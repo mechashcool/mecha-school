@@ -1,0 +1,151 @@
+{% extends "shared/base.html" %}
+{% block title %}تقرير الحضور{% endblock %}
+{% block page_title %}تقرير الحضور{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">تقرير الحضور والغياب</h1></div>
+  <a href="{{ url_for('attendance.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="d-flex gap-3 flex-wrap align-items-end">
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">الشعبة</label>
+        <select name="section_id" class="form-select">
+          <option value="">— اختر الشعبة —</option>
+          {% for sec in sections %}
+          <option value="{{ sec.id }}" {{ 'selected' if section_id == sec.id }}>
+            {{ sec.grade.name }} — شعبة {{ sec.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">من</label>
+        <input type="date" name="start" class="form-control" value="{{ start }}">
+      </div>
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">إلى</label>
+        <input type="date" name="end" class="form-control" value="{{ end }}">
+      </div>
+      <button class="btn btn-primary align-self-end"><i class="bi bi-search me-1"></i>عرض</button>
+    </form>
+  </div>
+</div>
+
+{% if records %}
+{# ── Summary table ───────────────��─────────────────────────────────────────── #}
+<div class="card mb-4">
+  <div class="card-header fw-600">
+    <i class="bi bi-bar-chart-fill text-accent me-1"></i>ملخص الحضور
+  </div>
+  <div class="table-wrapper">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>الطالب</th><th>رقمه</th>
+          <th class="text-success">حاضر</th>
+          <th class="text-danger">غائب</th>
+          <th class="text-warning">متأخر</th>
+          <th>الإجمالي</th>
+          <th>نسبة الحضور</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in records %}
+        {% set total = r.present + r.absent + r.late %}
+        {% set pct   = ((r.present + r.late) / total * 100) | round(1) if total else 0 %}
+        <tr>
+          <td class="fw-600">{{ r.student.full_name }}</td>
+          <td><code>{{ r.student.student_id }}</code></td>
+          <td class="text-success fw-700">{{ r.present }}</td>
+          <td class="text-danger fw-700">{{ r.absent }}</td>
+          <td class="text-warning fw-700">{{ r.late }}</td>
+          <td>{{ total }}</td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div style="flex:1;height:8px;background:#f0f4f8;border-radius:4px;overflow:hidden">
+                <div style="width:{{ pct }}%;height:100%;background:
+                  {% if pct >= 85 %}#1aab6d{% elif pct >= 70 %}#e8a020{% else %}#e03e3e{% endif %};
+                  border-radius:4px"></div>
+              </div>
+              <span style="font-size:13px;font-weight:700;min-width:40px;
+                color:{% if pct >= 85 %}#1aab6d{% elif pct >= 70 %}#e8a020{% else %}#e03e3e{% endif %}">
+                {{ pct }}%
+              </span>
+            </div>
+          </td>
+          <td>
+            <button class="btn btn-sm btn-outline-primary"
+                    onclick="toggleDetail('det_{{ r.student.id }}')">
+              <i class="bi bi-list-ul"></i>
+            </button>
+          </td>
+        </tr>
+        {# ── Per-day detail row ── #}
+        <tr id="det_{{ r.student.id }}" style="display:none;background:#f8fbff">
+          <td colspan="8" class="p-0">
+            <div class="px-4 py-3">
+              {% if r.details %}
+              <table class="table table-sm mb-0">
+                <thead>
+                  <tr>
+                    <th>التاريخ</th>
+                    <th>وقت الحضور</th>
+                    <th>وقت الانصراف</th>
+                    <th>الحالة</th>
+                    <th>ملاحظات</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for att in r.details %}
+                  <tr>
+                    <td>{{ att.date.strftime('%Y-%m-%d') }}</td>
+                    <td>{{ att.check_in.strftime('%H:%M') if att.check_in else '—' }}</td>
+                    <td>{{ att.check_out.strftime('%H:%M') if att.check_out else '—' }}</td>
+                    <td>
+                      <span class="badge-status
+                        {% if att.status == 'present' %}badge-active
+                        {% elif att.status == 'late' %}badge-pending
+                        {% else %}badge-inactive{% endif %}">
+                        {% if att.status == 'present' %}حاضر
+                        {% elif att.status == 'late' %}متأخر
+                        {% else %}غائب{% endif %}
+                      </span>
+                    </td>
+                    <td style="font-size:12px;color:#6b7a8d">{{ att.notes or '—' }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+              {% else %}
+              <p class="text-muted mb-0" style="font-size:13px">لا توجد سجلات في هذه الفترة</p>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% elif section_id %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">لا توجد بيانات حضور لهذه الفترة</div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function toggleDetail(id) {
+  const row = document.getElementById(id);
+  if (row) row.style.display = (row.style.display === 'none' ? 'table-row' : 'none');
+}
+</script>
+{% endblock %}

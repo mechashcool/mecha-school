@@ -1,0 +1,116 @@
+{% extends "shared/base.html" %}
+{% block title %}فئات المالية{% endblock %}
+{% block page_title %}فئات الإيرادات والمصروفات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">الفئات المالية</h1></div>
+  <a href="{{ url_for('finances.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="row g-4">
+  {% if not is_historical_year %}
+  <!-- Add form -->
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-plus-circle-fill text-accent"></i>إضافة فئة جديدة</div>
+      <div class="card-body">
+        <form method="POST">
+          <div class="mb-3">
+            <label class="form-label">النوع <span class="text-danger">*</span></label>
+            <select name="type" class="form-select" required>
+              <option value="revenue">فئة إيراد</option>
+              <option value="expense">فئة مصروف</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">الاسم <span class="text-danger">*</span></label>
+            <input type="text" name="name" class="form-control" required
+                   placeholder="مثال: رسوم دراسية، كهرباء...">
+          </div>
+          <button type="submit" class="btn btn-primary w-100">
+            <i class="bi bi-plus-circle-fill me-2"></i>إضافة
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Revenue categories -->
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-header" style="border-right:4px solid #1aab6d">
+        <i class="bi bi-arrow-up-circle-fill text-success"></i>
+        فئات الإيرادات ({{ rev_cats|length }})
+      </div>
+      <div class="card-body p-0">
+        {% for c in rev_cats %}
+        <div class="d-flex align-items-center justify-content-between px-4 py-3 border-bottom">
+          <div class="d-flex align-items-center gap-2">
+            <div style="width:8px;height:8px;border-radius:50%;background:#1aab6d"></div>
+            <span style="font-size:14px;font-weight:600">{{ c.name }}</span>
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            <span class="text-muted" style="font-size:12px">
+              {{ rev_counts.get(c.id, 0) }} سجل
+            </span>
+            {% if not is_historical_year %}
+            <form method="POST"
+                  action="{{ url_for('finances.delete_category', ctype='revenue', cat_id=c.id) }}"
+                  class="d-inline">
+              <button class="btn btn-sm btn-outline-danger py-0 px-2"
+                      data-confirm="حذف فئة '{{ c.name }}'؟">
+                <i class="bi bi-trash" style="font-size:11px"></i>
+              </button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+        {% else %}
+        <div class="text-center text-muted py-4">لا توجد فئات</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Expense categories -->
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-header" style="border-right:4px solid #e03e3e">
+        <i class="bi bi-arrow-down-circle-fill text-danger"></i>
+        فئات المصروفات ({{ exp_cats|length }})
+      </div>
+      <div class="card-body p-0">
+        {% for c in exp_cats %}
+        <div class="d-flex align-items-center justify-content-between px-4 py-3 border-bottom">
+          <div class="d-flex align-items-center gap-2">
+            <div style="width:8px;height:8px;border-radius:50%;background:#e03e3e"></div>
+            <span style="font-size:14px;font-weight:600">{{ c.name }}</span>
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            <span class="text-muted" style="font-size:12px">
+              {{ exp_counts.get(c.id, 0) }} سجل
+            </span>
+            {% if not is_historical_year %}
+            <form method="POST"
+                  action="{{ url_for('finances.delete_category', ctype='expense', cat_id=c.id) }}"
+                  class="d-inline">
+              <button class="btn btn-sm btn-outline-danger py-0 px-2"
+                      data-confirm="حذف فئة '{{ c.name }}'؟">
+                <i class="bi bi-trash" style="font-size:11px"></i>
+              </button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+        {% else %}
+        <div class="text-center text-muted py-4">لا توجد فئات</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,161 @@
+{% extends "shared/base.html" %}
+{% block title %}إدارة المستخدمين{% endblock %}
+{% block page_title %}إدارة المستخدمين{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">المستخدمون</h1>
+    <p class="page-subtitle">إدارة حسابات المستخدمين وصلاحياتهم</p>
+  </div>
+  <a href="{{ url_for('admin.create_user') }}" class="btn btn-primary">
+    <i class="bi bi-person-plus-fill me-2"></i>إضافة مستخدم
+  </a>
+</div>
+
+<!-- Search & Filter -->
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-md-5">
+        <label class="form-label">بحث</label>
+        <input type="text" name="q" class="form-control"
+               placeholder="بحث بالاسم أو اسم المستخدم..."
+               value="{{ search }}">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">الدور</label>
+        <select name="role_id" class="form-select">
+          <option value="all" {% if role_filter == 'all' %}selected{% endif %}>كل الأدوار</option>
+          {% for role in roles %}
+          <option value="{{ role.id }}"
+                  {% if role_filter == role.id|string %}selected{% endif %}>
+            {{ role.label }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3 d-flex gap-2">
+        <button class="btn btn-primary flex-grow-1">
+          <i class="bi bi-search me-1"></i>بحث
+        </button>
+        {% if search or role_filter != 'all' %}
+        <a href="{{ url_for('admin.users_list') }}" class="btn btn-outline-secondary"
+           title="مسح الفلاتر">
+          <i class="bi bi-x-lg"></i>
+        </a>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>الاسم الكامل</th>
+          <th>اسم المستخدم</th>
+          <th>البريد الإلكتروني</th>
+          <th>الدور</th>
+          <th>الحالة</th>
+          <th>آخر دخول</th>
+          <th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for user in users.items %}
+        <tr>
+          <td class="text-muted">{{ loop.index + (users.page - 1) * users.per_page }}</td>
+          <td class="fw-600">
+            <div class="d-flex align-items-center gap-2">
+              <div style="width:32px;height:32px;border-radius:8px;background:#1a3a5c;
+                          display:flex;align-items:center;justify-content:center;
+                          color:#fff;font-weight:700;font-size:13px;flex-shrink:0">
+                {{ user.full_name[0] }}
+              </div>
+              {{ user.full_name }}
+            </div>
+          </td>
+          <td><code>{{ user.username }}</code></td>
+          <td>{{ user.email or '—' }}</td>
+          <td>
+            <span class="badge-status"
+                  style="background:{% if user.role and user.role.name == 'super_admin' %}#e8f4fd{% elif user.role and user.role.name == 'school_admin' %}#eafaf1{% else %}#f0f4f8{% endif %};
+                         color:{% if user.role and user.role.name == 'super_admin' %}#2196f3{% elif user.role and user.role.name == 'school_admin' %}#0a6640{% else %}#1e2b3a{% endif %}">
+              {{ user.role.label if user.role else '—' }}
+            </span>
+          </td>
+          <td>
+            <span class="badge-status {{ 'badge-active' if user.is_active else 'badge-inactive' }}">
+              {{ 'فعّال' if user.is_active else 'معطّل' }}
+            </span>
+          </td>
+          <td class="text-muted" style="font-size:12.5px">
+            {{ user.last_login.strftime('%Y-%m-%d %H:%M') if user.last_login else 'لم يدخل بعد' }}
+          </td>
+          <td>
+            {% set target_super = user.role and user.role.name == 'super_admin' %}
+            {% set target_school_admin = user.role and user.role.name == 'school_admin' %}
+            {% set can_manage_row = current_user.is_super_admin or (current_user.is_school_admin and not target_super and not target_school_admin and user.id != current_user.id) %}
+            <div class="d-flex gap-1">
+              {% if current_user.school_id is not none and user.id == current_user.id %}
+              <span class="badge-status badge-active">حسابك</span>
+              {% elif can_manage_row %}
+              <a href="{{ url_for('admin.edit_user', user_id=user.id) }}"
+                 class="btn btn-sm btn-outline-primary" title="تعديل">
+                <i class="bi bi-pencil"></i>
+              </a>
+              {% endif %}
+              {% if can_manage_row and user.id != current_user.id %}
+              <form method="POST" action="{{ url_for('admin.toggle_user', user_id=user.id) }}" class="d-inline">
+                <button class="btn btn-sm btn-outline-warning" title="{{ 'تعطيل' if user.is_active else 'تفعيل' }}">
+                  <i class="bi bi-{{ 'pause' if user.is_active else 'play' }}-circle"></i>
+                </button>
+              </form>
+              <form method="POST" action="{{ url_for('admin.delete_user', user_id=user.id) }}" class="d-inline">
+                <button class="btn btn-sm btn-outline-danger" title="حذف"
+                        data-confirm="هل تريد حذف المستخدم {{ user.full_name }}؟">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8" class="text-center text-muted py-5">
+            <i class="bi bi-people" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا يوجد مستخدمون
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if users.pages > 1 %}
+  <div class="card-footer d-flex justify-content-between align-items-center">
+    <small class="text-muted">
+      عرض {{ users.items|length }} من {{ users.total }} مستخدم
+    </small>
+    <nav>
+      <ul class="pagination pagination-sm mb-0">
+        {% for p in users.iter_pages() %}
+          {% if p %}
+          <li class="page-item {{ 'active' if p == users.page }}">
+            <a class="page-link" href="{{ url_for('admin.users_list', page=p, q=search) }}">{{ p }}</a>
+          </li>
+          {% else %}
+          <li class="page-item disabled"><span class="page-link">…</span></li>
+          {% endif %}
+        {% endfor %}
+      </ul>
+    </nav>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

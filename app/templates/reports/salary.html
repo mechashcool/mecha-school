@@ -1,0 +1,107 @@
+{% extends "shared/base.html" %}
+{% block title %}تقرير الرواتب{% endblock %}
+{% block page_title %}تقرير الرواتب السنوي{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">تقرير الرواتب</h1>
+    <p class="page-subtitle">الإجمالي السنوي لعام {{ year }}</p>
+  </div>
+  <div class="d-flex gap-2">
+    <form method="GET" class="d-flex gap-2 align-items-center">
+      <select name="year" class="form-select" style="width:100px">
+        {% for y in range(2022, 2030) %}
+        <option value="{{ y }}" {{ 'selected' if y == year }}>{{ y }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn btn-primary"><i class="bi bi-search me-1"></i>عرض</button>
+    </form>
+    <a href="{{ url_for('reports.index') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>رجوع
+    </a>
+  </div>
+</div>
+
+<!-- Grand total -->
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#9c27b0,#ba68c8)">
+        <i class="bi bi-wallet-fill"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ '{:,.0f}'.format(grand_total) }}</div>
+        <div class="stat-label">إجمالي الرواتب المصروفة {{ year }} (د.ع)</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#1a3a5c,#22508a)">
+        <i class="bi bi-people-fill"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ rows|length }}</div>
+        <div class="stat-label">عدد الموظفين المشمولين</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#e8a020,#f5c25a)">
+        <i class="bi bi-calculator-fill"></i>
+      </div>
+      <div>
+        <div class="stat-value">
+          {{ '{:,.0f}'.format(grand_total / rows|length) if rows else 0 }}
+        </div>
+        <div class="stat-label">متوسط الراتب السنوي (د.ع)</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>#</th><th>الموظف</th><th>المسمى الوظيفي</th>
+          <th>عدد الأشهر</th><th>إجمالي الصرف (د.ع)</th><th>المتوسط الشهري</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td class="text-muted">{{ loop.index }}</td>
+          <td class="fw-600">{{ row.full_name }}</td>
+          <td class="text-muted">{{ row.job_title }}</td>
+          <td>{{ row.months }}</td>
+          <td class="fw-700" style="font-size:15px">{{ '{:,.0f}'.format(row.total) }}</td>
+          <td class="text-muted">
+            {{ '{:,.0f}'.format(row.total / row.months) if row.months else 0 }}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="text-center text-muted py-5">
+            <i class="bi bi-wallet" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا توجد سجلات رواتب لعام {{ year }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      {% if rows %}
+      <tfoot>
+        <tr style="background:#f6f9fc;font-weight:800">
+          <td colspan="4" class="text-end pe-4">الإجمالي الكلي</td>
+          <td style="font-size:16px;color:#1a3a5c">{{ '{:,.0f}'.format(grand_total) }}</td>
+          <td></td>
+        </tr>
+      </tfoot>
+      {% endif %}
+    </table>
+  </div>
+</div>
+{% endblock %}

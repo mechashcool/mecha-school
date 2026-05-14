@@ -1,0 +1,413 @@
+{% extends "shared/base.html" %}
+{% block title %}الصفوف والشعب{% endblock %}
+{% block page_title %}إدارة الصفوف والشعب{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">الصفوف والشعب الدراسية</h1>
+    <p class="page-subtitle">إدارة الهيكل الأكاديمي للمدرسة</p>
+  </div>
+  <a href="{{ url_for('sections.subjects') }}" class="btn btn-outline-primary">
+    <i class="bi bi-book-fill me-1"></i>إدارة المواد
+  </a>
+</div>
+
+<!-- Year filter -->
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="d-flex gap-3 align-items-center">
+      <div>
+        <label class="form-label mb-0 me-2" style="font-size:13px;font-weight:600">العام الدراسي:</label>
+        <select name="year_id" class="form-select d-inline-block" style="width:auto"
+                onchange="this.form.submit()">
+          <option value="">— اختر —</option>
+          {% for y in years %}
+          <option value="{{ y.id }}" {{ 'selected' if y.id == year_id }}>
+            {{ y.name }}{{ ' ★' if y.is_current }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if year_id and not is_historical_year %}
+<!-- Add Grade form -->
+<div class="card mb-4">
+  <div class="card-header">
+    <i class="bi bi-plus-circle-fill text-accent"></i>إضافة صف دراسي
+  </div>
+  <div class="card-body py-3">
+    <form method="POST" action="{{ url_for('sections.create_grade') }}"
+          class="d-flex gap-3 align-items-end flex-wrap">
+      <input type="hidden" name="academic_year_id" value="{{ year_id }}">
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">المرحلة الدراسية</label>
+        <select name="stage" class="form-select" style="min-width:160px">
+          <option value="">— اختر المرحلة —</option>
+          <option value="ابتدائية">المرحلة الابتدائية</option>
+          <option value="متوسطة">المرحلة المتوسطة</option>
+          <option value="إعدادية">المرحلة الإعدادية</option>
+        </select>
+      </div>
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">اسم الصف</label>
+        <input type="text" name="name" class="form-control"
+               placeholder="مثال: الأول الابتدائي..." required>
+      </div>
+      <button type="submit" class="btn btn-primary align-self-end">
+        <i class="bi bi-plus-circle-fill me-1"></i>إضافة صف
+      </button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<!-- Grades grouped by stage -->
+{% if grades %}
+
+{% set stage_list = [
+  ('ابتدائية',  'المرحلة الابتدائية',  'bi-building',     '#1a6b3c', '#d4edda'),
+  ('متوسطة',   'المرحلة المتوسطة',   'bi-mortarboard',  '#1a3a5c', '#d1ecf1'),
+  ('إعدادية',  'المرحلة الإعدادية',  'bi-award',        '#6b3a1a', '#fff3cd')
+] %}
+
+{% for stage_key, stage_label, stage_icon, stage_color, stage_bg in stage_list %}
+  {% set stage_grades = grades | selectattr('stage', 'equalto', stage_key) | list %}
+  {% if stage_grades %}
+  <div class="mb-4">
+    <div class="d-flex align-items-center gap-2 mb-3">
+      <span style="width:8px;height:32px;border-radius:4px;background:{{ stage_color }};display:inline-block"></span>
+      <h5 class="mb-0 fw-700" style="color:{{ stage_color }}">
+        <i class="bi {{ stage_icon }} me-1"></i>{{ stage_label }}
+      </h5>
+      <span class="badge" style="background:{{ stage_bg }};color:{{ stage_color }};font-size:12px">
+        {{ stage_grades | length }} صف
+      </span>
+    </div>
+    <div class="row g-4">
+      {% for grade in stage_grades %}
+      <div class="col-lg-6">
+        <div class="card">
+          <div class="card-header d-flex align-items-center gap-2">
+            <div style="width:36px;height:36px;border-radius:10px;background:{{ stage_color }};
+                        display:flex;align-items:center;justify-content:center;
+                        color:#fff;font-weight:800;font-size:14px;flex-shrink:0">
+              {{ loop.index }}
+            </div>
+            <span class="fw-700" style="font-size:15px">{{ grade.name }}</span>
+            <span class="badge ms-1" style="background:#f0f4f8;color:#6b7a8d">
+              {{ grade.sections.count() }} شعبة
+            </span>
+            {% if not is_historical_year %}
+            <div class="ms-auto d-flex gap-1">
+              <button class="btn btn-sm btn-outline-primary"
+                      onclick="showAddSection({{ grade.id }}, '{{ grade.name }}')">
+                <i class="bi bi-plus-circle me-1"></i>شعبة
+              </button>
+              <button class="btn btn-sm btn-outline-secondary"
+                      data-grade-id="{{ grade.id }}"
+                      data-grade-name="{{ grade.name }}"
+                      data-grade-stage="{{ grade.stage or '' }}"
+                      onclick="showEditGrade(this)">
+                <i class="bi bi-pencil"></i>
+              </button>
+              <form method="POST" action="{{ url_for('sections.delete_grade', grade_id=grade.id) }}"
+                    class="d-inline">
+                <button class="btn btn-sm btn-outline-danger"
+                        data-confirm="حذف صف '{{ grade.name }}' وجميع شعبه؟">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </form>
+            </div>
+            {% endif %}
+          </div>
+
+          <div class="card-body p-0">
+            {% if grade.sections.count() == 0 %}
+            <div class="text-center text-muted py-3" style="font-size:13px">
+              لا توجد شعب — اضغط "+ شعبة" لإضافة
+            </div>
+            {% else %}
+            <div class="table-wrapper">
+              <table class="table table-sm mb-0">
+                <thead>
+                  <tr>
+                    <th>الشعبة</th><th>المعلم المشرف</th><th>السعة</th>
+                    <th>الطلاب</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for sec in grade.sections %}
+                  <tr>
+                    <td class="fw-600">شعبة {{ sec.name }}</td>
+                    <td style="font-size:12.5px">
+                      {{ sec.teacher.full_name if sec.teacher else
+                         '<span class="text-muted">—</span>' | safe }}
+                    </td>
+                    <td>{{ sec.capacity }}</td>
+                    <td>
+                      <span class="badge-status badge-active">
+                        {{ sec.students.filter_by(status='active').count() }}
+                      </span>
+                    </td>
+                    <td>
+                      {% if not is_historical_year %}
+                      <div class="d-flex gap-1">
+                        <a href="{{ url_for('sections.edit_section', sec_id=sec.id) }}"
+                           class="btn btn-sm btn-outline-secondary py-0 px-2">
+                          <i class="bi bi-pencil" style="font-size:11px"></i>
+                        </a>
+                        <form method="POST"
+                              action="{{ url_for('sections.delete_section', sec_id=sec.id) }}"
+                              class="d-inline">
+                          <button class="btn btn-sm btn-outline-danger py-0 px-2"
+                                  data-confirm="حذف الشعبة؟">
+                            <i class="bi bi-trash" style="font-size:11px"></i>
+                          </button>
+                        </form>
+                      </div>
+                      {% endif %}
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+{% endfor %}
+
+<!-- Ungrouped grades (no stage assigned) -->
+{% set ungrouped = grades | rejectattr('stage', 'in', ['ابتدائية', 'متوسطة', 'إعدادية']) | list %}
+{% if ungrouped %}
+<div class="mb-4">
+  <div class="d-flex align-items-center gap-2 mb-3">
+    <span style="width:8px;height:32px;border-radius:4px;background:#6c757d;display:inline-block"></span>
+    <h5 class="mb-0 fw-700 text-muted">صفوف بدون مرحلة</h5>
+    <span class="badge bg-secondary" style="font-size:12px">{{ ungrouped | length }} صف</span>
+  </div>
+  <div class="row g-4">
+    {% for grade in ungrouped %}
+    <div class="col-lg-6">
+      <div class="card">
+        <div class="card-header d-flex align-items-center gap-2">
+          <div style="width:36px;height:36px;border-radius:10px;background:#6c757d;
+                      display:flex;align-items:center;justify-content:center;
+                      color:#fff;font-weight:800;font-size:14px;flex-shrink:0">
+            {{ loop.index }}
+          </div>
+          <span class="fw-700" style="font-size:15px">{{ grade.name }}</span>
+          <span class="badge ms-1" style="background:#f0f4f8;color:#6b7a8d">
+            {{ grade.sections.count() }} شعبة
+          </span>
+          {% if not is_historical_year %}
+          <div class="ms-auto d-flex gap-1">
+            <button class="btn btn-sm btn-outline-primary"
+                    onclick="showAddSection({{ grade.id }}, '{{ grade.name }}')">
+              <i class="bi bi-plus-circle me-1"></i>شعبة
+            </button>
+            <button class="btn btn-sm btn-outline-secondary"
+                    data-grade-id="{{ grade.id }}"
+                    data-grade-name="{{ grade.name }}"
+                    data-grade-stage="{{ grade.stage or '' }}"
+                    onclick="showEditGrade(this)">
+              <i class="bi bi-pencil"></i>
+            </button>
+            <form method="POST" action="{{ url_for('sections.delete_grade', grade_id=grade.id) }}"
+                  class="d-inline">
+              <button class="btn btn-sm btn-outline-danger"
+                      data-confirm="حذف صف '{{ grade.name }}' وجميع شعبه؟">
+                <i class="bi bi-trash"></i>
+              </button>
+            </form>
+          </div>
+          {% endif %}
+        </div>
+
+        <div class="card-body p-0">
+          {% if grade.sections.count() == 0 %}
+          <div class="text-center text-muted py-3" style="font-size:13px">
+            لا توجد شعب — اضغط "+ شعبة" لإضافة
+          </div>
+          {% else %}
+          <div class="table-wrapper">
+            <table class="table table-sm mb-0">
+              <thead>
+                <tr>
+                  <th>الشعبة</th><th>المعلم المشرف</th><th>السعة</th>
+                  <th>الطلاب</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for sec in grade.sections %}
+                <tr>
+                  <td class="fw-600">شعبة {{ sec.name }}</td>
+                  <td style="font-size:12.5px">
+                    {{ sec.teacher.full_name if sec.teacher else
+                       '<span class="text-muted">—</span>' | safe }}
+                  </td>
+                  <td>{{ sec.capacity }}</td>
+                  <td>
+                    <span class="badge-status badge-active">
+                      {{ sec.students.filter_by(status='active').count() }}
+                    </span>
+                  </td>
+                  <td>
+                    {% if not is_historical_year %}
+                    <div class="d-flex gap-1">
+                      <a href="{{ url_for('sections.edit_section', sec_id=sec.id) }}"
+                         class="btn btn-sm btn-outline-secondary py-0 px-2">
+                        <i class="bi bi-pencil" style="font-size:11px"></i>
+                      </a>
+                      <form method="POST"
+                            action="{{ url_for('sections.delete_section', sec_id=sec.id) }}"
+                            class="d-inline">
+                        <button class="btn btn-sm btn-outline-danger py-0 px-2"
+                                data-confirm="حذف الشعبة؟">
+                          <i class="bi bi-trash" style="font-size:11px"></i>
+                        </button>
+                      </form>
+                    </div>
+                    {% endif %}
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% elif year_id %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">
+    <i class="bi bi-grid" style="font-size:40px;opacity:.3;display:block;margin-bottom:8px"></i>
+    لا توجد صفوف في هذا العام — أضف صفاً أعلاه
+  </div>
+</div>
+
+{% elif years %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">
+    اختر العام الدراسي من القائمة أعلاه
+  </div>
+</div>
+
+{% else %}
+<div class="card border-warning">
+  <div class="card-body text-center py-4">
+    <i class="bi bi-calendar-x" style="font-size:36px;color:#e8a020;display:block;margin-bottom:8px"></i>
+    <p class="mb-2">لا توجد أعوام دراسية.</p>
+    <a href="{{ url_for('admin.academic_years') }}" class="btn btn-primary">
+      إضافة عام دراسي
+    </a>
+  </div>
+</div>
+{% endif %}
+
+<!-- Edit Grade Modal -->
+<div class="modal fade" id="editGradeModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title fw-700">تعديل الصف الدراسي</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="POST" id="editGradeForm">
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">المرحلة الدراسية</label>
+            <select name="stage" id="editGradeStage" class="form-select">
+              <option value="">— بدون مرحلة —</option>
+              <option value="ابتدائية">المرحلة الابتدائية</option>
+              <option value="متوسطة">المرحلة المتوسطة</option>
+              <option value="إعدادية">المرحلة الإعدادية</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">اسم الصف <span class="text-danger">*</span></label>
+            <input type="text" name="name" id="editGradeName" class="form-control" required>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary"
+                  data-bs-dismiss="modal">إلغاء</button>
+          <button type="submit" class="btn btn-primary">حفظ التغييرات</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Add Section Modal -->
+<div class="modal fade" id="addSectionModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title fw-700">إضافة شعبة جديدة</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="POST" id="addSectionForm">
+        <div class="modal-body">
+          <p class="text-muted mb-3" id="gradeNameLabel"></p>
+          <div class="mb-3">
+            <label class="form-label">اسم الشعبة <span class="text-danger">*</span></label>
+            <input type="text" name="name" class="form-control" required
+                   placeholder="مثال: أ، ب، Alpha...">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">المعلم المشرف</label>
+            <select name="teacher_id" class="form-select">
+              <option value="">— بدون تعيين —</option>
+              {% for emp in [] %}{% endfor %}{# populated via JS or server #}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">السعة القصوى</label>
+            <input type="number" name="capacity" class="form-control" value="30" min="1">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary"
+                  data-bs-dismiss="modal">إلغاء</button>
+          <button type="submit" class="btn btn-primary">إضافة الشعبة</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function showAddSection(gradeId, gradeName) {
+  document.getElementById('gradeNameLabel').textContent = 'الصف: ' + gradeName;
+  document.getElementById('addSectionForm').action =
+    '/sections/grades/' + gradeId + '/sections/create';
+  new bootstrap.Modal(document.getElementById('addSectionModal')).show();
+}
+
+function showEditGrade(btn) {
+  document.getElementById('editGradeName').value  = btn.dataset.gradeName;
+  document.getElementById('editGradeStage').value = btn.dataset.gradeStage;
+  document.getElementById('editGradeForm').action =
+    '/sections/grades/' + btn.dataset.gradeId + '/edit';
+  new bootstrap.Modal(document.getElementById('editGradeModal')).show();
+}
+</script>
+{% endblock %}

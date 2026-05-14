@@ -1,0 +1,198 @@
+{% extends "shared/base.html" %}
+{% block title %}الإيرادات والمصروفات{% endblock %}
+{% block page_title %}الإيرادات والمصروفات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">الإيرادات والمصروفات</h1>
+    <p class="page-subtitle">نظرة عامة — {{ year }}{% if month %} / {{ arabic_months[month] }}{% endif %}</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('finances.revenues') }}" class="btn btn-outline-success">
+      <i class="bi bi-arrow-up-circle me-1"></i>الإيرادات
+    </a>
+    <a href="{{ url_for('finances.expenses') }}" class="btn btn-outline-danger">
+      <i class="bi bi-arrow-down-circle me-1"></i>المصروفات
+    </a>
+    <a href="{{ url_for('finances.categories') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-tags me-1"></i>الفئات
+    </a>
+  </div>
+</div>
+
+<!-- Year/Month filter -->
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="d-flex gap-3 align-items-end">
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">السنة</label>
+        <select name="year" class="form-select" style="width:100px">
+          {% for y in range(2020, 2030) %}
+          <option value="{{ y }}" {{ 'selected' if y == year }}>{{ y }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">الشهر (اختياري)</label>
+        <select name="month" class="form-select" style="width:140px">
+          <option value="">كل الأشهر</option>
+          {% for i in range(1,13) %}
+          <option value="{{ i }}" {{ 'selected' if i == month }}>{{ arabic_months[i] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button class="btn btn-primary align-self-end">
+        <i class="bi bi-search me-1"></i>عرض
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- KPIs -->
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#1aab6d,#16c879)">
+        <i class="bi bi-arrow-up-circle-fill"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ '{:,.0f}'.format(total_rev) }}</div>
+        <div class="stat-label">إجمالي الإيرادات (د.ع)</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#e03e3e,#f87171)">
+        <i class="bi bi-arrow-down-circle-fill"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ '{:,.0f}'.format(total_exp) }}</div>
+        <div class="stat-label">إجمالي المصروفات (د.ع)</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="stat-card">
+      <div class="stat-icon"
+           style="background:{{ 'linear-gradient(135deg,#1a3a5c,#22508a)' if balance >= 0 else 'linear-gradient(135deg,#e03e3e,#f87171)' }}">
+        <i class="bi bi-wallet2"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ '{:,.0f}'.format(balance) }}</div>
+        <div class="stat-label">الصافي (د.ع)</div>
+        <div class="stat-change" style="color:{{ '#1aab6d' if balance >= 0 else '#e03e3e' }}">
+          {{ 'فائض' if balance >= 0 else 'عجز' }}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Monthly Chart -->
+<div class="row g-4 mb-4">
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-bar-chart-line-fill text-accent"></i>
+        الإيرادات والمصروفات الشهرية — {{ year }}
+      </div>
+      <div class="card-body">
+        <canvas id="finChart" style="max-height:280px"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Recent Transactions -->
+<div class="row g-4">
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-arrow-up-circle-fill text-success"></i>
+        آخر الإيرادات
+        <a href="{{ url_for('finances.revenues') }}" class="btn btn-sm btn-outline-secondary ms-auto">الكل</a>
+      </div>
+      <div class="table-wrapper">
+        <table class="table table-sm">
+          <thead><tr><th>التاريخ</th><th>الوصف</th><th>المبلغ</th></tr></thead>
+          <tbody>
+            {% for r in recent_rev %}
+            <tr>
+              <td style="font-size:12px;color:#9aabb8">{{ r.date.strftime('%Y-%m-%d') }}</td>
+              <td>{{ r.description or r.category.name }}</td>
+              <td class="fw-700 text-success">{{ '{:,.0f}'.format(r.amount) }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3" class="text-center text-muted py-3">لا توجد إيرادات</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-arrow-down-circle-fill text-danger"></i>
+        آخر المصروفات
+        <a href="{{ url_for('finances.expenses') }}" class="btn btn-sm btn-outline-secondary ms-auto">الكل</a>
+      </div>
+      <div class="table-wrapper">
+        <table class="table table-sm">
+          <thead><tr><th>التاريخ</th><th>الوصف</th><th>المبلغ</th></tr></thead>
+          <tbody>
+            {% for e in recent_exp %}
+            <tr>
+              <td style="font-size:12px;color:#9aabb8">{{ e.date.strftime('%Y-%m-%d') }}</td>
+              <td>{{ e.description or e.category.name }}</td>
+              <td class="fw-700 text-danger">{{ '{:,.0f}'.format(e.amount) }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3" class="text-center text-muted py-3">لا توجد مصروفات</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const months = ['يناير','فبراير','مارس','أبريل','مايو','يونيو',
+                 'يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+new Chart(document.getElementById('finChart'), {
+  type: 'bar',
+  data: {
+    labels: months,
+    datasets: [
+      {
+        label: 'الإيرادات',
+        data: {{ chart_rev | tojson }},
+        backgroundColor: 'rgba(26,171,109,.8)',
+        borderRadius: 6,
+      },
+      {
+        label: 'المصروفات',
+        data: {{ chart_exp | tojson }},
+        backgroundColor: 'rgba(224,62,62,.75)',
+        borderRadius: 6,
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { labels: { font: { family: 'Cairo', size: 13 } } }
+    },
+    scales: {
+      y: { ticks: { font: { family: 'Cairo' } }, grid: { color: '#f0f4f8' } },
+      x: { ticks: { font: { family: 'Cairo', size: 12 } } }
+    }
+  }
+});
+</script>
+{% endblock %}

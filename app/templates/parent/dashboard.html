@@ -1,0 +1,104 @@
+{% extends "shared/base.html" %}
+{% block title %}لوحة ولي الأمر{% endblock %}
+{% block page_title %}مرحبًا, {{ current_user.full_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">بوابة ولي الأمر</h1>
+    <p class="page-subtitle">متابعة حضور وأداء أبنائك</p>
+  </div>
+  <a href="{{ url_for('notifications.index') }}" class="btn btn-outline-primary">
+    <i class="bi bi-bell-fill me-1"></i>الإشعارات
+  </a>
+</div>
+
+{% if not summaries %}
+<div class="card">
+  <div class="card-body text-center py-5 text-muted">
+    <i class="bi bi-people" style="font-size:38px;opacity:.3;display:block;margin-bottom:10px"></i>
+    لم يتم ربط أبناءك بحسابك بعد. تواصل مع إدارة المدرسة.
+  </div>
+</div>
+{% endif %}
+
+<div class="row g-4">
+  {% for item in summaries %}
+  {% set s = item.student %}
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <div>
+          <i class="bi bi-person-circle text-accent me-1"></i>
+          <b>{{ s.full_name }}</b>
+          <span class="text-muted" style="font-size:12.5px">· {{ s.student_id }}</span>
+        </div>
+        <a href="{{ url_for('parent.child_overview', student_id=s.id) }}"
+           class="btn btn-sm btn-outline-primary">
+          عرض التفاصيل <i class="bi bi-arrow-left ms-1"></i>
+        </a>
+      </div>
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-4">
+            <div class="stat-label">الحضور (30 يوم)</div>
+            <div class="stat-value" style="font-size:20px;color:
+              {% if item.att_rate >= 90 %}#1aab6d{% elif item.att_rate >= 75 %}#e8a020{% else %}#e03e3e{% endif %}">
+              {{ item.att_rate }}%
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="stat-label">مدفوع من الرسوم</div>
+            <div class="stat-value" style="font-size:20px">
+              {{ '{:,.0f}'.format(item.fee_paid) }}
+            </div>
+            <small class="text-muted">
+              من أصل {{ '{:,.0f}'.format(item.fee_total) }}
+            </small>
+          </div>
+          <div class="col-md-4">
+            <div class="stat-label">متبقي</div>
+            <div class="stat-value" style="font-size:20px;color:
+              {% if item.fee_due > 0 %}#e03e3e{% else %}#1aab6d{% endif %}">
+              {{ '{:,.0f}'.format(item.fee_due) }}
+            </div>
+          </div>
+        </div>
+
+        {% if item.last_exam %}
+        <hr class="my-3">
+        <div class="d-flex justify-content-between align-items-center">
+          <span class="text-muted">آخر نتيجة:</span>
+          <b style="color:{% if item.last_exam.is_pass %}#1aab6d{% else %}#e03e3e{% endif %}">
+            {{ item.last_exam.exam.subject.name if item.last_exam.exam and item.last_exam.exam.subject else '—' }}
+            — {{ item.last_exam.marks }} / {{ item.last_exam.exam.max_marks if item.last_exam.exam else '—' }}
+          </b>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if recent_notifications %}
+<div class="card mt-4">
+  <div class="card-header">
+    <i class="bi bi-bell-fill text-accent"></i>آخر الإشعارات
+  </div>
+  <div class="card-body">
+    {% for n in recent_notifications %}
+    <div class="py-2 border-bottom">
+      <b>{{ n.title }}</b>
+      {% if n.created_at %}
+      <span class="text-muted" style="font-size:12px">
+        · {{ n.created_at.strftime('%Y-%m-%d %H:%M') }}
+      </span>
+      {% endif %}
+      <div style="font-size:13.5px;color:#556">{{ n.body|truncate(180) }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

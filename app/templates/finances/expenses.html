@@ -1,0 +1,131 @@
+{% extends "shared/base.html" %}
+{% block title %}المصروفات{% endblock %}
+{% block page_title %}سجلات المصروفات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">المصروفات</h1>
+    <p class="page-subtitle">إجمالي المعروض: {{ '{:,.0f}'.format(total) }} د.ع</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('finances.index') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>رجوع
+    </a>
+    {% if not is_historical_year %}
+    <a href="{{ url_for('finances.create_expense') }}" class="btn btn-danger">
+      <i class="bi bi-plus-circle-fill me-1"></i>إضافة مصروف
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Filters -->
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="d-flex gap-3 align-items-end flex-wrap">
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">السنة</label>
+        <select name="year" class="form-select" style="width:100px">
+          {% for y in range(2020, 2030) %}
+          <option value="{{ y }}" {{ 'selected' if y == year }}>{{ y }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">الشهر</label>
+        <select name="month" class="form-select" style="width:140px">
+          <option value="">الكل</option>
+          {% for i in range(1,13) %}
+          <option value="{{ i }}" {{ 'selected' if i == month }}>{{ arabic_months[i] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">الفئة</label>
+        <select name="category_id" class="form-select" style="width:160px">
+          <option value="">الكل</option>
+          {% for c in categories %}
+          <option value="{{ c.id }}" {{ 'selected' if c.id == cat_id }}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button class="btn btn-primary align-self-end"><i class="bi bi-search me-1"></i>عرض</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>التاريخ</th><th>الفئة</th><th>الوصف</th>
+          <th>المبلغ (د.ع)</th><th>الإيصال</th><th>اعتمد بواسطة</th><th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in expenses.items %}
+        <tr>
+          <td>{{ e.date.strftime('%Y-%m-%d') }}</td>
+          <td>
+            <span class="badge" style="background:#fef0f0;color:#e03e3e;font-weight:600">
+              {{ e.category.name }}
+            </span>
+          </td>
+          <td>{{ e.description or '—' }}</td>
+          <td class="fw-700 text-danger">{{ '{:,.0f}'.format(e.amount) }}</td>
+          <td>
+            {% if e.receipt %}
+            <a href="{{ url_for('static', filename=e.receipt) }}" target="_blank"
+               class="btn btn-sm btn-outline-secondary">
+              <i class="bi bi-file-earmark-pdf"></i>
+            </a>
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td class="text-muted" style="font-size:12.5px">
+            {{ e.approver.full_name if e.approver else '—' }}
+          </td>
+          <td>
+            <div class="d-flex gap-1">
+              {% if not is_historical_year %}
+              <a href="{{ url_for('finances.edit_expense', exp_id=e.id) }}"
+                 class="btn btn-sm btn-outline-primary"><i class="bi bi-pencil"></i></a>
+              <form method="POST" action="{{ url_for('finances.delete_expense', exp_id=e.id) }}" class="d-inline">
+                <button class="btn btn-sm btn-outline-danger"
+                        data-confirm="حذف هذا المصروف؟"><i class="bi bi-trash"></i></button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7" class="text-center text-muted py-5">
+            <i class="bi bi-arrow-down-circle" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا توجد مصروفات
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if expenses.pages > 1 %}
+  <div class="card-footer">
+    <ul class="pagination pagination-sm mb-0 justify-content-center">
+      {% for p in expenses.iter_pages() %}
+        {% if p %}
+        <li class="page-item {{ 'active' if p == expenses.page }}">
+          <a class="page-link" href="{{ url_for('finances.expenses', page=p, year=year, month=month, category_id=cat_id) }}">{{ p }}</a>
+        </li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link">…</span></li>
+        {% endif %}
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

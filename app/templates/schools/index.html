@@ -1,0 +1,225 @@
+{% extends "shared/base.html" %}
+
+{% block title %}لوحة التحكم الشاملة — جميع المدارس{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title"><i class="bi bi-buildings-fill me-2"></i>لوحة التحكم الشاملة</h1>
+    <p class="text-muted mb-0">إدارة جميع المدارس · السعة · الأعوام الدراسية</p>
+  </div>
+  <div class="d-flex gap-2">
+    {% if active_school_id %}
+    <form method="POST" action="{{ url_for('schools.clear_switch') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+      <button type="submit" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-globe me-1"></i>العرض الشامل
+      </button>
+    </form>
+    {% endif %}
+    <a href="{{ url_for('schools.create') }}" class="btn btn-primary btn-sm">
+      <i class="bi bi-plus-lg me-1"></i>إضافة مدرسة
+    </a>
+  </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }} alert-dismissible fade show" role="alert">
+    {{ msg }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+{% endwith %}
+
+<!-- Summary Cards -->
+<div class="stats-grid mb-4" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr));">
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(13,110,253,.12);color:#0d6efd">
+      <i class="bi bi-buildings"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ school_data|length }}</div>
+      <div class="stat-label">إجمالي المدارس</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(26,171,109,.12);color:#1aab6d">
+      <i class="bi bi-people-fill"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ school_data | sum(attribute='students') }}</div>
+      <div class="stat-label">إجمالي الطلاب</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(232,160,32,.12);color:#e8a020">
+      <i class="bi bi-person-badge-fill"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ school_data | sum(attribute='employees') }}</div>
+      <div class="stat-label">إجمالي الموظفين</div>
+    </div>
+  </div>
+</div>
+
+<!-- Schools Grid -->
+{% if not school_data %}
+<div class="card text-center py-5">
+  <i class="bi bi-buildings display-1 text-muted mb-3"></i>
+  <h4 class="text-muted">لا توجد مدارس مسجلة بعد</h4>
+  <a href="{{ url_for('schools.create') }}" class="btn btn-primary mt-3">
+    <i class="bi bi-plus-lg me-1"></i>إضافة أول مدرسة
+  </a>
+</div>
+{% else %}
+<div class="row g-4">
+  {% for sd in school_data %}
+  {% set s = sd.school %}
+  <div class="col-12 col-lg-6">
+    <div class="card h-100 {% if sd.at_capacity %}border-danger{% elif active_school_id == s.id %}border-primary{% endif %}"
+         style="border-width:2px">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <div class="d-flex align-items-center gap-3">
+          {% if s.logo_path %}
+          <img src="{{ url_for('static', filename='uploads/' + s.logo_path) }}"
+               style="width:40px;height:40px;object-fit:cover;border-radius:8px">
+          {% else %}
+          <div style="width:40px;height:40px;background:{{ s.primary_color or '#0d6efd' }};
+                      border-radius:8px;display:flex;align-items:center;justify-content:center;
+                      color:#fff;font-weight:700;font-size:1.2rem">
+            {{ s.school_name[0] }}
+          </div>
+          {% endif %}
+          <div>
+            <h6 class="mb-0">{{ s.school_name_ar or s.school_name }}</h6>
+            {% if s.code %}<small class="text-muted">{{ s.code }}</small>{% endif %}
+          </div>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+          {% if active_school_id == s.id %}
+          <span class="badge bg-primary">نشطة</span>
+          {% endif %}
+          {% if sd.at_capacity %}
+          <span class="badge bg-danger"><i class="bi bi-exclamation-triangle-fill me-1"></i>اكتملت</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="card-body">
+        <!-- Year info -->
+        <div class="d-flex align-items-center gap-2 mb-3">
+          <i class="bi bi-calendar3 text-muted"></i>
+          <span class="text-muted small">العام الدراسي الحالي:</span>
+          {% if sd.current_year %}
+          <span class="badge bg-success">{{ sd.current_year.name }}</span>
+          {% else %}
+          <span class="text-danger small">غير محدد</span>
+          {% endif %}
+        </div>
+
+        <!-- Stats row -->
+        <div class="row g-2 mb-3">
+          <div class="col-4 text-center">
+            <div class="fw-bold fs-5">{{ sd.students }}</div>
+            <div class="text-muted" style="font-size:.75rem">طالب نشط</div>
+          </div>
+          <div class="col-4 text-center border-start border-end">
+            <div class="fw-bold fs-5">{{ s.capacity if s.capacity else '∞' }}</div>
+            <div class="text-muted" style="font-size:.75rem">الطاقة الاستيعابية</div>
+          </div>
+          <div class="col-4 text-center">
+            <div class="fw-bold fs-5">{{ sd.employees }}</div>
+            <div class="text-muted" style="font-size:.75rem">موظف</div>
+          </div>
+        </div>
+
+        <!-- Capacity bar -->
+        {% if s.capacity and s.capacity > 0 %}
+        <div class="mb-3">
+          <div class="d-flex justify-content-between small text-muted mb-1">
+            <span>الطاقة الاستيعابية</span>
+            <span>{{ sd.students }} / {{ s.capacity }} ({{ sd.capacity_pct }}%)</span>
+          </div>
+          <div class="progress" style="height:8px">
+            <div class="progress-bar {% if sd.capacity_pct >= 100 %}bg-danger{% elif sd.capacity_pct >= 80 %}bg-warning{% else %}bg-success{% endif %}"
+                 style="width:{{ sd.capacity_pct }}%"></div>
+          </div>
+        </div>
+        {% else %}
+        <div class="text-muted small mb-3">
+          <i class="bi bi-infinity me-1"></i>بلا حد للطاقة
+        </div>
+        {% endif %}
+
+        <!-- Action buttons -->
+        <div class="d-flex gap-2 flex-wrap">
+          <!-- Switch to this school -->
+          <form method="POST" action="{{ url_for('schools.switch', school_id=s.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+            <input type="hidden" name="next" value="{{ url_for('admin.dashboard') }}">
+            <button type="submit" class="btn btn-sm {% if active_school_id == s.id %}btn-primary{% else %}btn-outline-primary{% endif %}">
+              <i class="bi bi-arrow-repeat me-1"></i>
+              {{ 'عرض بيانات هذه المدرسة' if active_school_id != s.id else 'تعرض الآن' }}
+            </button>
+          </form>
+
+          <a href="{{ url_for('schools.school_years', school_id=s.id) }}"
+             class="btn btn-sm btn-outline-info">
+            <i class="bi bi-calendar-range me-1"></i>الأعوام
+          </a>
+
+          <a href="{{ url_for('schools.detail', school_id=s.id) }}"
+             class="btn btn-sm btn-outline-primary">
+            <i class="bi bi-eye me-1"></i>Details
+          </a>
+
+          <a href="{{ url_for('schools.edit', school_id=s.id) }}"
+             class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-pencil me-1"></i>تعديل
+          </a>
+
+          <button type="button" class="btn btn-sm btn-outline-danger ms-auto"
+                  onclick="confirmDelete({{ s.id }}, '{{ s.school_name }}')">
+            <i class="bi bi-trash me-1"></i>حذف
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- Delete confirmation modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title text-danger"><i class="bi bi-trash me-2"></i>حذف المدرسة</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="deleteModalBody">
+        هل أنت متأكد من حذف هذه المدرسة؟ لا يمكن التراجع عن هذا الإجراء.
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+        <form id="deleteForm" method="POST">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+          <button type="submit" class="btn btn-danger">حذف</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function confirmDelete(id, name) {
+  document.getElementById('deleteModalBody').textContent =
+    'هل أنت متأكد من حذف مدرسة "' + name + '"؟ لا يمكن التراجع.';
+  document.getElementById('deleteForm').action = '/schools/' + id + '/delete';
+  new bootstrap.Modal(document.getElementById('deleteModal')).show();
+}
+</script>
+{% endblock %}

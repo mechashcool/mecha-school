@@ -1,0 +1,262 @@
+{% extends "shared/base.html" %}
+{% block title %}الطلاب{% endblock %}
+{% block page_title %}إدارة الطلاب{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">الطلاب</h1>
+    <p class="page-subtitle">إجمالي {{ students.total }} طالب</p>
+  </div>
+  {% if current_user.has_permission('add_student') and not is_historical_year %}
+  <a href="{{ url_for('students.create') }}" class="btn btn-primary">
+    <i class="bi bi-person-plus-fill me-2"></i>إضافة طالب
+  </a>
+  {% endif %}
+  <a href="{{ url_for('students.export_excel', status='active') }}"
+     class="btn btn-outline-success">
+    <i class="bi bi-file-earmark-excel-fill me-1"></i>تصدير Excel
+  </a>
+</div>
+
+<!-- Filters -->
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="row g-2 align-items-end" id="studentFilterForm">
+      <div class="col-md-3">
+        <label class="form-label mb-1" style="font-size:12px">بحث</label>
+        <input type="text" name="q" class="form-control"
+               placeholder="بحث بالاسم أو رقم الطالب..."
+               value="{{ search }}">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12px">الحالة</label>
+        <select name="status" class="form-select">
+          <option value="">جميع الحالات (عدا المؤرشفين)</option>
+          <option value="active"      {{ 'selected' if status=='active' }}>فعّال</option>
+          <option value="transferred" {{ 'selected' if status=='transferred' }}>منقول</option>
+          <option value="withdrawn"   {{ 'selected' if status=='withdrawn' }}>مسحوب</option>
+          <option value="graduated"   {{ 'selected' if status=='graduated' }}>متخرج</option>
+          <option value="archived"    {{ 'selected' if status=='archived' }}>مؤرشف</option>
+        </select>
+      </div>
+      {% if grades_list %}
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12px">الصف</label>
+        <select name="grade_id" class="form-select" id="gradeFilter"
+                onchange="this.form.submit()">
+          <option value="">كل الصفوف</option>
+          {% for g in grades_list %}
+          <option value="{{ g.id }}" {{ 'selected' if grade_id == g.id }}>{{ g.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% if grade_id and sections_list %}
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12px">الشعبة</label>
+        <select name="section_id" class="form-select">
+          <option value="">كل الشعب</option>
+          {% for sec in sections_list %}
+          <option value="{{ sec.id }}" {{ 'selected' if section_id == sec.id }}>{{ sec.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      {% endif %}
+      <div class="col-md-1">
+        <button class="btn btn-primary w-100"><i class="bi bi-search"></i></button>
+      </div>
+      {% if search or status or grade_id or section_id %}
+      <div class="col-md-1">
+        <a href="{{ url_for('students.index') }}" class="btn btn-outline-secondary w-100">مسح</a>
+      </div>
+      {% endif %}
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>رقم الطالب</th>
+          <th>الاسم الكامل</th>
+          <th>الجنس</th>
+          <th>الصف / الشعبة</th>
+          <th>ولي الأمر</th>
+          <th>الحالة</th>
+          <th>تاريخ التسجيل</th>
+          <th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in students.items %}
+        <tr>
+          <td><code class="text-primary-custom fw-600">{{ s.student_id }}</code></td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              {% if s.photo %}
+              <img src="{{ url_for('static', filename=s.photo) }}"
+                   style="width:32px;height:32px;border-radius:8px;object-fit:cover">
+              {% else %}
+              <div style="width:32px;height:32px;border-radius:8px;background:#1a3a5c;
+                          display:flex;align-items:center;justify-content:center;
+                          color:#fff;font-weight:700;font-size:13px">
+                {{ s.full_name[0] }}
+              </div>
+              {% endif %}
+              <span class="fw-600">{{ s.full_name }}</span>
+            </div>
+          </td>
+          <td>{{ 'ذكر' if s.gender == 'male' else 'أنثى' }}</td>
+          <td>
+            {% if s.section %}
+              <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
+                {{ s.section.grade.name }} / {{ s.section.name }}
+              </span>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>
+            <div style="font-size:13px">{{ s.guardian_name or '—' }}</div>
+            <div style="font-size:11.5px;color:#9aabb8">{{ s.guardian_phone or '' }}</div>
+          </td>
+          <td>
+            {% if s.status == 'active' %}
+            <span class="badge-status badge-active">فعّال</span>
+          {% elif s.status == 'transferred' %}
+            <span class="badge-status badge-pending">منقول</span>
+          {% elif s.status == 'withdrawn' %}
+            <span class="badge-status badge-inactive">مسحوب</span>
+          {% elif s.status == 'graduated' %}
+            <span class="badge-status badge-pending">متخرج</span>
+          {% elif s.status == 'archived' %}
+            <span class="badge-status" style="background:#f0f4f8;color:#6b7a8d;border:1px solid #d1dbe6">مؤرشف</span>
+          {% else %}
+            <span class="badge-status badge-inactive">{{ s.status }}</span>
+          {% endif %}
+          </td>
+          <td style="font-size:12.5px;color:#6b7a8d">
+            {{ s.enrollment_date.strftime('%Y-%m-%d') if s.enrollment_date }}
+          </td>
+          <td>
+            <div class="d-flex gap-1">
+              <a href="{{ url_for('students.view', student_id=s.id) }}"
+                 class="btn btn-sm btn-outline-primary" title="عرض">
+                <i class="bi bi-eye"></i>
+              </a>
+              {% if current_user.has_permission('edit_student') and not is_historical_year %}
+              <a href="{{ url_for('students.edit', student_id=s.id) }}"
+                 class="btn btn-sm btn-outline-secondary" title="تعديل">
+                <i class="bi bi-pencil"></i>
+              </a>
+              {% endif %}
+              {% if current_user.has_permission('delete_student') and not is_historical_year %}
+                {% if s.status != 'archived' %}
+                {# Archive: safe deactivation for school managers #}
+                <form method="POST" action="{{ url_for('students.archive', student_id=s.id) }}" class="d-inline">
+                  <input type="hidden" name="status" value="archived">
+                  <button class="btn btn-sm btn-outline-secondary" title="أرشفة الطالب"
+                          data-confirm="أرشفة الطالب {{ s.full_name }}؟ ستختفي من القوائم النشطة لكن بياناته ستبقى محفوظة.">
+                    <i class="bi bi-archive"></i>
+                  </button>
+                </form>
+                {% else %}
+                {# Restore archived student back to active #}
+                <form method="POST" action="{{ url_for('students.archive', student_id=s.id) }}" class="d-inline">
+                  <input type="hidden" name="status" value="active">
+                  <button class="btn btn-sm btn-outline-success" title="إعادة تفعيل"
+                          data-confirm="إعادة تفعيل الطالب {{ s.full_name }}؟">
+                    <i class="bi bi-person-check"></i>
+                  </button>
+                </form>
+                {% endif %}
+              {% endif %}
+              {% if current_user.is_super_admin and not is_historical_year %}
+              {# Hard delete: super_admin only — opens warning modal #}
+              <button class="btn btn-sm btn-danger" title="حذف نهائي (مسؤول النظام)"
+                      onclick="openHardDeleteModal({{ s.id }}, '{{ s.full_name | e }}')">
+                <i class="bi bi-trash-fill"></i>
+              </button>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8" class="text-center text-muted py-5">
+            <i class="bi bi-people" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا يوجد طلاب
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if students.pages > 1 %}
+  <div class="card-footer d-flex justify-content-between align-items-center">
+    <small class="text-muted">عرض {{ students.items|length }} من {{ students.total }}</small>
+    <nav>
+      <ul class="pagination pagination-sm mb-0">
+        {% for p in students.iter_pages() %}
+          {% if p %}
+          <li class="page-item {{ 'active' if p == students.page }}">
+            <a class="page-link" href="{{ url_for('students.index', page=p, q=search, status=status, grade_id=grade_id or '', section_id=section_id or '') }}">{{ p }}</a>
+          </li>
+          {% else %}
+          <li class="page-item disabled"><span class="page-link">…</span></li>
+          {% endif %}
+        {% endfor %}
+      </ul>
+    </nav>
+  </div>
+  {% endif %}
+</div>
+
+{# ── Hard-delete confirmation modal (super_admin only) ─────────────────────── #}
+{% if current_user.is_super_admin %}
+<div class="modal fade" id="hardDeleteModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content border-danger">
+      <div class="modal-header bg-danger text-white">
+        <h5 class="modal-title"><i class="bi bi-exclamation-triangle-fill me-2"></i>تحذير: حذف نهائي لا يمكن التراجع عنه</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="fw-bold mb-2">أنت على وشك حذف الطالب: <span id="hdStudentName" class="text-danger"></span></p>
+        <div class="alert alert-danger py-2 mb-3" style="font-size:13px">
+          <i class="bi bi-exclamation-circle-fill me-1"></i>
+          سيؤدي هذا الإجراء إلى <strong>حذف جميع البيانات المرتبطة بالطالب نهائياً</strong>، بما فيها:
+          <ul class="mb-0 mt-1">
+            <li>سجلات الحضور والغياب لجميع السنوات الدراسية</li>
+            <li>نتائج الاختبارات والدرجات</li>
+            <li>سجلات الرسوم والأقساط المالية</li>
+            <li>المستندات المرفوعة</li>
+            <li>جميع البيانات التاريخية الأخرى</li>
+          </ul>
+        </div>
+        <p class="text-muted mb-0" style="font-size:13px">
+          إذا كنت تريد فقط إخفاء الطالب من القوائم النشطة، استخدم <strong>الأرشفة</strong> بدلاً من الحذف.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">إلغاء</button>
+        <form id="hardDeleteForm" method="POST" class="d-inline">
+          <button type="submit" class="btn btn-danger px-4">
+            <i class="bi bi-trash-fill me-1"></i>تأكيد الحذف النهائي
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+function openHardDeleteModal(studentId, studentName) {
+  document.getElementById('hdStudentName').textContent = studentName;
+  document.getElementById('hardDeleteForm').action = '/students/' + studentId + '/delete';
+  new bootstrap.Modal(document.getElementById('hardDeleteModal')).show();
+}
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,108 @@
+{% extends "shared/base.html" %}
+{% block title %}الموظفون{% endblock %}
+{% block page_title %}إدارة الموظفين{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">الموظفون</h1>
+    <p class="page-subtitle">إجمالي {{ employees.total }} موظف</p>
+  </div>
+  {% if not is_historical_year %}
+  <a href="{{ url_for('employees.create') }}" class="btn btn-primary">
+    <i class="bi bi-person-plus-fill me-2"></i>إضافة موظف
+  </a>
+  {% endif %}
+</div>
+
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="d-flex gap-3 align-items-center">
+      <div class="flex-grow-1">
+        <input type="text" name="q" class="form-control"
+               placeholder="بحث بالاسم أو رقم الموظف..." value="{{ search }}">
+      </div>
+      <button class="btn btn-primary"><i class="bi bi-search me-1"></i>بحث</button>
+      {% if search %}<a href="{{ url_for('employees.index') }}" class="btn btn-outline-secondary">مسح</a>{% endif %}
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>رقم الموظف</th><th>الاسم</th><th>المسمى الوظيفي</th>
+          <th>القسم</th><th>الراتب الأساسي</th><th>الحالة</th><th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in employees.items %}
+        <tr>
+          <td><code class="text-primary-custom fw-600">{{ e.employee_id }}</code></td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              {% if e.photo %}
+              <img src="{{ url_for('static', filename=e.photo) }}"
+                   style="width:32px;height:32px;border-radius:8px;object-fit:cover">
+              {% else %}
+              <div style="width:32px;height:32px;border-radius:8px;background:#1aab6d;
+                          display:flex;align-items:center;justify-content:center;
+                          color:#fff;font-weight:700;font-size:13px">{{ e.full_name[0] }}</div>
+              {% endif %}
+              <span class="fw-600">{{ e.full_name }}</span>
+            </div>
+          </td>
+          <td>{{ e.job_title }}</td>
+          <td>{{ e.department or '—' }}</td>
+          <td class="fw-600">{{ '{:,.0f}'.format(e.base_salary) }} <small class="text-muted fw-400">د.ع</small></td>
+          <td>
+            <span class="badge-status {{ 'badge-active' if e.status == 'active' else 'badge-inactive' }}">
+              {% if e.status == 'active' %}فعّال{% elif e.status == 'on_leave' %}إجازة{% else %}منتهي{% endif %}
+            </span>
+          </td>
+          <td>
+            <div class="d-flex gap-1">
+              <a href="{{ url_for('employees.view', emp_id=e.id) }}" class="btn btn-sm btn-outline-primary" title="عرض">
+                <i class="bi bi-eye"></i>
+              </a>
+              {% if not is_historical_year %}
+              <a href="{{ url_for('employees.edit', emp_id=e.id) }}" class="btn btn-sm btn-outline-secondary" title="تعديل">
+                <i class="bi bi-pencil"></i>
+              </a>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7" class="text-center text-muted py-5">
+            <i class="bi bi-person-badge" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا يوجد موظفون
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if employees.pages > 1 %}
+  <div class="card-footer d-flex justify-content-between align-items-center">
+    <small class="text-muted">عرض {{ employees.items|length }} من {{ employees.total }}</small>
+    <nav>
+      <ul class="pagination pagination-sm mb-0">
+        {% for p in employees.iter_pages() %}
+          {% if p %}
+          <li class="page-item {{ 'active' if p == employees.page }}">
+            <a class="page-link" href="{{ url_for('employees.index', page=p, q=search) }}">{{ p }}</a>
+          </li>
+          {% else %}
+          <li class="page-item disabled"><span class="page-link">…</span></li>
+          {% endif %}
+        {% endfor %}
+      </ul>
+    </nav>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

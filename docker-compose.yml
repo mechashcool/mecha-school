@@ -1,0 +1,47 @@
+version: '3.9'
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       almuhandis_db
+      POSTGRES_USER:     almuhandis
+      POSTGRES_PASSWORD: changeme_strong_password
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U almuhandis"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      FLASK_ENV:    production
+      DATABASE_URL: postgresql://almuhandis:changeme_strong_password@db:5432/almuhandis_db
+      SECRET_KEY:   CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_KEY
+    volumes:
+      - uploads:/app/app/static/uploads
+    ports:
+      - "5000:5000"
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - uploads:/app/app/static/uploads:ro
+
+volumes:
+  pg_data:
+  uploads:

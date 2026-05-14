@@ -1,0 +1,141 @@
+{% extends "shared/base.html" %}
+{% block title %}تقييم الموظفين{% endblock %}
+{% block page_title %}تقييمات الموظفين{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">تقييمات الأداء</h1>
+    <p class="page-subtitle">متابعة وتقييم أداء الكوادر التدريسية والإدارية</p>
+  </div>
+  {% if not is_historical_year %}
+  <a href="{{ url_for('evaluations.create', school_id=selected_school_id) if is_super_admin and selected_school_id else url_for('evaluations.create') }}" class="btn btn-primary">
+    <i class="bi bi-plus-circle-fill me-2"></i>تقييم جديد
+  </a>
+  {% endif %}
+</div>
+
+{% if is_super_admin %}
+<form method="GET" class="mb-3">
+  <select name="school_id" class="form-select" onchange="this.form.submit()">
+    <option value="">Select school</option>
+    {% for school in schools %}
+    <option value="{{ school.id }}" {{ 'selected' if selected_school_id == school.id }}>
+      {{ school.school_name }}
+    </option>
+    {% endfor %}
+  </select>
+</form>
+{% endif %}
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>الموظف</th><th>الفترة</th><th>الأداء</th>
+          <th>الانضباط</th><th>الحضور</th><th>التقييم النهائي</th>
+          <th>المُقيِّم</th><th>التاريخ</th><th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ev in evals.items %}
+        {% set score = ev.final_score | float %}
+        <tr>
+          <td>
+            <div class="fw-600">{{ ev.employee.full_name }}</div>
+            <div style="font-size:12px;color:#9aabb8">{{ ev.employee.job_title }}</div>
+          </td>
+          <td>
+            <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
+              {{ ev.period }}
+            </span>
+          </td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div style="width:60px;height:6px;border-radius:3px;background:#f0f4f8;overflow:hidden">
+                <div style="width:{{ ev.performance * 10 }}%;height:100%;
+                            background:#1a3a5c;border-radius:3px"></div>
+              </div>
+              <span style="font-size:12.5px;font-weight:700">{{ ev.performance }}/10</span>
+            </div>
+          </td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div style="width:60px;height:6px;border-radius:3px;background:#f0f4f8;overflow:hidden">
+                <div style="width:{{ ev.discipline * 10 }}%;height:100%;
+                            background:#e8a020;border-radius:3px"></div>
+              </div>
+              <span style="font-size:12.5px;font-weight:700">{{ ev.discipline }}/10</span>
+            </div>
+          </td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div style="width:60px;height:6px;border-radius:3px;background:#f0f4f8;overflow:hidden">
+                <div style="width:{{ ev.attendance_score * 10 }}%;height:100%;
+                            background:#1aab6d;border-radius:3px"></div>
+              </div>
+              <span style="font-size:12.5px;font-weight:700">{{ ev.attendance_score }}/10</span>
+            </div>
+          </td>
+          <td>
+            <span style="font-size:20px;font-weight:900;
+              color:{% if score >= 8 %}#1aab6d{% elif score >= 6 %}#e8a020{% else %}#e03e3e{% endif %}">
+              {{ ev.final_score }}
+            </span>
+            <span style="font-size:11px;color:#9aabb8">/10</span>
+            <div style="font-size:11px;font-weight:600;
+              color:{% if score >= 8 %}#1aab6d{% elif score >= 6 %}#e8a020{% else %}#e03e3e{% endif %}">
+              {% if score >= 8 %}ممتاز{% elif score >= 7 %}جيد جداً{% elif score >= 6 %}جيد{% elif score >= 5 %}مقبول{% else %}ضعيف{% endif %}
+            </div>
+          </td>
+          <td style="font-size:12.5px">{{ ev.evaluator.full_name if ev.evaluator else 'System' }}</td>
+          <td style="font-size:12px;color:#9aabb8">
+            {{ ev.created_at.strftime('%Y-%m-%d') }}
+          </td>
+          <td>
+            <div class="d-flex gap-1">
+              {% if not is_historical_year %}
+              <a href="{{ url_for('evaluations.edit', ev_id=ev.id) }}"
+                 class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-pencil"></i>
+              </a>
+              <form method="POST"
+                    action="{{ url_for('evaluations.delete', ev_id=ev.id) }}" class="d-inline">
+                <button class="btn btn-sm btn-outline-danger"
+                        data-confirm="حذف هذا التقييم؟">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="9" class="text-center text-muted py-5">
+            <i class="bi bi-star" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا توجد تقييمات بعد
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if evals.pages > 1 %}
+  <div class="card-footer">
+    <ul class="pagination pagination-sm mb-0 justify-content-center">
+      {% for p in evals.iter_pages() %}
+        {% if p %}
+        <li class="page-item {{ 'active' if p == evals.page }}">
+          <a class="page-link" href="{{ url_for('evaluations.index', page=p, school_id=selected_school_id) if is_super_admin and selected_school_id else url_for('evaluations.index', page=p) }}">{{ p }}</a>
+        </li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link">…</span></li>
+        {% endif %}
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

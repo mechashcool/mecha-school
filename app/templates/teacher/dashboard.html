@@ -1,0 +1,303 @@
+{% extends "shared/base.html" %}
+{% block title %}لوحة المعلم{% endblock %}
+{% block page_title %}لوحة المعلم{% endblock %}
+
+{% block content %}
+{% set day_colors = ['#1a3a5c','#1565a0','#2196f3','#0d8fcc','#0a6fa0'] %}
+
+<div class="page-header">
+  <div>
+    <h1 class="page-title">
+      {% if employee %}{{ employee.full_name }}{% else %}{{ current_user.full_name }}{% endif %}
+    </h1>
+    <p class="page-subtitle">
+      {% if employee %}{{ employee.job_title }}{% else %}معلم{% endif %}
+      · لوحة التحكم الخاصة بالمعلم
+    </p>
+  </div>
+</div>
+
+{% if not employee %}
+{# ── No employee record linked ─────────────────────────────────────── #}
+<div class="card">
+  <div class="card-body text-center py-5 text-muted">
+    <i class="bi bi-person-x" style="font-size:48px;opacity:.25;display:block;margin-bottom:12px"></i>
+    <p class="mb-1">لم يتم ربط حسابك بملف موظف بعد.</p>
+    <p style="font-size:13px">تواصل مع المسؤول لربط حساب المستخدم بملف الموظف.</p>
+  </div>
+</div>
+
+{% else %}
+
+{# ── Stats strip ───────────────────────────────────────────────────── #}
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:#e8f4fd">
+        <i class="bi bi-people-fill" style="color:#1a3a5c"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ sections|length }}</div>
+        <div class="stat-label">شعبة تحت إشرافي</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:#fff8ec">
+        <i class="bi bi-clock-history" style="color:#e8a020"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ schedule|length }}</div>
+        <div class="stat-label">حصص أسبوعية</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:#e8f8f0">
+        <i class="bi bi-journal-check" style="color:#1aab6d"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ upcoming_exams|length }}</div>
+        <div class="stat-label">اختبارات قادمة (30 يوم)</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:{% if conflicts %}#fef0f0{% else %}#e8f8f0{% endif %}">
+        <i class="bi bi-exclamation-triangle-fill"
+           style="color:{% if conflicts %}#e03e3e{% else %}#1aab6d{% endif %}"></i>
+      </div>
+      <div>
+        <div class="stat-value" style="color:{% if conflicts %}#e03e3e{% else %}#1aab6d{% endif %}">
+          {{ conflicts|length }}
+        </div>
+        <div class="stat-label">تعارضات في الاختبارات</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Conflict alerts ────────────────────────────────────────────────── #}
+{% if conflicts %}
+<div class="card mb-4 border-danger">
+  <div class="card-header" style="background:#fef0f0;color:#c0392b">
+    <i class="bi bi-exclamation-triangle-fill me-1"></i>
+    تحذير: تعارضات في جدول الاختبارات
+  </div>
+  <div class="card-body">
+    {% for c in conflicts %}
+    <div class="alert mb-2" style="background:#fff5f5;border:1px solid #f5c6cb;color:#721c24;border-radius:8px">
+      <b>{{ c.section.grade.name if c.section and c.section.grade else '—' }}
+         / {{ c.section.name if c.section else '—' }}</b>
+      · {{ c.date.strftime('%Y-%m-%d') }}
+      <span class="text-muted ms-2" style="font-size:12px">
+        {{ c.exams|length }} اختبارات في نفس اليوم:
+        {% for e in c.exams %}
+          <b>{{ e.display_name }}</b>{% if not loop.last %}، {% endif %}
+        {% endfor %}
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="row g-4">
+
+  {# ── Left: Weekly schedule ──────────────────────────────────────── #}
+  <div class="col-lg-7">
+    <div class="card h-100">
+      <div class="card-header">
+        <i class="bi bi-calendar-week text-accent me-1"></i>جدولي الأسبوعي
+      </div>
+      {% if schedule_grid %}
+      <div class="card-body p-0">
+        {% for day_idx in range(7) %}
+        {% if day_idx in schedule_grid %}
+        <div class="border-bottom px-3 py-2">
+          <div class="fw-700 mb-2" style="font-size:13px;color:#1a3a5c">
+            <i class="bi bi-circle-fill me-1" style="font-size:8px"></i>
+            {{ days[day_idx] }}
+          </div>
+          <div class="row g-2">
+            {% for e in schedule_grid[day_idx] %}
+            <div class="col-md-6">
+              <div class="p-2 rounded" style="background:#f8f9fa;border-right:3px solid #1a3a5c">
+                <div class="fw-600" style="font-size:13px">
+                  {{ e.subject.name if e.subject else '—' }}
+                </div>
+                <div class="text-muted" style="font-size:12px">
+                  <i class="bi bi-clock me-1"></i>
+                  {{ e.start_time.strftime('%H:%M') }} – {{ e.end_time.strftime('%H:%M') }}
+                  {% if e.section %}
+                  · {{ e.section.grade.name if e.section.grade else '' }}/{{ e.section.name }}
+                  {% endif %}
+                  {% if e.room %}· غ.{{ e.room }}{% endif %}
+                </div>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="card-body text-center text-muted py-5">
+        <i class="bi bi-calendar3" style="font-size:36px;opacity:.25;display:block;margin-bottom:8px"></i>
+        لم يتم تعيين حصص بعد
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ── Right: Upcoming exams + Sections ──────────────────────────── #}
+  <div class="col-lg-5">
+
+    {# Upcoming exams #}
+    <div class="card mb-4">
+      <div class="card-header">
+        <i class="bi bi-journal-text text-accent me-1"></i>اختبارات قادمة
+      </div>
+      {% if upcoming_exams %}
+      <div class="table-wrapper">
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr><th>الاختبار</th><th>الشعبة</th><th>التاريخ</th></tr>
+          </thead>
+          <tbody>
+            {% for e in upcoming_exams %}
+            <tr>
+              <td>
+                <div class="fw-600">{{ e.display_name }}</div>
+                <small class="text-muted">{{ e.subject.name if e.subject else '—' }}</small>
+              </td>
+              <td style="font-size:12px">
+                {{ e.section.grade.name if e.section and e.section.grade else '—' }}
+                / {{ e.section.name if e.section else '—' }}
+              </td>
+              <td>
+                <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
+                  {{ e.exam_date.strftime('%m/%d') }}
+                </span>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="card-body text-muted text-center py-3" style="font-size:13px">
+        لا توجد اختبارات في الـ 30 يوماً القادمة
+      </div>
+      {% endif %}
+    </div>
+
+    {# My sections #}
+    {% if sections %}
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-people text-accent me-1"></i>شعبي
+      </div>
+      <div class="list-group list-group-flush">
+        {% for sec in sections %}
+        <div class="list-group-item d-flex justify-content-between align-items-center">
+          <div>
+            <div class="fw-600">{{ sec.grade.name if sec.grade else '—' }} / {{ sec.name }}</div>
+            <small class="text-muted">{{ sec.students.count() }} طالب</small>
+          </div>
+          <a href="{{ url_for('attendance.report') }}?section_id={{ sec.id }}"
+             class="btn btn-sm btn-outline-primary" title="تقرير حضور الشعبة">
+            <i class="bi bi-calendar-check"></i>
+          </a>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+
+{# ── Exam Conflict Checker Tool ─────────────────────────────────────── #}
+<div class="card mt-4">
+  <div class="card-header">
+    <i class="bi bi-search text-accent me-1"></i>فحص تعارض الاختبارات
+    <span class="text-muted ms-2" style="font-size:12px">
+      تحقق إن كانت هناك اختبارات أخرى مجدولة لنفس الشعبة في نفس اليوم
+    </span>
+  </div>
+  <div class="card-body">
+    <div class="row g-3 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label">الشعبة</label>
+        <select id="conflictSection" class="form-select">
+          <option value="">— اختر الشعبة —</option>
+          {% for sec in all_sections %}
+          <option value="{{ sec.id }}">
+            {{ sec.grade.name if sec.grade else '—' }} / {{ sec.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">تاريخ الاختبار</label>
+        <input type="date" id="conflictDate" class="form-control">
+      </div>
+      <div class="col-md-4">
+        <button class="btn btn-primary w-100" onclick="checkConflict()">
+          <i class="bi bi-search me-1"></i>فحص التعارض
+        </button>
+      </div>
+    </div>
+    <div id="conflictResult" class="mt-3" style="display:none"></div>
+  </div>
+</div>
+
+<script>
+async function checkConflict() {
+  const secId = document.getElementById('conflictSection').value;
+  const date  = document.getElementById('conflictDate').value;
+  const result = document.getElementById('conflictResult');
+
+  if (!secId || !date) {
+    result.style.display = 'block';
+    result.innerHTML = '<div class="alert alert-warning mb-0">يرجى تحديد الشعبة والتاريخ.</div>';
+    return;
+  }
+
+  try {
+    const resp = await fetch(
+      `{{ url_for('teacher.exam_conflict_check') }}?section_id=${secId}&exam_date=${date}`
+    );
+    const data = await resp.json();
+    result.style.display = 'block';
+
+    if (data.conflict) {
+      const examList = data.exams.map(e =>
+        `<li><b>${e.name}</b> — ${e.subject}</li>`
+      ).join('');
+      result.innerHTML = `
+        <div class="alert alert-danger mb-0">
+          <i class="bi bi-exclamation-triangle-fill me-1"></i>
+          <b>تعارض!</b> يوجد اختبار آخر في هذا اليوم لنفس الشعبة:
+          <ul class="mb-0 mt-1">${examList}</ul>
+        </div>`;
+    } else {
+      result.innerHTML = `
+        <div class="alert alert-success mb-0">
+          <i class="bi bi-check-circle-fill me-1"></i>
+          لا يوجد تعارض — يمكن جدولة الاختبار في هذا التاريخ.
+        </div>`;
+    }
+  } catch (e) {
+    result.style.display = 'block';
+    result.innerHTML = '<div class="alert alert-danger mb-0">حدث خطأ في الاتصال.</div>';
+  }
+}
+</script>
+{% endif %}
+{% endblock %}

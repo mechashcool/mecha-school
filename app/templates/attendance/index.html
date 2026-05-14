@@ -1,0 +1,290 @@
+{% extends "shared/base.html" %}
+{% block title %}الحضور والغياب{% endblock %}
+{% block page_title %}الحضور والغياب{% endblock %}
+
+{% set DAYS_AR = ['الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت','الأحد'] %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">الحضور والغياب</h1>
+    <p class="page-subtitle">اليوم: {{ today.strftime('%Y-%m-%d') }}</p>
+  </div>
+  <div class="d-flex gap-2 align-items-center">
+    <a href="{{ url_for('attendance.report') }}" class="btn btn-outline-primary">
+      <i class="bi bi-bar-chart-fill me-1"></i>تقرير الحضور
+    </a>
+    {% if current_user.is_admin_user and not is_historical_year %}
+    <form method="POST" action="{{ url_for('attendance.mark_absent_today') }}"
+          onsubmit="return confirm('هل تريد تسجيل غياب جميع الطلاب الذين لم يُسجَّل حضورهم اليوم وإرسال إشعارات لأولياء أمورهم؟')">
+      <button type="submit" class="btn btn-danger">
+        <i class="bi bi-person-x-fill me-1"></i>تسجيل غياب تلقائي
+      </button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{# ── Filters ───────────────────────────────────────────────────────────── #}
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="row g-2 align-items-end" id="filter-form">
+      <div class="col-md-2">
+        <label class="form-label mb-1 fw-600">
+          <i class="bi bi-calendar3 me-1"></i>التاريخ
+        </label>
+        <input type="date" name="date" class="form-control"
+               value="{{ sel_date.isoformat() }}">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1 fw-600">المرحلة الدراسية</label>
+        <select name="stage" class="form-select" id="stage-select">
+          <option value="">كل المراحل</option>
+          <option value="ابتدائية"  {% if sel_stage == 'ابتدائية'  %}selected{% endif %}>المرحلة الابتدائية</option>
+          <option value="متوسطة"    {% if sel_stage == 'متوسطة'    %}selected{% endif %}>المرحلة المتوسطة</option>
+          <option value="إعدادية"   {% if sel_stage == 'إعدادية'   %}selected{% endif %}>المرحلة الإعدادية</option>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1 fw-600">الصف</label>
+        <select name="grade_id" class="form-select" id="grade-select">
+          <option value="">كل الصفوف</option>
+          {% for g in all_grades %}
+          <option value="{{ g.id }}" data-stage="{{ g.stage or '' }}"
+                  {% if sel_grade_id == g.id %}selected{% endif %}>
+            {{ g.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1 fw-600">الشعبة</label>
+        <select name="section_id" class="form-select" id="section-select">
+          <option value="">كل الشعب</option>
+          {% for s in all_sections %}
+          <option value="{{ s.id }}" data-grade="{{ s.grade_id }}"
+                  {% if sel_section_id == s.id %}selected{% endif %}>
+            {{ s.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1 fw-600">
+          <i class="bi bi-search me-1"></i>بحث
+        </label>
+        <input type="text" name="q" class="form-control"
+               placeholder="اسم الطالب أو رقمه..."
+               value="{{ q }}">
+      </div>
+      <div class="col-md-2 d-flex gap-2">
+        <button class="btn btn-primary flex-grow-1">
+          <i class="bi bi-search me-1"></i>عرض
+        </button>
+        {% if sel_stage or sel_grade_id or sel_section_id or q or sel_date != today %}
+        <a href="{{ url_for('attendance.index') }}" class="btn btn-outline-secondary"
+           title="مسح الفلاتر">
+          <i class="bi bi-x-lg"></i>
+        </a>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+</div>
+
+{# Attendance time thresholds info banner #}
+{% if settings and (settings.att_late_threshold or settings.att_absence_threshold) %}
+<div class="alert alert-info mb-3 py-2 d-flex align-items-center gap-2" style="font-size:13px">
+  <i class="bi bi-clock-history"></i>
+  <span>
+    <b>إعدادات الدوام:</b>
+    {% if settings.att_start_time %}بدء الدوام {{ settings.att_start_time.strftime('%H:%M') }} · {% endif %}
+    {% if settings.att_late_threshold %}متأخر بعد {{ settings.att_late_threshold.strftime('%H:%M') }}{% endif %}
+    {% if settings.att_absence_threshold %} · غياب تلقائي بعد {{ settings.att_absence_threshold.strftime('%H:%M') }}{% endif %}
+  </span>
+</div>
+{% endif %}
+
+{# ── Attendance records for selected date ────────────────────────────── #}
+{% if day_records %}
+<div class="card mb-4">
+  <div class="card-header d-flex align-items-center justify-content-between">
+    <span>
+      <i class="bi bi-calendar-check-fill text-accent me-1"></i>
+      سجلات حضور {{ DAYS_AR[sel_date.weekday()] }} {{ sel_date.strftime('%Y-%m-%d') }}
+    </span>
+    <small class="text-muted">{{ day_records|length }} طالب</small>
+  </div>
+  <div class="table-wrapper">
+    <table class="table table-hover table-sm">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>رقم الطالب</th>
+          <th>الاسم</th>
+          <th>الصف / الشعبة</th>
+          <th>وقت الدخول</th>
+          <th>وقت الخروج</th>
+          <th>الحالة</th>
+          <th>المصدر</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in day_records %}
+        <tr>
+          <td class="text-muted">{{ loop.index }}</td>
+          <td><code>{{ r.student.student_id }}</code></td>
+          <td class="fw-600">{{ r.student.full_name }}</td>
+          <td style="font-size:12px;color:#555">
+            {% if r.student.section %}
+              {{ r.student.section.grade.name }} / {{ r.student.section.name }}
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% if r.check_in %}
+            <span style="font-weight:700;font-size:15px;color:{% if r.status == 'late' %}#e8a020{% else %}#1aab6d{% endif %}">
+              {{ r.check_in.strftime('%H:%M') }}
+            </span>
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if r.check_out %}
+            <span style="font-weight:600;font-size:14px;color:#555">
+              {{ r.check_out.strftime('%H:%M') }}
+            </span>
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if r.status == 'present' %}
+            <span class="badge-status badge-active">حاضر</span>
+            {% elif r.status == 'late' %}
+            <span class="badge-status" style="background:#fff8ec;color:#e8a020;font-weight:700">متأخر</span>
+            {% elif r.status == 'absent' %}
+            <span class="badge-status badge-inactive">غائب</span>
+            {% endif %}
+          </td>
+          <td style="font-size:12px">
+            {% if r.source == 'rfid' %}
+            <i class="bi bi-credit-card-2-back text-accent"></i> RFID
+            {% elif r.source == 'automatic' %}
+            <i class="bi bi-clock-history text-warning"></i> تلقائي
+            {% else %}
+            <i class="bi bi-pencil-square"></i> يدوي
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card-footer d-flex gap-4" style="font-size:13px">
+    {% set present_count = day_records | selectattr('status','eq','present') | list | length %}
+    {% set late_count    = day_records | selectattr('status','eq','late')    | list | length %}
+    {% set absent_count  = day_records | selectattr('status','eq','absent')  | list | length %}
+    <span class="text-success fw-600"><i class="bi bi-check-circle-fill me-1"></i>حاضر: {{ present_count }}</span>
+    <span style="color:#e8a020;font-weight:600"><i class="bi bi-clock-fill me-1"></i>متأخر: {{ late_count }}</span>
+    <span class="text-danger fw-600"><i class="bi bi-x-circle-fill me-1"></i>غائب: {{ absent_count }}</span>
+  </div>
+</div>
+{% elif sel_date %}
+<div class="alert alert-secondary mb-4 py-3 d-flex align-items-center gap-2" style="font-size:13px">
+  <i class="bi bi-calendar-x" style="font-size:20px;opacity:.5"></i>
+  لا توجد سجلات حضور ليوم {{ sel_date.strftime('%Y-%m-%d') }}.
+  يمكنك تسجيل الحضور بالضغط على أحد الصفوف أدناه.
+</div>
+{% endif %}
+
+{# ── Section cards ───────────────────────────────────────────────────── #}
+<div class="row g-3">
+  {% for section in sections %}
+  <div class="col-md-4 col-xl-3">
+    <div class="card" style="transition:transform .2s,box-shadow .2s"
+         onmouseenter="this.style.transform='translateY(-3px)'"
+         onmouseleave="this.style.transform=''">
+      <div class="card-body text-center py-4">
+        <div style="width:56px;height:56px;border-radius:14px;background:#1a3a5c;
+                    display:flex;align-items:center;justify-content:center;
+                    font-size:24px;color:#fff;margin:0 auto 14px">
+          <i class="bi bi-mortarboard-fill"></i>
+        </div>
+        <h5 style="font-weight:800;margin-bottom:4px">{{ section.grade.name }}</h5>
+        <p class="text-muted mb-1">شعبة {{ section.name }}</p>
+        <p style="font-size:12px;color:#9aabb8">
+          {{ section.students.filter_by(status='active').count() }} طالب
+        </p>
+        {% if current_user.has_permission('take_attendance') and not is_historical_year %}
+        <a href="{{ url_for('attendance.take', section_id=section.id) }}?date={{ sel_date.isoformat() }}"
+           class="btn btn-primary btn-sm w-100 mt-2">
+          <i class="bi bi-calendar-check-fill me-1"></i>تسجيل الحضور يدوياً
+        </a>
+        {% else %}
+        <span class="btn btn-outline-secondary btn-sm w-100 mt-2 disabled">
+          <i class="bi bi-lock-fill me-1"></i>بدون صلاحية
+        </span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="col-12">
+    <div class="card">
+      <div class="card-body text-center text-muted py-5">
+        <i class="bi bi-grid" style="font-size:40px;opacity:.3;display:block;margin-bottom:8px"></i>
+        لا توجد شعب دراسية مضافة بعد
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<script>
+(function () {
+  var stageEl   = document.getElementById('stage-select');
+  var gradeEl   = document.getElementById('grade-select');
+  var sectionEl = document.getElementById('section-select');
+  if (!stageEl) return;
+
+  // Snapshot all options once (skip the first placeholder option)
+  var allGradeOpts   = Array.from(gradeEl.options).slice(1).map(function(o){ return o.cloneNode(true); });
+  var allSectionOpts = Array.from(sectionEl.options).slice(1).map(function(o){ return o.cloneNode(true); });
+
+  function rebuildGrades() {
+    var stage = stageEl.value;
+    var prev  = gradeEl.value;
+    while (gradeEl.options.length > 1) gradeEl.remove(1);
+    allGradeOpts.forEach(function(o) {
+      if (!stage || o.dataset.stage === stage) gradeEl.add(o.cloneNode(true));
+    });
+    gradeEl.value = prev;
+    rebuildSections();
+  }
+
+  function rebuildSections() {
+    var grade = gradeEl.value;
+    var prev  = sectionEl.value;
+    while (sectionEl.options.length > 1) sectionEl.remove(1);
+    allSectionOpts.forEach(function(o) {
+      if (!grade || o.dataset.grade === grade) sectionEl.add(o.cloneNode(true));
+    });
+    sectionEl.value = prev;
+  }
+
+  stageEl.addEventListener('change', function() {
+    gradeEl.value   = '';
+    sectionEl.value = '';
+    rebuildGrades();
+  });
+  gradeEl.addEventListener('change', function() {
+    sectionEl.value = '';
+    rebuildSections();
+  });
+
+  // Initialize on page load to reflect server-selected values
+  rebuildGrades();
+})();
+</script>
+{% endblock %}

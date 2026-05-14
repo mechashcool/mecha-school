@@ -1,0 +1,120 @@
+{% extends "shared/base.html" %}
+{% block title %}إشعار جديد{% endblock %}
+{% block page_title %}إشعار جديد{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">إرسال إشعار</h1></div>
+  <a href="{{ url_for('notifications.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="row justify-content-center">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-megaphone-fill text-accent"></i>بيانات الإشعار</div>
+      <div class="card-body">
+        <form method="POST">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+          <div class="mb-3">
+            <label class="form-label">العنوان <span class="text-danger">*</span></label>
+            <input type="text" name="title" class="form-control" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">النص <span class="text-danger">*</span></label>
+            <textarea name="body" class="form-control" rows="5" required></textarea>
+          </div>
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">النوع</label>
+              <select name="ntype" class="form-select">
+                <option value="announcement">إعلان عام</option>
+                <option value="absence">غياب</option>
+                <option value="payment">رسوم</option>
+                <option value="grade">درجات</option>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">الجمهور المستهدف</label>
+              <select name="target_role" class="form-select" id="targetRoleSelect">
+                <option value="">الكل</option>
+                <option value="teacher">التدريسيين</option>
+                <option value="_specific_teacher">تدريسي محدد</option>
+                <option value="parent">أولياء الأمور</option>
+                <option value="_specific_parent">ولي أمر محدد</option>
+              </select>
+            </div>
+          </div>
+
+          {# Specific teacher selector — shown only when _specific_teacher is chosen #}
+          {% if teacher_users %}
+          <div class="mt-3" id="specificTeacherRow" style="display:none">
+            <label class="form-label">اختر المعلم <span class="text-danger">*</span></label>
+            <select name="target_teacher_id" class="form-select" id="targetTeacherSelect" disabled>
+              <option value="">-- اختر معلم --</option>
+              {% for u in teacher_users %}
+              <option value="{{ u.id }}">{{ u.full_name }} ({{ u.username }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          {% endif %}
+
+          {# Specific parent selector — shown only when _specific_parent is chosen #}
+          {% if parent_users %}
+          <div class="mt-3" id="specificParentRow" style="display:none">
+            <label class="form-label">اختر ولي الأمر <span class="text-danger">*</span></label>
+            <select name="target_parent_id" class="form-select" id="targetParentSelect" disabled>
+              <option value="">-- اختر ولي أمر --</option>
+              {% for u in parent_users %}
+              <option value="{{ u.id }}">{{ u.full_name }} ({{ u.username }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          {% endif %}
+
+          <div class="mt-4 d-flex gap-3">
+            <button type="submit" class="btn btn-primary px-5">
+              <i class="bi bi-send-fill me-2"></i>إرسال الإشعار
+            </button>
+            <a href="{{ url_for('notifications.index') }}" class="btn btn-outline-secondary px-4">إلغاء</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const roleSelect   = document.getElementById('targetRoleSelect');
+  const parentRow    = document.getElementById('specificParentRow');
+  const teacherRow   = document.getElementById('specificTeacherRow');
+  const parentSelect = document.getElementById('targetParentSelect');
+  const teacherSelect = document.getElementById('targetTeacherSelect');
+  if (!roleSelect) return;
+
+  function syncTargetSelectors() {
+    const isSpecificParent = roleSelect.value === '_specific_parent';
+    const isSpecificTeacher = roleSelect.value === '_specific_teacher';
+
+    if (parentRow) parentRow.style.display = isSpecificParent ? '' : 'none';
+    if (teacherRow) teacherRow.style.display = isSpecificTeacher ? '' : 'none';
+
+    if (parentSelect) {
+      parentSelect.required = isSpecificParent;
+      parentSelect.disabled = !isSpecificParent;
+      if (!isSpecificParent) parentSelect.value = '';
+    }
+    if (teacherSelect) {
+      teacherSelect.required = isSpecificTeacher;
+      teacherSelect.disabled = !isSpecificTeacher;
+      if (!isSpecificTeacher) teacherSelect.value = '';
+    }
+  }
+
+  roleSelect.addEventListener('change', syncTargetSelectors);
+  syncTargetSelectors();
+})();
+</script>
+{% endblock %}

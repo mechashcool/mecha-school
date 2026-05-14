@@ -1,0 +1,337 @@
+{% extends "shared/base.html" %}
+{% block title %}{{ 'تعديل مستخدم' if user else 'إضافة مستخدم' }}{% endblock %}
+{% block page_title %}{{ 'تعديل مستخدم' if user else 'إضافة مستخدم جديد' }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ 'تعديل: ' + user.full_name if user else 'مستخدم جديد' }}</h1>
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="{{ url_for('admin.dashboard') }}">الرئيسية</a></li>
+        <li class="breadcrumb-item"><a href="{{ url_for('admin.users_list') }}">المستخدمون</a></li>
+        <li class="breadcrumb-item active">{{ 'تعديل' if user else 'إضافة' }}</li>
+      </ol>
+    </nav>
+  </div>
+  <a href="{{ url_for('admin.users_list') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<form method="POST" action="{{ url_for('admin.edit_user', user_id=user.id) if user else url_for('admin.create_user') }}">
+  <div class="row g-4">
+    <!-- Main Info -->
+    <div class="col-lg-8">
+      <div class="card">
+        <div class="card-header">
+          <i class="bi bi-person-fill text-accent"></i>
+          البيانات الأساسية
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">الاسم الكامل <span class="text-danger">*</span></label>
+              <input type="text" name="full_name" class="form-control"
+                     value="{{ user.full_name if user else '' }}" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">اسم المستخدم <span class="text-danger">*</span></label>
+              <input type="text" name="username" class="form-control"
+                     value="{{ user.username if user else '' }}"
+                     {{ 'readonly' if user }} required>
+              {% if user %}<small class="text-muted">لا يمكن تغيير اسم المستخدم</small>{% endif %}
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">البريد الإلكتروني</label>
+              <input type="email" name="email" class="form-control"
+                     value="{{ user.email if user else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">رقم الهاتف</label>
+              <input type="tel" name="phone" class="form-control"
+                     value="{{ user.phone if user else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">{{ 'كلمة المرور الجديدة' if user else 'كلمة المرور' }} <span class="text-danger">{{ '' if user else '*' }}</span></label>
+              <input type="password" name="{{ 'new_password' if user else 'password' }}"
+                     class="form-control"
+                     placeholder="{{ 'اتركها فارغة إذا لم تُرِد التغيير' if user else '' }}"
+                     {{ '' if user else 'required minlength=6' }}>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">الدور <span class="text-danger">*</span></label>
+              <select name="role_id" class="form-select" required>
+                <option value="">— اختر الدور —</option>
+                {% for role in roles %}
+                <option value="{{ role.id }}"
+                        {{ 'selected' if user and user.role_id == role.id }}>
+                  {{ role.label }}
+                </option>
+                {% endfor %}
+              </select>
+              {% if is_school_manager %}
+              <div class="form-text text-warning">
+                <i class="bi bi-shield-exclamation me-1"></i>
+                لا يمكن إنشاء مستخدمين بصلاحيات إدارية.
+              </div>
+              {% endif %}
+            </div>
+            {% if current_user.is_super_admin and all_schools %}
+            <div class="col-md-6">
+              <label class="form-label">المدرسة</label>
+              <select name="school_id" class="form-select">
+                <option value="">— بدون مدرسة (مسؤول النظام) —</option>
+                {% for s in all_schools %}
+                <option value="{{ s.id }}"
+                        {{ 'selected' if (user and user.school_id == s.id) or (not user and s.id == preselect_school_id) }}>
+                  {{ s.school_name_ar or s.school_name }}
+                </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">
+                إذا كان دور المستخدم إدارة مدرسة، فسيكون مديراً للمدرسة المختارة.
+              </div>
+            </div>
+            {% endif %}
+            {% if user %}
+            <div class="col-md-6">
+              <label class="form-label">الحالة</label>
+              <div class="form-check form-switch mt-2">
+                <input class="form-check-input" type="checkbox" name="is_active" id="isActive"
+                       {{ 'checked' if user.is_active }}>
+                <label class="form-check-label" for="isActive">مستخدم فعّال</label>
+              </div>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Extra Permissions -->
+    {% if all_permissions %}
+    {# Super-admin: full permission list #}
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header">
+          <i class="bi bi-shield-check text-accent"></i>
+          صلاحيات إضافية
+        </div>
+        <div class="card-body" style="max-height:480px;overflow-y:auto">
+          <p class="text-muted" style="font-size:12px">
+            هذه الصلاحيات تُمنح للمستخدم بشكل فردي بصرف النظر عن دوره.
+          </p>
+          {% set ns = namespace(current_cat='') %}
+          {% set selected_perm_ids = request.form.getlist('permissions') %}
+          {% for perm in all_permissions %}
+            {% if perm.category != ns.current_cat %}
+              {% set ns.current_cat = perm.category %}
+              <div class="mt-3 mb-2" style="font-size:11px;font-weight:700;text-transform:uppercase;
+                                            letter-spacing:1px;color:#9aabb8">
+                {{ perm.category }}
+              </div>
+            {% endif %}
+            <div class="form-check mb-1">
+              <input class="form-check-input" type="checkbox"
+                     name="permissions" value="{{ perm.id }}"
+                     id="perm_{{ perm.id }}"
+                     {% if (user and perm in user.extra_permissions) or (not user and perm.id|string in selected_perm_ids) %}checked{% endif %}>
+              <label class="form-check-label" for="perm_{{ perm.id }}"
+                     style="font-size:13px">
+                {{ perm.label }}
+              </label>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    {% elif not user and not is_school_manager %}
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header"><i class="bi bi-info-circle text-accent"></i>ملاحظة</div>
+        <div class="card-body text-muted" style="font-size:13px">
+          يمكنك تعيين صلاحيات إضافية بعد إنشاء المستخدم من خلال صفحة التعديل.
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── Parent → Student linkage panel ──────────────────────────────────── #}
+  {% set is_parent_role = user and user.role and user.role.name == 'parent' %}
+  <div class="row g-4 mt-0" id="parentLinkPanel"
+       style="{{ 'display:none' if not is_parent_role }}">
+    <div class="col-12">
+      <div class="card border-warning">
+        <div class="card-header" style="background:#fff8ec;color:#b07800">
+          <i class="bi bi-people-fill me-1"></i>
+          ربط ولي الأمر بالطلاب
+        </div>
+        <div class="card-body">
+          <p class="text-muted mb-3" style="font-size:13px">
+            اختر الطلاب المرتبطين بهذا الحساب. يمكن لولي الأمر متابعة جميع الطلاب المختارين.
+          </p>
+          <div class="row g-2" style="max-height:260px;overflow-y:auto">
+            {% if all_students %}
+            {% for student in all_students %}
+            <div class="col-md-4">
+              <div class="form-check p-2 border rounded"
+                   style="cursor:pointer;transition:background .15s"
+                   onmouseover="this.style.background='#f8f9fa'"
+                   onmouseout="this.style.background=''">
+                <input class="form-check-input" type="checkbox"
+                       name="student_ids" value="{{ student.id }}"
+                       id="stu_{{ student.id }}"
+                       {% if user and student in user.children %}checked{% endif %}>
+                <label class="form-check-label w-100" for="stu_{{ student.id }}"
+                       style="cursor:pointer;font-size:13px">
+                  <b>{{ student.full_name }}</b>
+                  <span class="text-muted d-block" style="font-size:11px">
+                    {{ student.student_id }}
+                    {% if student.section %}
+                    · {{ student.section.grade.name }}/{{ student.section.name }}
+                    {% endif %}
+                  </span>
+                </label>
+              </div>
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="col-12 text-muted">لا يوجد طلاب مسجّلون.</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Teacher → Section assignment panel ─────────────────────────────── #}
+  {% set is_teacher_role = user and user.role and user.role.name == 'teacher' %}
+  <div class="row g-4 mt-0" id="teacherSectionPanel"
+       style="{{ 'display:none' if not is_teacher_role }}">
+    <div class="col-12">
+      <div class="card border-info">
+        <div class="card-header" style="background:#eaf4fb;color:#0c6378">
+          <i class="bi bi-person-workspace me-1"></i>
+          تعيين المعلم للشعب (صف التدريس)
+        </div>
+        <div class="card-body">
+          <p class="text-muted mb-3" style="font-size:13px">
+            حدد الشعب الدراسية التي يُشرف عليها هذا المعلم. يمكن للمعلم عرض وتسجيل غياب وإدخال درجات طلاب الشعب المختارة فقط.
+          </p>
+          <div class="row g-2" style="max-height:260px;overflow-y:auto">
+            {% if all_sections %}
+            {% for section in all_sections %}
+            <div class="col-md-4">
+              <div class="form-check p-2 border rounded"
+                   style="cursor:pointer;transition:background .15s"
+                   onmouseover="this.style.background='#f0f7fc'"
+                   onmouseout="this.style.background=''">
+                <input class="form-check-input" type="checkbox"
+                       name="teacher_section_ids" value="{{ section.id }}"
+                       id="sec_{{ section.id }}"
+                       {% if teacher_section_ids is defined and section.id in teacher_section_ids %}checked{% endif %}>
+                <label class="form-check-label w-100" for="sec_{{ section.id }}"
+                       style="cursor:pointer;font-size:13px">
+                  <b>{{ section.grade.name if section.grade else '' }} / {{ section.name }}</b>
+                  {% if section.teacher %}
+                  <span class="text-warning d-block" style="font-size:11px">
+                    <i class="bi bi-person-fill me-1"></i>{{ section.teacher.full_name }}
+                  </span>
+                  {% endif %}
+                </label>
+              </div>
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="col-12 text-muted">لا توجد شعب دراسية للعام الحالي.</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Teacher → Subject assignment panel ──────────────────────────────── #}
+  <div class="row g-4 mt-0" id="teacherSubjectPanel"
+       style="{{ 'display:none' if not is_teacher_role }}">
+    <div class="col-12">
+      <div class="card border-success">
+        <div class="card-header" style="background:#eafaf1;color:#0a6640">
+          <i class="bi bi-journal-bookmark-fill me-1"></i>
+          المواد الدراسية المسندة للمعلم
+        </div>
+        <div class="card-body">
+          <p class="text-muted mb-3" style="font-size:13px">
+            حدد المواد التي يُدرّسها هذا المعلم. يمكن للمعلم إدخال الدرجات والحضور لهذه المواد في الشعب المختارة أعلاه فقط.
+          </p>
+          <div class="row g-2" style="max-height:260px;overflow-y:auto">
+            {% if all_subjects %}
+            {% for subject in all_subjects %}
+            <div class="col-md-4">
+              <div class="form-check p-2 border rounded"
+                   style="cursor:pointer;transition:background .15s"
+                   onmouseover="this.style.background='#f0faf4'"
+                   onmouseout="this.style.background=''">
+                <input class="form-check-input" type="checkbox"
+                       name="teacher_subject_ids" value="{{ subject.id }}"
+                       id="subj_{{ subject.id }}"
+                       {% if teacher_subject_ids is defined and subject.id in teacher_subject_ids %}checked{% endif %}>
+                <label class="form-check-label w-100" for="subj_{{ subject.id }}"
+                       style="cursor:pointer;font-size:13px">
+                  <b>{{ subject.name }}</b>
+                  {% if subject.code %}
+                  <span class="text-muted d-block" style="font-size:11px">{{ subject.code }}</span>
+                  {% endif %}
+                </label>
+              </div>
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="col-12 text-muted">لا توجد مواد دراسية للعام الحالي.</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Submit -->
+  <div class="mt-4 d-flex gap-3">
+    <button type="submit" class="btn btn-primary px-5">
+      <i class="bi bi-check-circle-fill me-2"></i>
+      {{ 'حفظ التعديلات' if user else 'إنشاء المستخدم' }}
+    </button>
+    <a href="{{ url_for('admin.users_list') }}" class="btn btn-outline-secondary px-5">إلغاء</a>
+  </div>
+</form>
+
+<script>
+(function () {
+  const roleSelect        = document.querySelector('select[name="role_id"]');
+  const parentPanel       = document.getElementById('parentLinkPanel');
+  const teacherPanel      = document.getElementById('teacherSectionPanel');
+  const teacherSubjPanel  = document.getElementById('teacherSubjectPanel');
+  if (!roleSelect) return;
+
+  const parentRoleIds = [
+    {% for role in roles %}{% if role.name == 'parent' %}{{ role.id }}{% if not loop.last %},{% endif %}{% endif %}{% endfor %}
+  ];
+  const teacherRoleIds = [
+    {% for role in roles %}{% if role.name == 'teacher' %}{{ role.id }}{% if not loop.last %},{% endif %}{% endif %}{% endfor %}
+  ];
+
+  function togglePanels() {
+    const val = parseInt(roleSelect.value);
+    const isParent  = parentRoleIds.includes(val);
+    const isTeacher = teacherRoleIds.includes(val);
+    if (parentPanel)      parentPanel.style.display      = isParent  ? '' : 'none';
+    if (teacherPanel)     teacherPanel.style.display     = isTeacher ? '' : 'none';
+    if (teacherSubjPanel) teacherSubjPanel.style.display = isTeacher ? '' : 'none';
+  }
+  roleSelect.addEventListener('change', togglePanels);
+  togglePanels();
+})();
+</script>
+{% endblock %}

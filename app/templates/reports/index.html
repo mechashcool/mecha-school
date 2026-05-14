@@ -1,0 +1,224 @@
+{% extends "shared/base.html" %}
+{% block title %}التقارير{% endblock %}
+{% block page_title %}التقارير والإحصائيات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">التقارير والإحصائيات</h1>
+    <p class="page-subtitle">ملخص شامل لأداء المدرسة — {{ year }}</p>
+  </div>
+</div>
+
+<!-- KPIs -->
+<div class="row g-3 mb-4">
+  <div class="col-xl col-md-4">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#1a3a5c,#22508a)">
+        <i class="bi bi-people-fill"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ student_stats.active }}</div>
+        <div class="stat-label">طلاب فعّالون</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-xl col-md-4">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#1aab6d,#16c879)">
+        <i class="bi bi-person-badge-fill"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ emp_active }}</div>
+        <div class="stat-label">موظفون فعّالون</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-xl col-md-4">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#e8a020,#f5c25a)">
+        <i class="bi bi-cash-coin"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ fee_rate }}%</div>
+        <div class="stat-label">نسبة تحصيل الرسوم</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-xl col-md-4">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:{{ 'linear-gradient(135deg,#1aab6d,#16c879)' if balance >= 0 else 'linear-gradient(135deg,#e03e3e,#f87171)' }}">
+        <i class="bi bi-wallet2"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ '{:,.0f}'.format(balance) }}</div>
+        <div class="stat-label">الصافي المالي {{ year }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-xl col-md-4">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#2196f3,#64b5f6)">
+        <i class="bi bi-check-circle-fill"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ present_today }}</div>
+        <div class="stat-label">حضور اليوم</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Charts -->
+<div class="row g-4 mb-4">
+  <div class="col-xl-8">
+    <div class="card h-100">
+      <div class="card-header">
+        <i class="bi bi-bar-chart-line-fill text-accent"></i>
+        الإيرادات والمصروفات — {{ year }}
+      </div>
+      <div class="card-body">
+        <canvas id="finChart" style="max-height:260px"></canvas>
+      </div>
+    </div>
+  </div>
+  <div class="col-xl-4">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-pie-chart-fill text-accent"></i>توزيع الطلاب</div>
+      <div class="card-body d-flex align-items-center justify-content-center">
+        {% set total_s = student_stats.active + student_stats.transferred + student_stats.withdrawn + student_stats.graduated %}
+        {% if total_s > 0 %}
+        <div style="max-width:220px;width:100%">
+          <canvas id="studentChart"></canvas>
+        </div>
+        {% else %}
+        <p class="text-muted">لا توجد بيانات</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Fee collection progress -->
+<div class="row g-4 mb-4">
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-cash-stack text-accent"></i>تحصيل الرسوم</div>
+      <div class="card-body">
+        <div class="d-flex justify-content-between mb-2">
+          <span class="text-muted" style="font-size:13px">المحصّل</span>
+          <span class="fw-700 text-success">{{ '{:,.0f}'.format(total_fee_paid) }} د.ع</span>
+        </div>
+        <div class="d-flex justify-content-between mb-3">
+          <span class="text-muted" style="font-size:13px">الإجمالي</span>
+          <span class="fw-700">{{ '{:,.0f}'.format(total_fee_all) }} د.ع</span>
+        </div>
+        <div style="height:14px;background:#f0f4f8;border-radius:8px;overflow:hidden">
+          <div style="width:{{ fee_rate }}%;height:100%;background:linear-gradient(90deg,#1aab6d,#16c879);border-radius:8px"></div>
+        </div>
+        <div class="text-center mt-2" style="font-size:24px;font-weight:900;color:#1aab6d">{{ fee_rate }}%</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-calendar-check-fill text-accent"></i>حضور اليوم</div>
+      <div class="card-body">
+        <div class="row g-3 text-center">
+          <div class="col-4">
+            <div style="font-size:32px;font-weight:900;color:#1aab6d">{{ present_today }}</div>
+            <div style="font-size:12px;color:#6b7a8d">حاضر</div>
+          </div>
+          <div class="col-4">
+            <div style="font-size:32px;font-weight:900;color:#e03e3e">{{ absent_today }}</div>
+            <div style="font-size:12px;color:#6b7a8d">غائب</div>
+          </div>
+          <div class="col-4">
+            <div style="font-size:32px;font-weight:900;color:#e8a020">{{ late_today }}</div>
+            <div style="font-size:12px;color:#6b7a8d">متأخر</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Quick report links -->
+<div class="row g-3">
+  <div class="col-md-4"><a href="{{ url_for('reports.financial') }}" class="text-decoration-none">
+    <div class="card" style="border-right:4px solid #1aab6d;cursor:pointer">
+      <div class="card-body py-3 d-flex align-items-center gap-3">
+        <div style="width:40px;height:40px;border-radius:10px;background:#1aab6d;display:flex;align-items:center;justify-content:center;color:#fff"><i class="bi bi-graph-up-arrow"></i></div>
+        <div><div class="fw-700">التقرير المالي</div><div style="font-size:12px;color:#9aabb8">إيرادات ومصروفات مفصّلة</div></div>
+      </div>
+    </div>
+  </a></div>
+  <div class="col-md-4"><a href="{{ url_for('reports.students_report') }}" class="text-decoration-none">
+    <div class="card" style="border-right:4px solid #1a3a5c;cursor:pointer">
+      <div class="card-body py-3 d-flex align-items-center gap-3">
+        <div style="width:40px;height:40px;border-radius:10px;background:#1a3a5c;display:flex;align-items:center;justify-content:center;color:#fff"><i class="bi bi-people-fill"></i></div>
+        <div><div class="fw-700">تقرير الطلاب</div><div style="font-size:12px;color:#9aabb8">إحصائيات الطلاب والشعب</div></div>
+      </div>
+    </div>
+  </a></div>
+  <div class="col-md-4"><a href="{{ url_for('reports.fees_report') }}" class="text-decoration-none">
+    <div class="card" style="border-right:4px solid #e8a020;cursor:pointer">
+      <div class="card-body py-3 d-flex align-items-center gap-3">
+        <div style="width:40px;height:40px;border-radius:10px;background:#e8a020;display:flex;align-items:center;justify-content:center;color:#fff"><i class="bi bi-cash-coin"></i></div>
+        <div><div class="fw-700">تقرير الرسوم</div><div style="font-size:12px;color:#9aabb8">الأقساط المعلّقة والمتأخرة</div></div>
+      </div>
+    </div>
+  </a></div>
+  <div class="col-md-4"><a href="{{ url_for('reports.attendance_report') }}" class="text-decoration-none">
+    <div class="card" style="border-right:4px solid #2196f3;cursor:pointer">
+      <div class="card-body py-3 d-flex align-items-center gap-3">
+        <div style="width:40px;height:40px;border-radius:10px;background:#2196f3;display:flex;align-items:center;justify-content:center;color:#fff"><i class="bi bi-calendar-check-fill"></i></div>
+        <div><div class="fw-700">تقرير الحضور</div><div style="font-size:12px;color:#9aabb8">سجلات حضور الطلاب</div></div>
+      </div>
+    </div>
+  </a></div>
+  <div class="col-md-4"><a href="{{ url_for('reports.salary_report') }}" class="text-decoration-none">
+    <div class="card" style="border-right:4px solid #9c27b0;cursor:pointer">
+      <div class="card-body py-3 d-flex align-items-center gap-3">
+        <div style="width:40px;height:40px;border-radius:10px;background:#9c27b0;display:flex;align-items:center;justify-content:center;color:#fff"><i class="bi bi-wallet-fill"></i></div>
+        <div><div class="fw-700">تقرير الرواتب</div><div style="font-size:12px;color:#9aabb8">إجمالي الرواتب السنوية</div></div>
+      </div>
+    </div>
+  </a></div>
+  <div class="col-md-4"><a href="{{ url_for('grades.report') }}" class="text-decoration-none">
+    <div class="card" style="border-right:4px solid #e03e3e;cursor:pointer">
+      <div class="card-body py-3 d-flex align-items-center gap-3">
+        <div style="width:40px;height:40px;border-radius:10px;background:#e03e3e;display:flex;align-items:center;justify-content:center;color:#fff"><i class="bi bi-patch-check-fill"></i></div>
+        <div><div class="fw-700">تقرير الدرجات</div><div style="font-size:12px;color:#9aabb8">نتائج الاختبارات والمعدلات</div></div>
+      </div>
+    </div>
+  </a></div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+new Chart(document.getElementById('finChart'), {
+  type:'bar',
+  data:{
+    labels:['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'],
+    datasets:[
+      { label:'الإيرادات', data:{{ chart_rev|tojson }}, backgroundColor:'rgba(26,171,109,.8)', borderRadius:5 },
+      { label:'المصروفات', data:{{ chart_exp|tojson }}, backgroundColor:'rgba(224,62,62,.75)',  borderRadius:5 }
+    ]
+  },
+  options:{responsive:true,plugins:{legend:{labels:{font:{family:'Cairo',size:12}}}},
+    scales:{y:{ticks:{font:{family:'Cairo'}},grid:{color:'#f0f4f8'}},x:{ticks:{font:{family:'Cairo',size:11}}}}}
+});
+{% set total_s = student_stats.active + student_stats.transferred + student_stats.withdrawn + student_stats.graduated %}
+{% if total_s > 0 %}
+new Chart(document.getElementById('studentChart'), {
+  type:'doughnut',
+  data:{labels:['فعّال','منقول','مسحوب','متخرج'],
+    datasets:[{data:[{{ student_stats.active }},{{ student_stats.transferred }},{{ student_stats.withdrawn }},{{ student_stats.graduated }}],
+      backgroundColor:['#1aab6d','#2196f3','#e03e3e','#e8a020'],borderWidth:0,hoverOffset:6}]},
+  options:{responsive:true,cutout:'68%',plugins:{legend:{position:'bottom',labels:{font:{family:'Cairo',size:12},padding:10}}}}
+});
+{% endif %}
+</script>
+{% endblock %}

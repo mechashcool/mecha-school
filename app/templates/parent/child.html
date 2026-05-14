@@ -1,0 +1,298 @@
+{% extends "shared/base.html" %}
+{% block title %}{{ s.full_name }}{% endblock %}
+{% block page_title %}{{ s.full_name }}{% endblock %}
+
+{% block content %}
+{% set DAYS = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'] %}
+
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ s.full_name }}</h1>
+    <p class="page-subtitle">{{ s.student_id }}
+      {% if s.section %} · {{ s.section.grade.name }} / {{ s.section.name }}{% endif %}
+    </p>
+  </div>
+  <a href="{{ url_for('parent.dashboard') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>لوحتي
+  </a>
+</div>
+
+{# ── Attendance summary strip ─────────────────────────────────────────── #}
+{% set DAYS_AR = ['الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت','الأحد'] %}
+<div class="row g-3 mb-3">
+  <div class="col-6 col-md-2">
+    <div class="card text-center py-2">
+      <div class="stat-value" style="color:#1a3a5c">{{ att_stats.total }}</div>
+      <div class="stat-label">أيام مسجّلة</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card text-center py-2">
+      <div class="stat-value" style="color:#1aab6d">{{ att_stats.present }}</div>
+      <div class="stat-label">حاضر</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card text-center py-2">
+      <div class="stat-value" style="color:#e8a020">{{ att_stats.late }}</div>
+      <div class="stat-label">متأخر</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card text-center py-2">
+      <div class="stat-value" style="color:#e03e3e">{{ att_stats.absent }}</div>
+      <div class="stat-label">غائب</div>
+    </div>
+  </div>
+  <div class="col-12 col-md-4">
+    <div class="card text-center py-2">
+      <div class="stat-value" style="color:
+        {% if att_stats.pct >= 90 %}#1aab6d{% elif att_stats.pct >= 75 %}#e8a020{% else %}#e03e3e{% endif %}">
+        {{ att_stats.pct }}%
+      </div>
+      <div class="stat-label">نسبة الحضور (60 يوم)</div>
+    </div>
+  </div>
+</div>
+
+<ul class="nav nav-tabs mb-3" role="tablist">
+  <li class="nav-item">
+    <a class="nav-link active" data-bs-toggle="tab" href="#tab-att">
+      <i class="bi bi-calendar-check me-1"></i>الحضور
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" data-bs-toggle="tab" href="#tab-fees">
+      <i class="bi bi-cash-stack me-1"></i>الرسوم
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" data-bs-toggle="tab" href="#tab-grades">
+      <i class="bi bi-mortarboard-fill me-1"></i>الدرجات
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" data-bs-toggle="tab" href="#tab-schedule">
+      <i class="bi bi-clock me-1"></i>الجدول الدراسي
+    </a>
+  </li>
+</ul>
+
+<div class="tab-content">
+
+  {# ── ATTENDANCE TAB ─────────────────────────────────────────────────── #}
+  <div class="tab-pane fade show active" id="tab-att">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-calendar-check text-accent me-1"></i>آخر 60 يوم</span>
+        <span class="text-muted" style="font-size:12px">{{ atts|length }} سجل</span>
+      </div>
+      <div class="table-wrapper">
+        <table class="table table-sm table-hover">
+          <thead>
+            <tr>
+              <th>التاريخ</th><th>اليوم</th><th>الحالة</th><th>وقت الدخول</th>
+              <th>وقت الخروج</th><th>المصدر</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in atts %}
+            <tr>
+              <td>{{ r.date.strftime('%Y-%m-%d') }}</td>
+              <td style="font-size:12px;color:#555">{{ DAYS_AR[r.date.weekday()] }}</td>
+              <td>
+                {% if r.status == 'present' %}
+                <span class="badge-status badge-active">حاضر</span>
+                {% elif r.status == 'absent' %}
+                <span class="badge-status badge-inactive">غائب</span>
+                {% elif r.status == 'late' %}
+                <span class="badge-status" style="background:#fff8ec;color:#e8a020">متأخر</span>
+                {% else %}
+                <span class="badge-status">{{ r.status }}</span>
+                {% endif %}
+              </td>
+              <td style="color:#1aab6d;font-weight:600">
+                {{ r.check_in.strftime('%H:%M') if r.check_in else '—' }}
+              </td>
+              <td style="color:#e03e3e;font-weight:600">
+                {{ r.check_out.strftime('%H:%M') if r.check_out else '—' }}
+              </td>
+              <td style="font-size:12px">
+                {% if r.source == 'rfid' %}
+                <i class="bi bi-credit-card-2-back text-accent"></i> RFID
+                {% else %}
+                <i class="bi bi-pencil-square"></i> يدوي
+                {% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="6" class="text-center text-muted py-4">لا توجد سجلات حضور</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  {# ── FEES TAB ───────────────────────────────────────────────────────── #}
+  <div class="tab-pane fade" id="tab-fees">
+    {% for rec in fee_records %}
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between">
+        <b>{{ rec.fee_type.name if rec.fee_type else '—' }}</b>
+        <span class="text-muted" style="font-size:12.5px">
+          {{ rec.academic_year.name if rec.academic_year else '' }}
+        </span>
+      </div>
+      <div class="table-wrapper">
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr>
+              <th>القسط</th><th>المبلغ</th><th>المدفوع</th>
+              <th>المتبقي</th><th>الاستحقاق</th><th>الحالة</th><th>الإيصال</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for i in rec.installments %}
+            {% set rec_amt = i.received_amount|float if i.received_amount else 0 %}
+            <tr>
+              <td>{{ i.installment_no }}</td>
+              <td>{{ '{:,.0f}'.format(i.amount) }}</td>
+              <td class="text-success fw-600">{{ '{:,.0f}'.format(rec_amt) }}</td>
+              <td class="text-danger">{{ '{:,.0f}'.format(i.amount|float - rec_amt) }}</td>
+              <td>{{ i.due_date.strftime('%Y-%m-%d') if i.due_date else '—' }}</td>
+              <td>
+                <span class="badge-status badge-{{ i.status }}">
+                  {% if i.status == 'paid' %}مدفوع
+                  {% elif i.status == 'partial' %}جزئي
+                  {% elif i.status == 'overdue' %}متأخر
+                  {% else %}معلق{% endif %}
+                </span>
+              </td>
+              <td><code>{{ i.receipt_no or '—' }}</code></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% else %}
+    <div class="card">
+      <div class="card-body text-muted text-center py-4">لا توجد رسوم مسجّلة</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {# ── GRADES TAB ─────────────────────────────────────────────────────── #}
+  <div class="tab-pane fade" id="tab-grades">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-mortarboard-fill text-accent me-1"></i>آخر الدرجات
+      </div>
+      <div class="table-wrapper">
+        <table class="table table-sm">
+          <thead>
+            <tr>
+              <th>الاختبار</th><th>المادة</th><th>الدرجة</th>
+              <th>من</th><th>التقدير</th><th>الحالة</th><th>التاريخ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in results %}
+            <tr>
+              <td>{{ r.exam.display_name if r.exam else '—' }}</td>
+              <td>{{ r.exam.subject.name if r.exam and r.exam.subject else '—' }}</td>
+              <td class="fw-700" style="color:{% if r.is_pass %}#1aab6d{% else %}#e03e3e{% endif %}">
+                {{ r.marks }}
+              </td>
+              <td>{{ r.exam.max_marks if r.exam else '—' }}</td>
+              <td>
+                {% if r.grade_letter %}
+                <span class="badge" style="
+                  background:{% if r.is_pass %}#e8f8f0{% else %}#fef0f0{% endif %};
+                  color:{% if r.is_pass %}#1aab6d{% else %}#e03e3e{% endif %};
+                  font-weight:700">{{ r.grade_letter }}</span>
+                {% else %}—{% endif %}
+              </td>
+              <td>
+                {% if r.is_pass %}
+                <span class="badge-status badge-active">ناجح</span>
+                {% elif r.is_pass == false %}
+                <span class="badge-status badge-inactive">راسب</span>
+                {% else %}<span class="text-muted">—</span>{% endif %}
+              </td>
+              <td style="font-size:12px">
+                {{ r.exam.exam_date.strftime('%Y-%m-%d') if r.exam and r.exam.exam_date else '—' }}
+              </td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="7" class="text-center text-muted py-4">لا توجد نتائج بعد</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  {# ── SCHEDULE TAB ───────────────────────────────────────────────────── #}
+  <div class="tab-pane fade" id="tab-schedule">
+    {% if schedule %}
+    <div class="row g-3">
+      {% set grouped = {} %}
+      {% for entry in schedule %}
+        {% if entry.day_of_week not in grouped %}
+          {% set _ = grouped.update({entry.day_of_week: []}) %}
+        {% endif %}
+        {% set _ = grouped[entry.day_of_week].append(entry) %}
+      {% endfor %}
+
+      {% for day_idx in range(7) %}
+        {% if day_idx in grouped %}
+        <div class="col-md-6">
+          <div class="card">
+            <div class="card-header" style="background:#1a3a5c;color:#fff;font-weight:600">
+              <i class="bi bi-calendar-day me-1"></i>
+              {{ DAYS[day_idx] }}
+            </div>
+            <div class="table-wrapper">
+              <table class="table table-sm mb-0">
+                <thead>
+                  <tr><th>الوقت</th><th>المادة</th><th>المعلم</th><th>الغرفة</th></tr>
+                </thead>
+                <tbody>
+                  {% for e in grouped[day_idx] %}
+                  <tr>
+                    <td style="white-space:nowrap;font-weight:600">
+                      {{ e.start_time.strftime('%H:%M') }} – {{ e.end_time.strftime('%H:%M') }}
+                    </td>
+                    <td>{{ e.subject.name if e.subject else '—' }}</td>
+                    <td style="font-size:12px">
+                      {{ e.teacher.full_name if e.teacher else '—' }}
+                    </td>
+                    <td style="font-size:12px">{{ e.room or '—' }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="card">
+      <div class="card-body text-center text-muted py-5">
+        <i class="bi bi-calendar3" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+        لم يتم إعداد الجدول الدراسي بعد
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}

@@ -1,0 +1,117 @@
+{% extends "shared/base.html" %}
+{% block title %}إدخال الدرجات{% endblock %}
+{% block page_title %}إدخال الدرجات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">إدخال الدرجات</h1>
+    <p class="page-subtitle">
+      {{ exam.exam_type.name }} — {{ exam.subject.name }} —
+      {{ exam.section.grade.name }} / {{ exam.section.name }} —
+      {{ exam.exam_date.strftime('%Y-%m-%d') }}
+    </p>
+  </div>
+  <a href="{{ url_for('grades.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<form method="POST">
+  <div class="card">
+    <div class="card-header d-flex align-items-center">
+      <i class="bi bi-pencil-square text-accent me-2"></i>
+      درجات {{ students|length }} طالب
+      <span class="ms-auto text-muted" style="font-size:12.5px">
+        الدرجة العظمى: {{ exam.max_marks }} | درجة النجاح: {{ exam.pass_marks }}
+      </span>
+    </div>
+    <div class="table-wrapper">
+      <table class="table">
+        <thead>
+          <tr>
+            <th style="width:50px">#</th>
+            <th>رقم الطالب</th>
+            <th>الاسم</th>
+            <th style="width:160px">الدرجة <span class="text-muted fw-400">(من {{ exam.max_marks }})</span></th>
+            <th>التقدير</th>
+            <th>الحالة</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for student in students %}
+          {% set res = existing.get(student.id) %}
+          <tr>
+            <td class="text-muted">{{ loop.index }}</td>
+            <td><code>{{ student.student_id }}</code></td>
+            <td class="fw-600">{{ student.full_name }}</td>
+            <td>
+              <input type="number" name="marks_{{ student.id }}"
+                     class="form-control form-control-sm marks-input"
+                     data-max="{{ exam.max_marks }}" data-pass="{{ exam.pass_marks }}"
+                     data-index="{{ loop.index }}"
+                     min="0" max="{{ exam.max_marks }}" step="0.5"
+                     value="{{ res.marks if res else '' }}"
+                     placeholder="أدخل الدرجة">
+            </td>
+            <td>
+              <span id="grade_{{ loop.index }}" class="badge" style="background:#f0f4f8;color:#1a3a5c;min-width:40px;text-align:center">
+                {{ res.grade_letter if res else '—' }}
+              </span>
+            </td>
+            <td>
+              <span id="pass_{{ loop.index }}" class="badge-status {{ 'badge-active' if res and res.is_pass else 'badge-inactive' if res else '' }}">
+                {% if res %}{{ 'ناجح' if res.is_pass else 'راسب' }}{% else %}—{% endif %}
+              </span>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="6" class="text-center text-muted py-4">لا يوجد طلاب</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="card-footer d-flex justify-content-end">
+      <button type="submit" class="btn btn-primary px-5">
+        <i class="bi bi-save-fill me-2"></i>حفظ الدرجات وحساب الترتيب
+      </button>
+    </div>
+  </div>
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const gradeMap = [
+  [95,'A+'],[90,'A'],[85,'B+'],[80,'B'],[75,'C+'],[70,'C'],[60,'D'],[0,'F']
+];
+
+document.querySelectorAll('.marks-input').forEach(inp => {
+  inp.addEventListener('input', function() {
+    const marks   = parseFloat(this.value) || 0;
+    const max     = parseFloat(this.dataset.max);
+    const pass    = parseFloat(this.dataset.pass);
+    const idx     = this.dataset.index;
+    const pct     = (marks / max) * 100;
+
+    let letter = 'F';
+    for (const [min, ltr] of gradeMap) {
+      if (pct >= min) { letter = ltr; break; }
+    }
+
+    document.getElementById('grade_' + idx).textContent = letter;
+
+    const passEl = document.getElementById('pass_' + idx);
+    if (marks >= pass) {
+      passEl.textContent = 'ناجح';
+      passEl.className   = 'badge-status badge-active';
+    } else {
+      passEl.textContent = 'راسب';
+      passEl.className   = 'badge-status badge-inactive';
+    }
+  });
+});
+</script>
+{% endblock %}

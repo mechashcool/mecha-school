@@ -1,0 +1,205 @@
+{% extends "shared/base.html" %}
+{% block title %}الجداول الدراسية{% endblock %}
+{% block page_title %}بناء الجدول الدراسي{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">الجداول الدراسية</h1>
+    <p class="page-subtitle">بناء وإدارة الجدول الأسبوعي لكل شعبة</p>
+  </div>
+  {% if sec_id %}
+  <a href="{{ url_for('schedules.print_pdf', section_id=sec_id) }}"
+     target="_blank" class="btn btn-outline-primary">
+    <i class="bi bi-printer-fill me-1"></i>طباعة الجدول (PDF)
+  </a>
+  {% endif %}
+</div>
+
+<!-- Section selector -->
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="d-flex gap-3 align-items-center flex-wrap">
+      <div>
+        <label class="form-label mb-0 me-2" style="font-size:13px;font-weight:600">
+          الشعبة:
+        </label>
+        <select name="section_id" class="form-select d-inline-block" style="width:auto"
+                onchange="this.form.submit()">
+          <option value="">— اختر الشعبة —</option>
+          {% for sec in sections %}
+          <option value="{{ sec.id }}" {{ 'selected' if sec.id == sec_id }}>
+            {{ sec.grade.name }} / شعبة {{ sec.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+    </form>
+  </div>
+</div>
+
+{% if sec_id and not is_historical_year %}
+<!-- Add entry form -->
+<div class="card mb-4">
+  <div class="card-header">
+    <i class="bi bi-plus-circle-fill text-accent"></i>إضافة حصة دراسية
+  </div>
+  <div class="card-body">
+    <form method="POST" action="{{ url_for('schedules.create') }}"
+          class="row g-3 align-items-end">
+      <input type="hidden" name="section_id" value="{{ sec_id }}">
+
+      <div class="col-md-2">
+        <label class="form-label">اليوم <span class="text-danger">*</span></label>
+        <select name="day_of_week" class="form-select" required>
+          {% for i, d in enumerate(days) %}
+          <option value="{{ i }}">{{ d }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">المادة <span class="text-danger">*</span></label>
+        <select name="subject_id" class="form-select" required>
+          <option value="">— اختر —</option>
+          {% for s in subjects %}
+          <option value="{{ s.id }}">{{ s.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">المعلم</label>
+        <select name="teacher_id" class="form-select">
+          <option value="">— اختياري —</option>
+          {% for t in teachers %}
+          <option value="{{ t.id }}">{{ t.full_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">من <span class="text-danger">*</span></label>
+        <input type="time" name="start_time" class="form-control" required value="08:00">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">إلى <span class="text-danger">*</span></label>
+        <input type="time" name="end_time" class="form-control" required value="09:00">
+      </div>
+      <div class="col-md-1">
+        <label class="form-label">الغرفة</label>
+        <input type="text" name="room" class="form-control" placeholder="101">
+      </div>
+      <div class="col-12">
+        <button type="submit" class="btn btn-primary">
+          <i class="bi bi-plus-circle-fill me-1"></i>إضافة الحصة
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Timetable grid -->
+<div class="card">
+  <div class="card-header">
+    <i class="bi bi-table text-accent"></i>
+    الجدول الأسبوعي
+  </div>
+  <div style="overflow-x:auto">
+    <table class="table table-bordered mb-0" style="min-width:700px">
+      <thead>
+        <tr style="background:#f6f9fc">
+          <th style="text-align:center;padding:12px 8px;font-size:13px;
+                     color:#1a3a5c;font-weight:700;min-width:100px">
+            الوقت
+          </th>
+          {% for day in days %}
+          <th style="text-align:center;padding:12px 8px;font-size:13px;
+                     color:#1a3a5c;font-weight:700;min-width:130px">
+            {{ day }}
+          </th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% set time_slots = [] %}
+        {% for day_index in day_indices %}
+          {% if day_index in schedule_grid %}
+            {% for entry in schedule_grid[day_index] %}
+              {% set time_key = (entry.start_time.strftime('%H:%M'), entry.end_time.strftime('%H:%M')) %}
+              {% if time_key not in time_slots %}
+                {% set _ = time_slots.append(time_key) %}
+              {% endif %}
+            {% endfor %}
+          {% endif %}
+        {% endfor %}
+        {% set time_slots = time_slots|sort %}
+
+        {% for time_slot in time_slots %}
+        <tr style="vertical-align:top">
+          <td style="padding:12px 8px;text-align:center;background:#f6f9fc;
+                     font-size:12px;font-weight:600;color:#1a3a5c">
+            {{ time_slot[0] }}<br>—<br>{{ time_slot[1] }}
+          </td>
+          {% for day_index in day_indices %}
+          <td style="padding:8px;background:{{ '#f8fbff' if loop.index0 % 2 == 0 else '#fff' }}">
+            {% set day_entries = [] %}
+            {% if day_index in schedule_grid %}
+              {% for entry in schedule_grid[day_index] %}
+                {% if entry.start_time.strftime('%H:%M') == time_slot[0] and entry.end_time.strftime('%H:%M') == time_slot[1] %}
+                  {% set _ = day_entries.append(entry) %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            
+            {% if day_entries %}
+            {% for entry in day_entries %}
+            <div style="background:#fff;border:1px solid #dde3ec;border-radius:10px;
+                        padding:10px 12px;margin-bottom:8px;position:relative;
+                        border-right:4px solid #e8a020;">
+              <div style="font-size:13px;font-weight:700;color:#1a3a5c">
+                {{ entry.subject.name }}
+              </div>
+              {% if entry.teacher %}
+              <div style="font-size:11px;color:#9aabb8;margin-top:2px">
+                <i class="bi bi-person-fill"></i> {{ entry.teacher.full_name }}
+              </div>
+              {% endif %}
+              {% if entry.room %}
+              <div style="font-size:11px;color:#9aabb8">
+                <i class="bi bi-geo-alt-fill"></i> {{ entry.room }}
+              </div>
+              {% endif %}
+              {% if not is_historical_year %}
+              <form method="POST"
+                    action="{{ url_for('schedules.delete', entry_id=entry.id) }}"
+                    style="position:absolute;top:6px;left:6px">
+                <button class="btn btn-sm p-0"
+                        style="width:22px;height:22px;border-radius:6px;
+                               background:#fef0f0;color:#e03e3e;border:none;font-size:10px"
+                        data-confirm="حذف هذه الحصة؟">
+                  <i class="bi bi-x"></i>
+                </button>
+              </form>
+              {% endif %}
+            </div>
+            {% endfor %}
+            {% else %}
+            <div style="text-align:center;color:#dde3ec;padding:20px 0;font-size:22px">
+              <i class="bi bi-circle-dotted"></i>
+            </div>
+            {% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">
+    اختر شعبة من القائمة أعلاه لعرض جدولها أو إنشائه
+  </div>
+</div>
+{% endif %}
+{% endblock %}

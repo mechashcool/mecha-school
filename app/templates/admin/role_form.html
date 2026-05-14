@@ -1,0 +1,99 @@
+{% extends "shared/base.html" %}
+{% block title %}{{ 'تعديل دور' if role else 'إضافة دور' }}{% endblock %}
+{% block page_title %}{{ 'تعديل دور' if role else 'إضافة دور جديد' }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ 'تعديل: ' + role.label if role else 'دور جديد' }}</h1>
+  </div>
+  <a href="{{ url_for('admin.roles_list') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<form method="POST" action="{{ url_for('admin.edit_role', role_id=role.id) if role else url_for('admin.create_role') }}">
+  <div class="row g-4">
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header">
+          <i class="bi bi-info-circle text-accent"></i>بيانات الدور
+        </div>
+        <div class="card-body">
+          {% if not role %}
+          <div class="mb-3">
+            <label class="form-label">المعرّف (بالإنجليزية) <span class="text-danger">*</span></label>
+            <input type="text" name="name" class="form-control" placeholder="مثال: accountant" required>
+            <small class="text-muted">حروف صغيرة وشرطات سفلية فقط</small>
+          </div>
+          {% endif %}
+          <div class="mb-3">
+            <label class="form-label">الاسم (بالعربية) <span class="text-danger">*</span></label>
+            <input type="text" name="label" class="form-control"
+                   value="{{ role.label if role else '' }}" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">الوصف</label>
+            <textarea name="description" class="form-control" rows="3">{{ role.description if role else '' }}</textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-8">
+      <div class="card">
+        <div class="card-header">
+          <i class="bi bi-shield-check text-accent"></i>
+          الصلاحيات
+          <button type="button" class="btn btn-sm btn-outline-secondary ms-auto"
+                  onclick="toggleAll()">
+            تحديد الكل / إلغاء الكل
+          </button>
+        </div>
+        <div class="card-body">
+          {% set ns = namespace(current_cat='') %}
+          {% for perm in all_permissions %}
+            {% if perm.category != ns.current_cat %}
+              {% set ns.current_cat = perm.category %}
+              {% if not loop.first %}<hr class="my-3">{% endif %}
+              <div class="mb-3 mt-2" style="font-size:12px;font-weight:800;text-transform:uppercase;
+                                            letter-spacing:1.2px;color:#1a3a5c;
+                                            border-right:3px solid #e8a020;padding-right:8px">
+                {{ perm.category }}
+              </div>
+            {% endif %}
+            <div class="form-check form-check-inline mb-2" style="min-width:220px">
+              <input class="form-check-input perm-cb" type="checkbox"
+                     name="permissions" value="{{ perm.id }}"
+                     id="p_{{ perm.id }}"
+                     {% if role and perm in role.permissions %}checked{% endif %}>
+              <label class="form-check-label" for="p_{{ perm.id }}"
+                     style="font-size:13px;cursor:pointer">
+                {{ perm.label }}
+              </label>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-4 d-flex gap-3">
+    <button type="submit" class="btn btn-primary px-5">
+      <i class="bi bi-check-circle-fill me-2"></i>
+      {{ 'حفظ التعديلات' if role else 'إنشاء الدور' }}
+    </button>
+    <a href="{{ url_for('admin.roles_list') }}" class="btn btn-outline-secondary px-5">إلغاء</a>
+  </div>
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function toggleAll() {
+  const cbs = document.querySelectorAll('.perm-cb');
+  const anyUnchecked = [...cbs].some(cb => !cb.checked);
+  cbs.forEach(cb => cb.checked = anyUnchecked);
+}
+</script>
+{% endblock %}

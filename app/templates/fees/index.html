@@ -1,0 +1,335 @@
+{% extends "shared/base.html" %}
+{% block title %}الرسوم الدراسية{% endblock %}
+{% block page_title %}إدارة الرسوم الدراسية{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">الرسوم الدراسية</h1>
+    <p class="page-subtitle">متابعة وإدارة رسوم الطلاب والأقساط</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('fees.fee_types') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-tags-fill me-1"></i>أنواع الرسوم
+    </a>
+    <a href="{{ url_for('fees.export_excel', **request.args.to_dict()) }}" class="btn btn-outline-success">
+      <i class="bi bi-file-earmark-excel-fill me-1"></i>تصدير Excel
+    </a>
+    {% if current_user.has_permission('manage_fees') and not is_historical_year %}
+    <a href="{{ url_for('fees.create') }}" class="btn btn-primary">
+      <i class="bi bi-plus-circle-fill me-2"></i>إضافة سجل رسوم
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Search -->
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="row g-3 align-items-end">
+      <div class="col-md-2">
+        <label for="fee_type" class="form-label">نوع الرسم</label>
+        <select name="fee_type" id="fee_type" class="form-select" onchange="this.form.submit()">
+          <option value="all" {% if fee_type_filter == 'all' %}selected{% endif %}>الكل</option>
+          {% for fee_type in fee_types %}
+          <option value="{{ fee_type.id }}" {% if fee_type_filter == fee_type.id|string %}selected{% endif %}>{{ fee_type.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label for="installment" class="form-label">رقم القسط</label>
+        <select name="installment" id="installment" class="form-select" onchange="this.form.submit()">
+          <option value="all" {% if installment_filter == 'all' %}selected{% endif %}>الكل</option>
+          {% for i in range(1,13) %}
+          <option value="{{ i }}" {% if installment_filter == i|string %}selected{% endif %}>{{ i }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label for="payment_status" class="form-label">حالة الدفع</label>
+        <select name="payment_status" id="payment_status" class="form-select" onchange="this.form.submit()">
+          <option value="all" {% if payment_status == 'all' %}selected{% endif %}>الكل</option>
+          <option value="paid" {% if payment_status == 'paid' %}selected{% endif %}>مدفوع</option>
+          <option value="unpaid" {% if payment_status == 'unpaid' %}selected{% endif %}>غير مدفوع</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label for="q" class="form-label">البحث</label>
+        <input type="text" name="q" id="q" class="form-control"
+               placeholder="بحث باسم الطالب أو رقمه..." value="{{ search }}">
+      </div>
+      <div class="col-md-1 d-grid">
+        <button class="btn btn-primary w-100"><i class="bi bi-search me-1"></i>بحث</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>الطالب</th>
+          <th>نوع الرسم</th>
+          <th>المبلغ الإجمالي</th>
+          <th>الخصم</th>
+          <th>المدفوع</th>
+          <th>المتبقي</th>
+          <th>العام الدراسي</th>
+          <th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rec in records.items %}
+        {% set paid = rec.total_paid %}
+        {% set remaining = rec.remaining %}
+        <tr>
+          <td>
+            <div class="fw-600">{{ rec.student.full_name }}</div>
+            <div style="font-size:11.5px;color:#9aabb8">{{ rec.student.student_id }}</div>
+          </td>
+          <td>{{ rec.fee_type.name }}</td>
+          <td class="fw-600">{{ '{:,.0f}'.format(rec.total_amount) }}</td>
+          <td class="text-danger">
+            {% if rec.discount %}{{ '{:,.0f}'.format(rec.discount) }}{% else %}—{% endif %}
+          </td>
+          <td class="text-success fw-600">{{ '{:,.0f}'.format(paid) }}</td>
+          <td>
+            <span class="badge-status {{ 'badge-paid' if remaining <= 0 else 'badge-overdue' }}">
+              {{ '{:,.0f}'.format(remaining) if remaining > 0 else 'مسدّد' }}
+            </span>
+          </td>
+          <td style="font-size:12.5px">{{ rec.academic_year.name if rec.academic_year }}</td>
+          <td>
+            <button class="btn btn-sm btn-outline-primary"
+                    onclick="toggleInstallments({{ rec.id }})">
+              <i class="bi bi-list-ul me-1"></i>الأقساط
+            </button>
+          </td>
+        </tr>
+        <!-- Installments sub-row -->
+        <tr id="inst_{{ rec.id }}" style="display:none;background:#f8fbff">
+          <td colspan="8" class="p-0">
+            <div class="px-4 py-3">
+              <table class="table table-sm mb-0">
+                <thead>
+                  <tr>
+                    <th>القسط</th><th>المبلغ</th><th>المستلم</th><th>المتبقي</th>
+                    <th>الاستحقاق</th><th>الدفع</th><th>الحالة</th><th>الإيصال</th>
+                    {% if current_user.has_permission('record_payments') %}
+                    <th>إجراء</th>
+                    {% endif %}
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for inst in rec.installments %}
+                  {% if installment_filter == 'all' or inst.installment_no == installment_filter|int %}
+                  {% set inst_received = inst.received_amount|float if inst.received_amount else 0 %}
+                  {% set inst_remaining = (inst.amount|float) - inst_received %}
+                  <tr>
+                    <td>القسط {{ inst.installment_no }}</td>
+                    <td>{{ '{:,.0f}'.format(inst.amount) }}</td>
+                    <td class="text-success">{{ '{:,.0f}'.format(inst_received) }}</td>
+                    <td class="{{ 'text-muted' if inst_remaining <= 0 else 'text-danger' }}">
+                      {{ '{:,.0f}'.format(inst_remaining) }}
+                    </td>
+                    <td>{{ inst.due_date.strftime('%Y-%m-%d') }}</td>
+                    <td>{{ inst.paid_date.strftime('%Y-%m-%d') if inst.paid_date else '—' }}</td>
+                    <td>
+                      <span class="badge-status badge-{{ inst.status }}">
+                        {% if inst.status == 'paid'     %}مدفوع
+                        {% elif inst.status == 'partial' %}جزئي
+                        {% elif inst.status == 'overdue' %}متأخر
+                        {% else %}معلق{% endif %}
+                      </span>
+                    </td>
+                    <td><code>{{ inst.receipt_no or '—' }}</code></td>
+                    {% if current_user.has_permission('record_payments') %}
+                    <td>
+                      {% if inst.status != 'paid' and not is_historical_year %}
+                      <button type="button" class="btn btn-sm btn-success"
+                              onclick="openPayModal({{ inst.id }}, '{{ rec.student.full_name|e }}',
+                                                    {{ inst.amount|float }}, {{ inst_received }}, {{ inst.installment_no }})">
+                        <i class="bi bi-cash-stack me-1"></i>دفع
+                      </button>
+                      {% elif inst.status != 'paid' %}
+                      <span class="text-muted" style="font-size:12px">مؤرشف</span>
+                      {% else %}
+                      <button type="button" class="btn btn-sm btn-outline-secondary"
+                              onclick="printReceipt({{ inst.id }})">
+                        <i class="bi bi-printer me-1"></i>طباعة
+                      </button>
+                      {% endif %}
+                    </td>
+                    {% endif %}
+                  </tr>
+                  {% endif %}
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8" class="text-center text-muted py-5">
+            <i class="bi bi-cash-coin" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا توجد سجلات رسوم
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ────────────────── PAY MODAL (manual received_amount) ────────────────── -->
+<div class="modal fade" id="payModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <form id="payForm" autocomplete="off">
+        <div class="modal-header">
+          <h5 class="modal-title">
+            <i class="bi bi-cash-stack text-success me-1"></i>
+            تسجيل دفعة للقسط
+          </h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="alert alert-info mb-3" id="payCtx" style="font-size:13px"></div>
+
+          <div class="row g-2">
+            <div class="col-md-6">
+              <label class="form-label">المبلغ المستلم <span class="text-danger">*</span></label>
+              <input type="number" step="0.01" min="0.01" name="received_amount"
+                     id="rAmount" class="form-control" required>
+              <small class="text-muted" id="rRemaining"></small>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">طريقة الدفع</label>
+              <select name="payment_method" class="form-select">
+                <option value="cash">نقداً</option>
+                <option value="transfer">تحويل بنكي</option>
+                <option value="cheque">شيك</option>
+                <option value="card">بطاقة</option>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">تاريخ الدفع</label>
+              <input type="date" name="paid_date" id="rDate" class="form-control">
+            </div>
+            <div class="col-md-6 d-flex align-items-end">
+              <button type="button" class="btn btn-outline-secondary w-100"
+                      onclick="fillRemaining()">
+                <i class="bi bi-arrow-down-circle me-1"></i>المبلغ المتبقي
+              </button>
+            </div>
+            <div class="col-12">
+              <label class="form-label">ملاحظات</label>
+              <textarea name="notes" rows="2" class="form-control"></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">إلغاء</button>
+          <button type="submit" class="btn btn-success">
+            <i class="bi bi-check-circle-fill me-1"></i>تأكيد الدفع
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function toggleInstallments(id) {
+  const row = document.getElementById('inst_' + id);
+  row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+}
+
+let _lastRemaining = 0;
+
+function openPayModal(instId, studentName, amount, received, instNo) {
+  const remaining = (amount - received).toFixed(2);
+  _lastRemaining = parseFloat(remaining);
+
+  document.getElementById('payForm').action =
+    "{{ url_for('fees.pay_installment', inst_id=0) }}".replace('/0', '/' + instId);
+
+  document.getElementById('payCtx').innerHTML =
+    '<b>' + studentName + '</b> — القسط ' + instNo +
+    '<br>المبلغ: <b>' + amount.toLocaleString() + '</b>' +
+    ' · المستلم سابقاً: <b>' + received.toLocaleString() + '</b>' +
+    ' · <span class="text-danger">المتبقي: <b>' + parseFloat(remaining).toLocaleString() + '</b></span>';
+
+  document.getElementById('rAmount').value = '';
+  document.getElementById('rAmount').max   = remaining;
+  document.getElementById('rRemaining').innerText =
+    'الحد الأقصى: ' + parseFloat(remaining).toLocaleString();
+
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('rDate').value = today;
+
+  new bootstrap.Modal(document.getElementById('payModal')).show();
+}
+
+function fillRemaining() {
+  document.getElementById('rAmount').value = _lastRemaining.toFixed(2);
+}
+
+function printReceipt(instId) {
+  const url = "{{ url_for('fees.generate_receipt', inst_id=0) }}".replace('/0', '/' + instId);
+  const printWindow = window.open(url, '_blank');
+  printWindow.onload = function() {
+    printWindow.print();
+  };
+}
+
+// Handle form submission via AJAX
+document.getElementById('payForm').addEventListener('submit', function(e) {
+  e.preventDefault();
+  
+  const formData = new FormData(this);
+  const actionUrl = this.action;
+  
+  fetch(actionUrl, {
+    method: 'POST',
+    body: formData,
+    headers: {
+      'X-Requested-With': 'XMLHttpRequest'
+    }
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.status === 'success') {
+      // Close modal
+      bootstrap.Modal.getInstance(document.getElementById('payModal')).hide();
+      
+      // If receipt URL available, open it immediately for printing
+      if (data.receipt_url) {
+        const printWindow = window.open(data.receipt_url, '_blank');
+        printWindow.onload = function() {
+          printWindow.print();
+        };
+      }
+      
+      // Show success message
+      alert(data.message);
+      
+      // Reload page to update table
+      location.reload();
+      
+    } else {
+      alert(data.message || 'حدث خطأ أثناء معالجة الدفعة.');
+    }
+  })
+  .catch(error => {
+    console.error('Error:', error);
+    alert('حدث خطأ أثناء معالجة الدفعة.');
+  });
+});
+</script>
+{% endblock %}

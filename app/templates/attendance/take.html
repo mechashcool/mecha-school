@@ -1,0 +1,340 @@
+{% extends "shared/base.html" %}
+{% block title %}تسجيل الحضور{% endblock %}
+{% block page_title %}تسجيل الحضور{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">
+      {{ section.grade.name }} — شعبة {{ section.name }}
+    </h1>
+    <p class="page-subtitle">تاريخ الحضور: {{ att_date.strftime('%Y-%m-%d') }}</p>
+  </div>
+  <div class="d-flex gap-2 align-items-center">
+    <input type="date" id="datePicker" class="form-control" style="width:auto"
+           value="{{ att_date.isoformat() }}"
+           onchange="window.location.href='{{ url_for('attendance.take', section_id=section.id) }}?date='+this.value">
+    <a href="{{ url_for('attendance.index') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>رجوع
+    </a>
+  </div>
+</div>
+
+{% if is_departure_time %}
+<div class="alert alert-warning mb-3 py-2 d-flex align-items-center gap-2" style="font-size:13px">
+  <i class="bi bi-door-closed-fill" style="font-size:18px"></i>
+  <span>
+    <b>وضع الانصراف:</b>
+    الوقت الحالي تجاوز وقت الانصراف ({{ settings.att_departure_time.strftime('%H:%M') }}).
+    سيتم تسجيل <b>وقت الخروج</b> للطلاب الحاضرين الذين لم يُسجَّل انصرافهم بعد.
+  </span>
+</div>
+{% endif %}
+
+<form method="POST">
+  <div class="card">
+    <div class="card-header d-flex align-items-center gap-3">
+      <i class="bi bi-calendar-check-fill text-accent"></i>
+      {% if is_departure_time %}
+      كشف الانصراف ({{ students|length }} طالب)
+      {% else %}
+      كشف الحضور ({{ students|length }} طالب)
+      {% endif %}
+
+      <!-- Quick select buttons — only affect unlocked rows -->
+      <div class="d-flex gap-2 ms-auto">
+        {% if not is_departure_time %}
+        <button type="button" class="btn btn-sm btn-outline-success"
+                onclick="markAll('present')">
+          <i class="bi bi-check-all me-1"></i>الكل حاضر
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-danger"
+                onclick="markAll('absent')">
+          <i class="bi bi-x-circle me-1"></i>الكل غائب
+        </button>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if is_departure_time %}
+    {# ── DEPARTURE MODE TABLE ──────────────────────────────────────────── #}
+    <div class="table-wrapper">
+      <table class="table table-hover" id="departureTable">
+        <thead>
+          <tr>
+            <th style="width:44px">
+              <div class="form-check mb-0">
+                <input type="checkbox" class="form-check-input" id="checkAll"
+                       title="تحديد الكل">
+              </div>
+            </th>
+            <th style="width:40px">#</th>
+            <th>رقم الطالب</th>
+            <th>الاسم</th>
+            <th>وقت الدخول</th>
+            <th>الحالة</th>
+            <th>ملاحظة الانصراف (اختياري)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for student in students %}
+          {% set current = existing.get(student.id) %}
+          {% set can_checkout = current and current.check_in is not none and current.check_out is none %}
+          {% set already_out  = current and current.check_out is not none %}
+          {% set is_suspended = student.id in suspended_ids %}
+          {% set no_checkin   = not current or current.check_in is none %}
+
+          {% if already_out or is_suspended or no_checkin %}
+          {# ── Read-only rows ── #}
+          <tr style="opacity:.5;background:#f8f9fa">
+            <td></td>
+            <td class="text-muted">{{ loop.index }}</td>
+            <td><code>{{ student.student_id }}</code></td>
+            <td class="fw-600">
+              {{ student.full_name }}
+              {% if is_suspended %}
+              <span class="badge ms-1" style="background:#fff3cd;color:#856404;font-size:10px">موقوف</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if current and current.check_in %}
+              <span style="color:#1aab6d;font-weight:700">{{ current.check_in.strftime('%H:%M') }}</span>
+              {% else %}<span class="text-muted">—</span>{% endif %}
+            </td>
+            <td>
+              {% if already_out %}
+              <i class="bi bi-check2-circle text-success me-1"></i>
+              <span style="font-size:12px">خروج <b style="color:#e03e3e">{{ current.check_out.strftime('%H:%M') }}</b></span>
+              {% elif is_suspended %}
+              <span class="badge-status badge-pending" style="font-size:11px">موقوف</span>
+              {% else %}
+              <span class="text-muted" style="font-size:12px">لا يوجد دخول</span>
+              {% endif %}
+            </td>
+            <td></td>
+          </tr>
+          {% else %}
+          {# ── Eligible for checkout ── #}
+          <tr class="checkout-row">
+            <td>
+              <div class="form-check mb-0">
+                <input type="checkbox" class="form-check-input checkout-cb"
+                       name="checkout_{{ student.id }}" value="1" checked>
+              </div>
+            </td>
+            <td class="text-muted">{{ loop.index }}</td>
+            <td><code>{{ student.student_id }}</code></td>
+            <td class="fw-600">{{ student.full_name }}</td>
+            <td>
+              <span style="color:{% if current.status == 'late' %}#e8a020{% else %}#1aab6d{% endif %};font-weight:700;font-size:15px">
+                {{ current.check_in.strftime('%H:%M') }}
+              </span>
+            </td>
+            <td>
+              {% if current.status == 'present' %}
+              <span class="badge-status badge-active">حاضر</span>
+              {% elif current.status == 'late' %}
+              <span class="badge-status" style="background:#fff8ec;color:#e8a020">متأخر</span>
+              {% endif %}
+              {% if current.source == 'rfid' %}
+              <i class="bi bi-credit-card-2-back text-accent ms-1" title="RFID"></i>
+              {% endif %}
+            </td>
+            <td>
+              <input type="text" name="departure_note_{{ student.id }}"
+                     class="form-control form-control-sm"
+                     placeholder="مثال: نقل خاص، انصراف مبكر بإذن..."
+                     style="min-width:220px;font-size:12px">
+            </td>
+          </tr>
+          {% endif %}
+          {% else %}
+          <tr>
+            <td colspan="7" class="text-center text-muted py-4">لا يوجد طلاب في هذه الشعبة</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card-footer d-flex justify-content-between align-items-center">
+      <div class="text-muted" style="font-size:13px">
+        <span id="checkedCount" class="text-warning fw-600">0</span> طالب محدد للانصراف
+      </div>
+      <button type="submit" class="btn btn-warning px-5">
+        <i class="bi bi-door-closed-fill me-2"></i>تسجيل الانصراف
+      </button>
+    </div>
+
+    {% else %}
+    {# ── NORMAL CHECK-IN TABLE ─────────────────────────────────────────── #}
+    <div class="table-wrapper">
+      <table class="table table-hover">
+        <thead>
+          <tr>
+            <th style="width:50px">#</th>
+            <th>رقم الطالب</th>
+            <th>الاسم</th>
+            <th>حاضر</th>
+            <th>غائب</th>
+            <th>متأخر</th>
+            <th>الحالة الحالية</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for student in students %}
+          {% set current = existing.get(student.id) %}
+          {% set locked = current and current.check_in is not none %}
+          {% set is_suspended = student.id in suspended_ids %}
+          <tr {% if locked or is_suspended %}style="opacity:.55;background:#f8f9fa"{% endif %}>
+            <td class="text-muted">{{ loop.index }}</td>
+            <td><code>{{ student.student_id }}</code></td>
+            <td class="fw-600">
+              {{ student.full_name }}
+              {% if is_suspended %}
+              <span class="badge ms-1" style="background:#fff3cd;color:#856404;font-size:10px">
+                <i class="bi bi-slash-circle me-1"></i>موقوف
+              </span>
+              {% endif %}
+            </td>
+
+            {% if is_suspended %}
+            <td colspan="3" class="text-center text-muted" style="font-size:12px">
+              <i class="bi bi-slash-circle me-1 text-warning"></i>
+              الطالب موقوف — لا يُسجَّل حضوره
+            </td>
+            {% elif locked %}
+            <td colspan="3" class="text-center text-muted" style="font-size:12px">
+              <i class="bi bi-lock-fill me-1"></i>
+              سُجِّل الدخول الساعة
+              <b style="color:#1aab6d">{{ current.check_in.strftime('%H:%M') }}</b>
+              {% if current.check_out %}
+              · خروج <b style="color:#e03e3e">{{ current.check_out.strftime('%H:%M') }}</b>
+              {% endif %}
+            </td>
+            {% else %}
+            <td>
+              <div class="form-check">
+                <input type="radio" class="form-check-input att-radio-{{ loop.index }}"
+                       name="status_{{ student.id }}" value="present"
+                       {{ 'checked' if not current or current.status == 'present' }}>
+              </div>
+            </td>
+            <td>
+              <div class="form-check">
+                <input type="radio" class="form-check-input att-radio-{{ loop.index }}"
+                       name="status_{{ student.id }}" value="absent"
+                       {{ 'checked' if current and current.status == 'absent' }}>
+              </div>
+            </td>
+            <td>
+              <div class="form-check">
+                <input type="radio" class="form-check-input att-radio-{{ loop.index }}"
+                       name="status_{{ student.id }}" value="late"
+                       {{ 'checked' if current and current.status == 'late' }}>
+              </div>
+            </td>
+            {% endif %}
+
+            <td style="font-size:12px">
+              {% if is_suspended %}
+                <span class="badge-status badge-pending">موقوف</span>
+              {% elif current %}
+                {% if current.status == 'present' %}
+                <span class="badge-status badge-active">حاضر</span>
+                {% elif current.status == 'late' %}
+                <span class="badge-status" style="background:#fff8ec;color:#e8a020">متأخر</span>
+                {% elif current.status == 'absent' %}
+                <span class="badge-status badge-inactive">غائب</span>
+                {% endif %}
+                {% if current.source == 'rfid' %}
+                <i class="bi bi-credit-card-2-back text-accent ms-1" title="RFID"></i>
+                {% endif %}
+              {% else %}
+                <span class="text-muted">—</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="7" class="text-center text-muted py-4">
+              لا يوجد طلاب في هذه الشعبة
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card-footer d-flex justify-content-between">
+      <div class="text-muted" style="font-size:13px">
+        <span id="presentCount" class="text-success fw-600">0</span> حاضر ·
+        <span id="absentCount"  class="text-danger fw-600">0</span> غائب ·
+        <span id="lateCount"    class="text-warning fw-600">0</span> متأخر
+      </div>
+      <button type="submit" class="btn btn-primary px-5">
+        <i class="bi bi-save-fill me-2"></i>حفظ الحضور
+      </button>
+    </div>
+    {% endif %}
+  </div>
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+{% if is_departure_time %}
+// ── Departure mode ────────────────────────────────────────────────────────
+const checkAll = document.getElementById('checkAll');
+const checkboxes = document.querySelectorAll('.checkout-cb');
+
+function updateCheckedCount() {
+  const n = document.querySelectorAll('.checkout-cb:checked').length;
+  document.getElementById('checkedCount').textContent = n;
+}
+
+checkAll.addEventListener('change', () => {
+  checkboxes.forEach(cb => { cb.checked = checkAll.checked; });
+  updateCheckedCount();
+});
+
+checkboxes.forEach(cb => {
+  cb.addEventListener('change', () => {
+    checkAll.checked = [...checkboxes].every(c => c.checked);
+    updateCheckedCount();
+  });
+});
+
+updateCheckedCount();
+
+{% else %}
+// ── Normal check-in mode ──────────────────────────────────────────────────
+function markAll(status) {
+  document.querySelectorAll(`input[type=radio][value=${status}]:not(:disabled)`).forEach(r => {
+    if (!r.closest('tr').style.opacity) {
+      r.checked = true;
+    }
+  });
+  updateCounts();
+}
+
+function updateCounts() {
+  let p=0, a=0, l=0;
+  document.querySelectorAll('tbody tr').forEach(row => {
+    const checked = row.querySelector('input[type=radio]:checked');
+    if (checked) {
+      if (checked.value === 'present') p++;
+      else if (checked.value === 'absent') a++;
+      else l++;
+    }
+  });
+  document.getElementById('presentCount').textContent = p;
+  document.getElementById('absentCount').textContent  = a;
+  document.getElementById('lateCount').textContent    = l;
+}
+
+document.querySelectorAll('input[type=radio]').forEach(r => r.addEventListener('change', updateCounts));
+updateCounts();
+{% endif %}
+</script>
+{% endblock %}

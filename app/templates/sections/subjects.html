@@ -1,0 +1,239 @@
+{% extends "shared/base.html" %}
+{% block title %}المواد الدراسية{% endblock %}
+{% block page_title %}إدارة المواد الدراسية{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">المواد الدراسية</h1></div>
+  <a href="{{ url_for('sections.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="row g-4">
+  <!-- Add form -->
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-plus-circle-fill text-accent me-1"></i>إضافة مادة</div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('sections.create_subject') }}">
+          <div class="mb-3">
+            <label class="form-label">اسم المادة <span class="text-danger">*</span></label>
+            <input type="text" name="name" class="form-control" required
+                   placeholder="مثال: الرياضيات، اللغة العربية...">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">الرمز <span class="text-danger">*</span></label>
+            <input type="text" name="code" class="form-control" required
+                   placeholder="مثال: MATH, ARB, SCI"
+                   style="text-transform:uppercase">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">المرحلة</label>
+            <select name="stage" class="form-select" id="addStage">
+              <option value="">— اختر المرحلة —</option>
+              {% for st in stages %}
+              <option value="{{ st }}">المرحلة {{ st }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">الصف</label>
+            <select name="grade_id" class="form-select" id="addGrade">
+              <option value="">— اختر الصف —</option>
+              {% for g in grades %}
+              <option value="{{ g.id }}" data-stage="{{ g.stage or '' }}">{{ g.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="row g-2 mb-3">
+            <div class="col-6">
+              <label class="form-label">الدرجة الكلية</label>
+              <input type="number" name="total_marks" class="form-control"
+                     min="0" step="0.5" placeholder="100">
+            </div>
+            <div class="col-6">
+              <label class="form-label">درجة النجاح</label>
+              <input type="number" name="pass_marks" class="form-control"
+                     min="0" step="0.5" placeholder="50">
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">الوصف</label>
+            <textarea name="description" class="form-control" rows="2"></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary w-100">
+            <i class="bi bi-plus-circle-fill me-2"></i>إضافة
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Subjects list -->
+  <div class="col-lg-8">
+    <!-- Filter bar -->
+    <div class="card mb-3">
+      <div class="card-body py-2">
+        <form method="GET" action="{{ url_for('sections.subjects') }}" class="row g-2 align-items-end">
+          <div class="col-12 col-sm-4">
+            <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm"
+                   placeholder="بحث بالاسم أو الرمز...">
+          </div>
+          <div class="col-6 col-sm-3">
+            <select name="stage" class="form-select form-select-sm" id="filterStage">
+              <option value="">كل المراحل</option>
+              {% for st in stages %}
+              <option value="{{ st }}" {% if stage_f == st %}selected{% endif %}>{{ st }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-6 col-sm-3">
+            <select name="grade_id" class="form-select form-select-sm" id="filterGrade">
+              <option value="">كل الصفوف</option>
+              {% for g in grades %}
+              <option value="{{ g.id }}" data-stage="{{ g.stage or '' }}"
+                      {% if grade_f == g.id %}selected{% endif %}>{{ g.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-12 col-sm-2 d-flex gap-1">
+            <button type="submit" class="btn btn-sm btn-primary flex-fill">
+              <i class="bi bi-search"></i>
+            </button>
+            <a href="{{ url_for('sections.subjects') }}" class="btn btn-sm btn-outline-secondary flex-fill">
+              <i class="bi bi-x-lg"></i>
+            </a>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    {% if not grouped_subjects %}
+    <div class="card">
+      <div class="card-body text-center text-muted py-5">
+        <i class="bi bi-book" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+        {% if q or stage_f or grade_f %}
+          لا توجد مواد تطابق معايير البحث
+        {% else %}
+          لا توجد مواد — أضف مادة من الجانب
+        {% endif %}
+      </div>
+    </div>
+    {% else %}
+    <p class="text-muted small mb-3 px-1">المواد المسجّلة: {{ subjects|length }}</p>
+
+    {% for stage, grade_groups in grouped_subjects %}
+      {% if stage == 'ابتدائية' %}
+        {% set border_color = '#28a745' %}{% set bg_color = '#d4edda' %}{% set text_color = '#155724' %}{% set stage_label = 'المرحلة الابتدائية' %}
+      {% elif stage == 'متوسطة' %}
+        {% set border_color = '#0d6efd' %}{% set bg_color = '#cce5ff' %}{% set text_color = '#004085' %}{% set stage_label = 'المرحلة المتوسطة' %}
+      {% elif stage == 'إعدادية' %}
+        {% set border_color = '#fd7e14' %}{% set bg_color = '#fff3cd' %}{% set text_color = '#856404' %}{% set stage_label = 'المرحلة الإعدادية' %}
+      {% else %}
+        {% set border_color = '#6c757d' %}{% set bg_color = '#f8f9fa' %}{% set text_color = '#495057' %}{% set stage_label = 'بدون مرحلة' %}
+      {% endif %}
+
+      <div class="mb-4">
+        <div class="d-flex align-items-center mb-2">
+          <span style="display:inline-block;width:4px;height:22px;border-radius:2px;
+                       background:{{ border_color }};margin-left:10px"></span>
+          <h6 class="mb-0 fw-bold" style="color:{{ text_color }}">{{ stage_label }}</h6>
+        </div>
+
+        {% for grade_name, grade_subjects in grade_groups %}
+        <div class="card mb-2" style="border-right:3px solid {{ border_color }}">
+          <div class="card-header py-2 d-flex align-items-center justify-content-between"
+               style="background:{{ bg_color }};color:{{ text_color }};font-size:13px;font-weight:600">
+            <span><i class="bi bi-layers me-1"></i>{{ grade_name or 'بدون صف' }}</span>
+            <span class="badge" style="background:{{ border_color }};color:white">{{ grade_subjects|length }}</span>
+          </div>
+          <div class="table-wrapper">
+            <table class="table table-hover mb-0" style="font-size:13px">
+              <thead>
+                <tr>
+                  <th>الرمز</th>
+                  <th>اسم المادة</th>
+                  <th class="text-center">الدرجة الكلية</th>
+                  <th class="text-center">درجة النجاح</th>
+                  <th>الوصف</th>
+                  <th>الإجراءات</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for s in grade_subjects %}
+                <tr>
+                  <td>
+                    <span class="badge" style="background:#e8f4fd;color:#1a3a5c;
+                          font-weight:700;font-size:12px;letter-spacing:.5px">
+                      {{ s.code }}
+                    </span>
+                  </td>
+                  <td class="fw-600">{{ s.name }}</td>
+                  <td class="text-center">{{ s.total_marks | int if s.total_marks else '—' }}</td>
+                  <td class="text-center">{{ s.pass_marks  | int if s.pass_marks  else '—' }}</td>
+                  <td class="text-muted" style="max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                    {{ s.description or '—' }}
+                  </td>
+                  <td>
+                    <div class="d-flex gap-1">
+                      <a href="{{ url_for('sections.edit_subject', sub_id=s.id) }}"
+                         class="btn btn-sm btn-outline-primary"><i class="bi bi-pencil"></i></a>
+                      <form method="POST"
+                            action="{{ url_for('sections.delete_subject', sub_id=s.id) }}"
+                            class="d-inline">
+                        <button class="btn btn-sm btn-outline-danger"
+                                data-confirm="حذف مادة '{{ s.name }}'؟">
+                          <i class="bi bi-trash"></i>
+                        </button>
+                      </form>
+                    </div>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    {% endfor %}
+    {% endif %}
+  </div>
+</div>
+
+<script>
+(function () {
+  // ── Filter-bar cascade ────────────────────────────────────────────────
+  const filterStageEl = document.getElementById('filterStage');
+  const filterGradeEl = document.getElementById('filterGrade');
+  const filterGradeOpts = Array.from(filterGradeEl.options).slice(1);
+
+  function filterBarGrades() {
+    const stage = filterStageEl.value;
+    for (const opt of filterGradeOpts) {
+      opt.hidden = stage ? opt.dataset.stage !== stage : false;
+    }
+    // if selected grade is now hidden, clear the selection
+    const sel = filterGradeEl.selectedOptions[0];
+    if (sel && sel.hidden) filterGradeEl.value = '';
+  }
+  filterStageEl.addEventListener('change', filterBarGrades);
+  filterBarGrades(); // respect URL-param selection on page load
+
+  // ── Add-form cascade ─────────────────────────────────────────────────
+  const stageEl = document.getElementById('addStage');
+  const gradeEl = document.getElementById('addGrade');
+  const allGradeOptions = Array.from(gradeEl.options).slice(1);
+
+  function filterGrades() {
+    const stage = stageEl.value;
+    gradeEl.value = '';
+    for (const opt of allGradeOptions) {
+      opt.hidden = stage ? opt.dataset.stage !== stage : false;
+    }
+  }
+  stageEl.addEventListener('change', filterGrades);
+})();
+</script>
+{% endblock %}

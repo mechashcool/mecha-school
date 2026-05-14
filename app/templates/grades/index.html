@@ -1,0 +1,215 @@
+{% extends "shared/base.html" %}
+{% block title %}الدرجات والاختبارات{% endblock %}
+{% block page_title %}الدرجات والاختبارات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">الاختبارات والدرجات</h1></div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('grades.export_excel', q=search, student_q=student_search, exam_type=exam_type_filter, subject_id=subject_filter, start_date=start_date, end_date=end_date) }}"
+       class="btn btn-outline-success">
+      <i class="bi bi-file-earmark-excel-fill me-1"></i>
+      {% if subject_filter != 'all' %}تصدير تقرير المادة{% else %}تصدير Excel{% endif %}
+    </a>
+    <button type="button" class="btn btn-outline-secondary" onclick="window.print()">
+      <i class="bi bi-printer-fill me-1"></i>طباعة
+    </button>
+    <a href="{{ url_for('grades.gradebook') }}" class="btn btn-outline-primary">
+      <i class="bi bi-grid-3x3-gap-fill me-1"></i>كشف الدرجات
+    </a>
+    <a href="{{ url_for('grades.report') }}" class="btn btn-outline-primary">
+      <i class="bi bi-bar-chart-fill me-1"></i>تقرير الدرجات
+    </a>
+    {% if not is_historical_year %}
+    <a href="{{ url_for('grades.create_exam') }}" class="btn btn-primary">
+      <i class="bi bi-plus-circle-fill me-2"></i>اختبار جديد
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-md-2">
+        <label class="form-label">المادة</label>
+        <select name="subject_id" class="form-select">
+          <option value="all" {% if subject_filter == 'all' %}selected{% endif %}>كل المواد</option>
+          {% for subj in subjects %}
+          <option value="{{ subj.id }}" {% if subject_filter == subj.id|string %}selected{% endif %}>{{ subj.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">الفئة</label>
+        <select name="exam_type" class="form-select">
+          <option value="all" {% if exam_type_filter == 'all' %}selected{% endif %}>كل الفئات</option>
+          {% for et in exam_types %}
+          <option value="{{ et.id }}" {% if exam_type_filter == et.id|string %}selected{% endif %}>{{ et.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">من تاريخ</label>
+        <input type="date" name="start_date" class="form-control" value="{{ start_date }}">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">إلى تاريخ</label>
+        <input type="date" name="end_date" class="form-control" value="{{ end_date }}">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">بحث باسم الاختبار</label>
+        <input type="text" name="q" class="form-control" placeholder="مثلاً: الامتحان النهائي" value="{{ search }}">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">بحث باسم الطالب</label>
+        <input type="text" name="student_q" class="form-control" placeholder="اسم الطالب أو رقمه" value="{{ student_search }}">
+      </div>
+      <div class="col-md-2 d-flex gap-2">
+        <button class="btn btn-primary flex-grow-1"><i class="bi bi-search me-1"></i>تصفية</button>
+        <a href="{{ url_for('grades.index') }}" class="btn btn-outline-secondary" title="إعادة تعيين">
+          <i class="bi bi-x-lg"></i>
+        </a>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if results_view is not none %}
+{# ── Subject Report: per-student grades table ── #}
+<div class="card">
+  <div class="card-header d-flex align-items-center gap-2">
+    <i class="bi bi-table text-accent"></i>
+    <span>نتائج الطلاب — {{ results_view|length }} سجل</span>
+    {% if subject_filter != 'all' %}
+    <span class="badge ms-auto" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
+      تقرير مادة محدد
+    </span>
+    {% endif %}
+  </div>
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>اسم الطالب</th>
+          <th>رقم الطالب</th>
+          <th>المادة</th>
+          <th>اسم الاختبار</th>
+          <th>الفئة</th>
+          <th>التاريخ</th>
+          <th>الدرجة</th>
+          <th>التقدير</th>
+          <th>الحالة</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in results_view %}
+        <tr>
+          <td class="text-muted">{{ loop.index }}</td>
+          <td class="fw-600">{{ r.student.full_name }}</td>
+          <td><code>{{ r.student.student_id }}</code></td>
+          <td>{{ r.exam.subject.name if r.exam.subject else '—' }}</td>
+          <td>{{ r.exam.display_name }}</td>
+          <td>
+            {% if r.exam.exam_type %}
+            <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
+              {{ r.exam.exam_type.name }}
+            </span>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>{{ r.exam.exam_date.strftime('%Y-%m-%d') }}</td>
+          <td>
+            <span class="fw-700" style="font-size:14px;
+              color:{% if r.is_pass %}#1aab6d{% else %}#e03e3e{% endif %}">
+              {{ r.marks }} / {{ r.exam.max_marks }}
+            </span>
+          </td>
+          <td>
+            {% if r.grade_letter %}
+            <span class="badge" style="
+              background:{% if r.is_pass %}#e8f8f0{% else %}#fef0f0{% endif %};
+              color:{% if r.is_pass %}#1aab6d{% else %}#e03e3e{% endif %};
+              font-weight:700">
+              {{ r.grade_letter }}
+            </span>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>
+            {% if r.is_pass %}
+            <span class="badge-status badge-active">ناجح</span>
+            {% else %}
+            <span class="badge-status badge-inactive">راسب</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="10" class="text-center text-muted py-5">
+            <i class="bi bi-clipboard-data" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا توجد نتائج لهذه التصفية
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% else %}
+{# ── Default: Exam list table ── #}
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>اسم الاختبار</th><th>الفئة</th><th>المادة</th><th>الصف / الشعبة</th>
+          <th>التاريخ</th><th>الدرجة العظمى</th><th>درجة النجاح</th><th>عدد النتائج</th><th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for exam in exams %}
+        <tr>
+          <td class="fw-600">{{ exam.display_name }}</td>
+          <td>
+            {% if exam.exam_type %}
+            <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
+              {{ exam.exam_type.name }}
+            </span>
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td>{{ exam.subject.name }}</td>
+          <td>{{ exam.section.grade.name }} / {{ exam.section.name }}</td>
+          <td>{{ exam.exam_date.strftime('%Y-%m-%d') }}</td>
+          <td>{{ exam.max_marks }}</td>
+          <td>{{ exam.pass_marks }}</td>
+          <td>
+            <span class="badge-status badge-active">{{ exam.results.count() }}</span>
+          </td>
+          <td>
+            {% if not is_historical_year %}
+            <a href="{{ url_for('grades.enter_results', exam_id=exam.id) }}"
+               class="btn btn-sm btn-outline-primary">
+              <i class="bi bi-pencil-square me-1"></i>إدخال الدرجات
+            </a>
+            {% else %}
+            <span class="text-muted" style="font-size:12px">للعرض فقط</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="9" class="text-center text-muted py-5">
+            <i class="bi bi-clipboard-data" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا توجد اختبارات بعد
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

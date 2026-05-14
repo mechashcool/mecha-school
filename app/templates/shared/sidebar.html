@@ -1,0 +1,429 @@
+{# ─────────────────────────────────────────────────────────────────────
+   Mecha-School — Sidebar partial
+   Two flavours of nav:
+     • parent role  → minimal parent portal nav
+     • teacher role → teacher portal nav (scoped to their sections)
+     • admin / staff → full admin nav
+   ───────────────────────────────────────────────────────────────────── #}
+<nav id="sidebar">
+  <div class="sidebar-logo">
+    {% if school and school.logo_path %}
+    <img src="{{ url_for('static', filename='uploads/' + school.logo_path) }}"
+         alt="logo" class="logo-icon" style="object-fit:cover;background:#fff">
+    {% else %}
+    <div class="logo-icon">{{ (school.school_name[0] if school and school.school_name else 'M') }}</div>
+    {% endif %}
+    <div>
+      <div class="logo-text">
+        {{ (school.school_name_ar if school and school.school_name_ar else
+            (school.school_name if school else 'Mecha-School')) }}
+      </div>
+      <div class="logo-sub">
+        {% if active_year %}{{ active_year.name }}{% else %}نظام إدارة المدرسة{% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# ── Year switcher — school managers and staff (not super-admin) ────────── #}
+  {% if current_user.is_authenticated and not current_user.is_super_admin and school and all_school_years %}
+  <div class="px-3 pb-2" style="border-bottom:1px solid rgba(255,255,255,.08)">
+    <div class="text-muted mb-1" style="font-size:.7rem;letter-spacing:.04em">العام الدراسي</div>
+    <select id="yearSwitcherSelect"
+            class="form-select form-select-sm"
+            style="background:#1a3a5c;color:#c8d8ea;border:1px solid rgba(255,255,255,.15)">
+      {% if real_active_year %}
+      <option value=""
+              {{ 'selected' if not active_year or active_year.id == real_active_year.id }}>
+        {{ real_active_year.name }} (الحالي)
+      </option>
+      {% endif %}
+      {% for y in all_school_years %}
+        {% if not real_active_year or y.id != real_active_year.id %}
+        <option value="{{ y.id }}"
+                {{ 'selected' if active_year and active_year.id == y.id }}>
+          {{ y.name }}
+        </option>
+        {% endif %}
+      {% endfor %}
+    </select>
+    <form id="yearSwitcherForm" method="POST" action="{{ url_for('admin.switch_year') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+      <input type="hidden" name="next" value="{{ request.path }}">
+      <input type="hidden" id="yearSwitcherYearId" name="year_id" value="">
+    </form>
+  </div>
+  {% elif current_user.is_authenticated and not current_user.is_super_admin and school and not real_active_year %}
+  <div class="px-3 pb-2" style="border-bottom:1px solid rgba(255,255,255,.08)">
+    <div class="d-flex align-items-center gap-2"
+         style="font-size:.75rem;color:#e07070;padding:6px 0">
+      <i class="bi bi-exclamation-triangle-fill"></i>
+      <span>لا يوجد عام دراسي نشط</span>
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Super-admin school switcher ──────────────────────────────────────── #}
+  {% if current_user.is_authenticated and current_user.is_super_admin and all_schools %}
+  <div class="px-3 pb-2" style="border-bottom:1px solid rgba(255,255,255,.08)">
+    <div class="text-muted mb-1" style="font-size:.7rem;letter-spacing:.04em">تبديل المدرسة</div>
+    <div class="d-flex gap-1 align-items-center">
+      <select id="schoolSwitcherSelect"
+              class="form-select form-select-sm"
+              style="background:#1a3a5c;color:#c8d8ea;border:1px solid rgba(255,255,255,.15)">
+        <option value="">-- عرض شامل --</option>
+        {% for s in all_schools %}
+        <option value="{{ s.id }}"
+                {{ 'selected' if active_school_id == s.id }}>
+          {{ s.school_name_ar or s.school_name }}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <form id="schoolSwitcherForm" method="POST" action="">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+      <input type="hidden" name="next" value="{{ request.path }}">
+    </form>
+  </div>
+  {% endif %}
+
+  <div class="sidebar-user">
+    <div class="avatar">{{ current_user.full_name[0] if current_user.is_authenticated else '؟' }}</div>
+    <div>
+      <div class="uname">{{ current_user.full_name if current_user.is_authenticated }}</div>
+      <div class="urole">{{ current_user.role.label if current_user.is_authenticated and current_user.role }}</div>
+    </div>
+  </div>
+
+  <ul class="sidebar-nav">
+
+    {# ── Parent sidebar ─────────────────────────────────────────────────── #}
+    {% if current_user.is_authenticated and current_user.role and current_user.role.name == 'parent' %}
+    <li class="nav-section-label">بوابة ولي الأمر</li>
+    <li class="nav-item">
+      <a href="{{ url_for('parent.dashboard') }}"
+         class="{{ 'active' if request.endpoint == 'parent.dashboard' }}">
+        <i class="bi bi-grid-1x2-fill"></i> لوحتي
+      </a>
+    </li>
+    <li class="nav-item">
+      <a href="{{ url_for('notifications.index') }}"
+         class="{{ 'active' if request.blueprint == 'notifications' }}">
+        <i class="bi bi-bell-fill"></i> الإشعارات
+        {% if unread_notifications > 0 %}
+        <span class="nav-badge">{{ unread_notifications }}</span>
+        {% endif %}
+      </a>
+    </li>
+    <li class="nav-item" style="margin-top:8px">
+      <a href="{{ url_for('auth.logout') }}" style="color:#e07070">
+        <i class="bi bi-box-arrow-right"></i> تسجيل الخروج
+      </a>
+    </li>
+
+    {# ── Teacher sidebar ────────────────────────────────────────────────── #}
+    {% elif current_user.is_authenticated and current_user.role and current_user.role.name == 'teacher' %}
+    <li class="nav-section-label">بوابة المعلم</li>
+    <li class="nav-item">
+      <a href="{{ url_for('teacher.dashboard') }}"
+         class="{{ 'active' if request.blueprint == 'teacher' }}">
+        <i class="bi bi-grid-1x2-fill"></i> لوحتي
+      </a>
+    </li>
+
+    {% if current_user.has_permission('view_students') %}
+    <li class="nav-section-label">الطلاب</li>
+    <li class="nav-item">
+      <a href="{{ url_for('students.index') }}"
+         class="{{ 'active' if request.blueprint == 'students' }}">
+        <i class="bi bi-people-fill"></i> طلابي
+      </a>
+    </li>
+    {% endif %}
+
+    {% if current_user.has_permission('enter_grades') %}
+    <li class="nav-section-label">الدرجات</li>
+    <li class="nav-item">
+      <a href="{{ url_for('grades.index') }}"
+         class="{{ 'active' if request.blueprint == 'grades' }}">
+        <i class="bi bi-patch-check-fill"></i> الدرجات والاختبارات
+      </a>
+    </li>
+    {% endif %}
+
+    <li class="nav-section-label">النظام</li>
+    <li class="nav-item">
+      <a href="{{ url_for('notifications.index') }}"
+         class="{{ 'active' if request.blueprint == 'notifications' }}">
+        <i class="bi bi-bell-fill"></i> الإشعارات
+        {% if unread_notifications > 0 %}
+        <span class="nav-badge">{{ unread_notifications }}</span>
+        {% endif %}
+      </a>
+    </li>
+    <li class="nav-item" style="margin-top:8px">
+      <a href="{{ url_for('auth.logout') }}" style="color:#e07070">
+        <i class="bi bi-box-arrow-right"></i> تسجيل الخروج
+      </a>
+    </li>
+
+    {# ── Admin / staff sidebar ──────────────────────────────────────────── #}
+    {% else %}
+
+    <li class="nav-section-label">الرئيسية</li>
+
+    {# Only admins see the admin dashboard link #}
+    {% if current_user.is_admin_user %}
+    {# Super admin: dedicated portal + schools overview #}
+    {% if current_user.is_super_admin %}
+    <li class="nav-item">
+      <a href="{{ url_for('super_admin.dashboard') }}"
+         class="{{ 'active' if request.blueprint == 'super_admin' }}">
+        <i class="bi bi-shield-lock-fill"></i> بوابة المشرف العام
+      </a>
+    </li>
+    <li class="nav-item">
+      <a href="{{ url_for('schools.index') }}"
+         class="{{ 'active' if request.blueprint == 'schools' }}">
+        <i class="bi bi-buildings-fill"></i> إدارة المدارس
+      </a>
+    </li>
+    {% endif %}
+    <li class="nav-item">
+      <a href="{{ url_for('admin.dashboard') }}"
+         class="{{ 'active' if request.endpoint == 'admin.dashboard' }}">
+        <i class="bi bi-grid-1x2-fill"></i> لوحة التحكم
+      </a>
+    </li>
+    {% endif %}
+
+    {% if not current_user.is_super_admin %}
+    {% if current_user.has_permission('manage_fees') or current_user.has_permission('record_payments') %}
+    <li class="nav-item">
+      <a href="{{ url_for('fees.index') }}"
+         class="{{ 'active' if request.blueprint == 'fees' }}">
+        <i class="bi bi-cash-coin"></i> الرسوم والأقساط
+      </a>
+    </li>
+    {% endif %}
+
+    {% if current_user.has_permission('view_students') %}
+    <li class="nav-section-label">الطلاب</li>
+    <li class="nav-item">
+      <a href="{{ url_for('students.index') }}"
+         class="{{ 'active' if request.blueprint == 'students' }}">
+        <i class="bi bi-people-fill"></i> الطلاب
+      </a>
+    </li>
+    {% endif %}
+
+    {% if current_user.has_permission('take_attendance') %}
+    <li class="nav-item">
+      <a href="{{ url_for('attendance.index') }}"
+         class="{{ 'active' if request.blueprint == 'attendance' and request.endpoint != 'admin.attendance_settings' and request.endpoint != 'attendance.suspensions' and request.endpoint != 'attendance.create_suspension' and request.endpoint != 'attendance.delete_suspension' }}">
+        <i class="bi bi-calendar-check-fill"></i> الحضور والغياب
+      </a>
+    </li>
+    {% if current_user.is_admin_user %}
+    <li class="nav-item">
+      <a href="{{ url_for('attendance.suspensions') }}"
+         class="{{ 'active' if request.endpoint in ['attendance.suspensions', 'attendance.create_suspension'] }}">
+        <i class="bi bi-slash-circle"></i> إيقاف الطلاب
+      </a>
+    </li>
+    {% endif %}
+    {% endif %}
+    {% if current_user.has_permission('manage_attendance_settings') %}
+    <li class="nav-item">
+      <a href="{{ url_for('admin.attendance_settings') }}"
+         class="{{ 'active' if request.endpoint == 'admin.attendance_settings' }}">
+        <i class="bi bi-clock-history"></i> إعدادات الحضور
+      </a>
+    </li>
+    {% endif %}
+
+    {% if current_user.has_permission('enter_grades') %}
+    <li class="nav-item">
+      <a href="{{ url_for('grades.index') }}"
+         class="{{ 'active' if request.blueprint == 'grades' }}">
+        <i class="bi bi-patch-check-fill"></i> الدرجات والاختبارات
+      </a>
+    </li>
+    {% endif %}
+
+    {% if current_user.has_permission('manage_employees') %}
+    <li class="nav-section-label">الموارد البشرية</li>
+    <li class="nav-item">
+      <a href="{{ url_for('employees.index') }}"
+         class="{{ 'active' if request.blueprint == 'employees' }}">
+        <i class="bi bi-person-badge-fill"></i> الموظفون
+      </a>
+    </li>
+    {% endif %}
+
+    <li class="nav-section-label">المالية العامة</li>
+    {% if current_user.has_permission('manage_revenues') or current_user.has_permission('manage_expenses') %}
+    <li class="nav-item">
+      <a href="{{ url_for('finances.index') }}"
+         class="{{ 'active' if request.blueprint == 'finances' }}">
+        <i class="bi bi-graph-up-arrow"></i> الإيرادات والمصروفات
+      </a>
+    </li>
+    {% endif %}
+
+    {% if current_user.has_permission('manage_salaries') %}
+    <li class="nav-item">
+      <a href="{{ url_for('salaries.index') }}"
+         class="{{ 'active' if request.blueprint == 'salaries' }}">
+        <i class="bi bi-wallet-fill"></i> الرواتب
+      </a>
+    </li>
+    {% endif %}
+
+    {% if current_user.has_permission('manage_employees') %}
+    <li class="nav-item">
+      <a href="{{ url_for('evaluations.index') }}"
+         class="{{ 'active' if request.blueprint == 'evaluations' }}">
+        <i class="bi bi-star-fill"></i> تقييم الموظفين
+      </a>
+    </li>
+    {% endif %}
+
+    {% if current_user.has_permission('view_reports') %}
+    <li class="nav-section-label">التقارير</li>
+    <li class="nav-item">
+      <a href="{{ url_for('reports.index') }}"
+         class="{{ 'active' if request.blueprint == 'reports' }}">
+        <i class="bi bi-bar-chart-fill"></i> التقارير والإحصائيات
+      </a>
+    </li>
+    {% endif %}
+    {% endif %}{# not super_admin #}
+
+    <li class="nav-section-label">النظام</li>
+    {% if not current_user.is_super_admin %}
+    <li class="nav-item">
+      <a href="{{ url_for('notifications.index') }}"
+         class="{{ 'active' if request.blueprint == 'notifications' }}">
+        <i class="bi bi-bell-fill"></i> الإشعارات
+        {% if unread_notifications > 0 %}
+        <span class="nav-badge">{{ unread_notifications }}</span>
+        {% endif %}
+      </a>
+    </li>
+    {% endif %}
+
+    {# Admin-only section — strictly hidden from all non-admin roles #}
+    {% if current_user.is_admin_user %}
+    {% if not current_user.is_super_admin %}
+    <li class="nav-item">
+      <a href="{{ url_for('sections.index') }}"
+         class="{{ 'active' if request.blueprint == 'sections' }}">
+        <i class="bi bi-grid-3x3-gap-fill"></i> الصفوف والشعب
+      </a>
+    </li>
+    <li class="nav-item">
+      <a href="{{ url_for('schedules.index') }}"
+         class="{{ 'active' if request.blueprint == 'schedules' }}">
+        <i class="bi bi-table"></i> الجداول الدراسية
+      </a>
+    </li>
+    {% endif %}{# not super_admin #}
+
+    {# User management link — school managers see school-scoped label #}
+    {% if current_user.school_id is not none %}
+    <li class="nav-item">
+      <a href="{{ url_for('admin.users_list') }}"
+         class="{{ 'active' if request.endpoint and 'users' in request.endpoint }}">
+        <i class="bi bi-people-fill"></i> إدارة مستخدمي المدرسة
+      </a>
+    </li>
+    {% else %}
+    <li class="nav-item">
+      <a href="{{ url_for('admin.users_list') }}"
+         class="{{ 'active' if request.endpoint and 'users' in request.endpoint }}">
+        <i class="bi bi-shield-lock-fill"></i> المستخدمون والصلاحيات
+      </a>
+    </li>
+    {% endif %}
+
+    {% if current_user.is_super_admin %}
+    <li class="nav-item">
+      <a href="{{ url_for('audit.index') }}"
+         class="{{ 'active' if request.blueprint == 'audit' }}">
+        <i class="bi bi-journal-text"></i> سجل العمليات
+      </a>
+    </li>
+    {% endif %}
+    <li class="nav-item">
+      <a href="{{ url_for('admin.school_settings') }}"
+         class="{{ 'active' if request.endpoint == 'admin.school_settings' }}">
+        <i class="bi bi-buildings-fill"></i> هوية المدرسة
+      </a>
+    </li>
+
+    {# Super-admin only: roles management #}
+    {% if current_user.is_super_admin %}
+    <li class="nav-item">
+      <a href="{{ url_for('admin.roles_list') }}"
+         class="{{ 'active' if request.endpoint and 'role' in request.endpoint }}">
+        <i class="bi bi-diagram-3-fill"></i> الأدوار والأذونات
+      </a>
+    </li>
+    {% endif %}
+    {% endif %}{# is_admin #}
+
+    {# Global system settings — super admin only #}
+    {% if current_user.is_super_admin and current_user.has_permission('manage_settings') %}
+    <li class="nav-item">
+      <a href="{{ url_for('admin.settings') }}"
+         class="{{ 'active' if request.endpoint == 'admin.settings' }}">
+        <i class="bi bi-gear-fill"></i> الإعدادات
+      </a>
+    </li>
+    {% endif %}
+
+    <li class="nav-item" style="margin-top:8px">
+      <a href="{{ url_for('auth.logout') }}" style="color:#e07070">
+        <i class="bi bi-box-arrow-right"></i> تسجيل الخروج
+      </a>
+    </li>
+
+    {% endif %}{# role branches #}
+  </ul>
+</nav>
+
+{# ── Year switcher JS (school staff only) ──────────────────────────────── #}
+{% if current_user.is_authenticated and not current_user.is_super_admin %}
+<script>
+(function() {
+  const sel  = document.getElementById('yearSwitcherSelect');
+  const form = document.getElementById('yearSwitcherForm');
+  const inp  = document.getElementById('yearSwitcherYearId');
+  if (!sel || !form || !inp) return;
+  sel.addEventListener('change', function() {
+    inp.value = this.value;  // empty string → current year, numeric → historical
+    form.submit();
+  });
+})();
+</script>
+{% endif %}
+
+{# ── School switcher JS (super admin only) ─────────────────────────────── #}
+{% if current_user.is_authenticated and current_user.is_super_admin %}
+<script>
+(function() {
+  const sel  = document.getElementById('schoolSwitcherSelect');
+  const form = document.getElementById('schoolSwitcherForm');
+  if (!sel || !form) return;
+  sel.addEventListener('change', function() {
+    const id = this.value;
+    if (id) {
+      form.action = '/schools/' + id + '/switch';
+    } else {
+      form.action = '/schools/clear-switch';
+    }
+    form.submit();
+  });
+})();
+</script>
+{% endif %}

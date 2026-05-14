@@ -1,0 +1,201 @@
+"""
+Mecha-School — Notification Service
+===================================
+Pluggable dispatcher for parent push-notifications.
+
+Two back-ends:
+  * FCMBackend   — Firebase Cloud Messaging (HTTP v1 API)
+  * DevLogBackend — writes to stdout + persists a PushNotification row.
+
+Which back-end is used is decided at app-startup time:
+  - If `FCM_SERVICE_ACCOUNT_JSON` env var points at a valid service-account
+    JSON file, FCMBackend is selected.
+  - Otherwise DevLogBackend is selected so local dev / CI still works.
+
+Public API (stable — Phase 3 routes + hardware endpoint rely on this):
+
+    NotificationService.send_to_user(user_id: int, title: str, body: str, data: dict)
+    NotificationService.send_to_parents_of_student(student_id, title, body, data)
+    NotificationService.broadcast(announcement_id)  # legacy disabled
+
+Every call returns a list[PushNotification] of log rows it just persisted,
+regardless of back-end, so callers always get an audit trail even in dev.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+from datetime import datetime
+from typing import Iterable
+
+from app.models import db, User, Student, PushNotification, parent_students
+
+log = logging.getLogger('mecha.notifications')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Back-ends
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _Backend:
+    name: str = 'base'
+
+    def send_one(self, token: str, title: str, body: str,
+                 data: dict | None = None) -> tuple[bool, str | None, str | None]:
+        """
+        Return (success, fcm_message_id, error_text).
+        Sub-classes override.
+        """
+        raise NotImplementedError
+
+
+class DevLogBackend(_Backend):
+    name = 'devlog'
+
+    def send_one(self, token, title, body, data=None):
+        log.info('[DEV-FCM] → token=%s… title=%r body=%r data=%s',
+                 (token or '')[:16], title, body, data or {})
+        # Fake id so downstream code that stores it has something non-null.
+        return True, f'devlog-{datetime.utcnow().timestamp():.0f}', None
+
+
+class FCMBackend(_Backend):
+    name = 'fcm'
+
+    def __init__(self, service_account_path: str):
+        try:
+            # Lazy import — only needed when FCM is actually configured.
+            import firebase_admin
+            from firebase_admin import credentials, messaging
+        except ImportError as e:
+            log.warning('firebase_admin not installed — falling back to devlog. (%s)', e)
+            self._broken = True
+            return
+
+        self._broken = False
+        self._messaging = messaging
+        if not firebase_admin._apps:
+            cred = credentials.Certificate(service_account_path)
+            firebase_admin.initialize_app(cred)
+
+    def send_one(self, token, title, body, data=None):
+        if self._broken or not token:
+            return False, None, 'fcm-not-configured-or-missing-token'
+        try:
+            message = self._messaging.Message(
+                token=token,
+                notification=self._messaging.Notification(title=title, body=body),
+                data={k: str(v) for k, v in (data or {}).items()},
+            )
+            msg_id = self._messaging.send(message)
+            return True, msg_id, None
+        except Exception as ex:
+            log.exception('FCM send failed')
+            return False, None, str(ex)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Service facade
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _NotificationService:
+    def __init__(self):
+        sa_path = os.environ.get('FCM_SERVICE_ACCOUNT_JSON')
+        if sa_path and os.path.isfile(sa_path):
+            self.backend: _Backend = FCMBackend(sa_path)
+        else:
+            self.backend = DevLogBackend()
+        log.info('NotificationService initialised with %s backend', self.backend.name)
+
+    # ── low-level helpers ─────────────────────────────────────────────────────
+
+    def _persist(self, user_id: int, title: str, body: str,
+                 ntype: str, data: dict | None, result: tuple,
+                 school_id: int | None = None):
+        success, msg_id, err = result
+        row = PushNotification(
+            user_id        = user_id,
+            school_id      = school_id,
+            title          = title,
+            body           = body,
+            data_json      = json.dumps(data or {}, ensure_ascii=False),
+            ntype          = ntype,
+            status         = 'sent' if success else 'failed',
+            fcm_message_id = msg_id,
+            error          = err,
+            sent_at        = datetime.utcnow() if success else None,
+        )
+        db.session.add(row)
+        return row
+
+    def send_to_user(self, user_id: int, title: str, body: str,
+                     ntype: str = 'general', data: dict | None = None):
+        user = User.query.get(user_id)
+        if not user:
+            return []
+        if user.school_id is None:
+            return []
+        token = user.device_token
+        result = self.backend.send_one(token, title, body, data) \
+                 if token else (False, None, 'no-device-token')
+        row = self._persist(user_id, title, body, ntype, data, result,
+                            school_id=user.school_id)
+        db.session.commit()
+        return [row]
+
+    def send_to_users(self, user_ids: Iterable[int], title: str, body: str,
+                      ntype: str = 'general', data: dict | None = None):
+        rows = []
+        for uid in set(user_ids):
+            user = User.query.get(uid)
+            if not user:
+                continue
+            if user.school_id is None:
+                continue
+            token = user.device_token
+            result = self.backend.send_one(token, title, body, data) \
+                     if token else (False, None, 'no-device-token')
+            rows.append(self._persist(uid, title, body, ntype, data, result,
+                                      school_id=user.school_id))
+        db.session.commit()
+        return rows
+
+    # ── high-level helpers used by routes ─────────────────────────────────────
+
+    def send_to_parents_of_student(self, student_id: int, title: str, body: str,
+                                   ntype: str = 'general',
+                                   data: dict | None = None):
+        """
+        Pulls every parent User linked to the given Student via `parent_students`
+        and dispatches to their device_token.
+        """
+        student = Student.query.get(student_id)
+        if not student:
+            return []
+
+        parent_ids = [row[0] for row in db.session.query(parent_students.c.user_id)
+                      .filter(parent_students.c.student_id == student_id).all()]
+        if not parent_ids:
+            return []
+
+        payload = dict(data or {})
+        payload.setdefault('student_id', str(student_id))
+        payload.setdefault('student_name', student.full_name)
+        return self.send_to_users(parent_ids, title, body, ntype, payload)
+
+    def broadcast(self, announcement_id: int):
+        """Legacy Announcement broadcasts are disabled.
+
+        Parent-facing communication is handled by in-app Notification rows.
+        Announcement rows remain historical records only.
+        """
+        log.warning(
+            'Ignoring legacy announcement broadcast request for announcement_id=%s',
+            announcement_id,
+        )
+        return []
+
+
+# Module-level singleton — import this, don't instantiate.
+NotificationService = _NotificationService()

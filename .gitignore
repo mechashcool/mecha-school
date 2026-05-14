@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.spec
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env/
+
+# Environment files (keep .env.example, ignore actual .env)
+.env
+!.env.example
+
+# Flask
+instance/
+.webassets-cache
+app/static/uploads/
+
+# Database
+*.db
+*.sqlite3
+*.sqlite
+
+# Migrations (keep folder, ignore generated files if needed)
+# migrations/versions/*.py  # Uncomment to ignore auto-generated migrations
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+
+# Logs
+*.log
+logs/
+pip-log.txt
+
+# Docker
+.dockerignore
+
+# Distribution
+*.zip
+*.tar.gz

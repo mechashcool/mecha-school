@@ -1,0 +1,128 @@
+{% extends "shared/base.html" %}
+{% block title %}{{ 'تعديل راتب' if record else 'إضافة راتب' }}{% endblock %}
+{% block page_title %}{{ 'تعديل سجل راتب' if record else 'إضافة سجل راتب يدوي' }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">{{ 'تعديل سجل راتب' if record else 'سجل راتب جديد' }}</h1></div>
+  <a href="{{ url_for('salaries.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="row justify-content-center">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-wallet-fill text-accent"></i>بيانات الراتب</div>
+      <div class="card-body">
+        <form method="POST"
+              action="{{ url_for('salaries.edit', rec_id=record.id) if record else url_for('salaries.create') }}">
+          <div class="row g-3">
+            {% if not record %}
+            <div class="col-md-6">
+              <label class="form-label">الموظف <span class="text-danger">*</span></label>
+              <select name="employee_id" class="form-select" required id="empSelect"
+                      onchange="loadBaseSalary(this.value)">
+                <option value="">— اختر الموظف —</option>
+                {% for emp in employees %}
+                <option value="{{ emp.id }}">{{ emp.full_name }} — {{ emp.job_title }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">الشهر <span class="text-danger">*</span></label>
+              <select name="month" class="form-select" required>
+                {% for i in range(1,13) %}
+                <option value="{{ i }}" {{ 'selected' if i == today.month }}>{{ arabic_months[i] }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">السنة <span class="text-danger">*</span></label>
+              <select name="year" class="form-select" required>
+                {% for y in range(2022, 2030) %}
+                <option value="{{ y }}" {{ 'selected' if y == today.year }}>{{ y }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            {% else %}
+            <div class="col-12">
+              <div class="alert alert-info py-2 mb-0" style="font-size:13.5px">
+                <strong>{{ record.employee.full_name }}</strong> —
+                {{ arabic_months[record.month] }} {{ record.year }}
+              </div>
+            </div>
+            {% endif %}
+
+            <div class="col-md-4">
+              <label class="form-label">الراتب الأساسي</label>
+              <div class="form-control bg-light fw-700" id="baseSalaryDisplay">
+                {{ '{:,.0f}'.format(record.base_salary) if record else '—' }}
+              </div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">البدلات (د.ع)</label>
+              <input type="number" name="allowances" id="allowances" class="form-control"
+                     min="0" step="1000" value="{{ record.allowances if record else 0 }}"
+                     oninput="calcNet()">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">الخصومات (د.ع)</label>
+              <input type="number" name="deductions" id="deductions" class="form-control"
+                     min="0" step="1000" value="{{ record.deductions if record else 0 }}"
+                     oninput="calcNet()">
+            </div>
+
+            <div class="col-12">
+              <label class="form-label">الصافي</label>
+              <div class="form-control fw-800 text-success" id="netDisplay"
+                   style="font-size:18px;background:#f0f4f8">
+                {{ '{:,.0f}'.format(record.net_salary) if record else '—' }} د.ع
+              </div>
+            </div>
+
+            <div class="col-12">
+              <label class="form-label">ملاحظات</label>
+              <textarea name="notes" class="form-control" rows="2">{{ record.notes if record else '' }}</textarea>
+            </div>
+          </div>
+
+          <div class="mt-4 d-flex gap-3">
+            <button type="submit" class="btn btn-primary px-5">
+              <i class="bi bi-check-circle-fill me-2"></i>
+              {{ 'حفظ التعديلات' if record else 'إنشاء السجل' }}
+            </button>
+            <a href="{{ url_for('salaries.index') }}" class="btn btn-outline-secondary px-4">إلغاء</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let baseSalary = {{ record.base_salary | float if record else 0 }};
+
+async function loadBaseSalary(empId) {
+  if (!empId) return;
+  const res  = await fetch(`/salaries/api/employee/${empId}/salary`);
+  const data = await res.json();
+  baseSalary = data.base_salary;
+  document.getElementById('baseSalaryDisplay').textContent =
+    baseSalary.toLocaleString('ar-IQ') + ' د.ع';
+  calcNet();
+}
+
+function calcNet() {
+  const allow = parseFloat(document.getElementById('allowances').value) || 0;
+  const deduct = parseFloat(document.getElementById('deductions').value) || 0;
+  const net = baseSalary + allow - deduct;
+  document.getElementById('netDisplay').textContent = net.toLocaleString('ar-IQ') + ' د.ع';
+  document.getElementById('netDisplay').style.color = net >= 0 ? '#1aab6d' : '#e03e3e';
+}
+
+calcNet();
+</script>
+{% endblock %}

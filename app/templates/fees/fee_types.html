@@ -1,0 +1,59 @@
+{% extends "shared/base.html" %}
+{% block title %}أنواع الرسوم{% endblock %}
+{% block page_title %}أنواع الرسوم{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">أنواع الرسوم</h1></div>
+  <a href="{{ url_for('fees.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-plus-circle-fill text-accent"></i>إضافة نوع جديد</div>
+      <div class="card-body">
+        <form method="POST">
+          <div class="mb-3">
+            <label class="form-label">اسم النوع <span class="text-danger">*</span></label>
+            <input type="text" name="name" class="form-control" required placeholder="مثال: رسوم دراسية، رسوم نشاط...">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">الوصف</label>
+            <textarea name="description" class="form-control" rows="2"></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary w-100">
+            <i class="bi bi-plus-circle-fill me-2"></i>إضافة
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-tags-fill text-accent"></i>الأنواع المتوفرة</div>
+      <div class="table-wrapper">
+        <table class="table">
+          <thead>
+            <tr><th>#</th><th>الاسم</th><th>الوصف</th><th>عدد السجلات</th></tr>
+          </thead>
+          <tbody>
+            {% for t in types %}
+            <tr>
+              <td>{{ loop.index }}</td>
+              <td class="fw-600">{{ t.name }}</td>
+              <td class="text-muted">{{ t.description or '—' }}</td>
+              <td>{{ t.fee_records.count() }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="text-center text-muted py-4">لا توجد أنواع بعد</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

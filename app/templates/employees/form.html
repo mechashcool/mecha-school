@@ -1,0 +1,133 @@
+{% extends "shared/base.html" %}
+{% block title %}{{ 'تعديل موظف' if employee else 'إضافة موظف' }}{% endblock %}
+{% block page_title %}{{ 'تعديل: ' + employee.full_name if employee else 'موظف جديد' }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">{{ 'تعديل بيانات الموظف' if employee else 'إضافة موظف جديد' }}</h1></div>
+  <a href="{{ url_for('employees.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<form method="POST"
+      action="{{ url_for('employees.edit', emp_id=employee.id) if employee else url_for('employees.create') }}"
+      enctype="multipart/form-data">
+  <div class="row g-4">
+    <div class="col-lg-8">
+      <div class="card mb-4">
+        <div class="card-header"><i class="bi bi-person-badge-fill text-accent"></i>البيانات الأساسية</div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">الاسم الكامل <span class="text-danger">*</span></label>
+              <input type="text" name="full_name" class="form-control" required
+                     value="{{ employee.full_name if employee else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">المسمى الوظيفي <span class="text-danger">*</span></label>
+              <input type="text" name="job_title" class="form-control" required
+                     value="{{ employee.job_title if employee else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">القسم</label>
+              <input type="text" name="department" class="form-control"
+                     value="{{ employee.department if employee else '' }}"
+                     placeholder="مثال: التدريس، المالية، الإدارة...">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">الجنس</label>
+              <select name="gender" class="form-select">
+                <option value="">— اختر —</option>
+                <option value="male"   {{ 'selected' if employee and employee.gender == 'male' }}>ذكر</option>
+                <option value="female" {{ 'selected' if employee and employee.gender == 'female' }}>أنثى</option>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">رقم الهاتف</label>
+              <input type="tel" name="phone" class="form-control"
+                     value="{{ employee.phone if employee else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">البريد الإلكتروني</label>
+              <input type="email" name="email" class="form-control"
+                     value="{{ employee.email if employee else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">الجنسية</label>
+              <input type="text" name="nationality" class="form-control"
+                     value="{{ employee.nationality if employee else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">نوع العقد</label>
+              <select name="contract_type" class="form-select">
+                <option value="">— اختر —</option>
+                <option value="full-time"  {{ 'selected' if employee and employee.contract_type == 'full-time' }}>دوام كامل</option>
+                <option value="part-time"  {{ 'selected' if employee and employee.contract_type == 'part-time' }}>دوام جزئي</option>
+                <option value="contract"   {{ 'selected' if employee and employee.contract_type == 'contract' }}>عقد</option>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">الراتب الأساسي (د.ع) <span class="text-danger">*</span></label>
+              <input type="number" name="base_salary" class="form-control" min="0" step="1000" required
+                     value="{{ employee.base_salary if employee else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">تاريخ التعيين</label>
+              <input type="date" name="hire_date" class="form-control"
+                     value="{{ employee.hire_date.isoformat() if employee and employee.hire_date else '' }}">
+            </div>
+            {% if employee %}
+            <div class="col-md-6">
+              <label class="form-label">الحالة</label>
+              <select name="status" class="form-select">
+                <option value="active"     {{ 'selected' if employee.status == 'active' }}>فعّال</option>
+                <option value="on_leave"   {{ 'selected' if employee.status == 'on_leave' }}>إجازة</option>
+                <option value="terminated" {{ 'selected' if employee.status == 'terminated' }}>منتهي الخدمة</option>
+              </select>
+            </div>
+            {% endif %}
+            <div class="col-12">
+              <label class="form-label">العنوان</label>
+              <textarea name="address" class="form-control" rows="2">{{ employee.address if employee else '' }}</textarea>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-4">
+      <div class="card mb-4">
+        <div class="card-header"><i class="bi bi-camera-fill text-accent"></i>صورة الموظف</div>
+        <div class="card-body text-center">
+          {% if employee and employee.photo %}
+          <img src="{{ url_for('static', filename=employee.photo) }}"
+               class="rounded-12 mb-3" style="width:120px;height:120px;object-fit:cover">
+          {% else %}
+          <div class="mb-3" style="width:120px;height:120px;border-radius:12px;
+                background:#f0f4f8;display:flex;align-items:center;justify-content:center;
+                margin:0 auto;font-size:40px;color:#9aabb8">
+            <i class="bi bi-person-fill"></i>
+          </div>
+          {% endif %}
+          <input type="file" name="photo" class="form-control form-control-sm" accept="image/*">
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><i class="bi bi-sticky-fill text-accent"></i>ملاحظات</div>
+        <div class="card-body">
+          <textarea name="notes" class="form-control" rows="5">{{ employee.notes if employee else '' }}</textarea>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-4 d-flex gap-3">
+    <button type="submit" class="btn btn-primary px-5">
+      <i class="bi bi-check-circle-fill me-2"></i>
+      {{ 'حفظ التعديلات' if employee else 'إضافة الموظف' }}
+    </button>
+    <a href="{{ url_for('employees.index') }}" class="btn btn-outline-secondary px-5">إلغاء</a>
+  </div>
+</form>
+{% endblock %}

@@ -1,0 +1,186 @@
+{% extends "shared/base.html" %}
+{% block title %}{{ 'تعديل تقييم' if record else 'تقييم جديد' }}{% endblock %}
+{% block page_title %}{{ 'تعديل تقييم أداء' if record else 'تقييم أداء جديد' }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">{{ 'تعديل تقييم' if record else 'إنشاء تقييم أداء' }}</h1></div>
+  <a href="{{ url_for('evaluations.index', school_id=selected_school_id) if is_super_admin and selected_school_id else url_for('evaluations.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="row justify-content-center">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-star-fill text-accent"></i>بيانات التقييم
+      </div>
+      <div class="card-body">
+        <form method="POST"
+              action="{{ url_for('evaluations.edit', ev_id=record.id) if record else url_for('evaluations.create') }}">
+
+          <div class="row g-3 mb-4">
+            {% if is_super_admin and not record %}
+            <div class="col-md-6">
+              <label class="form-label">School <span class="text-danger">*</span></label>
+              <select name="school_id" id="schoolSelect" class="form-select" required>
+                <option value="">Select school</option>
+                {% for school in schools %}
+                <option value="{{ school.id }}"
+                  {{ 'selected' if selected_school_id == school.id }}>
+                  {{ school.school_name }}
+                </option>
+                {% endfor %}
+              </select>
+            </div>
+            {% endif %}
+            <div class="col-md-6">
+              <label class="form-label">الموظف <span class="text-danger">*</span></label>
+              <select name="employee_id" class="form-select" required
+                      {{ 'disabled' if record }}>
+                <option value="">— اختر الموظف —</option>
+                {% for emp in employees %}
+                <option value="{{ emp.id }}"
+                  {{ 'selected' if record and record.employee_id == emp.id }}>
+                  {{ emp.full_name }} — {{ emp.job_title }}
+                </option>
+                {% endfor %}
+              </select>
+              {% if record %}
+              <input type="hidden" name="employee_id" value="{{ record.employee_id }}">
+              {% endif %}
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">الفترة <span class="text-danger">*</span></label>
+              <input type="text" name="period" class="form-control" required
+                     placeholder="مثال: الفصل الأول 2024، Q1 2025"
+                     value="{{ record.period if record else '' }}">
+            </div>
+          </div>
+
+          <!-- Slider: Performance -->
+          <div class="mb-4">
+            <label class="form-label d-flex justify-content-between">
+              <span><i class="bi bi-lightning-fill me-1" style="color:#1a3a5c"></i>الأداء الوظيفي</span>
+              <span class="fw-700" id="perfVal" style="color:#1a3a5c">
+                {{ record.performance if record else 5 }}/10
+              </span>
+            </label>
+            <input type="range" name="performance" id="perfSlider"
+                   class="form-range" min="1" max="10" step="1"
+                   value="{{ record.performance if record else 5 }}"
+                   oninput="updateSlider('perf', this.value)">
+            <div class="d-flex justify-content-between"
+                 style="font-size:11px;color:#9aabb8;margin-top:2px">
+              <span>ضعيف</span><span>متوسط</span><span>ممتاز</span>
+            </div>
+          </div>
+
+          <!-- Slider: Discipline -->
+          <div class="mb-4">
+            <label class="form-label d-flex justify-content-between">
+              <span><i class="bi bi-shield-fill me-1" style="color:#e8a020"></i>الانضباط والالتزام</span>
+              <span class="fw-700" id="discVal" style="color:#e8a020">
+                {{ record.discipline if record else 5 }}/10
+              </span>
+            </label>
+            <input type="range" name="discipline" id="discSlider"
+                   class="form-range" min="1" max="10" step="1"
+                   value="{{ record.discipline if record else 5 }}"
+                   oninput="updateSlider('disc', this.value)">
+            <div class="d-flex justify-content-between"
+                 style="font-size:11px;color:#9aabb8;margin-top:2px">
+              <span>ضعيف</span><span>متوسط</span><span>ممتاز</span>
+            </div>
+          </div>
+
+          <!-- Slider: Attendance -->
+          <div class="mb-4">
+            <label class="form-label d-flex justify-content-between">
+              <span><i class="bi bi-calendar-check-fill me-1" style="color:#1aab6d"></i>الحضور والانتظام</span>
+              <span class="fw-700" id="attVal" style="color:#1aab6d">
+                {{ record.attendance_score if record else 5 }}/10
+              </span>
+            </label>
+            <input type="range" name="attendance_score" id="attSlider"
+                   class="form-range" min="1" max="10" step="1"
+                   value="{{ record.attendance_score if record else 5 }}"
+                   oninput="updateSlider('att', this.value)">
+            <div class="d-flex justify-content-between"
+                 style="font-size:11px;color:#9aabb8;margin-top:2px">
+              <span>ضعيف</span><span>متوسط</span><span>ممتاز</span>
+            </div>
+          </div>
+
+          <!-- Final score preview -->
+          <div class="mb-4 p-3 rounded-12" style="background:#f0f4f8;text-align:center">
+            <div style="font-size:12px;color:#9aabb8;text-transform:uppercase;
+                        letter-spacing:.8px;margin-bottom:4px">التقييم النهائي</div>
+            <div id="finalScore" style="font-size:42px;font-weight:900;color:#1a3a5c">
+              {{ record.final_score if record else '5.0' }}
+            </div>
+            <div id="finalLabel" style="font-size:14px;font-weight:700;color:#9aabb8">
+              مقبول
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">ملاحظات</label>
+            <textarea name="notes" class="form-control" rows="3">{{ record.notes if record else '' }}</textarea>
+          </div>
+
+          <div class="d-flex gap-3 mt-4">
+            <button type="submit" class="btn btn-primary px-5">
+              <i class="bi bi-check-circle-fill me-2"></i>
+              {{ 'حفظ التعديلات' if record else 'حفظ التقييم' }}
+            </button>
+            <a href="{{ url_for('evaluations.index', school_id=selected_school_id) if is_super_admin and selected_school_id else url_for('evaluations.index') }}"
+               class="btn btn-outline-secondary px-4">إلغاء</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const LABELS = {10:'ممتاز',9:'ممتاز',8:'جيد جداً',7:'جيد جداً',6:'جيد',5:'مقبول',4:'مقبول',3:'ضعيف',2:'ضعيف',1:'ضعيف'};
+
+function updateSlider(id, val) {
+  const map = {perf:'perfVal', disc:'discVal', att:'attVal'};
+  document.getElementById(map[id]).textContent = val + '/10';
+  calcFinal();
+}
+
+function calcFinal() {
+  const p = +document.getElementById('perfSlider').value;
+  const d = +document.getElementById('discSlider').value;
+  const a = +document.getElementById('attSlider').value;
+  const avg = ((p + d + a) / 3);
+  document.getElementById('finalScore').textContent = avg.toFixed(1);
+  const lbl = LABELS[Math.round(avg)] || '';
+  document.getElementById('finalLabel').textContent = lbl;
+  const el = document.getElementById('finalScore');
+  el.style.color = avg >= 8 ? '#1aab6d' : avg >= 6 ? '#e8a020' : '#e03e3e';
+  document.getElementById('finalLabel').style.color = el.style.color;
+}
+
+calcFinal();
+
+const schoolSelect = document.getElementById('schoolSelect');
+if (schoolSelect) {
+  schoolSelect.addEventListener('change', function () {
+    const url = new URL(window.location.href);
+    if (this.value) {
+      url.searchParams.set('school_id', this.value);
+    } else {
+      url.searchParams.delete('school_id');
+    }
+    window.location.href = url.toString();
+  });
+}
+</script>
+{% endblock %}

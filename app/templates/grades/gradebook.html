@@ -1,0 +1,326 @@
+{% extends "shared/base.html" %}
+{% block title %}كشف الدرجات الشامل{% endblock %}
+{% block page_title %}كشف الدرجات الشامل{% endblock %}
+
+{% block content %}
+<style>
+  .gradebook-wrap { overflow-x: auto; }
+  .gradebook-table { border-collapse: separate; border-spacing: 0; min-width: 100%; }
+  .gradebook-table thead th {
+    position: sticky; top: 0; z-index: 2;
+    background: #1a3a5c; color: #fff;
+    padding: 10px 12px; white-space: nowrap;
+    font-weight: 600; font-size: 13px;
+    border-bottom: 2px solid #0f2440;
+  }
+  .gradebook-table thead th.col-avg { background: #1a5c3a; }
+  .gradebook-table thead th.col-fixed {
+    position: sticky; z-index: 3;
+    background: #1a3a5c;
+  }
+  .gradebook-table thead th:nth-child(1) { left: 0;   min-width: 44px;  text-align:center; }
+  .gradebook-table thead th:nth-child(2) { left: 44px; min-width: 180px; }
+  .gradebook-table thead th:nth-child(3) { left: 224px; min-width: 110px; text-align:center; }
+  .gradebook-table tbody td {
+    padding: 8px 12px; vertical-align: middle;
+    border-bottom: 1px solid #e9ecef; font-size: 13px;
+  }
+  .gradebook-table tbody td.col-fixed {
+    position: sticky; background: #fff; z-index: 1;
+  }
+  .gradebook-table tbody tr:nth-child(even) td.col-fixed { background: #f8f9fa; }
+  .gradebook-table tbody td:nth-child(1) { left: 0;    min-width: 44px;  text-align:center; }
+  .gradebook-table tbody td:nth-child(2) { left: 44px; min-width: 180px; font-weight:600;   }
+  .gradebook-table tbody td:nth-child(3) { left: 224px; min-width:110px; text-align:center; }
+  .gradebook-table tbody tr:nth-child(even) td { background: #f8f9fa; }
+  .gradebook-table tbody tr:hover td { background: #eef4ff !important; }
+  .mark-cell { text-align: center; min-width: 88px; }
+  .mark-pass  { background: #e8f8f0 !important; color: #1aab6d; font-weight:700; }
+  .mark-fail  { background: #fef0f0 !important; color: #e03e3e; font-weight:700; }
+  .mark-empty { color: #adb5bd; text-align:center; }
+  .avg-cell   { text-align:center; font-weight:700; min-width:90px; }
+  .avg-pass   { background: #e8f8f0 !important; color: #1aab6d; }
+  .avg-fail   { background: #fef0f0 !important; color: #e03e3e; }
+  .exam-col-header { text-align:center; min-width:100px; }
+  .exam-col-header small { display:block; font-weight:400; opacity:.8; font-size:11px; margin-top:2px; }
+  @media print {
+    .page-header .d-flex, .card.mb-4 { display:none !important; }
+    .gradebook-table thead th, .gradebook-table tbody td.col-fixed { position: static; }
+  }
+</style>
+
+<div class="page-header">
+  <div><h1 class="page-title">كشف الدرجات الشامل</h1></div>
+  <div class="d-flex gap-2">
+    {% if section_id and exams %}
+    <a href="{{ url_for('grades.gradebook_export',
+                        section_id=section_id,
+                        subject_id=subject_filter,
+                        exam_type=exam_type_filter,
+                        start_date=start_date,
+                        end_date=end_date) }}"
+       class="btn btn-outline-success">
+      <i class="bi bi-file-earmark-excel-fill me-1"></i>تصدير Master Sheet
+    </a>
+    <button type="button" class="btn btn-outline-secondary" onclick="window.print()">
+      <i class="bi bi-printer-fill me-1"></i>طباعة
+    </button>
+    {% endif %}
+    <a href="{{ url_for('grades.index') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>رجوع
+    </a>
+  </div>
+</div>
+
+{# ── Filter bar ──────────────────────────────────────────────────────────── #}
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="row g-2 align-items-end">
+
+      {# ── Row 1: navigation filters ── #}
+      <div class="col-6 col-md-3">
+        <label class="form-label fw-600 small">المرحلة</label>
+        <select name="stage" class="form-select" id="gbStage">
+          <option value="">كل المراحل</option>
+          {% for st in stages %}
+          <option value="{{ st }}" {% if stage_filter == st %}selected{% endif %}>
+            {% if st == 'ابتدائية' %}المرحلة الابتدائية
+            {% elif st == 'متوسطة' %}المرحلة المتوسطة
+            {% else %}المرحلة الإعدادية{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label fw-600 small">الصف</label>
+        <select name="grade_id" class="form-select" id="gbGrade">
+          <option value="">كل الصفوف</option>
+          {% for g in grades %}
+          <option value="{{ g.id }}" data-stage="{{ g.stage or '' }}"
+                  {% if grade_filter == g.id %}selected{% endif %}>{{ g.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label fw-600 small">الشعبة <span class="text-danger">*</span></label>
+        <select name="section_id" class="form-select" id="gbSection">
+          <option value="">— اختر الشعبة —</option>
+          {% for sec in sections %}
+          <option value="{{ sec.id }}" data-grade-id="{{ sec.grade_id }}"
+                  {% if section_id == sec.id %}selected{% endif %}>
+            {{ sec.grade.name }} — {{ sec.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label small">المادة</label>
+        <select name="subject_id" class="form-select" id="gbSubject">
+          <option value="all" {% if subject_filter == 'all' %}selected{% endif %}>كل المواد</option>
+          {% for subj in subjects %}
+          <option value="{{ subj.id }}" data-grade-id="{{ subj.grade_id or '' }}"
+                  {% if subject_filter == subj.id|string %}selected{% endif %}>
+            {{ subj.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      {# ── Row 2: refinement filters + submit ── #}
+      <div class="col-6 col-md-3">
+        <label class="form-label small">الفئة</label>
+        <select name="exam_type" class="form-select">
+          <option value="all" {% if exam_type_filter == 'all' %}selected{% endif %}>كل الفئات</option>
+          {% for et in exam_types %}
+          <option value="{{ et.id }}"
+                  {% if exam_type_filter == et.id|string %}selected{% endif %}>
+            {{ et.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label small">من تاريخ</label>
+        <input type="date" name="start_date" class="form-control" value="{{ start_date }}">
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label small">إلى تاريخ</label>
+        <input type="date" name="end_date" class="form-control" value="{{ end_date }}">
+      </div>
+      <div class="col-6 col-md-3 d-flex gap-1 align-items-end">
+        <button class="btn btn-primary flex-grow-1" title="تصفية">
+          <i class="bi bi-search me-1"></i>بحث
+        </button>
+        <a href="{{ url_for('grades.gradebook') }}" class="btn btn-outline-secondary" title="إعادة تعيين">
+          <i class="bi bi-x-lg"></i>
+        </a>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ── Content area ────────────────────────────────────────────────────────── #}
+{% if not section_id %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">
+    <i class="bi bi-grid-3x3-gap" style="font-size:48px;opacity:.25;display:block;margin-bottom:12px"></i>
+    <p class="mb-0">اختر الشعبة لعرض كشف الدرجات الشامل</p>
+  </div>
+</div>
+
+{% elif not exams %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">
+    <i class="bi bi-clipboard-x" style="font-size:48px;opacity:.25;display:block;margin-bottom:12px"></i>
+    <p class="mb-0">لا توجد اختبارات لهذه التصفية</p>
+  </div>
+</div>
+
+{% else %}
+{# ── Stats bar ───────────────────────────────────────────────────────────── #}
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:#e8f4fd"><i class="bi bi-people-fill" style="color:#1a3a5c"></i></div>
+      <div><div class="stat-value">{{ stats.n_students }}</div><div class="stat-label">طالب</div></div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:#fff8ec"><i class="bi bi-journal-text" style="color:#e8a020"></i></div>
+      <div><div class="stat-value">{{ stats.n_exams }}</div><div class="stat-label">اختبار</div></div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:#e8f8f0"><i class="bi bi-check-circle-fill" style="color:#1aab6d"></i></div>
+      <div><div class="stat-value">{{ stats.n_passing }}</div><div class="stat-label">ناجح</div></div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:#fef0f0"><i class="bi bi-x-circle-fill" style="color:#e03e3e"></i></div>
+      <div><div class="stat-value">{{ stats.n_failing }}</div><div class="stat-label">راسب</div></div>
+    </div>
+  </div>
+</div>
+
+{# ── Pivot table ─────────────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="gradebook-wrap">
+    <table class="gradebook-table">
+      <thead>
+        <tr>
+          <th class="col-fixed">#</th>
+          <th class="col-fixed">اسم الطالب</th>
+          <th class="col-fixed">رقم الطالب</th>
+          {% for exam in exams %}
+          <th class="exam-col-header">
+            {{ exam.display_name }}
+            <small>
+              {% if exam.exam_type %}{{ exam.exam_type.name }} · {% endif %}
+              {{ exam.exam_date.strftime('%Y-%m-%d') }}
+            </small>
+            <small style="opacity:.6">/ {{ exam.max_marks }}</small>
+          </th>
+          {% endfor %}
+          <th class="col-avg">المتوسط %</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td class="col-fixed text-muted">{{ loop.index }}</td>
+          <td class="col-fixed fw-600">{{ row.student.full_name }}</td>
+          <td class="col-fixed"><code>{{ row.student.student_id }}</code></td>
+
+          {% for cell in row.cells %}
+          {% set exam = exams[loop.index0] %}
+          <td class="mark-cell
+            {% if cell is not none %}
+              {% if cell.is_pass %}mark-pass{% else %}mark-fail{% endif %}
+            {% else %}mark-empty{% endif %}">
+            {% if cell is not none %}
+              {{ cell.marks }}
+              <span style="font-weight:400;opacity:.6;font-size:11px">/{{ exam.max_marks }}</span>
+              {% if cell.grade_letter %}
+              <span class="badge ms-1"
+                    style="font-size:10px;background:transparent;border:1px solid currentColor;padding:1px 4px">
+                {{ cell.grade_letter }}
+              </span>
+              {% endif %}
+            {% else %}—{% endif %}
+          </td>
+          {% endfor %}
+
+          <td class="avg-cell
+            {% if row.avg is not none %}
+              {% if row.avg >= 60 %}avg-pass{% else %}avg-fail{% endif %}
+            {% endif %}">
+            {% if row.avg is not none %}
+              {{ row.avg }}%
+              <span style="font-weight:400;opacity:.6;font-size:11px">({{ row.taken }}/{{ exams|length }})</span>
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="{{ exams|length + 4 }}" class="text-center text-muted py-4">
+            لا يوجد طلاب في هذه الشعبة
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<script>
+(function () {
+  const stageEl   = document.getElementById('gbStage');
+  const gradeEl   = document.getElementById('gbGrade');
+  const sectionEl = document.getElementById('gbSection');
+  const subjectEl = document.getElementById('gbSubject');
+
+  const gradeOpts   = Array.from(gradeEl.options).slice(1);
+  const sectionOpts = Array.from(sectionEl.options).slice(1);
+  const subjectOpts = Array.from(subjectEl.options).slice(1);
+
+  function filterGrades() {
+    const stage = stageEl.value;
+    for (const opt of gradeOpts) {
+      opt.hidden = stage ? opt.dataset.stage !== stage : false;
+    }
+    const sel = gradeEl.selectedOptions[0];
+    if (sel && sel.hidden) gradeEl.value = '';
+    filterSections();
+    filterSubjects();
+  }
+
+  function filterSections() {
+    const gradeId = gradeEl.value;
+    for (const opt of sectionOpts) {
+      opt.hidden = gradeId ? opt.dataset.gradeId !== gradeId : false;
+    }
+    const sel = sectionEl.selectedOptions[0];
+    if (sel && sel.hidden) sectionEl.value = '';
+  }
+
+  function filterSubjects() {
+    const gradeId = gradeEl.value;
+    for (const opt of subjectOpts) {
+      opt.hidden = gradeId ? opt.dataset.gradeId !== gradeId : false;
+    }
+    const sel = subjectEl.selectedOptions[0];
+    if (sel && sel.hidden) subjectEl.value = 'all';
+  }
+
+  stageEl.addEventListener('change', filterGrades);
+  gradeEl.addEventListener('change', () => { filterSections(); filterSubjects(); });
+
+  // Apply on load to keep dropdowns consistent with URL params
+  filterGrades();
+})();
+</script>
+{% endblock %}

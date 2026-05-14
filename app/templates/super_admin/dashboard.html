@@ -1,0 +1,175 @@
+{% extends "shared/base.html" %}
+
+{% block title %}بوابة المشرف العام{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title"><i class="bi bi-shield-lock-fill me-2"></i>بوابة المشرف العام</h1>
+    <p class="text-muted mb-0">إدارة شاملة لجميع المحافظات والمدارس والاشتراكات</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('super_admin.billing_overview') }}" class="btn btn-outline-primary btn-sm">
+      <i class="bi bi-receipt me-1"></i>الفواتير الشاملة
+    </a>
+    <a href="{{ url_for('schools.create') }}" class="btn btn-primary btn-sm">
+      <i class="bi bi-plus-lg me-1"></i>إضافة مدرسة
+    </a>
+  </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }} alert-dismissible fade show" role="alert">
+    {{ msg }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+{% endwith %}
+
+{# ── System-wide summary cards ─────────────────────────────────────────── #}
+<div class="stats-grid mb-4" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr));">
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(13,110,253,.12);color:#0d6efd">
+      <i class="bi bi-buildings"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ total_schools }}</div>
+      <div class="stat-label">إجمالي المدارس</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(26,171,109,.12);color:#1aab6d">
+      <i class="bi bi-geo-alt-fill"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ governorates|length }}</div>
+      <div class="stat-label">المحافظات</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(232,160,32,.12);color:#e8a020">
+      <i class="bi bi-people-fill"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ total_students }}</div>
+      <div class="stat-label">إجمالي الطلاب</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(33,150,243,.12);color:#2196f3">
+      <i class="bi bi-person-fill"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ total_users }}</div>
+      <div class="stat-label">إجمالي المستخدمين</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(26,171,109,.12);color:#1aab6d">
+      <i class="bi bi-cash-stack"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ "{:,.0f}".format(total_paid) }}</div>
+      <div class="stat-label">إجمالي المحصّل</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(224,62,62,.12);color:#e03e3e">
+      <i class="bi bi-exclamation-circle-fill"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ "{:,.0f}".format(total_remaining) }}</div>
+      <div class="stat-label">إجمالي المتبقي</div>
+    </div>
+  </div>
+</div>
+
+{# ── Governorate cards grid ────────────────────────────────────────────── #}
+<h5 class="fw-bold mb-3"><i class="bi bi-map-fill me-2 text-primary"></i>المحافظات</h5>
+
+{% if governorates %}
+<div class="row g-3">
+  {% for gov in governorates %}
+  <div class="col-md-6 col-xl-4">
+    <div class="card h-100 shadow-sm border-0" style="border-radius:12px;overflow:hidden;">
+      {# Coloured header strip #}
+      <div class="card-header d-flex justify-content-between align-items-center py-3"
+           style="background:var(--primary);color:#fff;">
+        <div>
+          <i class="bi bi-geo-alt-fill me-2"></i>
+          <strong>{{ gov.name }}</strong>
+        </div>
+        <a href="{{ url_for('super_admin.governorate_detail', gov_name=gov.name) }}"
+           class="btn btn-sm btn-light btn-sm text-primary">
+          عرض التفاصيل
+        </a>
+      </div>
+
+      <div class="card-body p-3">
+        {# School counts #}
+        <div class="d-flex gap-2 mb-3 flex-wrap">
+          <span class="badge bg-primary-subtle text-primary fs-6 px-3 py-2">
+            <i class="bi bi-buildings me-1"></i>{{ gov.total_schools }} مدرسة
+          </span>
+          <span class="badge bg-success-subtle text-success fs-6 px-3 py-2">
+            <i class="bi bi-check-circle me-1"></i>{{ gov.active_schools }} نشطة
+          </span>
+          {% if gov.inactive_schools %}
+          <span class="badge bg-danger-subtle text-danger fs-6 px-3 py-2">
+            <i class="bi bi-x-circle me-1"></i>{{ gov.inactive_schools }} معطّلة
+          </span>
+          {% endif %}
+        </div>
+
+        {# Student / User counts #}
+        <div class="row g-2 mb-3">
+          <div class="col-6">
+            <div class="p-2 rounded text-center" style="background:#f0f4f8;">
+              <div class="fw-bold">{{ gov.students }}</div>
+              <small class="text-muted">طالب</small>
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="p-2 rounded text-center" style="background:#f0f4f8;">
+              <div class="fw-bold">{{ gov.users }}</div>
+              <small class="text-muted">مستخدم</small>
+            </div>
+          </div>
+        </div>
+
+        {# Financial summary #}
+        <div class="row g-2 mb-2">
+          <div class="col-6">
+            <small class="text-muted d-block">المحصّل</small>
+            <span class="fw-bold text-success">{{ "{:,.0f}".format(gov.total_paid) }}</span>
+          </div>
+          <div class="col-6">
+            <small class="text-muted d-block">المتبقي</small>
+            <span class="fw-bold text-danger">{{ "{:,.0f}".format(gov.total_remaining) }}</span>
+          </div>
+        </div>
+
+        {# Collection progress bar #}
+        <div>
+          <div class="d-flex justify-content-between mb-1">
+            <small class="text-muted">نسبة التحصيل</small>
+            <small class="fw-bold">{{ gov.collection_pct }}%</small>
+          </div>
+          <div class="progress" style="height:8px;border-radius:4px;">
+            <div class="progress-bar bg-success"
+                 style="width:{{ gov.collection_pct }}%"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="alert alert-info">
+  <i class="bi bi-info-circle me-2"></i>
+  لا توجد مدارس مضافة بعد. <a href="{{ url_for('schools.create') }}">أضف مدرسة الآن</a>.
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,133 @@
+{% extends "shared/base.html" %}
+{% block title %}تقرير الحضور{% endblock %}
+{% block page_title %}تقرير الحضور والغياب{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">تقرير الحضور</h1></div>
+  <a href="{{ url_for('reports.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="d-flex gap-3 align-items-end flex-wrap">
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">الشعبة</label>
+        <select name="section_id" class="form-select" style="width:200px">
+          <option value="">— اختر الشعبة —</option>
+          {% for sec in sections %}
+          <option value="{{ sec.id }}" {{ 'selected' if section_id == sec.id }}>
+            {{ sec.grade.name }} / شعبة {{ sec.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">من</label>
+        <input type="date" name="start" class="form-control" style="width:150px" value="{{ start }}">
+      </div>
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">إلى</label>
+        <input type="date" name="end" class="form-control" style="width:150px" value="{{ end }}">
+      </div>
+      <button class="btn btn-primary align-self-end">
+        <i class="bi bi-search me-1"></i>عرض
+      </button>
+    </form>
+  </div>
+</div>
+
+{% if rows %}
+<!-- Summary stats -->
+{% set total_p = rows | sum(attribute='present') %}
+{% set total_a = rows | sum(attribute='absent') %}
+{% set total_l = rows | sum(attribute='late') %}
+{% set grand   = total_p + total_a + total_l %}
+
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#1aab6d,#16c879)"><i class="bi bi-check-circle-fill"></i></div>
+      <div><div class="stat-value">{{ total_p }}</div><div class="stat-label">إجمالي الحضور</div></div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#e03e3e,#f87171)"><i class="bi bi-x-circle-fill"></i></div>
+      <div><div class="stat-value">{{ total_a }}</div><div class="stat-label">إجمالي الغياب</div></div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#e8a020,#f5c25a)"><i class="bi bi-clock-fill"></i></div>
+      <div><div class="stat-value">{{ total_l }}</div><div class="stat-label">إجمالي التأخر</div></div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#2196f3,#64b5f6)"><i class="bi bi-percent"></i></div>
+      <div>
+        <div class="stat-value">
+          {{ ((total_p + total_l) / grand * 100) | round(1) if grand else 0 }}%
+        </div>
+        <div class="stat-label">متوسط الحضور</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>الترتيب</th><th>الطالب</th><th>رقمه</th>
+          <th class="text-success">حاضر</th>
+          <th class="text-danger">غائب</th>
+          <th class="text-warning">متأخر</th>
+          <th>الإجمالي</th>
+          <th>نسبة الحضور</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td class="text-muted">{{ loop.index }}</td>
+          <td class="fw-600">{{ r.student.full_name }}</td>
+          <td><code>{{ r.student.student_id }}</code></td>
+          <td class="fw-700 text-success">{{ r.present }}</td>
+          <td class="fw-700 text-danger">{{ r.absent }}</td>
+          <td class="fw-700 text-warning">{{ r.late }}</td>
+          <td>{{ r.total }}</td>
+          <td>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="flex:1;height:8px;background:#f0f4f8;border-radius:4px;overflow:hidden">
+                <div style="width:{{ r.rate }}%;height:100%;
+                            background:{% if r.rate >= 85 %}#1aab6d{% elif r.rate >= 70 %}#e8a020{% else %}#e03e3e{% endif %};
+                            border-radius:4px"></div>
+              </div>
+              <span style="font-size:13px;font-weight:700;min-width:44px;
+                color:{% if r.rate >= 85 %}#1aab6d{% elif r.rate >= 70 %}#e8a020{% else %}#e03e3e{% endif %}">
+                {{ r.rate }}%
+              </span>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% elif section_id %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">لا توجد بيانات حضور لهذه الشعبة في الفترة المحددة</div>
+</div>
+{% else %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">اختر شعبة وفترة زمنية من الفلتر أعلاه</div>
+</div>
+{% endif %}
+{% endblock %}

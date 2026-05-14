@@ -1,0 +1,53 @@
+{% extends "shared/base.html" %}
+{% block title %}تعديل شعبة{% endblock %}
+{% block page_title %}تعديل بيانات الشعبة{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">تعديل شعبة: {{ section.grade.name }} / {{ section.name }}</h1>
+  </div>
+  <a href="{{ url_for('sections.index', year_id=section.grade.academic_year_id) }}"
+     class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="row justify-content-center">
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-pencil-fill text-accent"></i>بيانات الشعبة</div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('sections.edit_section', sec_id=section.id) }}">
+          <div class="mb-3">
+            <label class="form-label">اسم الشعبة <span class="text-danger">*</span></label>
+            <input type="text" name="name" class="form-control"
+                   value="{{ section.name }}" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">المعلم المشرف</label>
+            <select name="teacher_id" class="form-select">
+              <option value="">— بدون تعيين —</option>
+              {% for t in teachers %}
+              <option value="{{ t.id }}" {{ 'selected' if section.teacher_id == t.id }}>
+                {{ t.full_name }} — {{ t.job_title }}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">السعة القصوى</label>
+            <input type="number" name="capacity" class="form-control"
+                   value="{{ section.capacity }}" min="1">
+          </div>
+          <div class="d-flex gap-3 mt-4">
+            <button type="submit" class="btn btn-primary px-5">حفظ</button>
+            <a href="{{ url_for('sections.index', year_id=section.grade.academic_year_id) }}"
+               class="btn btn-outline-secondary px-4">إلغاء</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,131 @@
+{% extends "shared/base.html" %}
+{% block title %}إيقاف الطلاب{% endblock %}
+{% block page_title %}إيقاف الطلاب{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">إدارة إيقاف الطلاب</h1>
+    <p class="page-subtitle">يُمنع إدراج الطالب الموقوف في كشوفات الحضور خلال فترة الإيقاف</p>
+  </div>
+  <a href="{{ url_for('attendance.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="row g-4">
+  {# ── New suspension form ── #}
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-header fw-600">
+        <i class="bi bi-slash-circle text-warning me-1"></i>إضافة إيقاف جديد
+      </div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('attendance.create_suspension') }}">
+          <input type="hidden" name="csrf_token"
+                 value="{{ csrf_token() if csrf_token is defined else '' }}">
+          <div class="mb-3">
+            <label class="form-label">الطالب <span class="text-danger">*</span></label>
+            <select name="student_id" class="form-select" required>
+              <option value="">— اختر الطالب —</option>
+              {% for s in students %}
+              <option value="{{ s.id }}">
+                {{ s.full_name }}
+                {% if s.section %}({{ s.section.grade.name }} / {{ s.section.name }}){% endif %}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">من تاريخ <span class="text-danger">*</span></label>
+            <input type="date" name="start_date" class="form-control" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">إلى تاريخ <span class="text-danger">*</span></label>
+            <input type="date" name="end_date" class="form-control" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">سبب الإيقاف</label>
+            <textarea name="reason" class="form-control" rows="3"
+                      placeholder="اختياري..."></textarea>
+          </div>
+          <button type="submit" class="btn btn-warning w-100">
+            <i class="bi bi-slash-circle me-1"></i>تسجيل الإيقاف
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  {# ── Existing suspensions ── #}
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="card-header fw-600">
+        <i class="bi bi-list-ul text-accent me-1"></i>
+        سجل الإيقافات ({{ all_suspensions|length }})
+      </div>
+      <div class="table-wrapper">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>الطالب</th>
+              <th>الصف / الشعبة</th>
+              <th>من</th>
+              <th>إلى</th>
+              <th>الحالة</th>
+              <th>السبب</th>
+              <th>إجراء</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for susp in all_suspensions %}
+            <tr>
+              <td class="fw-600">{{ susp.student.full_name }}</td>
+              <td>
+                {% if susp.student.section %}
+                <span class="badge" style="background:#e8f4fd;color:#1a3a5c">
+                  {{ susp.student.section.grade.name }} / {{ susp.student.section.name }}
+                </span>
+                {% else %}—{% endif %}
+              </td>
+              <td>{{ susp.start_date.strftime('%Y-%m-%d') }}</td>
+              <td>{{ susp.end_date.strftime('%Y-%m-%d') }}</td>
+              <td>
+                {% if susp.is_active %}
+                <span class="badge-status badge-pending">نشط</span>
+                {% else %}
+                <span class="badge-status badge-inactive">منتهي</span>
+                {% endif %}
+              </td>
+              <td style="font-size:12px;color:#6b7a8d;max-width:180px">
+                {{ susp.reason or '—' }}
+              </td>
+              <td>
+                <form method="POST"
+                      action="{{ url_for('attendance.delete_suspension', susp_id=susp.id) }}"
+                      class="d-inline">
+                  <input type="hidden" name="csrf_token"
+                         value="{{ csrf_token() if csrf_token is defined else '' }}">
+                  <button class="btn btn-sm btn-outline-danger"
+                          data-confirm="هل تريد إلغاء إيقاف الطالب {{ susp.student.full_name }}؟">
+                    <i class="bi bi-trash"></i>
+                  </button>
+                </form>
+              </td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="7" class="text-center text-muted py-5">
+                <i class="bi bi-slash-circle"
+                   style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+                لا توجد إيقافات مسجلة
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,196 @@
+{% extends "shared/base.html" %}
+{% block title %}هوية المدرسة{% endblock %}
+{% block page_title %}هوية المدرسة — White Label{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">هوية المدرسة</h1>
+    <p class="page-subtitle">تخصيص اسم المدرسة، الشعار، الألوان، ومعلومات التواصل</p>
+  </div>
+  <a href="{{ url_for('admin.settings') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع للإعدادات
+  </a>
+</div>
+
+<form method="POST" enctype="multipart/form-data">
+  <div class="row g-4">
+
+    <!-- Left column: identity -->
+    <div class="col-md-8">
+      <div class="card mb-4">
+        <div class="card-header">
+          <i class="bi bi-buildings-fill text-accent"></i>الاسم والهوية
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">اسم المدرسة (بالعربية)</label>
+              <input type="text" name="school_name_ar"
+                     value="{{ settings.school_name_ar or '' }}"
+                     class="form-control" maxlength="200"
+                     placeholder="مدرسة المهندس النموذجية">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Name (English) <span class="text-danger">*</span></label>
+              <input type="text" name="school_name" required
+                     value="{{ settings.school_name }}"
+                     class="form-control" maxlength="200"
+                     placeholder="Al-Muhandis Model School">
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label">اللون الأساسي</label>
+              <input type="color" name="primary_color"
+                     value="{{ settings.primary_color or '#0d6efd' }}"
+                     class="form-control form-control-color" style="width:100%;height:42px">
+            </div>
+            <input type="hidden" name="locale" value="{{ settings.locale or 'ar' }}">
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header">
+          <i class="bi bi-telephone-fill text-accent"></i>معلومات التواصل
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-12">
+              <label class="form-label">العنوان</label>
+              <textarea name="address" class="form-control" rows="2"
+                        placeholder="الرياض — حي النخيل">{{ settings.address or '' }}</textarea>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">الهاتف</label>
+              <input type="text" name="phone" value="{{ settings.phone or '' }}"
+                     class="form-control" placeholder="+966 11 123 4567">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">البريد الإلكتروني</label>
+              <input type="email" name="email" value="{{ settings.email or '' }}"
+                     class="form-control" placeholder="info@school.com">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">الموقع الإلكتروني</label>
+              <input type="text" name="website" value="{{ settings.website or '' }}"
+                     class="form-control" placeholder="https://school.com">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header">
+          <i class="bi bi-currency-exchange text-accent"></i>العملة والمنطقة الزمنية
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label">رمز العملة</label>
+              <input type="text" name="currency_code" maxlength="10"
+                     value="{{ settings.currency_code or 'SAR' }}"
+                     class="form-control" placeholder="SAR">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">رمز العرض</label>
+              <input type="text" name="currency_symbol" maxlength="10"
+                     value="{{ settings.currency_symbol or '﷼' }}"
+                     class="form-control" placeholder="﷼">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">المنطقة الزمنية</label>
+              <input type="text" name="timezone" maxlength="50"
+                     value="{{ settings.timezone or 'Asia/Riyadh' }}"
+                     class="form-control" placeholder="Asia/Riyadh">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header">
+          <i class="bi bi-card-text text-accent"></i>تذييل الإيصالات والمستندات
+        </div>
+        <div class="card-body">
+          <textarea name="receipt_footer" class="form-control" rows="3"
+                    placeholder="مثال: شكراً لتعاملكم معنا — للاستفسار: 0112345678">{{ settings.receipt_footer or '' }}</textarea>
+          <small class="text-muted">يظهر في أسفل الإيصالات وكشوف الرواتب.</small>
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header">
+          <i class="bi bi-clock-history text-accent"></i>إعدادات الحضور والغياب
+        </div>
+        <div class="card-body d-flex align-items-center justify-content-between gap-3">
+          <div style="font-size:13px;color:#666">
+            أوقات بدء الدوام، حد التأخر، وحد الغياب التلقائي — تُدار في صفحة مستقلة
+            مع صلاحية قابلة للتفويض.
+            {% if settings.att_late_threshold %}
+            <br><span class="text-muted">حد التأخر الحالي: <b>{{ settings.att_late_threshold.strftime('%H:%M') }}</b></span>
+            {% endif %}
+          </div>
+          <a href="{{ url_for('admin.attendance_settings') }}" class="btn btn-outline-primary btn-sm text-nowrap">
+            <i class="bi bi-clock-history me-1"></i>إعدادات الحضور
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right column: logo upload -->
+    <div class="col-md-4">
+      <div class="card mb-4">
+        <div class="card-header">
+          <i class="bi bi-image-fill text-accent"></i>الشعار
+        </div>
+        <div class="card-body text-center">
+          {% if settings.logo_path %}
+          <img src="{{ url_for('static', filename='uploads/' + settings.logo_path) }}"
+               alt="Logo" style="max-width:180px;max-height:180px;
+                                 border-radius:14px;border:1px solid #dde3ec;
+                                 padding:8px;background:#fff">
+          <div class="text-muted mt-2" style="font-size:12px">الشعار الحالي</div>
+          {% else %}
+          <div style="width:150px;height:150px;margin:0 auto;
+                      background:#f6f9fc;border:2px dashed #dde3ec;
+                      border-radius:14px;display:flex;align-items:center;
+                      justify-content:center;color:#9aabb8;font-size:42px">
+            <i class="bi bi-buildings"></i>
+          </div>
+          <div class="text-muted mt-2" style="font-size:12px">لا يوجد شعار</div>
+          {% endif %}
+
+          <div class="mt-3">
+            <label class="form-label">رفع شعار جديد</label>
+            <input type="file" name="logo" class="form-control" accept="image/*">
+            <small class="text-muted">PNG / JPG / SVG — الحد الأقصى 2MB</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header">
+          <i class="bi bi-star-fill text-accent"></i>أيقونة التبويب (Favicon)
+        </div>
+        <div class="card-body text-center">
+          {% if settings.favicon_path %}
+          <img src="{{ url_for('static', filename='uploads/' + settings.favicon_path) }}"
+               alt="Favicon" style="width:48px;height:48px;border-radius:8px;
+                                     border:1px solid #dde3ec;padding:4px;background:#fff">
+          {% endif %}
+          <div class="mt-3">
+            <input type="file" name="favicon" class="form-control" accept="image/*">
+            <small class="text-muted">صورة صغيرة مربعة (32×32 أو 64×64)</small>
+          </div>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary w-100 btn-lg">
+        <i class="bi bi-check-circle-fill me-1"></i>حفظ التغييرات
+      </button>
+    </div>
+
+  </div>
+</form>
+{% endblock %}

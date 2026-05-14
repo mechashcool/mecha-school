@@ -1,0 +1,203 @@
+{% extends "shared/base.html" %}
+{% block title %}الأعوام الدراسية{% endblock %}
+{% block page_title %}الأعوام الدراسية{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">الأعوام الدراسية</h1></div>
+  {% if current_user.is_super_admin %}
+  <a href="{{ url_for('admin.settings') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+  {% else %}
+  <a href="{{ url_for('admin.dashboard') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+  {% endif %}
+</div>
+
+{# ── School manager info banner ────────────────────────────────────────────── #}
+{% if not current_user.is_super_admin %}
+<div class="alert alert-info mb-4" style="border-right:4px solid var(--info)">
+  <i class="bi bi-info-circle-fill me-2"></i>
+  الأعوام الدراسية يديرها مسؤول النظام فقط. يمكنك التبديل بين الأعوام لعرض البيانات التاريخية.
+</div>
+{% endif %}
+
+<div class="row g-4">
+  {# ── Create form — super admin only ──────────────────────────────────────── #}
+  {% if current_user.is_super_admin %}
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-plus-circle-fill text-accent"></i>إضافة عام دراسي</div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('admin.create_academic_year') }}">
+          <div class="mb-3">
+            <label class="form-label">الاسم <span class="text-danger">*</span></label>
+            <input type="text" name="name" class="form-control" required placeholder="مثال: 2024-2025">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">تاريخ البداية <span class="text-danger">*</span></label>
+            <input type="date" name="start_date" class="form-control" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">تاريخ النهاية <span class="text-danger">*</span></label>
+            <input type="date" name="end_date" class="form-control" required>
+          </div>
+          <div class="mb-3">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="is_current" id="isCurrent">
+              <label class="form-check-label" for="isCurrent">العام الدراسي الحالي</label>
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary w-100">
+            <i class="bi bi-plus-circle-fill me-2"></i>إضافة
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Year list ────────────────────────────────────────────────────────────── #}
+  <div class="{{ 'col-lg-7' if current_user.is_super_admin else 'col-12' }}">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-calendar3 text-accent"></i>الأعوام المسجّلة</div>
+      <div class="table-wrapper">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>الاسم</th><th>البداية</th><th>النهاية</th>
+              <th>الحالة</th>
+              <th style="width:180px">إجراءات</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for y in years %}
+            <tr>
+              <td class="fw-700">{{ y.name }}</td>
+              <td>{{ y.start_date.strftime('%Y-%m-%d') }}</td>
+              <td>{{ y.end_date.strftime('%Y-%m-%d') }}</td>
+              <td>
+                {% if y.is_current %}
+                <span class="badge-status badge-active">الحالي</span>
+                {% else %}
+                <span class="text-muted" style="font-size:13px">—</span>
+                {% endif %}
+              </td>
+              <td>
+                {# Super admin: full edit / delete actions #}
+                {% if current_user.is_super_admin %}
+                <button type="button" class="btn btn-sm btn-outline-primary"
+                        data-bs-toggle="modal" data-bs-target="#editYear{{ y.id }}">
+                  <i class="bi bi-pencil"></i> تعديل
+                </button>
+                {% if not y.is_current %}
+                <form method="POST"
+                      action="{{ url_for('admin.delete_academic_year', year_id=y.id) }}"
+                      class="d-inline"
+                      onsubmit="return confirm('هل أنت متأكد من حذف هذا العام؟');">
+                  <button class="btn btn-sm btn-outline-danger" type="submit">
+                    <i class="bi bi-trash"></i>
+                  </button>
+                </form>
+                {% endif %}
+
+                {# School manager: year-switch button only #}
+                {% else %}
+                {% if active_year and y.id == active_year.id %}
+                <span class="badge-status badge-active" style="font-size:11px">
+                  <i class="bi bi-eye-fill"></i> تعرض الآن
+                </span>
+                {% else %}
+                <form method="POST" action="{{ url_for('admin.switch_year') }}" class="d-inline">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+                  <input type="hidden" name="year_id" value="{{ y.id }}">
+                  <input type="hidden" name="next" value="{{ request.path }}">
+                  <button type="submit" class="btn btn-sm btn-outline-info">
+                    <i class="bi bi-calendar-check"></i> عرض هذا العام
+                  </button>
+                </form>
+                {% endif %}
+                {% if real_active_year and y.id != real_active_year.id %}
+                <span class="badge badge-secondary ms-1" style="font-size:10px">تاريخي</span>
+                {% endif %}
+                {% endif %}
+              </td>
+            </tr>
+
+            {# Edit modal — super admin only #}
+            {% if current_user.is_super_admin %}
+            <div class="modal fade" id="editYear{{ y.id }}" tabindex="-1" aria-hidden="true">
+              <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                  <form method="POST"
+                        action="{{ url_for('admin.edit_academic_year', year_id=y.id) }}">
+                    <div class="modal-header">
+                      <h5 class="modal-title">تعديل العام الدراسي</h5>
+                      <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                      <div class="mb-3">
+                        <label class="form-label">الاسم</label>
+                        <input type="text" name="name" class="form-control"
+                               value="{{ y.name }}" required>
+                      </div>
+                      <div class="row g-2">
+                        <div class="col-md-6">
+                          <label class="form-label">تاريخ البداية</label>
+                          <input type="date" name="start_date" class="form-control"
+                                 value="{{ y.start_date.strftime('%Y-%m-%d') }}">
+                        </div>
+                        <div class="col-md-6">
+                          <label class="form-label">تاريخ النهاية</label>
+                          <input type="date" name="end_date" class="form-control"
+                                 value="{{ y.end_date.strftime('%Y-%m-%d') }}">
+                        </div>
+                      </div>
+                      <div class="form-check mt-3">
+                        <input class="form-check-input" type="checkbox"
+                               name="is_current" id="ic{{ y.id }}"
+                               {% if y.is_current %}checked{% endif %}>
+                        <label class="form-check-label" for="ic{{ y.id }}">
+                          العام الدراسي الحالي
+                        </label>
+                      </div>
+                    </div>
+                    <div class="modal-footer">
+                      <button type="button" class="btn btn-outline-secondary"
+                              data-bs-dismiss="modal">إلغاء</button>
+                      <button type="submit" class="btn btn-primary">حفظ التغييرات</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </div>
+            {% endif %}
+
+            {% else %}
+            <tr>
+              <td colspan="5" class="text-center text-muted py-4">لا توجد أعوام بعد</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {# School manager: reset to current year #}
+      {% if not current_user.is_super_admin and real_active_year and active_year and active_year.id != real_active_year.id %}
+      <div class="card-footer text-center">
+        <form method="POST" action="{{ url_for('admin.switch_year') }}" class="d-inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+          <input type="hidden" name="year_id" value="">
+          <input type="hidden" name="next" value="{{ request.path }}">
+          <button type="submit" class="btn btn-sm btn-outline-success">
+            <i class="bi bi-arrow-repeat me-1"></i>العودة إلى العام الحالي ({{ real_active_year.name }})
+          </button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

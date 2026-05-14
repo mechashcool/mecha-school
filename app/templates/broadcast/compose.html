@@ -1,0 +1,86 @@
+{% extends "shared/base.html" %}
+{% block title %}إعلان جديد{% endblock %}
+{% block page_title %}إعلان جديد{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">تأليف إعلان جديد</h1></div>
+  <a href="{{ url_for('broadcast.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <div class="mb-3">
+        <label class="form-label">العنوان <span class="text-danger">*</span></label>
+        <input type="text" name="title" class="form-control" required maxlength="200">
+      </div>
+      <div class="mb-3">
+        <label class="form-label">نص الإعلان <span class="text-danger">*</span></label>
+        <textarea name="body" class="form-control" rows="5" required></textarea>
+      </div>
+
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label">الجمهور</label>
+          <select name="audience" id="audienceSel" class="form-select"
+                  onchange="updateAudienceUI()">
+            <option value="all_parents">كل أولياء الأمور</option>
+            <option value="role">حسب الدور</option>
+            <option value="specific">مستخدمون محدّدون</option>
+          </select>
+        </div>
+
+        <div class="col-md-6" id="roleRow" style="display:none">
+          <label class="form-label">اسم الدور</label>
+          <select name="target_role" class="form-select">
+            {% for r in roles %}
+            <option value="{{ r.name }}">{{ r.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div class="mt-3" id="specificRow" style="display:none">
+        <label class="form-label">المستقبلون (أولياء الأمور)</label>
+        <select name="target_user_ids" class="form-select" multiple size="8">
+          {% for u in parent_users %}
+          <option value="{{ u.id }}">{{ u.full_name }}{% if u.email %} — {{ u.email }}{% endif %}</option>
+          {% endfor %}
+        </select>
+        <small class="text-muted">اضغط Ctrl لاختيار أكثر من مستخدم.</small>
+      </div>
+
+      <hr class="my-4">
+
+      <div class="row g-3 align-items-end">
+        <div class="col-md-6">
+          <label class="form-label">وقت الإرسال (اختياري)</label>
+          <input type="datetime-local" name="scheduled_at" class="form-control">
+        </div>
+        <div class="col-md-6 d-flex gap-2">
+          <button type="submit" name="action" value="send_now" class="btn btn-success flex-grow-1">
+            <i class="bi bi-send-fill me-1"></i>إرسال فوري
+          </button>
+          <button type="submit" name="action" value="schedule" class="btn btn-outline-primary flex-grow-1">
+            <i class="bi bi-clock-fill me-1"></i>جدولة
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function updateAudienceUI() {
+  const v = document.getElementById('audienceSel').value;
+  document.getElementById('roleRow').style.display     = (v === 'role')     ? '' : 'none';
+  document.getElementById('specificRow').style.display = (v === 'specific') ? '' : 'none';
+}
+updateAudienceUI();
+</script>
+{% endblock %}

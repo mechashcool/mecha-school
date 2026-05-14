@@ -1,0 +1,99 @@
+{% extends "shared/base.html" %}
+{% block title %}{{ employee.full_name }}{% endblock %}
+{% block page_title %}ملف الموظف{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ employee.full_name }}</h1>
+    <p class="page-subtitle">{{ employee.employee_id }} — {{ employee.job_title }}</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('employees.edit', emp_id=employee.id) }}" class="btn btn-outline-primary">
+      <i class="bi bi-pencil me-1"></i>تعديل
+    </a>
+    <a href="{{ url_for('employees.documents', emp_id=employee.id) }}" class="btn btn-outline-secondary">
+      <i class="bi bi-folder-fill me-1"></i>المستندات
+    </a>
+    <a href="{{ url_for('salaries.employee_history', emp_id=employee.id) }}" class="btn btn-outline-secondary">
+      <i class="bi bi-wallet-fill me-1"></i>سجل الرواتب
+    </a>
+    <a href="{{ url_for('employees.index') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>رجوع
+    </a>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-4">
+    <div class="card text-center mb-4">
+      <div class="card-body py-4">
+        {% if employee.photo %}
+        <img src="{{ url_for('static', filename=employee.photo) }}"
+             style="width:100px;height:100px;border-radius:50%;object-fit:cover;border:4px solid #1aab6d;margin-bottom:16px">
+        {% else %}
+        <div style="width:100px;height:100px;border-radius:50%;background:#1aab6d;
+                    display:flex;align-items:center;justify-content:center;
+                    font-size:36px;color:#fff;font-weight:900;
+                    margin:0 auto 16px;border:4px solid #1aab6d">{{ employee.full_name[0] }}</div>
+        {% endif %}
+        <h3 style="font-size:18px;font-weight:800">{{ employee.full_name }}</h3>
+        <p class="text-muted mb-1">{{ employee.job_title }}</p>
+        <p class="text-muted mb-3" style="font-size:12px">{{ employee.department or '' }}</p>
+        <span class="badge-status {{ 'badge-active' if employee.status == 'active' else 'badge-inactive' }}">
+          {% if employee.status == 'active' %}فعّال{% elif employee.status == 'on_leave' %}إجازة{% else %}منتهي{% endif %}
+        </span>
+      </div>
+    </div>
+
+    <!-- Salary summary -->
+    <div class="card">
+      <div class="card-header"><i class="bi bi-wallet2 text-accent"></i>الراتب</div>
+      <div class="card-body">
+        <div class="d-flex justify-content-between mb-2">
+          <span class="text-muted" style="font-size:13px">الراتب الأساسي</span>
+          <span class="fw-700">{{ '{:,.0f}'.format(employee.base_salary) }} د.ع</span>
+        </div>
+        <div class="d-flex justify-content-between">
+          <span class="text-muted" style="font-size:13px">تاريخ التعيين</span>
+          <span>{{ employee.hire_date.strftime('%Y-%m-%d') if employee.hire_date else '—' }}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-8">
+    <div class="card mb-4">
+      <div class="card-header"><i class="bi bi-info-circle-fill text-accent"></i>البيانات الشخصية</div>
+      <div class="card-body">
+        <div class="row g-3">
+          {% macro info_row(label, value) %}
+          <div class="col-md-6">
+            <div style="font-size:12px;font-weight:700;color:#9aabb8;text-transform:uppercase;margin-bottom:3px">{{ label }}</div>
+            <div style="font-size:14px;color:#1e2b3a;font-weight:500">{{ value or '—' }}</div>
+          </div>
+          {% endmacro %}
+          {{ info_row('الجنس', 'ذكر' if employee.gender == 'male' else 'أنثى' if employee.gender == 'female' else '') }}
+          {{ info_row('الجنسية', employee.nationality) }}
+          {{ info_row('رقم الهاتف', employee.phone) }}
+          {{ info_row('البريد الإلكتروني', employee.email) }}
+          {{ info_row('نوع العقد', employee.contract_type) }}
+          {% if employee.address %}
+          <div class="col-12">
+            <div style="font-size:12px;font-weight:700;color:#9aabb8;text-transform:uppercase;margin-bottom:3px">العنوان</div>
+            <div style="font-size:14px;color:#1e2b3a">{{ employee.address }}</div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    {% if employee.notes %}
+    <div class="card">
+      <div class="card-header"><i class="bi bi-sticky-fill text-accent"></i>ملاحظات</div>
+      <div class="card-body" style="font-size:14px;color:#4a5568">{{ employee.notes }}</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

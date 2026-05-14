@@ -1,0 +1,158 @@
+{% extends "shared/base.html" %}
+{% block title %}إعدادات الحضور{% endblock %}
+{% block page_title %}إعدادات الحضور والغياب{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">إعدادات الحضور والغياب</h1>
+    <p class="page-subtitle">تحديد أوقات الدوام وحدود التأخر والغياب التلقائي</p>
+  </div>
+  <a href="{{ url_for('attendance.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>سجل الحضور
+  </a>
+</div>
+
+<div class="row g-4">
+  <div class="col-md-8">
+    <form method="POST">
+      <div class="card mb-4">
+        <div class="card-header">
+          <i class="bi bi-clock-history text-accent"></i>أوقات الدوام والحدود الزمنية
+        </div>
+        <div class="card-body">
+          <p class="text-muted mb-4" style="font-size:13px">
+            يحدد النظام تلقائياً حالة الطالب بناءً على وقت الدخول:
+            <br>• الدخول قبل <b>حد التأخر</b> → <span class="text-success fw-600">حاضر</span>
+            <br>• الدخول بعد <b>حد التأخر</b> → <span style="color:#e8a020" class="fw-600">متأخر</span>
+            <br>• بدون حضور بحلول <b>حد الغياب</b> → <span class="text-danger fw-600">غائب تلقائياً</span> (عند الضغط على زر التسجيل التلقائي)
+          </p>
+
+          <div class="row g-3">
+            <div class="col-md-3">
+              <label class="form-label fw-600">
+                <i class="bi bi-door-open text-accent me-1"></i>وقت بدء الدوام
+              </label>
+              <input type="time" name="att_start_time"
+                     value="{{ settings.att_start_time.strftime('%H:%M') if settings.att_start_time else '' }}"
+                     class="form-control form-control-lg">
+              <small class="text-muted">وقت فتح أبواب المدرسة</small>
+            </div>
+
+            <div class="col-md-3">
+              <label class="form-label fw-600">
+                <i class="bi bi-clock text-warning me-1"></i>حد التأخر
+              </label>
+              <input type="time" name="att_late_threshold"
+                     value="{{ settings.att_late_threshold.strftime('%H:%M') if settings.att_late_threshold else '' }}"
+                     class="form-control form-control-lg" style="border-color:#e8a020">
+              <small class="text-muted">الدخول بعد هذا الوقت → <b style="color:#e8a020">متأخر</b></small>
+            </div>
+
+            <div class="col-md-3">
+              <label class="form-label fw-600">
+                <i class="bi bi-x-circle text-danger me-1"></i>حد الغياب التلقائي
+              </label>
+              <input type="time" name="att_absence_threshold"
+                     value="{{ settings.att_absence_threshold.strftime('%H:%M') if settings.att_absence_threshold else '' }}"
+                     class="form-control form-control-lg" style="border-color:#e03e3e">
+              <small class="text-muted">بدون حضور بحلول هذا الوقت → <b class="text-danger">غائب تلقائياً</b></small>
+            </div>
+
+            <div class="col-md-3">
+              <label class="form-label fw-600">
+                <i class="bi bi-door-closed text-secondary me-1"></i>وقت الانصراف
+              </label>
+              <input type="time" name="att_departure_time"
+                     value="{{ settings.att_departure_time.strftime('%H:%M') if settings.att_departure_time else '' }}"
+                     class="form-control form-control-lg" style="border-color:#6c757d">
+              <small class="text-muted">المسح بعد هذا الوقت → تسجيل <b>وقت الخروج</b></small>
+            </div>
+          </div>
+
+          <div class="alert alert-warning mt-4 mb-0 py-2" style="font-size:13px">
+            <i class="bi bi-info-circle me-1"></i>
+            اتركها فارغةً لتعطيل المنطق الزمني التلقائي — سيُعامَل كل حضور مسجَّل كـ "حاضر".
+          </div>
+        </div>
+      </div>
+
+      {% if settings.att_start_time or settings.att_late_threshold or settings.att_absence_threshold or settings.att_departure_time %}
+      <div class="card mb-4">
+        <div class="card-header">
+          <i class="bi bi-diagram-3 text-accent"></i>الإعدادات النشطة حالياً
+        </div>
+        <div class="card-body py-3">
+          <div class="d-flex gap-4 flex-wrap">
+            {% if settings.att_start_time %}
+            <div class="text-center px-3 py-2 rounded" style="background:#f0f4ff;border:1px solid #c7d5f5">
+              <div style="font-size:22px;font-weight:800;color:#1a3a5c">
+                {{ settings.att_start_time.strftime('%H:%M') }}
+              </div>
+              <div style="font-size:12px;color:#555">بدء الدوام</div>
+            </div>
+            {% endif %}
+            {% if settings.att_late_threshold %}
+            <div class="text-center px-3 py-2 rounded" style="background:#fff8ec;border:1px solid #f0c060">
+              <div style="font-size:22px;font-weight:800;color:#e8a020">
+                {{ settings.att_late_threshold.strftime('%H:%M') }}
+              </div>
+              <div style="font-size:12px;color:#555">حد التأخر</div>
+            </div>
+            {% endif %}
+            {% if settings.att_absence_threshold %}
+            <div class="text-center px-3 py-2 rounded" style="background:#fff0f0;border:1px solid #f0b0b0">
+              <div style="font-size:22px;font-weight:800;color:#e03e3e">
+                {{ settings.att_absence_threshold.strftime('%H:%M') }}
+              </div>
+              <div style="font-size:12px;color:#555">حد الغياب</div>
+            </div>
+            {% endif %}
+            {% if settings.att_departure_time %}
+            <div class="text-center px-3 py-2 rounded" style="background:#f4f4f4;border:1px solid #bbb">
+              <div style="font-size:22px;font-weight:800;color:#444">
+                {{ settings.att_departure_time.strftime('%H:%M') }}
+              </div>
+              <div style="font-size:12px;color:#555">وقت الانصراف</div>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      <button type="submit" class="btn btn-primary btn-lg px-5">
+        <i class="bi bi-check-circle-fill me-2"></i>حفظ الإعدادات
+      </button>
+    </form>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-question-circle text-accent"></i>دليل الإعدادات
+      </div>
+      <div class="card-body" style="font-size:13px;line-height:1.8">
+        <p><b>مثال عملي:</b></p>
+        <ul class="text-muted ps-3">
+          <li>بدء الدوام: <b>08:00</b></li>
+          <li>حد التأخر: <b>08:15</b></li>
+          <li>حد الغياب: <b>09:00</b></li>
+          <li>وقت الانصراف: <b>13:00</b></li>
+        </ul>
+        <p class="text-muted">
+          → الدخول قبل 08:15 → <b class="text-success">حاضر</b>.<br>
+          → الدخول بعد 08:15 → <b style="color:#e8a020">متأخر</b>.<br>
+          → بدون حضور بحلول 09:00 → <b class="text-danger">غائب تلقائياً</b>.<br>
+          → مسح البطاقة بعد 13:00 → تسجيل <b>وقت الخروج</b>.
+        </p>
+        <hr>
+        <p class="text-muted mb-0">
+          <i class="bi bi-globe me-1"></i>المنطقة الزمنية المستخدمة: <b>{{ settings.timezone or 'Asia/Baghdad' }}</b>
+          <br><small>يمكن تغييرها من <a href="{{ url_for('admin.school_settings') }}">هوية المدرسة</a>.</small>
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

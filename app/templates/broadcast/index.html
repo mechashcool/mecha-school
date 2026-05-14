@@ -1,0 +1,51 @@
+{% extends "shared/base.html" %}
+{% block title %}سجل الإعلانات{% endblock %}
+{% block page_title %}سجل الإعلانات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">سجل الإعلانات السابقة</h1>
+       <p class="page-subtitle">أرشيف للرجوع والتدقيق فقط. إرسال الرسائل يتم من خلال الإشعارات.</p>
+  </div>
+  <a href="{{ url_for('notifications.create') }}" class="btn btn-primary">
+    <i class="bi bi-bell-fill me-2"></i>إشعار جديد
+  </a>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>العنوان</th><th>الجمهور</th><th>الحالة</th>
+          <th>الإنشاء</th><th>الإرسال</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in announcements %}
+        <tr>
+          <td class="fw-600">{{ a.title }}</td>
+          <td>
+            {% if a.audience == 'all_parents' %}كل الأولياء
+            {% elif a.audience == 'role'     %}حسب الدور ({{ a.target_role }})
+            {% else %}محدّد{% endif %}
+          </td>
+          <td>
+            <span class="badge-status badge-{{ a.status }}">
+              {% if a.status == 'sent'      %}مرسل
+              {% elif a.status == 'scheduled' %}مجدول
+              {% elif a.status == 'failed'  %}فشل
+              {% else %}مسوّدة{% endif %}
+            </span>
+          </td>
+          <td style="font-size:12.5px">{{ a.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td style="font-size:12.5px">{{ a.sent_at.strftime('%Y-%m-%d %H:%M') if a.sent_at else '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="text-center text-muted py-4">لا توجد إعلانات محفوظة</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

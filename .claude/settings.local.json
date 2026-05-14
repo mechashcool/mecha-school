@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m flask db current)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(flask db *)"
+    ]
+  }
+}

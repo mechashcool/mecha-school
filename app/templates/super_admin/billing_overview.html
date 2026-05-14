@@ -1,0 +1,183 @@
+{% extends "shared/base.html" %}
+
+{% block title %}الفواتير الشاملة{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb mb-1">
+        <li class="breadcrumb-item">
+          <a href="{{ url_for('super_admin.dashboard') }}">بوابة المشرف العام</a>
+        </li>
+        <li class="breadcrumb-item active">الفواتير الشاملة</li>
+      </ol>
+    </nav>
+    <h1 class="page-title"><i class="bi bi-receipt me-2"></i>الفواتير الشاملة</h1>
+    <p class="text-muted mb-0">جميع فواتير المدارس مع تصفية بالمحافظة والحالة</p>
+  </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }} alert-dismissible fade show">{{ msg }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+{% endwith %}
+
+{# ── Summary cards ─────────────────────────────────────────────────────── #}
+<div class="stats-grid mb-4" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));">
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(13,110,253,.12);color:#0d6efd">
+      <i class="bi bi-file-earmark-text"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ records|length }}</div>
+      <div class="stat-label">سجلات</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(224,62,62,.12);color:#e03e3e">
+      <i class="bi bi-cash"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ "{:,.0f}".format(total_due) }}</div>
+      <div class="stat-label">إجمالي المستحق</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(26,171,109,.12);color:#1aab6d">
+      <i class="bi bi-cash-stack"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ "{:,.0f}".format(total_paid) }}</div>
+      <div class="stat-label">إجمالي المحصّل</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(232,160,32,.12);color:#e8a020">
+      <i class="bi bi-exclamation-circle"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ "{:,.0f}".format(total_remaining) }}</div>
+      <div class="stat-label">إجمالي المتبقي</div>
+    </div>
+  </div>
+</div>
+
+{# ── Filters ───────────────────────────────────────────────────────────── #}
+<form method="GET" class="card border-0 shadow-sm mb-4 p-3">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-3">
+      <label class="form-label small">المحافظة</label>
+      <select name="governorate" class="form-select form-select-sm">
+        <option value="">الكل</option>
+        <option value="غير محدد" {{ 'selected' if gov_filter == 'غير محدد' }}>غير محدد</option>
+        {% for gov in governorates %}
+        <option value="{{ gov }}" {{ 'selected' if gov_filter == gov }}>{{ gov }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label small">المدرسة</label>
+      <select name="school_id" class="form-select form-select-sm">
+        <option value="">الكل</option>
+        {% for s in all_schools %}
+        <option value="{{ s.id }}" {{ 'selected' if school_filter == s.id }}>
+          {{ s.school_name_ar or s.school_name }}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label small">الحالة</label>
+      <select name="status" class="form-select form-select-sm">
+        <option value="">الكل</option>
+        <option value="unpaid"  {{ 'selected' if status_filter == 'unpaid' }}>غير مدفوع</option>
+        <option value="partial" {{ 'selected' if status_filter == 'partial' }}>جزئي</option>
+        <option value="paid"    {{ 'selected' if status_filter == 'paid' }}>مدفوع</option>
+      </select>
+    </div>
+    <div class="col-md-2">
+      <button type="submit" class="btn btn-primary btn-sm w-100">
+        <i class="bi bi-funnel me-1"></i>تصفية
+      </button>
+    </div>
+    <div class="col-md-2">
+      <a href="{{ url_for('super_admin.billing_overview') }}"
+         class="btn btn-outline-secondary btn-sm w-100">إعادة تعيين</a>
+    </div>
+  </div>
+</form>
+
+{# ── Records table ─────────────────────────────────────────────────────── #}
+<div class="card border-0 shadow-sm">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>#</th>
+            <th>المدرسة</th>
+            <th>المحافظة</th>
+            <th>النوع</th>
+            <th>الوصف</th>
+            <th>المستحق</th>
+            <th>المدفوع</th>
+            <th>المتبقي</th>
+            <th>الحالة</th>
+            <th>الاستحقاق</th>
+            <th>آخر دفع</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% set type_labels = {
+            'subscription': 'اشتراك',
+            'setup': 'إعداد',
+            'extra_students': 'طلاب إضافيون',
+            'service': 'خدمة',
+            'other': 'أخرى'
+          } %}
+          {% for rec in records %}
+          <tr>
+            <td class="text-muted small">{{ rec.id }}</td>
+            <td>
+              <a href="{{ url_for('super_admin.school_detail', school_id=rec.school_id) }}"
+                 class="fw-semibold text-decoration-none">
+                {{ rec.school.school_name_ar or rec.school.school_name }}
+              </a>
+            </td>
+            <td><small>{{ rec.school.governorate or 'غير محدد' }}</small></td>
+            <td>
+              <span class="badge bg-info-subtle text-info">
+                {{ type_labels.get(rec.billing_type, rec.billing_type) }}
+              </span>
+            </td>
+            <td><small>{{ rec.description or '—' }}</small></td>
+            <td class="fw-semibold">{{ "{:,.0f}".format(rec.amount_due or 0) }}</td>
+            <td class="text-success fw-semibold">{{ "{:,.0f}".format(rec.amount_paid or 0) }}</td>
+            <td class="text-danger fw-semibold">{{ "{:,.0f}".format(rec.remaining) }}</td>
+            <td>
+              {% if rec.status == 'paid' %}
+                <span class="badge bg-success">مدفوع</span>
+              {% elif rec.status == 'partial' %}
+                <span class="badge bg-warning text-dark">جزئي</span>
+              {% else %}
+                <span class="badge bg-danger">غير مدفوع</span>
+              {% endif %}
+            </td>
+            <td><small class="text-muted">{{ rec.due_date.strftime('%Y-%m-%d') if rec.due_date else '—' }}</small></td>
+            <td><small class="text-muted">{{ rec.payment_date.strftime('%Y-%m-%d') if rec.payment_date else '—' }}</small></td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="11" class="text-center text-muted py-4">لا توجد سجلات فواتير.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

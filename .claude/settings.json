@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cd \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\"; $env:FLASK_APP=\"run.py\"; $env:FLASK_ENV=\"development\"; python -c \"from app import create_app; app = create_app\\('development'\\); print\\('App created OK'\\)\" 2>&1)",
+      "Bash(.venv/Scripts/flask --app manage:app fix-admin)",
+      "Bash(.venv/Scripts/python -c ' *)",
+      "Bash(python -)",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

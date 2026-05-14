@@ -1,0 +1,114 @@
+{% extends "shared/base.html" %}
+{% block title %}تقرير الطلاب{% endblock %}
+{% block page_title %}تقرير إحصائيات الطلاب{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">إحصائيات الطلاب</h1></div>
+  <a href="{{ url_for('reports.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+{% set total = stats.active + stats.transferred + stats.withdrawn + stats.graduated %}
+
+<!-- Status KPIs -->
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#1aab6d,#16c879)"><i class="bi bi-check-circle-fill"></i></div>
+      <div><div class="stat-value">{{ stats.active }}</div><div class="stat-label">فعّالون</div></div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#2196f3,#64b5f6)"><i class="bi bi-arrow-right-circle-fill"></i></div>
+      <div><div class="stat-value">{{ stats.transferred }}</div><div class="stat-label">منقولون</div></div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#e03e3e,#f87171)"><i class="bi bi-x-circle-fill"></i></div>
+      <div><div class="stat-value">{{ stats.withdrawn }}</div><div class="stat-label">مسحوبون</div></div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#e8a020,#f5c25a)"><i class="bi bi-mortarboard-fill"></i></div>
+      <div><div class="stat-value">{{ stats.graduated }}</div><div class="stat-label">متخرجون</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <!-- Donut -->
+  {% if total > 0 %}
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-pie-chart-fill text-accent"></i>توزيع الحالات</div>
+      <div class="card-body d-flex justify-content-center align-items-center">
+        <div style="max-width:260px;width:100%"><canvas id="statusChart"></canvas></div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Per-section capacity table -->
+  <div class="{{ 'col-lg-8' if total > 0 else 'col-12' }}">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-grid-fill text-accent"></i>
+        الطلاب الفعّالون لكل شعبة
+      </div>
+      <div class="table-wrapper">
+        <table class="table table-hover">
+          <thead>
+            <tr><th>الصف</th><th>الشعبة</th><th>المعلم المشرف</th><th>الطلاب</th><th>السعة</th><th>نسبة الامتلاء</th></tr>
+          </thead>
+          <tbody>
+            {% for row in section_data %}
+            <tr>
+              <td class="fw-600">{{ row.section.grade.name }}</td>
+              <td>شعبة {{ row.section.name }}</td>
+              <td style="font-size:12.5px">{{ row.section.teacher.full_name if row.section.teacher else '—' }}</td>
+              <td>
+                <span class="badge-status badge-active">{{ row.active }}</span>
+              </td>
+              <td class="text-muted">{{ row.capacity }}</td>
+              <td>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <div style="flex:1;height:8px;background:#f0f4f8;border-radius:4px;overflow:hidden">
+                    <div style="width:{{ row.pct }}%;height:100%;
+                                background:{% if row.pct >= 90 %}#e03e3e{% elif row.pct >= 70 %}#e8a020{% else %}#1aab6d{% endif %};
+                                border-radius:4px"></div>
+                  </div>
+                  <span style="font-size:12px;font-weight:700;min-width:38px">{{ row.pct }}%</span>
+                </div>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="text-center text-muted py-4">لا توجد شعب</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{% if (stats.active + stats.transferred + stats.withdrawn + stats.graduated) > 0 %}
+<script>
+new Chart(document.getElementById('statusChart'), {
+  type:'doughnut',
+  data:{
+    labels:['فعّال','منقول','مسحوب','متخرج'],
+    datasets:[{data:[{{ stats.active }},{{ stats.transferred }},{{ stats.withdrawn }},{{ stats.graduated }}],
+      backgroundColor:['#1aab6d','#2196f3','#e03e3e','#e8a020'],borderWidth:0,hoverOffset:6}]
+  },
+  options:{responsive:true,cutout:'65%',plugins:{legend:{position:'bottom',labels:{font:{family:'Cairo',size:13},padding:14}}}}
+});
+</script>
+{% endif %}
+{% endblock %}

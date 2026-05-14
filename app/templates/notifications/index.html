@@ -1,0 +1,73 @@
+{% extends "shared/base.html" %}
+{% block title %}الإشعارات{% endblock %}
+{% block page_title %}الإشعارات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ 'سجل الإشعارات' if can_manage else 'الإشعارات' }}</h1>
+  </div>
+  {% if current_user.has_permission('manage_notifications') and not is_historical_year %}
+  <a href="{{ url_for('notifications.create') }}" class="btn btn-primary">
+    <i class="bi bi-plus-circle-fill me-2"></i>إشعار جديد
+  </a>
+  {% endif %}
+</div>
+
+<div class="card">
+  {% for n in notifs.items %}
+  <div class="d-flex align-items-start gap-3 px-4 py-4 border-bottom">
+    <div style="width:42px;height:42px;border-radius:12px;flex-shrink:0;
+                display:flex;align-items:center;justify-content:center;font-size:18px;
+                {% if n.ntype == 'absence' %}background:#fef0f0;color:#e03e3e;
+                {% elif n.ntype == 'payment' %}background:#e8f8f0;color:#1aab6d;
+                {% elif n.ntype == 'grade' %}background:#e8f4fd;color:#2196f3;
+                {% else %}background:#fff8ec;color:#e8a020;{% endif %}">
+      <i class="bi bi-{% if n.ntype == 'absence' %}person-x{% elif n.ntype == 'payment' %}cash{% elif n.ntype == 'grade' %}patch-check{% else %}megaphone{% endif %}-fill"></i>
+    </div>
+    <div class="flex-grow-1">
+      <div class="d-flex align-items-center gap-2 mb-1">
+        <span style="font-size:14.5px;font-weight:700">{{ n.title }}</span>
+        <span class="badge" style="background:#f0f4f8;color:#6b7a8d;font-size:10.5px">
+          {% if n.ntype == 'absence' %}غياب
+          {% elif n.ntype == 'payment' %}رسوم
+          {% elif n.ntype == 'grade' %}درجات
+          {% else %}إعلان{% endif %}
+        </span>
+        {% if can_manage %}
+        <span class="badge" style="background:#eef4ff;color:#1a3a5c;font-size:10.5px">
+          {% if n.target_user %}
+            محدد: {{ n.target_user.full_name }}
+          {% elif n.target_role == 'teacher' %}
+            التدريسيين
+          {% elif n.target_role == 'parent' %}
+            أولياء الأمور
+          {% else %}
+            الكل
+          {% endif %}
+        </span>
+        {% endif %}
+      </div>
+      <p style="font-size:13.5px;color:#4a5568;margin-bottom:6px">{{ n.body }}</p>
+      <div style="font-size:12px;color:#9aabb8">
+        {{ n.created_at.strftime('%Y-%m-%d %H:%M') }}
+        {% if n.creator %} · بواسطة {{ n.creator.full_name }}{% endif %}
+      </div>
+    </div>
+    {% if current_user.has_permission('manage_notifications') and not is_historical_year %}
+    <form method="POST" action="{{ url_for('notifications.delete', nid=n.id) }}">
+      <button class="btn btn-sm btn-outline-danger"
+              data-confirm="حذف هذا الإشعار؟">
+        <i class="bi bi-trash"></i>
+      </button>
+    </form>
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="card-body text-center text-muted py-5">
+    <i class="bi bi-bell-slash" style="font-size:40px;opacity:.3;display:block;margin-bottom:8px"></i>
+    لا توجد إشعارات
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

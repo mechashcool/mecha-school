@@ -1,0 +1,166 @@
+"""Mecha-School – Notifications Blueprint"""
+from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify
+from flask_login import login_required, current_user
+from app.models import db, Notification, NotificationRead, User, Role
+from app.utils.decorators import permission_required, get_current_school, historical_guard
+from app.utils.notification_visibility import (
+    notification_is_addressed_to, notification_visible_to,
+)
+
+notifications_bp = Blueprint('notifications', __name__,
+                              template_folder='../../templates/notifications')
+
+
+@notifications_bp.route('/')
+@login_required
+def index():
+    school = get_current_school()
+    school_id = school.id if school else None
+
+    page = request.args.get('page', 1, type=int)
+
+    can_manage = current_user.has_permission('manage_notifications')
+    q = Notification.query
+    if not can_manage:
+        q = q.filter(notification_visible_to(current_user))
+    q = q.order_by(Notification.created_at.desc())
+
+    if school_id:
+        q = q.filter(Notification.school_id == school_id)
+
+    notifs = q.paginate(page=page, per_page=20, error_out=False)
+
+    # Mark only the user's own inbox notifications as read. Admin history can
+    # include notifications sent to other users and must not consume them.
+    for n in notifs.items:
+        if not notification_is_addressed_to(n, current_user):
+            continue
+        exists = NotificationRead.query.filter_by(
+            notification_id=n.id, user_id=current_user.id).first()
+        if not exists:
+            db.session.add(NotificationRead(
+                notification_id=n.id, user_id=current_user.id))
+    db.session.commit()
+    return render_template('notifications/index.html',
+                           notifs=notifs, can_manage=can_manage)
+
+
+@notifications_bp.route('/create', methods=['GET', 'POST'])
+@login_required
+@historical_guard
+@permission_required('manage_notifications')
+def create():
+    school = get_current_school()
+    school_id = school.id if school else None
+    if not school_id:
+        flash('Select a school before creating notifications.', 'danger')
+        return redirect(url_for('notifications.index'))
+
+    # Load users for specific-recipient selectors.
+    parent_role = Role.query.filter_by(name='parent').first()
+    teacher_role = Role.query.filter_by(name='teacher').first()
+    parent_users = []
+    teacher_users = []
+    if parent_role:
+        parent_users = (User.query
+                        .filter_by(role_id=parent_role.id, school_id=school_id)
+                        .order_by(User.full_name)
+                        .all())
+    if teacher_role:
+        teacher_users = (User.query
+                         .filter_by(role_id=teacher_role.id, school_id=school_id)
+                         .order_by(User.full_name)
+                         .all())
+
+    def form_response(status=200):
+        return render_template(
+            'notifications/form.html',
+            parent_users=parent_users,
+            teacher_users=teacher_users,
+        ), status
+
+    if request.method == 'POST':
+        target_mode = request.form.get('target_role', '') or None
+        target_role = None
+        target_user_id = None
+
+        if target_mode == '_specific_parent':
+            target_user_id = request.form.get('target_parent_id', type=int)
+            if not target_user_id:
+                # Backward-compatible fallback for older forms/tests.
+                target_user_id = request.form.get('target_user_id', type=int)
+            if not target_user_id:
+                flash('يرجى اختيار ولي الأمر المحدد.', 'danger')
+                return form_response(400)
+            target_user = (User.query
+                           .filter_by(id=target_user_id, school_id=school_id)
+                           .filter(User.role.has(name='parent'))
+                           .first())
+            if not target_user:
+                flash('ولي الأمر المحدد غير متاح لهذه المدرسة.', 'danger')
+                return form_response(403)
+
+        elif target_mode == '_specific_teacher':
+            target_user_id = request.form.get('target_teacher_id', type=int)
+            if not target_user_id:
+                target_user_id = request.form.get('target_user_id', type=int)
+            if not target_user_id:
+                flash('يرجى اختيار المعلم المحدد.', 'danger')
+                return form_response(400)
+            target_user = (User.query
+                           .filter_by(id=target_user_id, school_id=school_id)
+                           .filter(User.role.has(name='teacher'))
+                           .first())
+            if not target_user:
+                flash('المعلم المحدد غير متاح لهذه المدرسة.', 'danger')
+                return form_response(403)
+
+        elif target_mode in (None, 'teacher', 'parent'):
+            target_role = target_mode
+
+        else:
+            flash('الجمهور المستهدف غير صالح.', 'danger')
+            return form_response(400)
+
+        if target_role:
+            role_exists = Role.query.filter_by(name=target_role).first()
+            if not role_exists:
+                flash('الجمهور المستهدف غير صالح.', 'danger')
+                return form_response(400)
+
+        if not request.form.get('title', '').strip():
+            flash('عنوان الإشعار مطلوب.', 'danger')
+            return form_response(400)
+        if not request.form.get('body', '').strip():
+            flash('نص الإشعار مطلوب.', 'danger')
+            return form_response(400)
+
+        n = Notification(
+            school_id      = school_id,
+            title          = request.form.get('title', '').strip(),
+            body           = request.form.get('body', '').strip(),
+            ntype          = request.form.get('ntype', 'announcement'),
+            target_role    = target_role,
+            target_user_id = target_user_id,
+            created_by     = current_user.id,
+        )
+        db.session.add(n)
+        db.session.commit()
+        flash('تم إرسال الإشعار بنجاح.', 'success')
+        return redirect(url_for('notifications.index'))
+
+    return render_template('notifications/form.html',
+                           parent_users=parent_users,
+                           teacher_users=teacher_users)
+
+
+@notifications_bp.route('/delete/<int:nid>', methods=['POST'])
+@login_required
+@historical_guard
+@permission_required('manage_notifications')
+def delete(nid):
+    n = Notification.query.get_or_404(nid)
+    db.session.delete(n)
+    db.session.commit()
+    flash('تم حذف الإشعار.', 'success')
+    return redirect(url_for('notifications.index'))

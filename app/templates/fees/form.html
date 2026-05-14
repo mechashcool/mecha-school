@@ -1,0 +1,136 @@
+{% extends "shared/base.html" %}
+{% block title %}إضافة سجل رسوم{% endblock %}
+{% block page_title %}إضافة سجل رسوم{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">سجل رسوم جديد</h1></div>
+  <a href="{{ url_for('fees.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-cash-coin text-accent"></i>بيانات الرسوم</div>
+      <div class="card-body">
+        <form method="POST" id="feeForm">
+          <div class="row g-3 mb-4">
+            <div class="col-md-6">
+              <label class="form-label">الطالب <span class="text-danger">*</span></label>
+              <select name="student_id" class="form-select" required>
+                <option value="">— اختر الطالب —</option>
+                {% for s in students %}
+                <option value="{{ s.id }}">{{ s.full_name }} ({{ s.student_id }})</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">نوع الرسم <span class="text-danger">*</span></label>
+              <select name="fee_type_id" class="form-select" required>
+                <option value="">— اختر النوع —</option>
+                {% for ft in fee_types %}
+                <option value="{{ ft.id }}">{{ ft.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">العام الدراسي <span class="text-danger">*</span></label>
+              <select name="academic_year_id" class="form-select" required>
+                <option value="">— اختر العام —</option>
+                {% for y in years %}
+                <option value="{{ y.id }}" {{ 'selected' if y.is_current }}>
+                  {{ y.name }}{{ ' (الحالي)' if y.is_current }}
+                </option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">المبلغ الإجمالي <span class="text-danger">*</span></label>
+              <input type="number" name="total_amount" id="totalAmount" class="form-control"
+                     min="0" step="0.01" required oninput="calcNet()">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">الخصم</label>
+              <input type="number" name="discount" id="discount" class="form-control"
+                     min="0" step="0.01" value="0" oninput="calcNet()">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">الصافي بعد الخصم</label>
+              <div class="form-control bg-light fw-700 text-primary-custom" id="netAmount">—</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">عدد الأقساط <span class="text-danger">*</span></label>
+              <select name="num_installments" id="numInst" class="form-select"
+                      onchange="renderInstDates()" required>
+                <option value="1">قسط واحد</option>
+                <option value="2">قسطان</option>
+                <option value="3">3 أقساط</option>
+                <option value="4">4 أقساط</option>
+                <option value="5">5 أقساط</option>
+                <option value="6">6 أقساط</option>
+                <option value="7">7 أقساط</option>
+                <option value="8">8 أقساط</option>
+                <option value="9">9 أقساط</option>
+                <option value="10">10 أقساط</option>
+                <option value="11">11 قسطاً</option>
+                <option value="12">12 قسطاً</option>
+              </select>
+            </div>
+            <div class="col-12">
+              <label class="form-label">ملاحظات</label>
+              <textarea name="notes" class="form-control" rows="2"></textarea>
+            </div>
+          </div>
+
+          <!-- Dynamic installment dates -->
+          <div id="instDatesSection">
+            <div class="mb-2 fw-700" style="font-size:13px;color:#1a3a5c">
+              <i class="bi bi-calendar3 me-1"></i>تواريخ استحقاق الأقساط
+            </div>
+            <div id="instDates" class="row g-2"></div>
+          </div>
+
+          <div class="mt-4 d-flex gap-3">
+            <button type="submit" class="btn btn-primary px-5">
+              <i class="bi bi-check-circle-fill me-2"></i>حفظ السجل
+            </button>
+            <a href="{{ url_for('fees.index') }}" class="btn btn-outline-secondary px-4">إلغاء</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function calcNet() {
+  const total    = parseFloat(document.getElementById('totalAmount').value) || 0;
+  const discount = parseFloat(document.getElementById('discount').value) || 0;
+  const net      = total - discount;
+  document.getElementById('netAmount').textContent = net.toLocaleString('ar-IQ') + ' د.ع';
+}
+
+function renderInstDates() {
+  const n   = parseInt(document.getElementById('numInst').value);
+  const div = document.getElementById('instDates');
+  div.innerHTML = '';
+  const today = new Date();
+  for (let i = 1; i <= n; i++) {
+    const d = new Date(today);
+    d.setMonth(d.getMonth() + (i - 1));
+    const iso = d.toISOString().split('T')[0];
+    div.innerHTML += `
+      <div class="col-md-4">
+        <label class="form-label" style="font-size:12.5px">استحقاق القسط ${i}</label>
+        <input type="date" name="due_date_${i}" class="form-control form-control-sm" value="${iso}" required>
+      </div>`;
+  }
+}
+
+renderInstDates();
+</script>
+{% endblock %}

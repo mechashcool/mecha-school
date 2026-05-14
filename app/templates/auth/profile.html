@@ -1,0 +1,86 @@
+{% extends "shared/base.html" %}
+{% block title %}ملفي الشخصي{% endblock %}
+{% block page_title %}ملفي الشخصي{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">ملفي الشخصي</h1></div>
+</div>
+
+<div class="row justify-content-center">
+  <div class="col-lg-6">
+    <div class="card">
+      <!-- Avatar / name header — same for all roles -->
+      <div class="card-body text-center py-4" style="border-bottom:1px solid var(--border)">
+        <div style="width:80px;height:80px;border-radius:50%;background:#1a3a5c;
+                    display:flex;align-items:center;justify-content:center;
+                    font-size:32px;color:#fff;font-weight:900;margin:0 auto 14px;
+                    border:4px solid #e8a020">
+          {{ current_user.full_name[0] }}
+        </div>
+        <h3 style="font-size:18px;font-weight:800">{{ current_user.full_name }}</h3>
+        <p class="text-muted">{{ current_user.role.label if current_user.role }}</p>
+        <code>{{ current_user.username }}</code>
+      </div>
+
+      <div class="card-body">
+
+        {% if readonly %}
+        {# ── READ-ONLY VIEW (parent / teacher) ──────────────────────────── #}
+        <div class="alert alert-warning d-flex align-items-center gap-2 mb-4" role="alert">
+          <i class="bi bi-lock-fill fs-5"></i>
+          <div>
+            <strong>صفحة عرض فقط</strong> — لا يمكنك تعديل بياناتك الشخصية مباشرةً.
+            للتحديث، يرجى التواصل مع <strong>إدارة المدرسة</strong>.
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label text-muted" style="font-size:12px">الاسم الكامل</label>
+          <div class="form-control bg-light" style="cursor:default">
+            {{ current_user.full_name }}
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label text-muted" style="font-size:12px">رقم الهاتف</label>
+          <div class="form-control bg-light" style="cursor:default">
+            {{ current_user.phone or '—' }}
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label text-muted" style="font-size:12px">البريد الإلكتروني</label>
+          <div class="form-control bg-light" style="cursor:default">
+            {{ current_user.email or '—' }}
+          </div>
+        </div>
+
+        {% else %}
+        {# ── EDITABLE FORM (admin / staff) ───────────────────────────────── #}
+        <form method="POST">
+          <div class="mb-3">
+            <label class="form-label">الاسم الكامل</label>
+            <input type="text" name="full_name" class="form-control"
+                   value="{{ current_user.full_name }}">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">رقم الهاتف</label>
+            <input type="tel" name="phone" class="form-control"
+                   value="{{ current_user.phone or '' }}">
+          </div>
+          <hr>
+          <p class="text-muted" style="font-size:13px">اتركها فارغة إذا لم تُرِد تغيير كلمة المرور</p>
+          <div class="mb-3">
+            <label class="form-label">كلمة المرور الجديدة</label>
+            <input type="password" name="new_password" class="form-control" minlength="6">
+          </div>
+          <button type="submit" class="btn btn-primary w-100">
+            <i class="bi bi-save-fill me-2"></i>حفظ التعديلات
+          </button>
+        </form>
+        {% endif %}
+
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,99 @@
+{% extends "shared/base.html" %}
+{% block title %}الإيرادات{% endblock %}
+{% block page_title %}سجلات الإيرادات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">الإيرادات</h1>
+    <p class="page-subtitle">إجمالي المعروض: {{ '{:,.0f}'.format(total) }} د.ع</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('finances.index') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>رجوع
+    </a>
+    {% if not is_historical_year %}
+    <a href="{{ url_for('finances.create_revenue') }}" class="btn btn-success">
+      <i class="bi bi-plus-circle-fill me-1"></i>إضافة إيراد
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="d-flex gap-3 align-items-end flex-wrap">
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">السنة</label>
+        <select name="year" class="form-select" style="width:100px">
+          {% for y in range(2020, 2030) %}
+          <option value="{{ y }}" {{ 'selected' if y == year }}>{{ y }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">الشهر</label>
+        <select name="month" class="form-select" style="width:140px">
+          <option value="">الكل</option>
+          {% for i in range(1,13) %}
+          <option value="{{ i }}" {{ 'selected' if i == month }}>{{ arabic_months[i] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">الفئة</label>
+        <select name="category_id" class="form-select" style="width:160px">
+          <option value="">الكل</option>
+          {% for c in categories %}
+          <option value="{{ c.id }}" {{ 'selected' if c.id == cat_id }}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button class="btn btn-primary align-self-end"><i class="bi bi-search me-1"></i>عرض</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr><th>التاريخ</th><th>الفئة</th><th>الوصف</th><th>المبلغ (د.ع)</th><th>سُجِّل بواسطة</th><th>الإجراءات</th></tr>
+      </thead>
+      <tbody>
+        {% for r in revenues.items %}
+        <tr>
+          <td>{{ r.date.strftime('%Y-%m-%d') }}</td>
+          <td><span class="badge" style="background:#e8f8f0;color:#1aab6d;font-weight:600">{{ r.category.name }}</span></td>
+          <td>{{ r.description or '—' }}</td>
+          <td class="fw-700 text-success">{{ '{:,.0f}'.format(r.amount) }}</td>
+          <td class="text-muted" style="font-size:12.5px">{{ r.recorder.full_name if r.recorder else '—' }}</td>
+          <td>
+            <div class="d-flex gap-1">
+              {% if not is_historical_year %}
+              <a href="{{ url_for('finances.edit_revenue', rev_id=r.id) }}" class="btn btn-sm btn-outline-primary"><i class="bi bi-pencil"></i></a>
+              <form method="POST" action="{{ url_for('finances.delete_revenue', rev_id=r.id) }}" class="d-inline">
+                <button class="btn btn-sm btn-outline-danger" data-confirm="حذف هذا الإيراد؟"><i class="bi bi-trash"></i></button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="text-center text-muted py-5">لا توجد إيرادات</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if revenues.pages > 1 %}
+  <div class="card-footer">
+    <ul class="pagination pagination-sm mb-0 justify-content-center">
+      {% for p in revenues.iter_pages() %}
+        {% if p %}<li class="page-item {{ 'active' if p == revenues.page }}"><a class="page-link" href="{{ url_for('finances.revenues', page=p, year=year, month=month, category_id=cat_id) }}">{{ p }}</a></li>
+        {% else %}<li class="page-item disabled"><span class="page-link">…</span></li>{% endif %}
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

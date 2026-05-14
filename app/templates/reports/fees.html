@@ -1,0 +1,146 @@
+{% extends "shared/base.html" %}
+{% block title %}تقرير الرسوم{% endblock %}
+{% block page_title %}تقرير الرسوم الدراسية{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">تقرير الرسوم الدراسية</h1></div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('fees.index') }}" class="btn btn-outline-primary">
+      <i class="bi bi-cash-coin me-1"></i>إدارة الرسوم
+    </a>
+    <a href="{{ url_for('reports.index') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>رجوع
+    </a>
+  </div>
+</div>
+
+<!-- KPIs -->
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#1a3a5c,#22508a)">
+        <i class="bi bi-cash-stack"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ '{:,.0f}'.format(total_all) }}</div>
+        <div class="stat-label">إجمالي الرسوم (د.ع)</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#1aab6d,#16c879)">
+        <i class="bi bi-check-circle-fill"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ '{:,.0f}'.format(total_paid) }}</div>
+        <div class="stat-label">المحصّل (د.ع)</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#e8a020,#f5c25a)">
+        <i class="bi bi-hourglass-split"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ '{:,.0f}'.format(total_pending) }}</div>
+        <div class="stat-label">معلّق (د.ع)</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#e03e3e,#f87171)">
+        <i class="bi bi-exclamation-triangle-fill"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ '{:,.0f}'.format(overdue_total) }}</div>
+        <div class="stat-label">متأخر (د.ع)</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Collection progress bar -->
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <span class="fw-700" style="font-size:14px">نسبة التحصيل الكلية</span>
+      <span style="font-size:22px;font-weight:900;color:{% if rate >= 80 %}#1aab6d{% elif rate >= 60 %}#e8a020{% else %}#e03e3e{% endif %}">
+        {{ rate }}%
+      </span>
+    </div>
+    <div style="height:16px;background:#f0f4f8;border-radius:8px;overflow:hidden">
+      <div style="width:{{ rate }}%;height:100%;
+                  background:linear-gradient(90deg,{% if rate >= 80 %}#1aab6d,#16c879{% elif rate >= 60 %}#e8a020,#f5c25a{% else %}#e03e3e,#f87171{% endif %});
+                  border-radius:8px;transition:width 1s ease"></div>
+    </div>
+    <div class="row mt-3 text-center">
+      <div class="col-4">
+        <div style="font-size:12px;color:#6b7a8d">المحصّل</div>
+        <div class="fw-700 text-success">{{ '{:,.0f}'.format(total_paid) }}</div>
+      </div>
+      <div class="col-4">
+        <div style="font-size:12px;color:#6b7a8d">المتبقي</div>
+        <div class="fw-700 text-warning">{{ '{:,.0f}'.format(total_pending) }}</div>
+      </div>
+      <div class="col-4">
+        <div style="font-size:12px;color:#6b7a8d">الإجمالي</div>
+        <div class="fw-700">{{ '{:,.0f}'.format(total_all) }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Overdue installments -->
+{% if overdue_list %}
+<div class="card border-danger">
+  <div class="card-header" style="background:#fef0f0;color:#b91c1c">
+    <i class="bi bi-exclamation-triangle-fill me-2"></i>
+    الأقساط المتأخرة ({{ overdue_list|length }}) — تاريخ استحقاقها مضى
+  </div>
+  <div class="table-wrapper">
+    <table class="table table-sm">
+      <thead>
+        <tr>
+          <th>الطالب</th><th>نوع الرسم</th><th>القسط</th>
+          <th>المبلغ (د.ع)</th><th>تاريخ الاستحقاق</th><th>التأخر</th><th>دفع</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for inst in overdue_list %}
+        <tr>
+          <td class="fw-600">{{ inst.fee_record.student.full_name }}</td>
+          <td>{{ inst.fee_record.fee_type.name }}</td>
+          <td>القسط {{ inst.installment_no }}</td>
+          <td class="fw-700 text-danger">{{ '{:,.0f}'.format(inst.amount) }}</td>
+          <td style="color:#e03e3e">{{ inst.due_date.strftime('%Y-%m-%d') }}</td>
+          <td>
+            {% set days_late = (today - inst.due_date).days if today is defined else 0 %}
+            <span class="badge" style="background:#fef0f0;color:#e03e3e;font-weight:700">
+              {{ (today - inst.due_date).days }} يوم
+            </span>
+          </td>
+          <td>
+            <a href="{{ url_for('fees.index', q=inst.fee_record.student.student_id) }}"
+               class="btn btn-sm btn-success">
+              <i class="bi bi-check-circle-fill me-1"></i>دفع
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card">
+  <div class="card-body text-center py-4" style="color:#1aab6d">
+    <i class="bi bi-check-circle-fill" style="font-size:36px;display:block;margin-bottom:8px"></i>
+    <strong>لا توجد أقساط متأخرة — أداء ممتاز!</strong>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

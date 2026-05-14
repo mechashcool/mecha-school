@@ -1,0 +1,89 @@
+{% extends "shared/base.html" %}
+{% block title %}الإعدادات{% endblock %}
+{% block page_title %}إعدادات النظام{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">إعدادات النظام</h1></div>
+</div>
+
+<div class="row g-4">
+  <div class="col-md-4">
+    <a href="{{ url_for('admin.academic_years') }}" class="text-decoration-none">
+      <div class="card" style="cursor:pointer;transition:transform .2s" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform=''">
+        <div class="card-body text-center py-4">
+          <div style="width:56px;height:56px;border-radius:14px;background:#1a3a5c;
+                      display:flex;align-items:center;justify-content:center;
+                      font-size:24px;color:#fff;margin:0 auto 14px">
+            <i class="bi bi-calendar3"></i>
+          </div>
+          <h5 style="font-weight:800">الأعوام الدراسية</h5>
+          <p class="text-muted" style="font-size:13px">إدارة الأعوام والفصول الدراسية</p>
+        </div>
+      </div>
+    </a>
+  </div>
+  <div class="col-md-4">
+    <a href="{{ url_for('admin.roles_list') }}" class="text-decoration-none">
+      <div class="card" style="cursor:pointer;transition:transform .2s" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform=''">
+        <div class="card-body text-center py-4">
+          <div style="width:56px;height:56px;border-radius:14px;background:#e8a020;
+                      display:flex;align-items:center;justify-content:center;
+                      font-size:24px;color:#fff;margin:0 auto 14px">
+            <i class="bi bi-shield-lock-fill"></i>
+          </div>
+          <h5 style="font-weight:800">الأدوار والصلاحيات</h5>
+          <p class="text-muted" style="font-size:13px">إدارة أدوار المستخدمين</p>
+        </div>
+      </div>
+    </a>
+  </div>
+  <div class="col-md-4">
+    <a href="{{ url_for('admin.users_list') }}" class="text-decoration-none">
+      <div class="card" style="cursor:pointer;transition:transform .2s" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform=''">
+        <div class="card-body text-center py-4">
+          <div style="width:56px;height:56px;border-radius:14px;background:#1aab6d;
+                      display:flex;align-items:center;justify-content:center;
+                      font-size:24px;color:#fff;margin:0 auto 14px">
+            <i class="bi bi-people-fill"></i>
+          </div>
+          <h5 style="font-weight:800">المستخدمون</h5>
+          <p class="text-muted" style="font-size:13px">إدارة حسابات المستخدمين</p>
+        </div>
+      </div>
+    </a>
+  </div>
+
+  <div class="col-md-4">
+    <a href="{{ url_for('admin.school_settings') }}" class="text-decoration-none">
+      <div class="card" style="cursor:pointer;transition:transform .2s" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform=''">
+        <div class="card-body text-center py-4">
+          <div style="width:56px;height:56px;border-radius:14px;background:#5a39a0;
+                      display:flex;align-items:center;justify-content:center;
+                      font-size:24px;color:#fff;margin:0 auto 14px">
+            <i class="bi bi-buildings-fill"></i>
+          </div>
+          <h5 style="font-weight:800">هوية المدرسة</h5>
+          <p class="text-muted" style="font-size:13px">الاسم، الشعار، الألوان (White Label)</p>
+        </div>
+      </div>
+    </a>
+  </div>
+
+  <div class="col-md-4">
+    <a href="{{ url_for('audit.index') }}" class="text-decoration-none">
+      <div class="card" style="cursor:pointer;transition:transform .2s" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform=''">
+        <div class="card-body text-center py-4">
+          <div style="width:56px;height:56px;border-radius:14px;background:#c94f4f;
+                      display:flex;align-items:center;justify-content:center;
+                      font-size:24px;color:#fff;margin:0 auto 14px">
+            <i class="bi bi-journal-text"></i>
+          </div>
+          <h5 style="font-weight:800">سجل العمليات</h5>
+          <p class="text-muted" style="font-size:13px">مراجعة جميع العمليات الحساسة</p>
+        </div>
+      </div>
+    </a>
+  </div>
+</div>
+{% endblock %}

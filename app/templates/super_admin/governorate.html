@@ -1,0 +1,152 @@
+{% extends "shared/base.html" %}
+
+{% block title %}محافظة {{ gov_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb mb-1">
+        <li class="breadcrumb-item">
+          <a href="{{ url_for('super_admin.dashboard') }}">بوابة المشرف العام</a>
+        </li>
+        <li class="breadcrumb-item active">{{ gov_name }}</li>
+      </ol>
+    </nav>
+    <h1 class="page-title"><i class="bi bi-geo-alt-fill me-2"></i>محافظة {{ gov_name }}</h1>
+    <p class="text-muted mb-0">{{ school_rows|length }} مدرسة</p>
+  </div>
+  <a href="{{ url_for('schools.create') }}" class="btn btn-primary btn-sm">
+    <i class="bi bi-plus-lg me-1"></i>إضافة مدرسة
+  </a>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }} alert-dismissible fade show">{{ msg }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+{% endwith %}
+
+{# ── Governorate totals ────────────────────────────────────────────────── #}
+<div class="stats-grid mb-4" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));">
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(13,110,253,.12);color:#0d6efd">
+      <i class="bi bi-buildings"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ school_rows|length }}</div>
+      <div class="stat-label">مدارس</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(232,160,32,.12);color:#e8a020">
+      <i class="bi bi-people-fill"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ gov_totals.students }}</div>
+      <div class="stat-label">طلاب</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(33,150,243,.12);color:#2196f3">
+      <i class="bi bi-person-fill"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ gov_totals.users }}</div>
+      <div class="stat-label">مستخدمون</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(26,171,109,.12);color:#1aab6d">
+      <i class="bi bi-cash-stack"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ "{:,.0f}".format(gov_totals.total_paid) }}</div>
+      <div class="stat-label">محصّل</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(224,62,62,.12);color:#e03e3e">
+      <i class="bi bi-exclamation-circle"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ "{:,.0f}".format(gov_totals.remaining) }}</div>
+      <div class="stat-label">متبقي</div>
+    </div>
+  </div>
+</div>
+
+{# ── Schools table ─────────────────────────────────────────────────────── #}
+<div class="card shadow-sm border-0">
+  <div class="card-header bg-white d-flex justify-content-between align-items-center">
+    <strong><i class="bi bi-table me-2"></i>مدارس محافظة {{ gov_name }}</strong>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>اسم المدرسة</th>
+            <th>الحالة</th>
+            <th>الطلاب</th>
+            <th>المستخدمون</th>
+            <th>السعة</th>
+            <th>سعر الطالب</th>
+            <th>المستحق</th>
+            <th>المحصّل</th>
+            <th>المتبقي</th>
+            <th>العام الدراسي</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in school_rows %}
+          {% set s = row.school %}
+          <tr>
+            <td>
+              <a href="{{ url_for('super_admin.school_detail', school_id=s.id) }}"
+                 class="fw-semibold text-decoration-none">
+                {{ s.school_name_ar or s.school_name }}
+              </a>
+            </td>
+            <td>
+              {% if s.is_active %}
+              <span class="badge bg-success">نشطة</span>
+              {% else %}
+              <span class="badge bg-danger">معطّلة</span>
+              {% endif %}
+            </td>
+            <td>{{ row.students }}</td>
+            <td>{{ row.users }}</td>
+            <td>{{ s.capacity if s.capacity else '∞' }}</td>
+            <td>{{ "{:,.0f}".format(s.price_per_student or 0) }}</td>
+            <td>{{ "{:,.0f}".format(row.total_due) }}</td>
+            <td class="text-success fw-semibold">{{ "{:,.0f}".format(row.total_paid) }}</td>
+            <td class="text-danger fw-semibold">{{ "{:,.0f}".format(row.remaining) }}</td>
+            <td>
+              {% if row.current_year %}
+                <span class="badge bg-primary-subtle text-primary">{{ row.current_year.name }}</span>
+              {% else %}
+                <span class="text-muted small">—</span>
+              {% endif %}
+            </td>
+            <td>
+              <a href="{{ url_for('super_admin.school_detail', school_id=s.id) }}"
+                 class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-eye"></i>
+              </a>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="11" class="text-center text-muted py-4">لا توجد مدارس في هذه المحافظة.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

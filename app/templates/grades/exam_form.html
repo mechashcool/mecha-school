@@ -1,0 +1,174 @@
+{% extends "shared/base.html" %}
+{% block title %}اختبار جديد{% endblock %}
+{% block page_title %}إنشاء اختبار جديد{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">اختبار جديد</h1></div>
+  <a href="{{ url_for('grades.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="row justify-content-center">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-clipboard-check-fill text-accent"></i>بيانات الاختبار</div>
+      <div class="card-body">
+        <form method="POST">
+          <div class="row g-3">
+
+            {# ── Row 1: Name & type ──────────────────────────────────────── #}
+            <div class="col-md-6">
+              <label class="form-label">اسم الاختبار <span class="text-danger">*</span></label>
+              <input type="text" name="exam_name" class="form-control" required
+                     placeholder="مثلاً: الامتحان النهائي">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">فئة الاختبار</label>
+              <select name="exam_type_id" class="form-select">
+                <option value="">— اختياري —</option>
+                {% for et in exam_types %}
+                <option value="{{ et.id }}">{{ et.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+
+            {# ── Row 2: Stage → Grade → Section cascade ──────────────────── #}
+            <div class="col-md-4">
+              <label class="form-label">المرحلة الدراسية</label>
+              <select id="stage-select" class="form-select">
+                <option value="">كل المراحل</option>
+                <option value="ابتدائية">المرحلة الابتدائية</option>
+                <option value="متوسطة">المرحلة المتوسطة</option>
+                <option value="إعدادية">المرحلة الإعدادية</option>
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">الصف</label>
+              <select id="grade-select" class="form-select">
+                <option value="">— اختر الصف —</option>
+                {% for g in grades %}
+                <option value="{{ g.id }}" data-stage="{{ g.stage or '' }}">{{ g.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">الشعبة <span class="text-danger">*</span></label>
+              <select name="section_id" id="section-select" class="form-select" required>
+                <option value="">— اختر الشعبة —</option>
+                {% for sec in sections %}
+                <option value="{{ sec.id }}" data-grade="{{ sec.grade_id }}">
+                  {{ sec.grade.name }} — شعبة {{ sec.name }}
+                </option>
+                {% endfor %}
+              </select>
+            </div>
+
+            {# ── Row 3: Subject (filtered by grade) ──────────────────────── #}
+            <div class="col-12">
+              <label class="form-label">المادة <span class="text-danger">*</span></label>
+              <select name="subject_id" id="subject-select" class="form-select" required>
+                <option value="">— اختر المادة —</option>
+                {% for s in subjects %}
+                <option value="{{ s.id }}" data-grade="{{ s.grade_id or '' }}">{{ s.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+
+            {# ── Row 4: Academic year & exam date ────────────────────────── #}
+            <div class="col-md-6">
+              <label class="form-label">العام الدراسي <span class="text-danger">*</span></label>
+              <select name="academic_year_id" class="form-select" required>
+                <option value="">— اختر —</option>
+                {% for y in years %}
+                <option value="{{ y.id }}" {{ 'selected' if y.is_current }}>{{ y.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">تاريخ الاختبار <span class="text-danger">*</span></label>
+              <input type="date" name="exam_date" class="form-control" required>
+            </div>
+
+            {# ── Row 5: Max marks & pass marks ───────────────────────────── #}
+            <div class="col-md-6">
+              <label class="form-label">الدرجة العظمى</label>
+              <input type="number" name="max_marks" class="form-control" value="100" min="1" step="0.5">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">درجة النجاح</label>
+              <input type="number" name="pass_marks" class="form-control" value="50" min="0" step="0.5">
+            </div>
+
+          </div>
+
+          <div class="mt-4 d-flex gap-3">
+            <button type="submit" class="btn btn-primary px-5">
+              <i class="bi bi-check-circle-fill me-2"></i>إنشاء الاختبار
+            </button>
+            <a href="{{ url_for('grades.index') }}" class="btn btn-outline-secondary px-4">إلغاء</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var stageEl   = document.getElementById('stage-select');
+  var gradeEl   = document.getElementById('grade-select');
+  var sectionEl = document.getElementById('section-select');
+  var subjectEl = document.getElementById('subject-select');
+  if (!stageEl) return;
+
+  // Snapshot all non-placeholder options once on page load
+  var allGradeOpts   = Array.from(gradeEl.options).slice(1).map(function(o){ return o.cloneNode(true); });
+  var allSectionOpts = Array.from(sectionEl.options).slice(1).map(function(o){ return o.cloneNode(true); });
+  var allSubjectOpts = Array.from(subjectEl.options).slice(1).map(function(o){ return o.cloneNode(true); });
+
+  function rebuildGrades() {
+    var stage = stageEl.value;
+    var prev  = gradeEl.value;
+    while (gradeEl.options.length > 1) gradeEl.remove(1);
+    allGradeOpts.forEach(function(o) {
+      if (!stage || o.dataset.stage === stage) gradeEl.add(o.cloneNode(true));
+    });
+    gradeEl.value = prev;
+    rebuildSectionsAndSubjects();
+  }
+
+  function rebuildSectionsAndSubjects() {
+    var grade = gradeEl.value;
+
+    while (sectionEl.options.length > 1) sectionEl.remove(1);
+    allSectionOpts.forEach(function(o) {
+      if (!grade || o.dataset.grade === grade) sectionEl.add(o.cloneNode(true));
+    });
+
+    while (subjectEl.options.length > 1) subjectEl.remove(1);
+    allSubjectOpts.forEach(function(o) {
+      // Subjects with no grade_id always appear; others filter by grade
+      if (!grade || !o.dataset.grade || o.dataset.grade === grade) subjectEl.add(o.cloneNode(true));
+    });
+  }
+
+  stageEl.addEventListener('change', function() {
+    gradeEl.value   = '';
+    sectionEl.value = '';
+    subjectEl.value = '';
+    rebuildGrades();
+  });
+
+  gradeEl.addEventListener('change', function() {
+    sectionEl.value = '';
+    subjectEl.value = '';
+    rebuildSectionsAndSubjects();
+  });
+
+  // Initialize on page load
+  rebuildGrades();
+})();
+</script>
+{% endblock %}

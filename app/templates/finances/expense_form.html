@@ -1,0 +1,74 @@
+{% extends "shared/base.html" %}
+{% block title %}{{ 'تعديل مصروف' if record else 'إضافة مصروف' }}{% endblock %}
+{% block page_title %}{{ 'تعديل مصروف' if record else 'تسجيل مصروف جديد' }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">{{ 'تعديل مصروف' if record else 'مصروف جديد' }}</h1></div>
+  <a href="{{ url_for('finances.expenses') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="row justify-content-center">
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-arrow-down-circle-fill text-danger"></i> بيانات المصروف
+      </div>
+      <div class="card-body">
+        <form method="POST" enctype="multipart/form-data"
+              action="{{ url_for('finances.edit_expense', exp_id=record.id) if record else url_for('finances.create_expense') }}">
+
+          <div class="mb-3">
+            <label class="form-label">الفئة <span class="text-danger">*</span></label>
+            <select name="category_id" class="form-select" required>
+              <option value="">— اختر الفئة —</option>
+              {% for c in categories %}
+              <option value="{{ c.id }}"
+                {{ 'selected' if record and record.category_id == c.id }}>
+                {{ c.name }}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">المبلغ (د.ع) <span class="text-danger">*</span></label>
+            <input type="number" name="amount" class="form-control"
+                   min="0" step="0.01" required
+                   value="{{ record.amount if record else '' }}">
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">التاريخ <span class="text-danger">*</span></label>
+            <input type="date" name="date" class="form-control" required
+                   value="{{ record.date.isoformat() if record else '' }}">
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">الوصف</label>
+            <textarea name="description" class="form-control" rows="2">{{ record.description if record else '' }}</textarea>
+          </div>
+
+          {% if not record %}
+          <div class="mb-3">
+            <label class="form-label">إيصال / مستند (اختياري)</label>
+            <input type="file" name="receipt" class="form-control"
+                   accept=".pdf,.jpg,.jpeg,.png">
+          </div>
+          {% endif %}
+
+          <div class="d-flex gap-3 mt-4">
+            <button type="submit" class="btn btn-danger px-5">
+              <i class="bi bi-check-circle-fill me-2"></i>حفظ
+            </button>
+            <a href="{{ url_for('finances.expenses') }}"
+               class="btn btn-outline-secondary px-4">إلغاء</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

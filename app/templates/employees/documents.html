@@ -1,0 +1,115 @@
+{% extends "shared/base.html" %}
+{% block title %}مستندات {{ employee.full_name }}{% endblock %}
+{% block page_title %}مستندات الموظف{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ employee.full_name }}</h1>
+    <p class="page-subtitle">{{ employee.employee_id }} — المستندات والوثائق</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('employees.view', emp_id=employee.id) }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>رجوع للملف
+    </a>
+  </div>
+</div>
+
+<div class="row g-4">
+  <!-- Upload form -->
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-cloud-upload-fill text-accent"></i>رفع مستند جديد
+      </div>
+      <div class="card-body">
+        <form method="POST" enctype="multipart/form-data"
+              action="{{ url_for('employees.documents', emp_id=employee.id) }}">
+          <div class="mb-3">
+            <label class="form-label">العنوان <span class="text-danger">*</span></label>
+            <input type="text" name="title" class="form-control" required
+                   placeholder="مثال: شهادة التخرج، بطاقة الهوية...">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">النوع</label>
+            <select name="doc_type" class="form-select">
+              <option value="">— اختر النوع —</option>
+              <option value="هوية">هوية وطنية</option>
+              <option value="شهادة">شهادة دراسية</option>
+              <option value="عقد">عقد عمل</option>
+              <option value="شهادة خبرة">شهادة خبرة</option>
+              <option value="أخرى">أخرى</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">الملف <span class="text-danger">*</span></label>
+            <input type="file" name="file" class="form-control" required
+                   accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+            <div style="font-size:11.5px;color:#9aabb8;margin-top:4px">
+              الصيغ المقبولة: PDF, JPG, PNG, DOC, DOCX
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary w-100">
+            <i class="bi bi-cloud-upload-fill me-2"></i>رفع المستند
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Documents list -->
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-folder-fill text-accent"></i>
+        المستندات المحفوظة ({{ docs|length }})
+      </div>
+      {% if docs %}
+      <div class="card-body p-0">
+        {% for doc in docs %}
+        <div class="d-flex align-items-center gap-3 px-4 py-3 border-bottom">
+          <!-- Icon by type -->
+          <div style="width:44px;height:44px;border-radius:10px;flex-shrink:0;
+                      display:flex;align-items:center;justify-content:center;font-size:20px;
+                      {% if 'pdf' in doc.file_path %}background:#fef0f0;color:#e03e3e;
+                      {% elif doc.file_path.endswith(('.jpg','.jpeg','.png')) %}background:#e8f4fd;color:#2196f3;
+                      {% else %}background:#f0f4f8;color:#1a3a5c;{% endif %}">
+            <i class="bi bi-file-earmark-{% if 'pdf' in doc.file_path %}pdf{% elif doc.file_path.endswith(('.jpg','.jpeg','.png')) %}image{% else %}text{% endif %}-fill"></i>
+          </div>
+
+          <div class="flex-grow-1">
+            <div style="font-weight:700;font-size:14px;color:#1e2b3a">{{ doc.title }}</div>
+            <div style="font-size:12px;color:#9aabb8;margin-top:2px">
+              {% if doc.doc_type %}<span class="me-2">{{ doc.doc_type }}</span>{% endif %}
+              <span>{{ doc.uploaded_at.strftime('%Y-%m-%d') }}</span>
+            </div>
+          </div>
+
+          <div class="d-flex gap-2">
+            <a href="{{ url_for('static', filename=doc.file_path) }}"
+               target="_blank"
+               class="btn btn-sm btn-outline-primary">
+              <i class="bi bi-eye me-1"></i>عرض
+            </a>
+            <form method="POST"
+                  action="{{ url_for('employees.delete_document', doc_id=doc.id) }}"
+                  class="d-inline">
+              <button class="btn btn-sm btn-outline-danger"
+                      data-confirm="حذف هذا المستند؟">
+                <i class="bi bi-trash"></i>
+              </button>
+            </form>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="card-body text-center text-muted py-5">
+        <i class="bi bi-folder" style="font-size:40px;opacity:.3;display:block;margin-bottom:8px"></i>
+        لا توجد مستندات — ارفع مستنداً من الجانب
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

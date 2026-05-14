@@ -1,0 +1,61 @@
+{% extends "shared/base.html" %}
+{% block title %}سجل رواتب {{ employee.full_name }}{% endblock %}
+{% block page_title %}سجل رواتب الموظف{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ employee.full_name }}</h1>
+    <p class="page-subtitle">{{ employee.job_title }} — إجمالي المصروف: {{ '{:,.0f}'.format(total_paid) }} د.ع</p>
+  </div>
+  <a href="{{ url_for('salaries.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>الشهر</th><th>السنة</th><th>الأساسي</th>
+          <th>البدلات</th><th>الخصومات</th><th>الصافي</th>
+          <th>الحالة</th><th>تاريخ الصرف</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rec in records %}
+        <tr>
+          <td class="fw-600">{{ arabic_months[rec.month] }}</td>
+          <td>{{ rec.year }}</td>
+          <td>{{ '{:,.0f}'.format(rec.base_salary) }}</td>
+          <td class="text-success">
+            {% if rec.allowances %}+{{ '{:,.0f}'.format(rec.allowances) }}{% else %}—{% endif %}
+          </td>
+          <td class="text-danger">
+            {% if rec.deductions %}-{{ '{:,.0f}'.format(rec.deductions) }}{% else %}—{% endif %}
+          </td>
+          <td class="fw-700">{{ '{:,.0f}'.format(rec.net_salary) }}</td>
+          <td>
+            <span class="badge-status {{ 'badge-paid' if rec.status == 'paid' else 'badge-pending' }}">
+              {{ 'مصروف' if rec.status == 'paid' else 'معلّق' }}
+            </span>
+          </td>
+          <td style="font-size:12.5px;color:#9aabb8">
+            {{ rec.paid_date.strftime('%Y-%m-%d') if rec.paid_date else '—' }}
+          </td>
+          <td>
+            <a href="{{ url_for('salaries.slip', rec_id=rec.id) }}"
+               class="btn btn-sm btn-outline-secondary" target="_blank">
+              <i class="bi bi-printer"></i>
+            </a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="text-center text-muted py-4">لا توجد سجلات</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

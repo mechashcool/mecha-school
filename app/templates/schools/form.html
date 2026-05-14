@@ -1,0 +1,254 @@
+{% extends "shared/base.html" %}
+
+{% block title %}{{ 'تعديل المدرسة' if school else 'إضافة مدرسة جديدة' }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">
+      <i class="bi bi-buildings-fill me-2"></i>
+      {{ 'تعديل: ' + (school.school_name_ar or school.school_name) if school else 'إضافة مدرسة جديدة' }}
+    </h1>
+    <p class="text-muted mb-0">
+      {{ 'تعديل بيانات وإعدادات المدرسة' if school else 'إنشاء مدرسة جديدة في المنصة' }}
+    </p>
+  </div>
+  <a href="{{ url_for('schools.index') }}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }} alert-dismissible fade show">
+    {{ msg }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+{% endwith %}
+
+<form method="POST"
+      action="{{ url_for('schools.edit', school_id=school.id) if school else url_for('schools.create') }}"
+      enctype="multipart/form-data">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+
+  <div class="row g-4">
+
+    <!-- Left: Basic Info -->
+    <div class="col-12 col-lg-8">
+      <div class="card mb-4">
+        <div class="card-header"><h6 class="mb-0">المعلومات الأساسية</h6></div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">اسم المدرسة (إنجليزي / لاتيني) <span class="text-danger">*</span></label>
+              <input type="text" name="school_name" class="form-control"
+                     value="{{ school.school_name if school else '' }}" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">اسم المدرسة (عربي)</label>
+              <input type="text" name="school_name_ar" class="form-control"
+                     value="{{ school.school_name_ar or '' if school else '' }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">رمز المدرسة (كود)</label>
+              <input type="text" name="code" class="form-control" placeholder="مثال: SCH001"
+                     value="{{ school.code or '' if school else '' }}">
+            </div>
+
+            <!-- ── CAPACITY — the key multi-tenant control ────────────── -->
+            <div class="col-md-4">
+              <label class="form-label fw-bold">
+                <i class="bi bi-people-fill text-primary me-1"></i>
+                الطاقة الاستيعابية (عدد الطلاب)
+              </label>
+              <input type="number" name="capacity" class="form-control"
+                     min="0" placeholder="0 = بلا حد"
+                     value="{{ school.capacity if school else 0 }}">
+              <div class="form-text">
+                أدخل <strong>0</strong> لإزالة الحد.
+                {% if school and school.capacity and school.capacity > 0 %}
+                <br>الطلاب الحاليون: <strong>{{ school.student_count }}</strong> / {{ school.capacity }}
+                {% endif %}
+              </div>
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">المحافظة</label>
+              <input type="text" name="governorate" class="form-control"
+                     placeholder="مثال: بغداد"
+                     value="{{ school.governorate or '' if school else '' }}">
+              <div class="form-text">تُستخدم لتجميع المدارس في بوابة المشرف العام.</div>
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">سعر الطالب ({{ school.currency_symbol if school else 'IQD' }})</label>
+              <input type="number" name="price_per_student" class="form-control"
+                     min="0" step="0.01" placeholder="0"
+                     value="{{ school.price_per_student or 0 if school else 0 }}">
+              <div class="form-text">يُستخدم لحساب المبلغ المتوقع = الطلاب × السعر.</div>
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">اللون الرئيسي</label>
+              <div class="input-group">
+                <input type="color" name="primary_color" class="form-control form-control-color"
+                       value="{{ school.primary_color or '#0d6efd' if school else '#0d6efd' }}"
+                       style="max-width:60px">
+                <input type="text" id="colorHex" class="form-control"
+                       value="{{ school.primary_color or '#0d6efd' if school else '#0d6efd' }}"
+                       readonly>
+              </div>
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label">البريد الإلكتروني</label>
+              <input type="email" name="email" class="form-control"
+                     value="{{ school.email or '' if school else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">رقم الهاتف</label>
+              <input type="text" name="phone" class="form-control"
+                     value="{{ school.phone or '' if school else '' }}">
+            </div>
+            <div class="col-12">
+              <label class="form-label">العنوان</label>
+              <textarea name="address" class="form-control" rows="2">{{ school.address or '' if school else '' }}</textarea>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Attendance Time Settings -->
+      <div class="card mb-4">
+        <div class="card-header"><h6 class="mb-0"><i class="bi bi-clock me-2"></i>إعدادات الحضور</h6></div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label">وقت بدء الدوام</label>
+              <input type="time" name="att_start_time" class="form-control"
+                     value="{{ school.att_start_time.strftime('%H:%M') if school and school.att_start_time else '' }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">حد التأخير</label>
+              <input type="time" name="att_late_threshold" class="form-control"
+                     value="{{ school.att_late_threshold.strftime('%H:%M') if school and school.att_late_threshold else '' }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">حد الغياب</label>
+              <input type="time" name="att_absence_threshold" class="form-control"
+                     value="{{ school.att_absence_threshold.strftime('%H:%M') if school and school.att_absence_threshold else '' }}">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Initial Academic Year (create only) -->
+      {% if not school %}
+      <div class="card mb-4">
+        <div class="card-header">
+          <h6 class="mb-0"><i class="bi bi-calendar3 me-2"></i>العام الدراسي الأول (اختياري)</h6>
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label">اسم العام</label>
+              <input type="text" name="year_name" class="form-control"
+                     placeholder="مثال: 2025-2026">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">تاريخ البدء</label>
+              <input type="date" name="year_start" class="form-control">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">تاريخ الانتهاء</label>
+              <input type="date" name="year_end" class="form-control">
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+    </div>
+
+    <!-- Right: Logo + Currency + Status -->
+    <div class="col-12 col-lg-4">
+      <div class="card mb-4">
+        <div class="card-header"><h6 class="mb-0">الشعار</h6></div>
+        <div class="card-body text-center">
+          {% if school and school.logo_path %}
+          <img src="{{ url_for('static', filename='uploads/' + school.logo_path) }}"
+               class="img-thumbnail mb-3" style="max-height:120px">
+          {% else %}
+          <div class="bg-light rounded d-flex align-items-center justify-content-center mb-3"
+               style="height:100px">
+            <i class="bi bi-image text-muted fs-1"></i>
+          </div>
+          {% endif %}
+          <input type="file" name="logo" class="form-control form-control-sm"
+                 accept="image/*">
+          <div class="form-text">PNG أو JPG · يُعرض في الشريط الجانبي</div>
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header"><h6 class="mb-0">العملة والمنطقة الزمنية</h6></div>
+        <div class="card-body">
+          <div class="mb-3">
+            <label class="form-label">رمز العملة</label>
+            <input type="text" name="currency_code" class="form-control"
+                   value="{{ school.currency_code or 'IQD' if school else 'IQD' }}" maxlength="10">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">رمز العملة (رمز)</label>
+            <input type="text" name="currency_symbol" class="form-control"
+                   value="{{ school.currency_symbol or 'د.ع' if school else 'د.ع' }}" maxlength="10">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">المنطقة الزمنية</label>
+            <input type="text" name="timezone" class="form-control"
+                   value="{{ school.timezone or 'Asia/Baghdad' if school else 'Asia/Baghdad' }}">
+          </div>
+          <div>
+            <label class="form-label">اللغة</label>
+            <select name="locale" class="form-select">
+              <option value="ar" {{ 'selected' if not school or school.locale == 'ar' }}>العربية</option>
+              <option value="en" {{ 'selected' if school and school.locale == 'en' }}>English</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {% if school %}
+      <div class="card mb-4">
+        <div class="card-header"><h6 class="mb-0">الحالة</h6></div>
+        <div class="card-body">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" name="is_active" id="isActive"
+                   {{ 'checked' if school.is_active }}>
+            <label class="form-check-label" for="isActive">المدرسة نشطة</label>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="d-flex gap-2 justify-content-end pb-4">
+    <a href="{{ url_for('schools.index') }}" class="btn btn-secondary">إلغاء</a>
+    <button type="submit" class="btn btn-primary px-4">
+      <i class="bi bi-check-lg me-1"></i>
+      {{ 'حفظ التعديلات' if school else 'إنشاء المدرسة' }}
+    </button>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const colorInput = document.querySelector('input[type="color"]');
+const hexInput   = document.getElementById('colorHex');
+if (colorInput && hexInput) {
+  colorInput.addEventListener('input', () => { hexInput.value = colorInput.value; });
+}
+</script>
+{% endblock %}

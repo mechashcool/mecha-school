@@ -1,0 +1,223 @@
+{% extends "shared/base.html" %}
+{% block title %}الرواتب{% endblock %}
+{% block page_title %}نظام الرواتب{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">الرواتب</h1>
+    <p class="page-subtitle">{{ arabic_months[month] }} {{ year }}</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('salaries.export_excel', month=month, year=year) }}"
+       class="btn btn-outline-success">
+      <i class="bi bi-file-earmark-excel-fill me-1"></i>Excel
+    </a>
+    {% if not is_historical_year %}
+    <a href="{{ url_for('salaries.create') }}" class="btn btn-outline-primary">
+      <i class="bi bi-plus-circle me-1"></i>إضافة يدوي
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Month/Year Selector -->
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="d-flex gap-3 align-items-end flex-wrap">
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">الشهر</label>
+        <select name="month" class="form-select" style="width:140px">
+          {% for i in range(1,13) %}
+          <option value="{{ i }}" {{ 'selected' if i == month }}>{{ arabic_months[i] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">السنة</label>
+        <select name="year" class="form-select" style="width:100px">
+          {% for y in range(2022, 2030) %}
+          <option value="{{ y }}" {{ 'selected' if y == year }}>{{ y }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button class="btn btn-primary align-self-end">
+        <i class="bi bi-search me-1"></i>عرض
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- Summary KPIs -->
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#1a3a5c,#22508a)">
+        <i class="bi bi-people-fill"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ records|length }}</div>
+        <div class="stat-label">سجلات الراتب</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#e8a020,#f5c25a)">
+        <i class="bi bi-wallet-fill"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ '{:,.0f}'.format(total_net) }}</div>
+        <div class="stat-label">إجمالي الرواتب (د.ع)</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#1aab6d,#16c879)">
+        <i class="bi bi-check-circle-fill"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ '{:,.0f}'.format(total_paid) }}</div>
+        <div class="stat-label">مصروف (د.ع)</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#e03e3e,#f87171)">
+        <i class="bi bi-hourglass-split"></i>
+      </div>
+      <div>
+        <div class="stat-value">{{ records|selectattr('status','eq','pending')|list|length }}</div>
+        <div class="stat-label">معلّق الصرف</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Actions row -->
+{% if not is_historical_year %}
+<div class="d-flex gap-3 mb-3 flex-wrap">
+  <!-- Generate salaries -->
+  <form method="POST" action="{{ url_for('salaries.generate_month') }}">
+    <input type="hidden" name="month" value="{{ month }}">
+    <input type="hidden" name="year"  value="{{ year }}">
+    <button class="btn btn-outline-secondary"
+            data-confirm="توليد رواتب {{ arabic_months[month] }} {{ year }} لجميع الموظفين؟">
+      <i class="bi bi-lightning-charge-fill me-1"></i>توليد رواتب الشهر
+    </button>
+  </form>
+
+  <!-- Pay all pending -->
+  {% set pending_count = records|selectattr('status','eq','pending')|list|length %}
+  {% if pending_count > 0 %}
+  <form method="POST" action="{{ url_for('salaries.pay_all') }}">
+    <input type="hidden" name="month" value="{{ month }}">
+    <input type="hidden" name="year"  value="{{ year }}">
+    <button class="btn btn-success"
+            data-confirm="صرف {{ pending_count }} رواتب معلّقة دفعة واحدة؟">
+      <i class="bi bi-cash-stack me-1"></i>صرف الكل ({{ pending_count }})
+    </button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- Records table -->
+<div class="card mb-4">
+  <div class="card-header">
+    <i class="bi bi-wallet-fill text-accent"></i>
+    سجلات رواتب {{ arabic_months[month] }} {{ year }}
+  </div>
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>الموظف</th><th>المسمى</th><th>الراتب الأساسي</th>
+          <th>البدلات</th><th>الخصومات</th><th>الصافي</th>
+          <th>الحالة</th><th>تاريخ الصرف</th><th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rec in records %}
+        <tr>
+          <td class="fw-600">{{ rec.employee.full_name }}</td>
+          <td class="text-muted" style="font-size:12.5px">{{ rec.employee.job_title }}</td>
+          <td>{{ '{:,.0f}'.format(rec.base_salary) }}</td>
+          <td class="text-success">
+            {% if rec.allowances %}+{{ '{:,.0f}'.format(rec.allowances) }}{% else %}—{% endif %}
+          </td>
+          <td class="text-danger">
+            {% if rec.deductions %}-{{ '{:,.0f}'.format(rec.deductions) }}{% else %}—{% endif %}
+          </td>
+          <td class="fw-700" style="font-size:15px">{{ '{:,.0f}'.format(rec.net_salary) }}</td>
+          <td>
+            <span class="badge-status {{ 'badge-paid' if rec.status == 'paid' else 'badge-pending' }}">
+              {{ 'مصروف' if rec.status == 'paid' else 'معلّق' }}
+            </span>
+          </td>
+          <td style="font-size:12.5px;color:#9aabb8">
+            {{ rec.paid_date.strftime('%Y-%m-%d') if rec.paid_date else '—' }}
+          </td>
+          <td>
+            <div class="d-flex gap-1">
+              <a href="{{ url_for('salaries.slip', rec_id=rec.id) }}"
+                 class="btn btn-sm btn-outline-secondary" title="كشف الراتب" target="_blank">
+                <i class="bi bi-printer"></i>
+              </a>
+              {% if not is_historical_year %}
+              <a href="{{ url_for('salaries.edit', rec_id=rec.id) }}"
+                 class="btn btn-sm btn-outline-primary" title="تعديل">
+                <i class="bi bi-pencil"></i>
+              </a>
+              {% if rec.status == 'pending' %}
+              <form method="POST" action="{{ url_for('salaries.mark_paid', rec_id=rec.id) }}" class="d-inline">
+                <button class="btn btn-sm btn-success" title="صرف"
+                        data-confirm="تأكيد صرف راتب {{ rec.employee.full_name }}؟">
+                  <i class="bi bi-check-circle-fill"></i>
+                </button>
+              </form>
+              {% endif %}
+              <form method="POST" action="{{ url_for('salaries.delete', rec_id=rec.id) }}" class="d-inline">
+                <button class="btn btn-sm btn-outline-danger" title="حذف"
+                        data-confirm="حذف سجل راتب {{ rec.employee.full_name }}؟">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="9" class="text-center text-muted py-5">
+            <i class="bi bi-wallet" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا توجد سجلات لهذا الشهر — اضغط "توليد رواتب الشهر" للبدء
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Employees missing salary -->
+{% if unpaid_employees %}
+<div class="card border-warning">
+  <div class="card-header" style="background:#fff8ec;color:#856404">
+    <i class="bi bi-exclamation-triangle-fill me-2"></i>
+    موظفون بدون سجل راتب ({{ unpaid_employees|length }})
+  </div>
+  <div class="card-body py-2">
+    <div class="d-flex flex-wrap gap-2">
+      {% for emp in unpaid_employees %}
+      <span class="badge" style="background:#f0f4f8;color:#1e2b3a;font-weight:600;padding:6px 12px;border-radius:8px">
+        {{ emp.full_name }}
+      </span>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

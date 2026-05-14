@@ -1,0 +1,487 @@
+{% extends "shared/base.html" %}
+
+{% block title %}{{ school.school_name_ar or school.school_name }} — المشرف العام{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb mb-1">
+        <li class="breadcrumb-item">
+          <a href="{{ url_for('super_admin.dashboard') }}">بوابة المشرف العام</a>
+        </li>
+        {% if school.governorate %}
+        <li class="breadcrumb-item">
+          <a href="{{ url_for('super_admin.governorate_detail', gov_name=school.governorate) }}">
+            {{ school.governorate }}
+          </a>
+        </li>
+        {% endif %}
+        <li class="breadcrumb-item active">{{ school.school_name_ar or school.school_name }}</li>
+      </ol>
+    </nav>
+    <h1 class="page-title">
+      {% if school.logo_path %}
+      <img src="{{ url_for('static', filename='uploads/' + school.logo_path) }}"
+           alt="logo" style="height:36px;border-radius:6px;margin-left:10px;">
+      {% endif %}
+      {{ school.school_name_ar or school.school_name }}
+    </h1>
+    <p class="text-muted mb-0">{{ school.governorate or 'غير محددة المحافظة' }}</p>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <a href="{{ url_for('schools.edit', school_id=school.id) }}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-pencil me-1"></i>تعديل
+    </a>
+    <form method="POST" action="{{ url_for('super_admin.toggle_school', school_id=school.id) }}"
+          style="display:inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+      <button type="submit"
+              class="btn btn-sm {{ 'btn-warning' if school.is_active else 'btn-success' }}"
+              onclick="return confirm('{{ 'تعطيل' if school.is_active else 'تفعيل' }} هذه المدرسة؟')">
+        <i class="bi {{ 'bi-pause-circle' if school.is_active else 'bi-play-circle' }} me-1"></i>
+        {{ 'تعطيل' if school.is_active else 'تفعيل' }}
+      </button>
+    </form>
+    {% if school.is_active %}
+    <form method="POST" action="{{ url_for('super_admin.suspend_school_users', school_id=school.id) }}"
+          style="display:inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+      <button type="submit" class="btn btn-sm btn-danger"
+              onclick="return confirm('تعليق جميع مستخدمي هذه المدرسة؟')">
+        <i class="bi bi-person-slash me-1"></i>تعليق المستخدمين
+      </button>
+    </form>
+    <form method="POST" action="{{ url_for('super_admin.reactivate_school_users', school_id=school.id) }}"
+          style="display:inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+      <button type="submit" class="btn btn-sm btn-success"
+              onclick="return confirm('إعادة تفعيل جميع مستخدمي هذه المدرسة؟')">
+        <i class="bi bi-person-check me-1"></i>إعادة تفعيل المستخدمين
+      </button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }} alert-dismissible fade show">{{ msg }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+{% endwith %}
+
+{# Status badge #}
+<div class="mb-3">
+  {% if school.is_active %}
+  <span class="badge bg-success fs-6 px-3 py-2"><i class="bi bi-check-circle me-1"></i>نشطة</span>
+  {% else %}
+  <span class="badge bg-danger fs-6 px-3 py-2"><i class="bi bi-x-circle me-1"></i>معطّلة</span>
+  {% endif %}
+  {% if school.code %}
+  <span class="badge bg-secondary-subtle text-secondary fs-6 px-3 py-2 me-1">{{ school.code }}</span>
+  {% endif %}
+</div>
+
+{# ── Statistics row ─────────────────────────────────────────────────────── #}
+<div class="stats-grid mb-4" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));">
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(232,160,32,.12);color:#e8a020">
+      <i class="bi bi-people-fill"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ stats.students }}</div>
+      <div class="stat-label">طلاب نشطون</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(33,150,243,.12);color:#2196f3">
+      <i class="bi bi-person-fill"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ stats.users }}</div>
+      <div class="stat-label">مستخدمون</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(13,110,253,.12);color:#0d6efd">
+      <i class="bi bi-building"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ school.capacity if school.capacity else '∞' }}</div>
+      <div class="stat-label">السعة</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(26,171,109,.12);color:#1aab6d">
+      <i class="bi bi-cash-stack"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ "{:,.0f}".format(stats.total_paid) }}</div>
+      <div class="stat-label">محصّل</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(224,62,62,.12);color:#e03e3e">
+      <i class="bi bi-exclamation-circle"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ "{:,.0f}".format(stats.remaining) }}</div>
+      <div class="stat-label">متبقي</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:rgba(128,0,128,.12);color:purple">
+      <i class="bi bi-percent"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ stats.collection_pct }}%</div>
+      <div class="stat-label">نسبة التحصيل</div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+
+  {# ── Left column: pricing + academic years + users ─────────────────── #}
+  <div class="col-lg-4">
+
+    {# Pricing / Capacity panel #}
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header bg-white">
+        <strong><i class="bi bi-sliders me-2"></i>السعة والتسعير</strong>
+      </div>
+      <div class="card-body">
+        <dl class="row mb-3">
+          <dt class="col-6 text-muted small">السعة</dt>
+          <dd class="col-6">{{ school.capacity if school.capacity else 'غير محددة' }}</dd>
+          <dt class="col-6 text-muted small">سعر الطالب</dt>
+          <dd class="col-6">{{ "{:,.0f}".format(school.price_per_student or 0) }} {{ school.currency_symbol }}</dd>
+          <dt class="col-6 text-muted small">المتوقع</dt>
+          <dd class="col-6 fw-bold">{{ "{:,.0f}".format(stats.expected) }} {{ school.currency_symbol }}</dd>
+        </dl>
+        <form method="POST"
+              action="{{ url_for('super_admin.update_school_pricing', school_id=school.id) }}">
+          <input type="hidden" name="csrf_token"
+                 value="{{ csrf_token() if csrf_token is defined else '' }}">
+          <div class="mb-2">
+            <label class="form-label small">السعة (0 = غير محدودة)</label>
+            <input type="number" name="capacity" class="form-control form-control-sm"
+                   value="{{ school.capacity or 0 }}" min="0">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">سعر الطالب ({{ school.currency_symbol }})</label>
+            <input type="number" name="price_per_student" class="form-control form-control-sm"
+                   value="{{ school.price_per_student or 0 }}" min="0" step="0.01">
+          </div>
+          <button type="submit" class="btn btn-sm btn-primary w-100">
+            <i class="bi bi-save me-1"></i>حفظ
+          </button>
+        </form>
+      </div>
+    </div>
+
+    {# Academic Years panel #}
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <strong><i class="bi bi-calendar-fill me-2"></i>الأعوام الدراسية</strong>
+        <button class="btn btn-sm btn-outline-primary" data-bs-toggle="collapse"
+                data-bs-target="#addYearForm">
+          <i class="bi bi-plus"></i>
+        </button>
+      </div>
+      <div class="collapse" id="addYearForm">
+        <div class="card-body border-bottom">
+          <form method="POST"
+                action="{{ url_for('super_admin.create_year', school_id=school.id) }}">
+            <input type="hidden" name="csrf_token"
+                   value="{{ csrf_token() if csrf_token is defined else '' }}">
+            <div class="mb-2">
+              <input type="text" name="year_name" class="form-control form-control-sm"
+                     placeholder="مثال: 2025-2026" required>
+            </div>
+            <div class="row g-1 mb-2">
+              <div class="col">
+                <input type="date" name="year_start" class="form-control form-control-sm"
+                       required>
+              </div>
+              <div class="col">
+                <input type="date" name="year_end" class="form-control form-control-sm"
+                       required>
+              </div>
+            </div>
+            <div class="form-check mb-2">
+              <input type="checkbox" name="is_current" class="form-check-input"
+                     id="isCurrentYear" value="1">
+              <label class="form-check-label small" for="isCurrentYear">العام الحالي</label>
+            </div>
+            <button type="submit" class="btn btn-sm btn-success w-100">
+              <i class="bi bi-plus-circle me-1"></i>إنشاء
+            </button>
+          </form>
+        </div>
+      </div>
+      <ul class="list-group list-group-flush">
+        {% for yr in all_years %}
+        <li class="list-group-item d-flex justify-content-between align-items-center gap-2 flex-wrap">
+          <span>
+            {{ yr.name }}
+            {% if yr.is_current %}
+            <span class="badge bg-success ms-1">الحالي</span>
+            {% endif %}
+          </span>
+          <div class="d-flex gap-1">
+            {% if not yr.is_current %}
+            <form method="POST"
+                  action="{{ url_for('super_admin.activate_year', school_id=school.id, year_id=yr.id) }}">
+              <input type="hidden" name="csrf_token"
+                     value="{{ csrf_token() if csrf_token is defined else '' }}">
+              <button type="submit" class="btn btn-xs btn-outline-success btn-sm py-0">
+                تفعيل
+              </button>
+            </form>
+            {% endif %}
+            <form method="POST"
+                  action="{{ url_for('super_admin.rollover_year', school_id=school.id, year_id=yr.id) }}"
+                  onsubmit="return confirm('سيتم نسخ الصفوف والشعب والمواد وأنواع الرسوم من أحدث عام سابق إلى «{{ yr.name }}»، وتحديث أقسام الطلاب تلقائياً.\n\nهل تريد المتابعة؟')">
+              <input type="hidden" name="csrf_token"
+                     value="{{ csrf_token() if csrf_token is defined else '' }}">
+              <button type="submit" class="btn btn-xs btn-outline-primary btn-sm py-0"
+                      title="نقل الهيكل من العام السابق">
+                <i class="bi bi-arrow-repeat me-1"></i>ترحيل
+              </button>
+            </form>
+          </div>
+        </li>
+        {% else %}
+        <li class="list-group-item text-muted small text-center">لا توجد أعوام دراسية</li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    {# Users panel #}
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <strong><i class="bi bi-people me-2"></i>مستخدمو المدرسة</strong>
+        <a href="{{ url_for('admin.create_user') }}" class="btn btn-sm btn-outline-primary">
+          <i class="bi bi-plus"></i>
+        </a>
+      </div>
+      <ul class="list-group list-group-flush" style="max-height:260px;overflow-y:auto;">
+        {% for u in users %}
+        <li class="list-group-item d-flex justify-content-between align-items-center py-2">
+          <div>
+            <span class="fw-semibold small">{{ u.full_name }}</span><br>
+            <small class="text-muted">{{ u.role.label if u.role else '' }}</small>
+          </div>
+          <span class="badge {{ 'bg-success' if u.is_active else 'bg-secondary' }}">
+            {{ 'نشط' if u.is_active else 'معطّل' }}
+          </span>
+        </li>
+        {% else %}
+        <li class="list-group-item text-muted small text-center">لا توجد مستخدمون.</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+
+  {# ── Right column: billing ─────────────────────────────────────────── #}
+  <div class="col-lg-8">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <strong><i class="bi bi-receipt me-2"></i>سجلات الفواتير والاشتراكات</strong>
+        <button class="btn btn-sm btn-primary" data-bs-toggle="collapse"
+                data-bs-target="#addBillingForm">
+          <i class="bi bi-plus me-1"></i>إضافة فاتورة
+        </button>
+      </div>
+
+      {# Add billing form (collapsed by default) #}
+      <div class="collapse" id="addBillingForm">
+        <div class="card-body border-bottom bg-light">
+          <form method="POST"
+                action="{{ url_for('super_admin.add_billing', school_id=school.id) }}">
+            <input type="hidden" name="csrf_token"
+                   value="{{ csrf_token() if csrf_token is defined else '' }}">
+            <div class="row g-2">
+              <div class="col-md-4">
+                <label class="form-label small">المبلغ المستحق *</label>
+                <input type="number" name="amount_due" class="form-control form-control-sm"
+                       step="0.01" min="0" required placeholder="0">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label small">نوع الفاتورة</label>
+                <select name="billing_type" class="form-select form-select-sm">
+                  <option value="subscription">اشتراك</option>
+                  <option value="setup">إعداد</option>
+                  <option value="extra_students">طلاب إضافيون</option>
+                  <option value="service">خدمة</option>
+                  <option value="other">أخرى</option>
+                </select>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label small">تاريخ الاستحقاق</label>
+                <input type="date" name="due_date" class="form-control form-control-sm"
+                       value="{{ today }}">
+              </div>
+              <div class="col-12">
+                <label class="form-label small">الوصف</label>
+                <input type="text" name="description" class="form-control form-control-sm"
+                       placeholder="وصف الفاتورة">
+              </div>
+              <div class="col-12">
+                <label class="form-label small">ملاحظات</label>
+                <textarea name="notes" class="form-control form-control-sm"
+                          rows="2"></textarea>
+              </div>
+              <div class="col-12 text-end">
+                <button type="submit" class="btn btn-sm btn-success">
+                  <i class="bi bi-save me-1"></i>حفظ الفاتورة
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      {# Billing records table #}
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>#</th>
+                <th>النوع</th>
+                <th>الوصف</th>
+                <th>المستحق</th>
+                <th>المدفوع</th>
+                <th>المتبقي</th>
+                <th>الحالة</th>
+                <th>الاستحقاق</th>
+                <th>الإجراءات</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for rec in billing_records %}
+              <tr>
+                <td class="text-muted small">{{ rec.id }}</td>
+                <td>
+                  {% set type_labels = {
+                    'subscription': 'اشتراك',
+                    'setup': 'إعداد',
+                    'extra_students': 'طلاب إضافيون',
+                    'service': 'خدمة',
+                    'other': 'أخرى'
+                  } %}
+                  <span class="badge bg-info-subtle text-info">
+                    {{ type_labels.get(rec.billing_type, rec.billing_type) }}
+                  </span>
+                </td>
+                <td>
+                  <span class="small">{{ rec.description or '—' }}</span>
+                </td>
+                <td class="fw-semibold">{{ "{:,.0f}".format(rec.amount_due or 0) }}</td>
+                <td class="text-success fw-semibold">{{ "{:,.0f}".format(rec.amount_paid or 0) }}</td>
+                <td class="text-danger fw-semibold">{{ "{:,.0f}".format(rec.remaining) }}</td>
+                <td>
+                  {% if rec.status == 'paid' %}
+                    <span class="badge bg-success">مدفوع</span>
+                  {% elif rec.status == 'partial' %}
+                    <span class="badge bg-warning text-dark">جزئي</span>
+                  {% else %}
+                    <span class="badge bg-danger">غير مدفوع</span>
+                  {% endif %}
+                </td>
+                <td>
+                  <small class="text-muted">
+                    {{ rec.due_date.strftime('%Y-%m-%d') if rec.due_date else '—' }}
+                  </small>
+                </td>
+                <td>
+                  <div class="d-flex gap-1">
+                    {% if rec.status != 'paid' %}
+                    <button class="btn btn-xs btn-outline-success btn-sm py-0 px-2"
+                            data-bs-toggle="modal"
+                            data-bs-target="#payModal{{ rec.id }}">
+                      دفع
+                    </button>
+                    {% endif %}
+                    <form method="POST"
+                          action="{{ url_for('super_admin.delete_billing', billing_id=rec.id) }}">
+                      <input type="hidden" name="csrf_token"
+                             value="{{ csrf_token() if csrf_token is defined else '' }}">
+                      <button type="submit" class="btn btn-xs btn-outline-danger btn-sm py-0 px-2"
+                              onclick="return confirm('حذف هذا السجل؟')">
+                        <i class="bi bi-trash"></i>
+                      </button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+
+              {# Payment modal #}
+              {% if rec.status != 'paid' %}
+              <div class="modal fade" id="payModal{{ rec.id }}" tabindex="-1">
+                <div class="modal-dialog modal-sm">
+                  <div class="modal-content">
+                    <div class="modal-header">
+                      <h6 class="modal-title">تسجيل دفعة — فاتورة #{{ rec.id }}</h6>
+                      <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <form method="POST"
+                          action="{{ url_for('super_admin.record_payment', billing_id=rec.id) }}">
+                      <input type="hidden" name="csrf_token"
+                             value="{{ csrf_token() if csrf_token is defined else '' }}">
+                      <div class="modal-body">
+                        <div class="mb-2">
+                          <label class="form-label small">المبلغ المدفوع</label>
+                          <input type="number" name="payment_amount"
+                                 class="form-control form-control-sm"
+                                 step="0.01" min="0.01"
+                                 max="{{ rec.remaining }}"
+                                 value="{{ rec.remaining }}" required>
+                          <small class="text-muted">المتبقي: {{ "{:,.0f}".format(rec.remaining) }}</small>
+                        </div>
+                        <div class="mb-2">
+                          <label class="form-label small">تاريخ الدفع</label>
+                          <input type="date" name="payment_date"
+                                 class="form-control form-control-sm"
+                                 value="{{ today }}">
+                        </div>
+                        <div class="mb-2">
+                          <label class="form-label small">ملاحظات</label>
+                          <textarea name="notes" class="form-control form-control-sm"
+                                    rows="2">{{ rec.notes or '' }}</textarea>
+                        </div>
+                      </div>
+                      <div class="modal-footer">
+                        <button type="button" class="btn btn-sm btn-secondary"
+                                data-bs-dismiss="modal">إلغاء</button>
+                        <button type="submit" class="btn btn-sm btn-success">تأكيد الدفع</button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              </div>
+              {% endif %}
+
+              {% else %}
+              <tr>
+                <td colspan="9" class="text-center text-muted py-4">
+                  لا توجد فواتير لهذه المدرسة.
+                  <button class="btn btn-sm btn-outline-primary ms-2"
+                          data-bs-toggle="collapse" data-bs-target="#addBillingForm">
+                    إضافة الأولى
+                  </button>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,121 @@
+{% extends "shared/base.html" %}
+{% block title %}سجل العمليات{% endblock %}
+{% block page_title %}سجل العمليات والتدقيق{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">سجل العمليات</h1>
+    <p class="page-subtitle">تتبع جميع العمليات التي تمت على النظام</p>
+  </div>
+</div>
+
+<!-- Filters -->
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="d-flex gap-3 flex-wrap align-items-end">
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">المستخدم</label>
+        <select name="user_id" class="form-select" style="width:200px">
+          <option value="">كل المستخدمين</option>
+          {% for u in users %}
+          <option value="{{ u.id }}" {{ 'selected' if u.id == user_id }}>
+            {{ u.full_name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">الإجراء</label>
+        <input type="text" name="action" class="form-control" style="width:180px"
+               placeholder="مثال: login, delete..." value="{{ action }}">
+      </div>
+      <button class="btn btn-primary align-self-end">
+        <i class="bi bi-search me-1"></i>بحث
+      </button>
+      {% if user_id or action %}
+      <a href="{{ url_for('audit.index') }}"
+         class="btn btn-outline-secondary align-self-end">مسح</a>
+      {% endif %}
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>الوقت</th><th>المستخدم</th><th>الإجراء</th>
+          <th>المورد</th><th>المعرّف</th><th>التفاصيل</th><th>عنوان IP</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in logs.items %}
+        <tr>
+          <td style="font-size:12px;color:#9aabb8;white-space:nowrap">
+            {{ log.created_at.strftime('%Y-%m-%d %H:%M:%S') }}
+          </td>
+          <td>
+            {% if log.user %}
+            <div style="font-size:13px;font-weight:600">{{ log.user.full_name }}</div>
+            <div style="font-size:11px;color:#9aabb8"><code>{{ log.user.username }}</code></div>
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="badge" style="
+              background:{% if 'delete' in log.action %}#fef0f0{% elif 'create' in log.action or 'add' in log.action %}#e8f8f0{% elif 'login' in log.action %}#e8f4fd{% else %}#f0f4f8{% endif %};
+              color:{% if 'delete' in log.action %}#e03e3e{% elif 'create' in log.action or 'add' in log.action %}#1aab6d{% elif 'login' in log.action %}#2196f3{% else %}#1e2b3a{% endif %};
+              font-weight:600;font-size:12px">
+              {{ log.action }}
+            </span>
+          </td>
+          <td style="font-size:13px">{{ log.resource or '—' }}</td>
+          <td style="font-size:13px;color:#6b7a8d">{{ log.resource_id or '—' }}</td>
+          <td style="font-size:12.5px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+              title="{{ log.details or '' }}">
+            {{ log.details or '—' }}
+          </td>
+          <td style="font-size:12px;color:#9aabb8;font-family:monospace">
+            {{ log.ip_address or '—' }}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7" class="text-center text-muted py-5">
+            <i class="bi bi-journal-x" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا توجد سجلات عمليات
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if logs.pages > 1 %}
+  <div class="card-footer d-flex justify-content-between align-items-center">
+    <small class="text-muted">
+      عرض {{ logs.items|length }} من {{ logs.total }} سجل
+    </small>
+    <nav>
+      <ul class="pagination pagination-sm mb-0">
+        {% for p in logs.iter_pages() %}
+          {% if p %}
+          <li class="page-item {{ 'active' if p == logs.page }}">
+            <a class="page-link"
+               href="{{ url_for('audit.index', page=p, user_id=user_id, action=action) }}">
+              {{ p }}
+            </a>
+          </li>
+          {% else %}
+          <li class="page-item disabled"><span class="page-link">…</span></li>
+          {% endif %}
+        {% endfor %}
+      </ul>
+    </nav>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
