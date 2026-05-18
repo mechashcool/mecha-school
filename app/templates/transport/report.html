@@ -1,0 +1,228 @@
+{% extends "shared/base.html" %}
+{% block title %}تقارير خطوط النقل{% endblock %}
+{% block page_title %}تقارير خطوط النقل{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">تقارير خطوط النقل</h1>
+    <p class="page-subtitle">ملخص المشتركين والكشف الشهري</p>
+  </div>
+  <div class="d-flex gap-2">
+    <button onclick="window.print()" class="btn btn-outline-secondary">
+      <i class="bi bi-printer-fill me-1"></i>طباعة / PDF
+    </button>
+    <a href="{{ url_for('transport.index') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>رجوع
+    </a>
+  </div>
+</div>
+
+{# ══════════════════════════════════════════════════════════════════════════════
+   SECTION A: summary per route
+══════════════════════════════════════════════════════════════════════════════ #}
+<div class="card mb-4 no-print">
+  <div class="card-header">
+    <i class="bi bi-pie-chart-fill text-accent me-1"></i>أ. عدد الطلاب بكل خط (المشتركون الفعّالون)
+  </div>
+  {% if route_summary %}
+  <div class="table-wrapper">
+    <table class="table table-hover table-sm">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>اسم الخط</th>
+          <th>رقم الخط</th>
+          <th>السائق</th>
+          <th>نوع المركبة</th>
+          <th>الطاقة</th>
+          <th>المشتركون الفعّالون</th>
+          <th>الحالة</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in route_summary %}
+        <tr>
+          <td class="text-muted">{{ loop.index }}</td>
+          <td class="fw-600">
+            <a href="{{ url_for('transport.detail', route_id=row.route.id) }}"
+               class="text-decoration-none">{{ row.route.name }}</a>
+          </td>
+          <td>{{ row.route.route_number or '—' }}</td>
+          <td>{{ row.route.driver_name }}</td>
+          <td>{{ row.route.vehicle_type }}</td>
+          <td>{{ row.route.capacity }}</td>
+          <td>
+            <span class="fw-700"
+                  style="color:{% if row.active > row.route.capacity %}#e03e3e{% else %}#1aab6d{% endif %}">
+              {{ row.active }}
+            </span>
+            {% if row.active > row.route.capacity %}
+            <i class="bi bi-exclamation-triangle-fill text-danger ms-1"
+               title="تجاوز الطاقة الاستيعابية"></i>
+            {% endif %}
+          </td>
+          <td>
+            <span class="badge"
+                  style="background:{% if row.route.status == 'active' %}#e8f8f0;color:#1aab6d{% else %}#f0f0f0;color:#888{% endif %}">
+              {% if row.route.status == 'active' %}فعّال{% else %}متوقف{% endif %}
+            </span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr class="fw-700" style="background:#f8f9fa">
+          <td colspan="6" class="text-end">الإجمالي</td>
+          <td>{{ route_summary | sum(attribute='active') }}</td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+  <div class="card-body text-center text-muted py-4">لا توجد خطوط نقل.</div>
+  {% endif %}
+</div>
+
+{# ══════════════════════════════════════════════════════════════════════════════
+   SECTION B: monthly roster
+══════════════════════════════════════════════════════════════════════════════ #}
+<div class="card">
+  <div class="card-header d-flex align-items-center justify-content-between">
+    <span>
+      <i class="bi bi-table text-accent me-1"></i>ب. الكشف الشهري
+    </span>
+    <small class="text-muted no-print">{{ monthly_records|length }} سجل</small>
+  </div>
+
+  {# Filters #}
+  <div class="card-body pb-2 no-print">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-auto">
+        <label class="form-label fw-600 mb-1">الشهر</label>
+        <select name="month" class="form-select">
+          {% for m in range(1, 13) %}
+          <option value="{{ m }}" {% if m == month %}selected{% endif %}>
+            {% set names = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'] %}
+            {{ names[m-1] }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-auto">
+        <label class="form-label fw-600 mb-1">السنة</label>
+        <input type="number" name="year" class="form-control" style="width:100px"
+               value="{{ year }}" min="2020" max="2040">
+      </div>
+      <div class="col-auto">
+        <label class="form-label fw-600 mb-1">الخط</label>
+        <select name="route_id" class="form-select">
+          <option value="">كل الخطوط</option>
+          {% for r in all_routes %}
+          <option value="{{ r.id }}" {% if r.id == route_id_f %}selected{% endif %}>
+            {{ r.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-auto">
+        <label class="form-label fw-600 mb-1">حالة الاشتراك</label>
+        <select name="status" class="form-select">
+          <option value="active"   {% if status_f == 'active'   %}selected{% endif %}>فعّال</option>
+          <option value="inactive" {% if status_f == 'inactive' %}selected{% endif %}>متوقف</option>
+          <option value="all"      {% if status_f == 'all'      %}selected{% endif %}>الكل</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-primary">
+          <i class="bi bi-search me-1"></i>عرض
+        </button>
+      </div>
+    </form>
+  </div>
+
+  {# Print header #}
+  <div class="print-only p-3 border-bottom">
+    <div class="text-center mb-2">
+      <h5 class="mb-0">كشف شهري لخدمة النقل المدرسي</h5>
+      <p class="text-muted mb-0">{{ month_name }} {{ year }}</p>
+    </div>
+  </div>
+
+  {% if monthly_records %}
+  <div class="table-wrapper">
+    <table class="table table-hover table-sm">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>اسم الطالب</th>
+          <th>الصف</th>
+          <th>الشعبة</th>
+          <th>اسم الخط</th>
+          <th>رقم الخط</th>
+          <th>السائق</th>
+          <th>هاتف السائق</th>
+          <th>تاريخ البداية</th>
+          <th>حالة الاشتراك</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for lk in monthly_records %}
+        <tr>
+          <td class="text-muted">{{ loop.index }}</td>
+          <td class="fw-600">{{ lk.student.full_name }}</td>
+          <td style="font-size:12px">
+            {{ lk.student.section.grade.name if lk.student.section else '—' }}
+          </td>
+          <td style="font-size:12px">
+            {{ lk.student.section.name if lk.student.section else '—' }}
+          </td>
+          <td>{{ lk.route.name }}</td>
+          <td>{{ lk.route.route_number or '—' }}</td>
+          <td>{{ lk.route.driver_name }}</td>
+          <td>
+            <a href="tel:{{ lk.route.driver_phone }}" class="text-decoration-none text-dark">
+              {{ lk.route.driver_phone }}
+            </a>
+          </td>
+          <td style="font-size:12px">
+            {{ lk.start_date.strftime('%Y-%m-%d') if lk.start_date else '—' }}
+          </td>
+          <td>
+            {% if lk.status == 'active' %}
+            <span class="badge-status badge-active">فعّال</span>
+            {% else %}
+            <span class="badge-status badge-inactive">متوقف</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card-footer text-muted" style="font-size:12px">
+    إجمالي السجلات: {{ monthly_records|length }} |
+    {{ month_name }} {{ year }}
+    {% if route_id_f %}
+      | الخط: {{ all_routes | selectattr('id','eq',route_id_f) | map(attribute='name') | first }}
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="card-body text-center text-muted py-5">
+    <i class="bi bi-table" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+    لا توجد سجلات مطابقة للفلاتر المحددة.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+@media print {
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+}
+.print-only { display: none; }
+</style>
+{% endblock %}

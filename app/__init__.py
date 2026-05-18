@@ -72,6 +72,8 @@ def create_app(config_name=None):
     from app.blueprints.schools      import schools_bp
     # Phase 7 — Super Admin portal
     from app.blueprints.super_admin  import super_admin_bp
+    # Transport routes
+    from app.blueprints.transport    import transport_bp
 
     app.register_blueprint(auth_bp,          url_prefix='/auth')
     app.register_blueprint(admin_bp,         url_prefix='/admin')
@@ -95,6 +97,7 @@ def create_app(config_name=None):
     app.register_blueprint(teacher_bp,       url_prefix='/teacher')
     app.register_blueprint(schools_bp,       url_prefix='/schools')
     app.register_blueprint(super_admin_bp,   url_prefix='/admin/super')
+    app.register_blueprint(transport_bp,     url_prefix='/transport')
 
     # ── Jinja2 globals ────────────────────────────────────────────────────────
     app.jinja_env.globals.update(enumerate=enumerate, zip=zip, len=len)

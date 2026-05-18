@@ -1242,7 +1242,75 @@ class AuditLog(db.Model):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  18. WHITE-LABEL / SCHOOL SETTINGS  (global fallback — one row)
+#  18. TRANSPORT ROUTES  (school-scoped, not year-scoped)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TransportRoute(db.Model):
+    """One bus/van route operated by the school."""
+    __tablename__ = 'transport_routes'
+    __school_scoped__ = True
+
+    id             = db.Column(db.Integer, primary_key=True)
+    school_id      = db.Column(db.Integer, db.ForeignKey('schools.id'),
+                               nullable=False, index=True)
+    name           = db.Column(db.String(150), nullable=False)
+    route_number   = db.Column(db.String(30),  nullable=True)
+    driver_name    = db.Column(db.String(200), nullable=False)
+    driver_phone   = db.Column(db.String(30),  nullable=False)
+    supervisor     = db.Column(db.String(200), nullable=True)   # المشرفة / المرافق
+    vehicle_type   = db.Column(db.String(80),  nullable=False)
+    vehicle_number = db.Column(db.String(30),  nullable=False)
+    capacity       = db.Column(db.Integer,     nullable=False, default=1)
+    status         = db.Column(db.String(20),  nullable=False, default='active')  # active|inactive
+    created_at     = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at     = db.Column(db.DateTime, default=datetime.utcnow,
+                               onupdate=datetime.utcnow)
+
+    school         = db.relationship('School', foreign_keys=[school_id],
+                                     backref=db.backref('transport_routes', lazy='dynamic'))
+    students_links = db.relationship('StudentTransport', backref='route',
+                                     cascade='all, delete-orphan', lazy='dynamic')
+
+    __table_args__ = (
+        db.UniqueConstraint('school_id', 'name', name='uq_transport_route_school_name'),
+    )
+
+    def __repr__(self):
+        return f'<TransportRoute {self.name}>'
+
+
+class StudentTransport(db.Model):
+    """Links a student to a transport route with subscription details."""
+    __tablename__ = 'student_transport'
+    __school_scoped__ = True
+
+    id         = db.Column(db.Integer, primary_key=True)
+    school_id  = db.Column(db.Integer, db.ForeignKey('schools.id'),
+                           nullable=False, index=True)
+    route_id   = db.Column(db.Integer, db.ForeignKey('transport_routes.id'),
+                           nullable=False, index=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id'),
+                           nullable=False, index=True)
+    status     = db.Column(db.String(20), nullable=False, default='active')  # active|inactive
+    start_date = db.Column(db.Date,  nullable=True)
+    notes      = db.Column(db.Text,  nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    school  = db.relationship('School',  foreign_keys=[school_id])
+    student = db.relationship('Student', foreign_keys=[student_id],
+                              backref=db.backref('transport_links', lazy='dynamic'))
+
+    __table_args__ = (
+        db.UniqueConstraint('route_id', 'student_id',
+                            name='uq_student_transport_route'),
+    )
+
+    def __repr__(self):
+        return f'<StudentTransport student={self.student_id} route={self.route_id}>'
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  19. WHITE-LABEL / SCHOOL SETTINGS  (global fallback — one row)
 # ═════════════════════════════════════════════════════════════════════════════
 
 class SchoolSettings(db.Model):

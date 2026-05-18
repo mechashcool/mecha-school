@@ -241,6 +241,15 @@
     </li>
     {% endif %}
 
+    {% if current_user.has_permission('manage_transport') %}
+    <li class="nav-item">
+      <a href="{{ url_for('transport.index') }}"
+         class="{{ 'active' if request.blueprint == 'transport' }}">
+        <i class="bi bi-bus-front-fill"></i> خطوط النقل
+      </a>
+    </li>
+    {% endif %}
+
     {% if current_user.has_permission('enter_grades') %}
     <li class="nav-item">
       <a href="{{ url_for('grades.index') }}"

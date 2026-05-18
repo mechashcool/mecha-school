@@ -1,0 +1,648 @@
+{% extends "shared/base.html" %}
+{% block title %}{{ route.name }} — خط النقل{% endblock %}
+{% block page_title %}تفاصيل خط النقل{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ route.name }}</h1>
+    <p class="page-subtitle">
+      {% if route.route_number %}رقم الخط: {{ route.route_number }} · {% endif %}
+      <span class="badge"
+            style="background:{% if route.status == 'active' %}#e8f8f0;color:#1aab6d{% else %}#f0f0f0;color:#888{% endif %}">
+        {% if route.status == 'active' %}فعّال{% else %}متوقف{% endif %}
+      </span>
+    </p>
+  </div>
+  <div class="d-flex gap-2">
+    {% if not is_historical_year %}
+    <a href="{{ url_for('transport.edit', route_id=route.id) }}"
+       class="btn btn-outline-secondary">
+      <i class="bi bi-pencil-fill me-1"></i>تعديل البيانات
+    </a>
+    {% endif %}
+    <a href="{{ url_for('transport.index') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>رجوع
+    </a>
+  </div>
+</div>
+
+{# ── Route info cards ────────────────────────────────────────────────────── #}
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="card text-center py-3">
+      <div style="font-size:28px;font-weight:800;color:#1a3a5c">{{ links|length }}</div>
+      <div class="text-muted" style="font-size:13px">إجمالي المشتركين</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card text-center py-3">
+      <div style="font-size:28px;font-weight:800;color:#1aab6d">
+        {{ links | selectattr('status','eq','active') | list | length }}
+      </div>
+      <div class="text-muted" style="font-size:13px">مشترك فعّال</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card text-center py-3">
+      <div style="font-size:28px;font-weight:800;color:#e8a020">{{ route.capacity }}</div>
+      <div class="text-muted" style="font-size:13px">الطاقة الاستيعابية</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card text-center py-3">
+      <div style="font-size:28px;font-weight:800;color:#9aabb8">
+        {{ links | selectattr('status','eq','inactive') | list | length }}
+      </div>
+      <div class="text-muted" style="font-size:13px">اشتراك متوقف</div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+
+  {# ── Route metadata ────────────────────────────────────────────────────────── #}
+  <div class="col-lg-4">
+    <div class="card mb-4">
+      <div class="card-header">
+        <i class="bi bi-info-circle text-accent"></i> بيانات الخط
+      </div>
+      <div class="card-body" style="font-size:13px">
+        {% macro info_row(label, value) %}
+        <div class="d-flex justify-content-between border-bottom py-2">
+          <span class="text-muted">{{ label }}</span>
+          <span class="fw-600">{{ value or '—' }}</span>
+        </div>
+        {% endmacro %}
+
+        {{ info_row('اسم الخط', route.name) }}
+        {{ info_row('رقم الخط', route.route_number) }}
+        {{ info_row('السائق', route.driver_name) }}
+        <div class="d-flex justify-content-between border-bottom py-2">
+          <span class="text-muted">هاتف السائق</span>
+          <a href="tel:{{ route.driver_phone }}" class="fw-600 text-decoration-none text-dark">
+            {{ route.driver_phone }}
+          </a>
+        </div>
+        {{ info_row('المشرفة / المرافق', route.supervisor) }}
+        {{ info_row('نوع المركبة', route.vehicle_type) }}
+        {{ info_row('رقم المركبة', route.vehicle_number) }}
+        <div class="d-flex justify-content-between border-bottom py-2">
+          <span class="text-muted">الطاقة الاستيعابية</span>
+          <span class="fw-600">{{ route.capacity }} مقعد</span>
+        </div>
+        <div class="d-flex justify-content-between pt-2">
+          <span class="text-muted">الحالة</span>
+          <span class="badge"
+                style="background:{% if route.status == 'active' %}#e8f8f0;color:#1aab6d{% else %}#f0f0f0;color:#888{% endif %}">
+            {% if route.status == 'active' %}فعّال{% else %}متوقف{% endif %}
+          </span>
+        </div>
+      </div>
+    </div>
+
+    {# Delete card #}
+    {% if not is_historical_year %}
+    <div class="card border-danger" style="border-color:#f5c6cb">
+      <div class="card-header text-danger" style="background:#fff5f5">
+        <i class="bi bi-exclamation-triangle-fill me-1"></i>منطقة الخطر
+      </div>
+      <div class="card-body">
+        <p class="text-muted mb-3" style="font-size:13px">
+          لحذف الخط يجب أن لا يكون لديه أي مشتركين فعّالين.
+        </p>
+        <form method="POST" action="{{ url_for('transport.delete', route_id=route.id) }}"
+              onsubmit="return confirm('هل أنت متأكد من حذف الخط \'{{ route.name }}\'؟ لا يمكن التراجع.')">
+          <button class="btn btn-danger btn-sm w-100">
+            <i class="bi bi-trash-fill me-1"></i>حذف الخط
+          </button>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── Students panel ────────────────────────────────────────────────────────── #}
+  <div class="col-lg-8">
+
+    {# ── Add student card ─────────────────────────────────────────────────────── #}
+    {% if not is_historical_year and available_students %}
+    <div class="card mb-4">
+      <div class="card-header">
+        <i class="bi bi-person-plus-fill text-accent me-1"></i>ربط طالب بالخط
+      </div>
+      <div class="card-body">
+        <form method="POST"
+              action="{{ url_for('transport.add_student', route_id=route.id) }}"
+              id="addStudentForm">
+
+          {# ── Student picker ─────────────────────────────────────────────── #}
+          <div class="mb-3">
+            <label class="form-label fw-600 mb-1">
+              الطالب <span class="text-danger">*</span>
+              <span class="text-muted fw-400" style="font-size:12px">
+                — {{ available_students|length }} طالب متاح
+              </span>
+            </label>
+
+            <input type="hidden" name="student_id" id="pickerStudentId">
+
+            <div class="sp-wrap" id="studentPicker">
+
+              {# Search input row #}
+              <div class="sp-input-wrap" id="spInputWrap">
+                <i class="bi bi-search sp-icon-search"></i>
+                <input type="text" id="pickerSearch"
+                       class="sp-input"
+                       placeholder="ابحث باسم الطالب أو رقمه..."
+                       autocomplete="off">
+                <button type="button" id="pickerClear"
+                        class="sp-btn-clear d-none" title="مسح">
+                  <i class="bi bi-x-lg"></i>
+                </button>
+              </div>
+
+              {# Dropdown results #}
+              <div class="sp-dropdown d-none" id="spDropdown">
+                <div id="spList"></div>
+                <div id="spEmpty" class="sp-empty d-none">
+                  <i class="bi bi-search"></i>
+                  <span>لا يوجد طلاب مطابقون للبحث أو جميع الطلاب<br>لديهم اشتراكات فعالة</span>
+                </div>
+              </div>
+            </div>
+
+            {# Selected student chip #}
+            <div id="spSelected" class="sp-selected d-none">
+              <i class="bi bi-check-circle-fill" style="color:#1aab6d"></i>
+              <div class="sp-selected-info">
+                <span id="spSelectedName" class="sp-selected-name"></span>
+                <span id="spSelectedMeta" class="sp-selected-meta"></span>
+              </div>
+            </div>
+
+            <div id="spValidationMsg" class="invalid-feedback" style="display:none">
+              يرجى اختيار طالب من القائمة.
+            </div>
+          </div>
+
+          {# ── Secondary fields ───────────────────────────────────────────── #}
+          <div class="row g-3">
+            <div class="col-sm-4">
+              <label class="form-label fw-600 mb-1">حالة الاشتراك</label>
+              <select name="status" class="form-select form-select-sm">
+                <option value="active">فعّال</option>
+                <option value="inactive">متوقف</option>
+              </select>
+            </div>
+            <div class="col-sm-4">
+              <label class="form-label fw-600 mb-1">تاريخ البداية</label>
+              <input type="date" name="start_date" class="form-control form-control-sm">
+            </div>
+            <div class="col-sm-4">
+              <label class="form-label fw-600 mb-1">ملاحظات</label>
+              <input type="text" name="notes" class="form-control form-control-sm"
+                     placeholder="اختياري">
+            </div>
+          </div>
+
+          <div class="mt-3 pt-1 border-top">
+            <button type="submit" class="btn btn-success btn-sm px-4">
+              <i class="bi bi-person-plus-fill me-1"></i>ربط الطالب بالخط
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    {% elif not is_historical_year and not available_students %}
+    <div class="alert alert-info mb-4 py-2" style="font-size:13px">
+      <i class="bi bi-info-circle me-1"></i>
+      لا يوجد طلاب متاحون للإضافة — جميع الطلاب النشطين إما مضافون لهذا الخط أو لديهم اشتراك فعّال في خط نقل آخر.
+    </div>
+    {% endif %}
+
+    {# ── Linked students table ──────────────────────────────────────────────── #}
+    <div class="card">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-people-fill text-accent me-1"></i>الطلاب المشتركون</span>
+        <small class="text-muted">{{ links|length }} طالب</small>
+      </div>
+      {% if links %}
+      <div class="table-wrapper">
+        <table class="table table-hover table-sm">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>رقم الطالب</th>
+              <th>الاسم</th>
+              <th>الصف / الشعبة</th>
+              <th>حالة الاشتراك</th>
+              <th>تاريخ البداية</th>
+              <th>ملاحظات</th>
+              {% if not is_historical_year %}<th>إجراء</th>{% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for lk in links %}
+            <tr>
+              <td class="text-muted">{{ loop.index }}</td>
+              <td><code>{{ lk.student.student_id }}</code></td>
+              <td class="fw-600">{{ lk.student.full_name }}</td>
+              <td style="font-size:12px;color:#555">
+                {% if lk.student.section %}
+                  {{ lk.student.section.grade.name }} / {{ lk.student.section.name }}
+                {% else %}—{% endif %}
+              </td>
+              <td>
+                {% if lk.status == 'active' %}
+                <span class="badge-status badge-active">فعّال</span>
+                {% else %}
+                <span class="badge-status badge-inactive">متوقف</span>
+                {% endif %}
+              </td>
+              <td style="font-size:12px">
+                {{ lk.start_date.strftime('%Y-%m-%d') if lk.start_date else '—' }}
+              </td>
+              <td style="font-size:12px;color:#777">{{ lk.notes or '—' }}</td>
+              {% if not is_historical_year %}
+              <td>
+                <div class="d-flex gap-1">
+                  <form method="POST"
+                        action="{{ url_for('transport.toggle_student', link_id=lk.id) }}">
+                    <button class="btn btn-xs btn-outline-secondary" title="تغيير الحالة">
+                      <i class="bi bi-arrow-repeat"></i>
+                    </button>
+                  </form>
+                  <form method="POST"
+                        action="{{ url_for('transport.remove_student', link_id=lk.id) }}"
+                        onsubmit="return confirm('هل تريد إزالة {{ lk.student.full_name }} من الخط؟')">
+                    <button class="btn btn-xs btn-outline-danger" title="إزالة من الخط">
+                      <i class="bi bi-person-dash-fill"></i>
+                    </button>
+                  </form>
+                </div>
+              </td>
+              {% endif %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="card-body text-center text-muted py-5">
+        <i class="bi bi-person-x" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+        لا يوجد طلاب مربوطون بهذا الخط بعد.
+      </div>
+      {% endif %}
+    </div>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+/* ── Generic ── */
+.btn-xs { padding: 2px 6px; font-size: 11px; }
+
+/* ════════════════════════════════════════════
+   Student Picker
+   ════════════════════════════════════════════ */
+.sp-wrap { position: relative; }
+
+/* Input row */
+.sp-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border: 1.5px solid #ced4da;
+  border-radius: 7px;
+  background: #fff;
+  transition: border-color .15s, box-shadow .15s;
+  overflow: hidden;
+}
+.sp-input-wrap:focus-within {
+  border-color: #86b7fe;
+  box-shadow: 0 0 0 3px rgba(13,110,253,.12);
+}
+.sp-input-wrap.is-invalid {
+  border-color: #dc3545;
+  box-shadow: 0 0 0 3px rgba(220,53,69,.12);
+}
+
+.sp-icon-search {
+  flex-shrink: 0;
+  color: #aaa;
+  font-size: 13px;
+  padding: 0 10px 0 4px;  /* RTL: icon sits on the right (start) */
+  pointer-events: none;
+  order: 3;
+}
+.sp-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 9px 4px;
+  font-size: 14px;
+  direction: rtl;
+  order: 2;
+  min-width: 0;
+}
+.sp-btn-clear {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #aaa;
+  padding: 0 8px 0 10px; /* RTL: X sits on the left (end) */
+  cursor: pointer;
+  font-size: 11px;
+  order: 1;
+  line-height: 1;
+  transition: color .1s;
+}
+.sp-btn-clear:hover { color: #333; }
+
+/* Dropdown */
+.sp-dropdown {
+  position: absolute;
+  top: calc(100% + 5px);
+  right: 0;
+  left: 0;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.10);
+  z-index: 1055;
+  max-height: 270px;
+  overflow-y: auto;
+}
+
+/* Dropdown item */
+.sp-item {
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid #f5f5f5;
+  transition: background .1s;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sp-item:last-child { border-bottom: none; }
+.sp-item:hover, .sp-item:focus { background: #f0f6ff; outline: none; }
+
+.sp-item-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: #1a3a5c;
+  line-height: 1.3;
+}
+.sp-item-grade {
+  font-size: 12px;
+  color: #666;
+}
+.sp-item-sid {
+  font-size: 11px;
+  color: #aaa;
+  font-family: monospace;
+}
+
+/* Empty state inside dropdown */
+.sp-empty {
+  padding: 22px 16px;
+  text-align: center;
+  color: #aaa;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  line-height: 1.6;
+}
+.sp-empty i { font-size: 24px; opacity: .5; }
+
+/* Selected chip */
+.sp-selected {
+  margin-top: 8px;
+  padding: 9px 13px;
+  background: #f0fdf4;
+  border: 1.5px solid #bbf7d0;
+  border-radius: 7px;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 13px;
+}
+.sp-selected > i { margin-top: 2px; flex-shrink: 0; }
+.sp-selected-info { display: flex; flex-direction: column; gap: 2px; }
+.sp-selected-name { font-weight: 600; color: #166534; }
+.sp-selected-meta { color: #4b7a5e; font-size: 12px; }
+
+/* Highlight matched text */
+.sp-hl {
+  background: #fef3c7;
+  padding: 0 1px;
+  border-radius: 2px;
+  font-weight: 700;
+}
+</style>
+{% endblock %}
+
+{% block extra_js %}
+{% if not is_historical_year and available_students %}
+<script>
+(function () {
+  'use strict';
+
+  /* ── Data ────────────────────────────────────────────────────── */
+  var STUDENTS = [
+    {% for s in available_students %}
+    {
+      id:      {{ s.id }},
+      name:    {{ s.full_name | tojson }},
+      sid:     {{ (s.student_id or '') | tojson }},
+      grade:   {{ (s.section.grade.name if s.section else '') | tojson }},
+      section: {{ (s.section.name if s.section else '') | tojson }}
+    }{% if not loop.last %},{% endif %}
+
+    {% endfor %}
+  ];
+
+  /* ── Elements ────────────────────────────────────────────────── */
+  var wrap        = document.getElementById('studentPicker');
+  var inputWrap   = document.getElementById('spInputWrap');
+  var searchEl    = document.getElementById('pickerSearch');
+  var dropdown    = document.getElementById('spDropdown');
+  var list        = document.getElementById('spList');
+  var emptyEl     = document.getElementById('spEmpty');
+  var clearBtn    = document.getElementById('pickerClear');
+  var hiddenId    = document.getElementById('pickerStudentId');
+  var selectedEl  = document.getElementById('spSelected');
+  var selName     = document.getElementById('spSelectedName');
+  var selMeta     = document.getElementById('spSelectedMeta');
+  var valMsg      = document.getElementById('spValidationMsg');
+  var form        = document.getElementById('addStudentForm');
+
+  if (!searchEl) return;
+
+  var selectedId = null;
+
+  /* ── Helpers ─────────────────────────────────────────────────── */
+  function esc(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function hlMatch(text, q) {
+    if (!q) return esc(text);
+    var i = text.toLowerCase().indexOf(q.toLowerCase());
+    if (i === -1) return esc(text);
+    return esc(text.slice(0, i))
+      + '<span class="sp-hl">' + esc(text.slice(i, i + q.length)) + '</span>'
+      + esc(text.slice(i + q.length));
+  }
+
+  function buildMeta(s) {
+    var parts = [];
+    if (s.grade)   parts.push(s.grade);
+    if (s.section) parts.push(s.section);
+    return parts.join(' / ');
+  }
+
+  /* ── Render dropdown ─────────────────────────────────────────── */
+  function renderDropdown(q) {
+    var matches = STUDENTS.filter(function (s) {
+      if (!q) return true;
+      var ql = q.toLowerCase();
+      return s.name.toLowerCase().indexOf(ql) !== -1
+          || (s.sid && s.sid.toLowerCase().indexOf(ql) !== -1);
+    });
+
+    list.innerHTML = '';
+
+    if (matches.length === 0) {
+      emptyEl.classList.remove('d-none');
+    } else {
+      emptyEl.classList.add('d-none');
+      matches.forEach(function (s) {
+        var el = document.createElement('div');
+        el.className    = 'sp-item';
+        el.tabIndex     = -1;
+
+        var meta    = buildMeta(s);
+        var nameHl  = hlMatch(s.name, q);
+        var sidHl   = s.sid ? hlMatch(s.sid, q) : '';
+
+        el.innerHTML =
+          '<span class="sp-item-name">' + nameHl + '</span>' +
+          (meta  ? '<span class="sp-item-grade">' + esc(meta) + '</span>' : '') +
+          (sidHl ? '<span class="sp-item-sid">رقم الطالب: ' + sidHl + '</span>' : '');
+
+        el.addEventListener('mousedown', function (e) {
+          e.preventDefault();       // prevent blur before click completes
+          pickStudent(s);
+        });
+        list.appendChild(el);
+      });
+    }
+
+    dropdown.classList.remove('d-none');
+  }
+
+  /* ── Pick a student ─────────────────────────────────────────── */
+  function pickStudent(s) {
+    selectedId      = s.id;
+    hiddenId.value  = s.id;
+    searchEl.value  = s.name;
+
+    var meta  = buildMeta(s);
+    var parts = [];
+    if (meta)  parts.push(meta);
+    if (s.sid) parts.push('رقم الطالب: ' + s.sid);
+
+    selName.textContent = s.name;
+    selMeta.textContent = parts.length ? ' — ' + parts.join(' · ') : '';
+    selectedEl.classList.remove('d-none');
+
+    clearBtn.classList.remove('d-none');
+    inputWrap.classList.remove('is-invalid');
+    valMsg.style.display = 'none';
+
+    closeDropdown();
+  }
+
+  /* ── Clear selection ─────────────────────────────────────────── */
+  function clearPicker() {
+    selectedId       = null;
+    hiddenId.value   = '';
+    searchEl.value   = '';
+    clearBtn.classList.add('d-none');
+    selectedEl.classList.add('d-none');
+    selName.textContent = '';
+    selMeta.textContent = '';
+    searchEl.focus();
+  }
+
+  /* ── Open / close ────────────────────────────────────────────── */
+  function openDropdown() {
+    renderDropdown(searchEl.value.trim());
+  }
+
+  function closeDropdown() {
+    dropdown.classList.add('d-none');
+  }
+
+  /* ── Events ─────────────────────────────────────────────────── */
+  searchEl.addEventListener('focus', openDropdown);
+
+  searchEl.addEventListener('input', function () {
+    // Typing invalidates the previous selection
+    if (selectedId !== null) {
+      selectedId       = null;
+      hiddenId.value   = '';
+      selectedEl.classList.add('d-none');
+    }
+    clearBtn.classList.toggle('d-none', !this.value);
+    renderDropdown(this.value.trim());
+  });
+
+  searchEl.addEventListener('blur', function () {
+    // Slight delay so mousedown on an item fires before blur closes the list
+    setTimeout(closeDropdown, 160);
+  });
+
+  clearBtn.addEventListener('click', clearPicker);
+
+  /* Close when clicking outside the picker */
+  document.addEventListener('click', function (e) {
+    if (wrap && !wrap.contains(e.target)) closeDropdown();
+  });
+
+  /* ── Form submit guard ───────────────────────────────────────── */
+  form.addEventListener('submit', function (e) {
+    if (!hiddenId.value) {
+      e.preventDefault();
+      inputWrap.classList.add('is-invalid');
+      valMsg.style.display = 'block';
+      searchEl.focus();
+      openDropdown();
+    } else {
+      inputWrap.classList.remove('is-invalid');
+      valMsg.style.display = 'none';
+    }
+  });
+
+  /* Clear validation state as soon as the user starts searching again */
+  searchEl.addEventListener('input', function () {
+    inputWrap.classList.remove('is-invalid');
+    valMsg.style.display = 'none';
+  });
+
+})();
+</script>
+{% endif %}
+{% endblock %}

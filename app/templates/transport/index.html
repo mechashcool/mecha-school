@@ -1,0 +1,142 @@
+{% extends "shared/base.html" %}
+{% block title %}خطوط النقل{% endblock %}
+{% block page_title %}خطوط النقل{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">خطوط النقل المدرسي</h1>
+    <p class="page-subtitle">إدارة خطوط النقل وربط الطلاب بها</p>
+  </div>
+  <div class="d-flex gap-2 align-items-center">
+    <a href="{{ url_for('transport.report') }}" class="btn btn-outline-primary">
+      <i class="bi bi-bar-chart-fill me-1"></i>التقارير
+    </a>
+    {% if not is_historical_year %}
+    <a href="{{ url_for('transport.create') }}" class="btn btn-primary">
+      <i class="bi bi-plus-circle-fill me-1"></i>إضافة خط جديد
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+{# ── Status filter ──────────────────────────────────────────────────────── #}
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="d-flex align-items-end gap-3 flex-wrap">
+      <div>
+        <label class="form-label mb-1 fw-600">الحالة</label>
+        <select name="status" class="form-select" style="width:160px"
+                onchange="this.form.submit()">
+          <option value="all"      {% if status_f == 'all'      %}selected{% endif %}>كل الخطوط</option>
+          <option value="active"   {% if status_f == 'active'   %}selected{% endif %}>فعّال فقط</option>
+          <option value="inactive" {% if status_f == 'inactive' %}selected{% endif %}>متوقف فقط</option>
+        </select>
+      </div>
+      <small class="text-muted align-self-center">
+        {{ routes|length }} خط
+      </small>
+    </form>
+  </div>
+</div>
+
+{# ── Route cards ──────────────────────────────────────────────────────────── #}
+{% if routes %}
+<div class="row g-3">
+  {% for route in routes %}
+  <div class="col-md-6 col-xl-4">
+    <div class="card h-100">
+      <div class="card-body">
+        <div class="d-flex align-items-start gap-3">
+          <div style="width:48px;height:48px;border-radius:12px;flex-shrink:0;
+                      background:{% if route.status == 'active' %}#1a3a5c{% else %}#9aabb8{% endif %};
+                      display:flex;align-items:center;justify-content:center;
+                      font-size:22px;color:#fff">
+            <i class="bi bi-bus-front-fill"></i>
+          </div>
+          <div class="flex-grow-1 min-w-0">
+            <div class="fw-700 fs-6">{{ route.name }}</div>
+            {% if route.route_number %}
+            <div class="text-muted" style="font-size:12px">رقم الخط: {{ route.route_number }}</div>
+            {% endif %}
+            <span class="badge mt-1"
+                  style="background:{% if route.status == 'active' %}#e8f8f0;color:#1aab6d{% else %}#f0f0f0;color:#888{% endif %}">
+              {% if route.status == 'active' %}فعّال{% else %}متوقف{% endif %}
+            </span>
+          </div>
+        </div>
+
+        <hr class="my-3">
+
+        <div class="row g-2" style="font-size:13px">
+          <div class="col-6">
+            <div class="text-muted">السائق</div>
+            <div class="fw-600">{{ route.driver_name }}</div>
+          </div>
+          <div class="col-6">
+            <div class="text-muted">رقم الهاتف</div>
+            <div class="fw-600">
+              <a href="tel:{{ route.driver_phone }}" class="text-decoration-none text-dark">
+                {{ route.driver_phone }}
+              </a>
+            </div>
+          </div>
+          {% if route.supervisor %}
+          <div class="col-6">
+            <div class="text-muted">المشرفة / المرافق</div>
+            <div class="fw-600">{{ route.supervisor }}</div>
+          </div>
+          {% endif %}
+          <div class="col-6">
+            <div class="text-muted">نوع المركبة</div>
+            <div class="fw-600">{{ route.vehicle_type }}</div>
+          </div>
+          <div class="col-6">
+            <div class="text-muted">رقم المركبة</div>
+            <div class="fw-600">{{ route.vehicle_number }}</div>
+          </div>
+          <div class="col-6">
+            <div class="text-muted">الطاقة / المشتركون</div>
+            <div class="fw-600">
+              {{ counts.get(route.id, 0) }}
+              <span class="text-muted">/ {{ route.capacity }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card-footer d-flex gap-2">
+        <a href="{{ url_for('transport.detail', route_id=route.id) }}"
+           class="btn btn-sm btn-outline-primary flex-grow-1">
+          <i class="bi bi-eye-fill me-1"></i>عرض التفاصيل
+        </a>
+        {% if not is_historical_year %}
+        <a href="{{ url_for('transport.edit', route_id=route.id) }}"
+           class="btn btn-sm btn-outline-secondary">
+          <i class="bi bi-pencil-fill"></i>
+        </a>
+        <form method="POST" action="{{ url_for('transport.delete', route_id=route.id) }}"
+              onsubmit="return confirm('هل تريد حذف الخط \'{{ route.name }}\'؟')">
+          <button class="btn btn-sm btn-outline-danger">
+            <i class="bi bi-trash-fill"></i>
+          </button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">
+    <i class="bi bi-bus-front" style="font-size:48px;opacity:.25;display:block;margin-bottom:12px"></i>
+    <p class="mb-0">لا توجد خطوط نقل مضافة بعد.</p>
+    {% if not is_historical_year %}
+    <a href="{{ url_for('transport.create') }}" class="btn btn-primary mt-3">
+      <i class="bi bi-plus-circle-fill me-1"></i>إضافة خط جديد
+    </a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

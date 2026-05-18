@@ -1,0 +1,132 @@
+{% extends "shared/base.html" %}
+{% block title %}{{ 'تعديل خط النقل' if route else 'إضافة خط نقل جديد' }}{% endblock %}
+{% block page_title %}{{ 'تعديل خط النقل' if route else 'إضافة خط نقل' }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ 'تعديل: ' + route.name if route else 'خط نقل جديد' }}</h1>
+    <p class="page-subtitle">أدخل بيانات خط النقل المدرسي</p>
+  </div>
+  <a href="{{ url_for('transport.detail', route_id=route.id) if route else url_for('transport.index') }}"
+     class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<form method="POST"
+      action="{{ url_for('transport.edit', route_id=route.id) if route else url_for('transport.create') }}">
+  <div class="row g-4">
+
+    {# ── Main fields ────────────────────────────────────────────────────────── #}
+    <div class="col-lg-8">
+      <div class="card mb-4">
+        <div class="card-header">
+          <i class="bi bi-bus-front-fill text-accent"></i> بيانات الخط
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+
+            <div class="col-md-6">
+              <label class="form-label fw-600">اسم الخط <span class="text-danger">*</span></label>
+              <input type="text" name="name" class="form-control"
+                     value="{{ fd.get('name', '') }}" required
+                     placeholder="مثال: خط السيدية">
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label fw-600">رقم الخط</label>
+              <input type="text" name="route_number" class="form-control"
+                     value="{{ fd.get('route_number', '') }}"
+                     placeholder="مثال: 01">
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label fw-600">اسم السائق <span class="text-danger">*</span></label>
+              <input type="text" name="driver_name" class="form-control"
+                     value="{{ fd.get('driver_name', '') }}" required>
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label fw-600">رقم هاتف السائق <span class="text-danger">*</span></label>
+              <input type="tel" name="driver_phone" class="form-control"
+                     value="{{ fd.get('driver_phone', '') }}" required
+                     placeholder="07XX-XXX-XXXX">
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label fw-600">المشرفة / المرافق</label>
+              <input type="text" name="supervisor" class="form-control"
+                     value="{{ fd.get('supervisor', '') }}"
+                     placeholder="اختياري">
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label fw-600">نوع المركبة <span class="text-danger">*</span></label>
+              <input type="text" name="vehicle_type" class="form-control"
+                     value="{{ fd.get('vehicle_type', '') }}" required
+                     placeholder="مثال: باص / ميني باص / فان">
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label fw-600">رقم المركبة <span class="text-danger">*</span></label>
+              <input type="text" name="vehicle_number" class="form-control"
+                     value="{{ fd.get('vehicle_number', '') }}" required
+                     placeholder="رقم اللوحة">
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label fw-600">الطاقة الاستيعابية <span class="text-danger">*</span></label>
+              <input type="number" name="capacity" class="form-control"
+                     value="{{ fd.get('capacity', '') }}" required min="1"
+                     placeholder="عدد المقاعد">
+              <small class="text-muted">يجب أن تكون رقماً موجباً</small>
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label fw-600">الحالة</label>
+              <select name="status" class="form-select">
+                <option value="active"
+                        {% if fd.get('status', 'active') == 'active' %}selected{% endif %}>
+                  فعّال
+                </option>
+                <option value="inactive"
+                        {% if fd.get('status') == 'inactive' %}selected{% endif %}>
+                  متوقف
+                </option>
+              </select>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <div class="d-flex gap-3">
+        <button type="submit" class="btn btn-primary px-5">
+          <i class="bi bi-check-circle-fill me-2"></i>
+          {{ 'حفظ التعديلات' if route else 'إضافة الخط' }}
+        </button>
+        <a href="{{ url_for('transport.detail', route_id=route.id) if route else url_for('transport.index') }}"
+           class="btn btn-outline-secondary px-5">إلغاء</a>
+      </div>
+    </div>
+
+    {# ── Tips ───────────────────────────────────────────────────────────────── #}
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header">
+          <i class="bi bi-question-circle text-accent"></i> ملاحظات
+        </div>
+        <div class="card-body" style="font-size:13px;line-height:1.9;color:#555">
+          <ul class="ps-3 mb-0">
+            <li>اسم الخط يجب أن يكون فريداً داخل المدرسة.</li>
+            <li>رقم الخط ورقم هاتف السائق والمشرفة اختياريان.</li>
+            <li>الطاقة الاستيعابية تُستخدم للمراجعة فقط، لا تمنع إضافة طلاب إضافيين.</li>
+            <li>يمكن تغيير حالة الخط إلى "متوقف" بدلاً من حذفه للحفاظ على سجل الطلاب.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</form>
+{% endblock %}
