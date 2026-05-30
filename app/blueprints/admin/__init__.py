@@ -12,17 +12,48 @@ from datetime import date, timedelta, datetime
 from app.models import (db, User, Role, Permission, Employee, Student, Subject,
                          FeeInstallment, StudentAttendance, Revenue, Expense,
                          Notification, AcademicYear, School, Section,
-                         teacher_subjects)
+                         teacher_subjects, Complaint, LeaveRequest)
 from app.utils.decorators import (admin_required, staff_required,
                                    get_current_school,
                                    get_active_year, get_view_year, super_admin_required)
-from app.utils.helpers import generate_employee_id
+from app.utils import code_generator
 
 admin_bp = Blueprint('admin', __name__, template_folder='../../templates/admin')
 
 SUPER_ADMIN_ROLE = 'super_admin'
 SCHOOL_ADMIN_ROLE = 'school_admin'
 LEGACY_ADMIN_ROLE = 'admin'
+
+COMPLAINT_TYPES = {
+    'academic': '\u0623\u0643\u0627\u062f\u064a\u0645\u064a\u0629',
+    'administrative': '\u0625\u062f\u0627\u0631\u064a\u0629',
+    'financial': '\u0645\u0627\u0644\u064a\u0629',
+    'transportation': '\u0627\u0644\u0646\u0642\u0644',
+    'behavior': '\u0633\u0644\u0648\u0643\u064a\u0629',
+    'other': '\u0623\u062e\u0631\u0649',
+}
+
+COMPLAINT_STATUS = {
+    'new': '\u062c\u062f\u064a\u062f\u0629',
+    'under_review': '\u0642\u064a\u062f \u0627\u0644\u0645\u0631\u0627\u062c\u0639\u0629',
+    'replied': '\u062a\u0645 \u0627\u0644\u0631\u062f',
+    'closed': '\u0645\u063a\u0644\u0642\u0629',
+}
+
+LEAVE_TYPES = {
+    'sick': '\u0625\u062c\u0627\u0632\u0629 \u0645\u0631\u0636\u064a\u0629',
+    'medical': '\u0645\u0648\u0639\u062f \u0637\u0628\u064a',
+    'family': '\u0638\u0631\u0641 \u0639\u0627\u0626\u0644\u064a',
+    'travel': '\u0633\u0641\u0631',
+    'emergency': '\u0637\u0627\u0631\u0626',
+    'other': '\u0623\u062e\u0631\u0649',
+}
+
+LEAVE_STATUS = {
+    'pending': '\u0642\u064a\u062f \u0627\u0644\u0627\u0646\u062a\u0638\u0627\u0631',
+    'approved': '\u0645\u0648\u0627\u0641\u0642 \u0639\u0644\u064a\u0647',
+    'rejected': '\u0645\u0631\u0641\u0648\u0636',
+}
 
 
 def _role_name(role):
@@ -51,6 +82,67 @@ def _non_super_visible_roles():
     return Role.query.filter(
         ~Role.name.in_([SUPER_ADMIN_ROLE, SCHOOL_ADMIN_ROLE, LEGACY_ADMIN_ROLE])
     ).order_by(Role.id).all()
+
+
+def _admin_scope_id():
+    if current_user.is_school_admin:
+        return current_user.school_id
+    school = get_current_school()
+    return school.id if school else None
+
+
+def _notify_parent(parent_id, school_id, title, body):
+    db.session.add(Notification(
+        school_id=school_id,
+        title=title,
+        body=body,
+        ntype='parent_request',
+        target_user_id=parent_id,
+        created_by=current_user.id,
+    ))
+
+
+def _valid_email(email):
+    return bool(email and '@' in email and '.' in email.rsplit('@', 1)[-1])
+
+
+def _unique_ids(ids):
+    seen = set()
+    result = []
+    for ident in ids:
+        if ident not in seen:
+            seen.add(ident)
+            result.append(ident)
+    return result
+
+
+def _student_options(school, year):
+    query = Student.query.filter_by(status='active')
+    if school:
+        query = query.filter_by(school_id=school.id)
+    if year:
+        query = query.filter_by(academic_year_id=year.id)
+    return query.order_by(Student.full_name).all()
+
+
+def _section_options(school, year):
+    if not (school and year):
+        return []
+    return (Section.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(school_id=school.id, academic_year_id=year.id)
+            .order_by(Section.name)
+            .all())
+
+
+def _subject_options(school, year):
+    if not (school and year):
+        return []
+    return (Subject.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(school_id=school.id, academic_year_id=year.id)
+            .order_by(Subject.name)
+            .all())
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  DASHBOARD  (school-scoped)
@@ -202,28 +294,15 @@ def create_user():
     school = get_current_school()
 
     roles = _assignable_roles()
+    year = get_active_year(school.id) if school else None
 
-    all_students = Student.query.filter_by(status='active')
-    if school and is_school_manager:
-        all_students = all_students.filter_by(school_id=school.id)
-    all_students = all_students.order_by(Student.full_name).all()
+    all_students = _student_options(school, year)
 
     all_schools = (School.query.filter_by(is_active=True).order_by(School.id).all()
                    if current_user.is_super_admin else [])
 
-    year = get_active_year(school.id) if school else None
-    all_sections = []
-    all_subjects = []
-    if school and year:
-        all_sections = (Section.query
-                        .execution_options(bypass_tenant_scope=True)
-                        .filter_by(school_id=school.id, academic_year_id=year.id)
-                        .all())
-        all_subjects = (Subject.query
-                        .execution_options(bypass_tenant_scope=True)
-                        .filter_by(school_id=school.id, academic_year_id=year.id)
-                        .order_by(Subject.name)
-                        .all())
+    all_sections = _section_options(school, year)
+    all_subjects = _subject_options(school, year)
 
     # Only super-admin can grant per-user extra permissions. School managers
     # create users with role permissions only.
@@ -256,10 +335,17 @@ def create_user():
         if role_obj.name == SUPER_ADMIN_ROLE:
             assigned_school_id = None
 
+        # Auto-generate username when left blank and role supports it
+        if (not username and password and assigned_school_id and role_obj
+                and role_obj.name in ('teacher', 'parent', 'school_admin')):
+            username = code_generator.generate_username(assigned_school_id, role_obj.name)
+
         errors = []
         if not username: errors.append('اسم المستخدم مطلوب.')
         if User.query.execution_options(bypass_tenant_scope=True).filter_by(username=username).first():
             errors.append('اسم المستخدم مستخدم بالفعل.')
+        if email and not _valid_email(email):
+            errors.append('Invalid email address.')
         if email and User.query.execution_options(bypass_tenant_scope=True).filter_by(email=email).first():
             errors.append('البريد الإلكتروني مستخدم بالفعل.')
         if not password or len(password) < 6:
@@ -289,22 +375,25 @@ def create_user():
                 Permission.id.in_(selected_perm_ids)
             ).all()
 
+        assigned_year = get_active_year(assigned_school_id) if assigned_school_id else None
+
         if role_obj and role_obj.name == 'parent':
-            student_ids = request.form.getlist('student_ids', type=int)
+            student_ids = _unique_ids(request.form.getlist('student_ids', type=int))
             if student_ids:
                 # Validate students belong to the same school
-                q = Student.query.filter(Student.id.in_(student_ids))
+                q = (Student.query
+                     .execution_options(bypass_tenant_scope=True)
+                     .filter(Student.id.in_(student_ids)))
                 if assigned_school_id:
                     q = q.filter(Student.school_id == assigned_school_id)
+                if assigned_year:
+                    q = q.filter(Student.academic_year_id == assigned_year.id)
                 user.children = q.all()
 
         elif role_obj and role_obj.name == 'teacher':
             # Auto-create Employee record for the teacher
-            last_emp = (Employee.query
-                        .execution_options(bypass_tenant_scope=True)
-                        .order_by(Employee.id.desc()).first())
             emp = Employee(
-                employee_id=generate_employee_id(last_emp.id if last_emp else 0),
+                employee_id=code_generator.generate_employee_id(assigned_school_id),
                 full_name=user.full_name,
                 job_title='معلم',
                 school_id=assigned_school_id,
@@ -316,28 +405,42 @@ def create_user():
             db.session.flush()
 
             # Assign homeroom sections (validates they belong to the same school)
-            section_ids = request.form.getlist('teacher_section_ids', type=int)
+            section_ids = _unique_ids(request.form.getlist('teacher_section_ids', type=int))
             if section_ids and assigned_school_id:
+                section_filter = [
+                    Section.id.in_(section_ids),
+                    Section.school_id == assigned_school_id,
+                ]
+                if assigned_year:
+                    section_filter.append(Section.academic_year_id == assigned_year.id)
                 (Section.query
                  .execution_options(bypass_tenant_scope=True)
-                 .filter(Section.id.in_(section_ids),
-                         Section.school_id == assigned_school_id)
+                 .filter(*section_filter)
                  .update({'teacher_id': emp.id}, synchronize_session=False))
 
             # Assign teaching subjects × sections into teacher_subjects
-            subject_ids = request.form.getlist('teacher_subject_ids', type=int)
+            subject_ids = _unique_ids(request.form.getlist('teacher_subject_ids', type=int))
             if subject_ids and section_ids and assigned_school_id:
+                subject_filter = [
+                    Subject.id.in_(subject_ids),
+                    Subject.school_id == assigned_school_id,
+                ]
+                section_filter = [
+                    Section.id.in_(section_ids),
+                    Section.school_id == assigned_school_id,
+                ]
+                if assigned_year:
+                    subject_filter.append(Subject.academic_year_id == assigned_year.id)
+                    section_filter.append(Section.academic_year_id == assigned_year.id)
                 valid_subj_ids = [r[0] for r in
                     db.session.query(Subject.id)
                               .execution_options(bypass_tenant_scope=True)
-                              .filter(Subject.id.in_(subject_ids),
-                                      Subject.school_id == assigned_school_id)
+                              .filter(*subject_filter)
                               .all()]
                 valid_sec_ids = [r[0] for r in
                     db.session.query(Section.id)
                               .execution_options(bypass_tenant_scope=True)
-                              .filter(Section.id.in_(section_ids),
-                                      Section.school_id == assigned_school_id)
+                              .filter(*section_filter)
                               .all()]
                 rows = [
                     {'employee_id': emp.id, 'subject_id': s, 'section_id': c}
@@ -346,8 +449,25 @@ def create_user():
                 if rows:
                     db.session.execute(teacher_subjects.insert(), rows)
 
-        db.session.commit()
-        flash(f'تم إنشاء المستخدم {username} بنجاح.', 'success')
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+        from sqlalchemy.exc import IntegrityError as _IntegrityError
+        try:
+            db.session.commit()
+        except _IntegrityError as _exc:
+            db.session.rollback()
+            _s = str(_exc).lower()
+            _log.error('Admin create_user commit IntegrityError: %s', str(_exc)[:800])
+            if 'username' in _s and 'unique' in _s:
+                flash('اسم المستخدم مستخدم مسبقاً، يرجى اختيار اسم آخر.', 'danger')
+            elif ('uq_employee_school_employee_id' in _s
+                  or 'ix_employees_employee_id' in _s
+                  or ('employee_id' in _s and 'unique' in _s)):
+                flash('تعذر توليد رقم الموظف، يرجى المحاولة مرة أخرى.', 'danger')
+            else:
+                flash('تعذر حفظ البيانات بسبب تعارض في القيم. يرجى المحاولة مرة أخرى.', 'danger')
+            return redirect(url_for('admin.create_user'))
+        flash(f'تم إنشاء الحساب بنجاح. اسم المستخدم: {username}', 'success')
         return redirect(url_for('admin.users_list'))
 
     preselect_school_id = request.args.get('school_id', type=int)
@@ -395,27 +515,14 @@ def edit_user(user_id):
     safe_permissions = []
 
     school = get_current_school()
-    all_students = Student.query.filter_by(status='active')
-    if school and is_school_manager:
-        all_students = all_students.filter_by(school_id=school.id)
-    all_students = all_students.order_by(Student.full_name).all()
+    year = get_active_year(school.id) if school else None
+    all_students = _student_options(school, year)
     all_schools = (School.query.filter_by(is_active=True).order_by(School.id).all()
                    if current_user.is_super_admin else [])
 
     # Sections and subjects for teacher role assignment
-    year = get_active_year(school.id) if school else None
-    all_sections = []
-    all_subjects = []
-    if school and year:
-        all_sections = (Section.query
-                        .execution_options(bypass_tenant_scope=True)
-                        .filter_by(school_id=school.id, academic_year_id=year.id)
-                        .all())
-        all_subjects = (Subject.query
-                        .execution_options(bypass_tenant_scope=True)
-                        .filter_by(school_id=school.id, academic_year_id=year.id)
-                        .order_by(Subject.name)
-                        .all())
+    all_sections = _section_options(school, year)
+    all_subjects = _subject_options(school, year)
 
     # Current homeroom section IDs and subject IDs for this teacher (if applicable)
     teacher_section_ids = set()
@@ -441,6 +548,17 @@ def edit_user(user_id):
     if request.method == 'POST':
         user.full_name = request.form.get('full_name', user.full_name).strip()
         new_email = request.form.get('email', '').strip()
+        if new_email and not _valid_email(new_email):
+            flash('Invalid email address.', 'danger')
+            return redirect(url_for('admin.edit_user', user_id=user.id))
+        if new_email:
+            existing_email = (User.query
+                              .execution_options(bypass_tenant_scope=True)
+                              .filter(User.email == new_email, User.id != user.id)
+                              .first())
+            if existing_email:
+                flash('Email is already in use.', 'danger')
+                return redirect(url_for('admin.edit_user', user_id=user.id))
         user.email = new_email or None
         user.phone     = request.form.get('phone', '').strip()
 
@@ -469,6 +587,8 @@ def edit_user(user_id):
                 return redirect(url_for('admin.edit_user', user_id=user.id))
             user.school_id = new_school_id
 
+        user_year = get_active_year(user.school_id) if user.school_id else None
+
         new_password = request.form.get('new_password', '')
         if new_password and len(new_password) >= 6:
             user.set_password(new_password)
@@ -481,11 +601,15 @@ def edit_user(user_id):
             ).all()
 
         if new_role and new_role.name == 'parent':
-            student_ids = request.form.getlist('student_ids', type=int)
+            student_ids = _unique_ids(request.form.getlist('student_ids', type=int))
             if student_ids:
-                q = Student.query.filter(Student.id.in_(student_ids))
-                if is_school_manager:
-                    q = q.filter(Student.school_id == current_user.school_id)
+                q = (Student.query
+                     .execution_options(bypass_tenant_scope=True)
+                     .filter(Student.id.in_(student_ids)))
+                if user.school_id:
+                    q = q.filter(Student.school_id == user.school_id)
+                if user_year:
+                    q = q.filter(Student.academic_year_id == user_year.id)
                 user.children = q.all()
             else:
                 user.children = []
@@ -496,11 +620,8 @@ def edit_user(user_id):
                    .execution_options(bypass_tenant_scope=True)
                    .filter_by(user_id=user.id).first())
             if not emp:
-                last_emp = (Employee.query
-                            .execution_options(bypass_tenant_scope=True)
-                            .order_by(Employee.id.desc()).first())
                 emp = Employee(
-                    employee_id=generate_employee_id(last_emp.id if last_emp else 0),
+                    employee_id=code_generator.generate_employee_id(user.school_id),
                     full_name=user.full_name,
                     job_title='معلم',
                     school_id=user.school_id,
@@ -511,17 +632,22 @@ def edit_user(user_id):
                 db.session.add(emp)
                 db.session.flush()
 
-            new_section_ids = request.form.getlist('teacher_section_ids', type=int)
+            new_section_ids = _unique_ids(request.form.getlist('teacher_section_ids', type=int))
             # Clear previous homeroom assignments for this teacher
             (Section.query
              .execution_options(bypass_tenant_scope=True)
              .filter_by(teacher_id=emp.id)
              .update({'teacher_id': None}, synchronize_session=False))
             if new_section_ids and user.school_id:
+                section_filter = [
+                    Section.id.in_(new_section_ids),
+                    Section.school_id == user.school_id,
+                ]
+                if user_year:
+                    section_filter.append(Section.academic_year_id == user_year.id)
                 (Section.query
                  .execution_options(bypass_tenant_scope=True)
-                 .filter(Section.id.in_(new_section_ids),
-                         Section.school_id == user.school_id)
+                 .filter(*section_filter)
                  .update({'teacher_id': emp.id}, synchronize_session=False))
 
             # Update subject assignments — clear then rebuild
@@ -530,19 +656,28 @@ def edit_user(user_id):
                     teacher_subjects.c.employee_id == emp.id
                 )
             )
-            new_subject_ids = request.form.getlist('teacher_subject_ids', type=int)
+            new_subject_ids = _unique_ids(request.form.getlist('teacher_subject_ids', type=int))
             if new_subject_ids and new_section_ids and user.school_id:
+                subject_filter = [
+                    Subject.id.in_(new_subject_ids),
+                    Subject.school_id == user.school_id,
+                ]
+                section_filter = [
+                    Section.id.in_(new_section_ids),
+                    Section.school_id == user.school_id,
+                ]
+                if user_year:
+                    subject_filter.append(Subject.academic_year_id == user_year.id)
+                    section_filter.append(Section.academic_year_id == user_year.id)
                 valid_subj_ids = [r[0] for r in
                     db.session.query(Subject.id)
                               .execution_options(bypass_tenant_scope=True)
-                              .filter(Subject.id.in_(new_subject_ids),
-                                      Subject.school_id == user.school_id)
+                              .filter(*subject_filter)
                               .all()]
                 valid_sec_ids = [r[0] for r in
                     db.session.query(Section.id)
                               .execution_options(bypass_tenant_scope=True)
-                              .filter(Section.id.in_(new_section_ids),
-                                      Section.school_id == user.school_id)
+                              .filter(*section_filter)
                               .all()]
                 rows = [
                     {'employee_id': emp.id, 'subject_id': s, 'section_id': c}
@@ -622,6 +757,122 @@ def delete_user(user_id):
 # ─────────────────────────────────────────────────────────────────────────────
 #  ROLE MANAGEMENT
 # ─────────────────────────────────────────────────────────────────────────────
+
+@admin_bp.route('/complaints')
+@login_required
+@admin_required
+def complaints_list():
+    school_id = _admin_scope_id()
+    query = Complaint.query
+    if school_id:
+        query = query.filter_by(school_id=school_id)
+    complaints = query.order_by(Complaint.created_at.desc()).all()
+    return render_template('admin/complaints_list.html',
+                           complaints=complaints,
+                           status_labels=COMPLAINT_STATUS,
+                           type_labels=COMPLAINT_TYPES)
+
+
+@admin_bp.route('/complaints/<int:complaint_id>', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def complaint_detail(complaint_id):
+    school_id = _admin_scope_id()
+    query = Complaint.query.filter_by(id=complaint_id)
+    if school_id:
+        query = query.filter_by(school_id=school_id)
+    complaint = query.first_or_404()
+
+    if request.method == 'POST':
+        new_status = request.form.get('status', '').strip()
+        manager_reply = request.form.get('manager_reply', '').strip()
+        if new_status not in COMPLAINT_STATUS:
+            flash('\u062d\u0627\u0644\u0629 \u0627\u0644\u0634\u0643\u0648\u0649 \u063a\u064a\u0631 \u0635\u0627\u0644\u062d\u0629.', 'danger')
+            return redirect(url_for('admin.complaint_detail', complaint_id=complaint.id))
+
+        changed = (
+            new_status != complaint.status
+            or manager_reply != (complaint.manager_reply or '')
+        )
+        complaint.status = new_status
+        complaint.manager_reply = manager_reply or None
+        complaint.replied_by = current_user.id
+        complaint.replied_at = datetime.utcnow()
+
+        if changed:
+            _notify_parent(
+                complaint.parent_id,
+                complaint.school_id,
+                '\u062a\u062d\u062f\u064a\u062b \u0627\u0644\u0634\u0643\u0648\u0649',
+                f'\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u0634\u0643\u0648\u0627\u0643 \u0628\u062d\u0627\u0644\u0629: {COMPLAINT_STATUS[new_status]}.',
+            )
+        db.session.commit()
+        flash('\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u0627\u0644\u0634\u0643\u0648\u0649 \u0628\u0646\u062c\u0627\u062d.', 'success')
+        return redirect(url_for('admin.complaint_detail', complaint_id=complaint.id))
+
+    return render_template('admin/complaint_detail.html',
+                           complaint=complaint,
+                           status_labels=COMPLAINT_STATUS,
+                           type_labels=COMPLAINT_TYPES)
+
+
+@admin_bp.route('/leave-requests')
+@login_required
+@admin_required
+def leave_requests_list():
+    school_id = _admin_scope_id()
+    query = LeaveRequest.query
+    if school_id:
+        query = query.filter_by(school_id=school_id)
+    requests = query.order_by(LeaveRequest.created_at.desc()).all()
+    return render_template('admin/leave_requests_list.html',
+                           requests=requests,
+                           status_labels=LEAVE_STATUS,
+                           type_labels=LEAVE_TYPES)
+
+
+@admin_bp.route('/leave-requests/<int:request_id>', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def leave_request_detail(request_id):
+    school_id = _admin_scope_id()
+    query = LeaveRequest.query.filter_by(id=request_id)
+    if school_id:
+        query = query.filter_by(school_id=school_id)
+    leave_request = query.first_or_404()
+
+    if request.method == 'POST':
+        new_status = request.form.get('status', '').strip()
+        manager_note = request.form.get('manager_note', '').strip()
+        if new_status not in {'approved', 'rejected'}:
+            flash('\u064a\u0631\u062c\u0649 \u0627\u062e\u062a\u064a\u0627\u0631 \u0645\u0648\u0627\u0641\u0642\u0629 \u0623\u0648 \u0631\u0641\u0636.', 'danger')
+            return redirect(url_for('admin.leave_request_detail', request_id=leave_request.id))
+
+        changed = (
+            new_status != leave_request.status
+            or manager_note != (leave_request.manager_note or '')
+        )
+        leave_request.status = new_status
+        leave_request.manager_note = manager_note or None
+        leave_request.reviewed_by = current_user.id
+        leave_request.reviewed_at = datetime.utcnow()
+
+        if changed:
+            _notify_parent(
+                leave_request.parent_id,
+                leave_request.school_id,
+                '\u062a\u062d\u062f\u064a\u062b \u0637\u0644\u0628 \u0627\u0644\u0625\u062c\u0627\u0632\u0629',
+                f'\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u0637\u0644\u0628 \u0627\u0644\u0625\u062c\u0627\u0632\u0629 \u0628\u062d\u0627\u0644\u0629: {LEAVE_STATUS[new_status]}.',
+            )
+        db.session.commit()
+        flash('\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u0637\u0644\u0628 \u0627\u0644\u0625\u062c\u0627\u0632\u0629 \u0628\u0646\u062c\u0627\u062d.', 'success')
+        return redirect(url_for('admin.leave_request_detail', request_id=leave_request.id))
+
+    return render_template('admin/leave_request_detail.html',
+                           leave_request=leave_request,
+                           status_labels=LEAVE_STATUS,
+                           type_labels=LEAVE_TYPES)
+
 
 @admin_bp.route('/roles')
 @login_required
@@ -989,6 +1240,13 @@ def attendance_settings():
         settings_row.att_late_threshold    = _parse_time(request.form.get('att_late_threshold', ''))
         settings_row.att_absence_threshold = _parse_time(request.form.get('att_absence_threshold', ''))
         settings_row.att_departure_time    = _parse_time(request.form.get('att_departure_time', ''))
+
+        # Employee absence limit settings (saved on School object only)
+        if is_school_obj:
+            raw_limit = request.form.get('emp_absence_limit', '').strip()
+            settings_row.emp_absence_limit = int(raw_limit) if raw_limit.isdigit() and int(raw_limit) > 0 else None
+            settings_row.emp_absence_period = request.form.get('emp_absence_period', 'monthly') or 'monthly'
+            settings_row.emp_absence_alert_enabled = bool(request.form.get('emp_absence_alert_enabled'))
 
         db.session.commit()
         resource_id = school.id if is_school_obj else getattr(settings_row, 'id', None)

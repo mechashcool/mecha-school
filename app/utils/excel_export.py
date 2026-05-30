@@ -34,9 +34,15 @@ def _apply(cell, **kwargs):
 
 
 def _autowidth(ws, min_w=12, max_w=50):
-    for col in ws.columns:
-        w = max(len(str(c.value or '')) for c in col)
-        ws.column_dimensions[col[0].column_letter].width = min(max_w, max(min_w, w + 2))
+    from openpyxl.utils import get_column_letter
+    from openpyxl.cell.cell import MergedCell
+    for col_idx, col_cells in enumerate(ws.iter_cols(), start=1):
+        max_len = 0
+        for cell in col_cells:
+            if isinstance(cell, MergedCell) or cell.value is None:
+                continue
+            max_len = max(max_len, len(str(cell.value)))
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max_w, max(min_w, max_len + 2))
 
 
 # ─── STUDENTS ────────────────────────────────────────────────────────────────
@@ -529,3 +535,204 @@ def export_gradebook(exams, rows) -> bytes | None:
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# ─── EMPLOYEE ATTENDANCE ──────────────────────────────────────────────────────
+
+def export_employee_attendance(rows, date_from: str, date_to: str) -> bytes | None:
+    """
+    Export employee attendance report to Excel.
+
+    rows: list of stat dicts from employee_attendance_helper.get_employees_attendance_summary()
+    Each dict has: employee, working_days, present, late, absent, checked_out, rate, daily.
+    daily is a list of per-day dicts: date, status, check_in, check_out, source, device, notes.
+
+    Produces two sheets:
+      Sheet 1 – Summary  (one row per employee)
+      Sheet 2 – Daily Detail (one row per employee-day)
+    """
+    wb = _wb()
+    if not wb:
+        return None
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    hs = _header_style()
+    STATUS_AR = {'present': 'حاضر', 'absent': 'غائب', 'late': 'متأخر'}
+    ALT_FILL = PatternFill('solid', fgColor='F0F4F8')
+    ABSENT_FILL = PatternFill('solid', fgColor='FFE0E0')
+    LATE_FILL = PatternFill('solid', fgColor='FFF3CD')
+
+    # ── Sheet 1: Summary ──────────────────────────────────────────────────────
+    ws = wb.active
+    ws.title = 'ملخص الحضور'
+    ws.sheet_view.rightToLeft = True
+
+    title = f'تقرير حضور الموظفين — {date_from} إلى {date_to}'
+    ws.cell(row=1, column=1, value=title).font = Font(bold=True, size=13)
+    ws.merge_cells('A1:J1')
+
+    headers = ['#', 'اسم الموظف', 'القسم', 'المسمى الوظيفي',
+               'أيام العمل', 'حاضر', 'متأخر', 'غائب', 'انصراف', 'نسبة الحضور %']
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=2, column=col, value=h)
+        cell.font = hs['font']
+        cell.fill = hs['fill']
+        cell.alignment = hs['alignment']
+
+    for i, row in enumerate(rows, 1):
+        emp = row['employee']
+        row_data = [
+            i, emp.full_name, emp.department or '', emp.job_title or '',
+            row['working_days'], row['present'], row['late'],
+            row['absent'], row['checked_out'], row['rate'],
+        ]
+        fill = ALT_FILL if i % 2 == 0 else None
+        for col, val in enumerate(row_data, 1):
+            cell = ws.cell(row=i + 2, column=col, value=val)
+            cell.alignment = Alignment(vertical='center')
+            if fill:
+                cell.fill = fill
+
+    _autowidth(ws)
+
+    # ── Sheet 2: Daily Detail ─────────────────────────────────────────────────
+    ws2 = wb.create_sheet(title='تفاصيل يومية')
+    ws2.sheet_view.rightToLeft = True
+
+    ws2.cell(row=1, column=1,
+             value=f'سجلات الحضور اليومية — {date_from} إلى {date_to}').font = Font(bold=True, size=13)
+    ws2.merge_cells('A1:K1')
+
+    detail_headers = [
+        '#', 'اسم الموظف', 'القسم', 'المسمى الوظيفي',
+        'التاريخ', 'وقت الحضور', 'وقت الانصراف',
+        'الحالة', 'المصدر', 'الجهاز', 'ملاحظات',
+    ]
+    for col, h in enumerate(detail_headers, 1):
+        cell = ws2.cell(row=2, column=col, value=h)
+        cell.font = hs['font']
+        cell.fill = hs['fill']
+        cell.alignment = hs['alignment']
+
+    detail_row = 3
+    for row in rows:
+        emp = row['employee']
+        for day in row.get('daily', []):
+            status = day.get('status', '')
+            dev = day.get('device')
+            row_data = [
+                detail_row - 2,
+                emp.full_name, emp.department or '', emp.job_title or '',
+                day['date'].strftime('%Y-%m-%d') if day.get('date') else '',
+                day['check_in'].strftime('%H:%M') if day.get('check_in') else '',
+                day['check_out'].strftime('%H:%M') if day.get('check_out') else '',
+                STATUS_AR.get(status, status),
+                day.get('source') or '',
+                dev.name if dev else '',
+                day.get('notes') or '',
+            ]
+            if status == 'absent':
+                fill = ABSENT_FILL
+            elif status == 'late':
+                fill = LATE_FILL
+            elif detail_row % 2 == 0:
+                fill = ALT_FILL
+            else:
+                fill = None
+
+            for col, val in enumerate(row_data, 1):
+                cell = ws2.cell(row=detail_row, column=col, value=val)
+                cell.alignment = Alignment(vertical='center')
+                if fill:
+                    cell.fill = fill
+
+            detail_row += 1
+
+    _autowidth(ws2)
+    buf2 = BytesIO()
+    wb.save(buf2)
+    return buf2.getvalue()
+
+
+def export_single_employee_attendance(emp_row, date_from: str, date_to: str) -> bytes | None:
+    """
+    Export a single employee's daily attendance to Excel.
+    emp_row: one stat dict from calculate_employee_stats().
+    """
+    wb = _wb()
+    if not wb:
+        return None
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    hs = _header_style()
+    STATUS_AR = {'present': 'حاضر', 'absent': 'غائب', 'late': 'متأخر'}
+    ALT_FILL = PatternFill('solid', fgColor='F0F4F8')
+    ABSENT_FILL = PatternFill('solid', fgColor='FFE0E0')
+    LATE_FILL = PatternFill('solid', fgColor='FFF3CD')
+
+    emp = emp_row['employee']
+    ws = wb.active
+    ws.title = 'تفاصيل الحضور'
+    ws.sheet_view.rightToLeft = True
+
+    title = f'{emp.full_name} — تقرير الحضور — {date_from} إلى {date_to}'
+    ws.cell(row=1, column=1, value=title).font = Font(bold=True, size=13)
+    ws.merge_cells('A1:H1')
+
+    # Compact summary block (row 2 = labels, row 3 = values)
+    summary_items = [
+        ('أيام العمل', emp_row['working_days']),
+        ('حاضر',       emp_row['present']),
+        ('متأخر',      emp_row['late']),
+        ('غائب',       emp_row['absent']),
+        ('انصراف',     emp_row['checked_out']),
+        ('نسبة الحضور', f"{emp_row['rate']}%"),
+    ]
+    for col, (label, val) in enumerate(summary_items, 1):
+        lbl_cell = ws.cell(row=2, column=col, value=label)
+        lbl_cell.font = Font(bold=True, color='FFFFFF')
+        lbl_cell.fill = PatternFill('solid', fgColor='1A3A5C')
+        lbl_cell.alignment = Alignment(horizontal='center')
+        val_cell = ws.cell(row=3, column=col, value=val)
+        val_cell.alignment = Alignment(horizontal='center')
+
+    headers = ['#', 'التاريخ', 'وقت الحضور', 'وقت الانصراف',
+               'الحالة', 'المصدر', 'الجهاز', 'ملاحظات']
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=5, column=col, value=h)
+        cell.font = hs['font']
+        cell.fill = hs['fill']
+        cell.alignment = hs['alignment']
+
+    for i, day in enumerate(emp_row.get('daily', []), 1):
+        status = day.get('status', '')
+        dev = day.get('device')
+        row_data = [
+            i,
+            day['date'].strftime('%Y-%m-%d') if day.get('date') else '',
+            day['check_in'].strftime('%H:%M') if day.get('check_in') else '',
+            day['check_out'].strftime('%H:%M') if day.get('check_out') else '',
+            STATUS_AR.get(status, status),
+            day.get('source') or '',
+            dev.name if dev else '',
+            day.get('notes') or '',
+        ]
+        if status == 'absent':
+            fill = ABSENT_FILL
+        elif status == 'late':
+            fill = LATE_FILL
+        elif i % 2 == 0:
+            fill = ALT_FILL
+        else:
+            fill = None
+
+        for col, val in enumerate(row_data, 1):
+            cell = ws.cell(row=i + 5, column=col, value=val)
+            cell.alignment = Alignment(vertical='center')
+            if fill:
+                cell.fill = fill
+
+    _autowidth(ws)
+    buf3 = BytesIO()
+    wb.save(buf3)
+    return buf3.getvalue()

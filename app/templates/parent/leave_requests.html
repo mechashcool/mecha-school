@@ -1,0 +1,56 @@
+{% extends "shared/base.html" %}
+{% block title %}&#1591;&#1604;&#1576;&#1575;&#1578; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;{% endblock %}
+{% block page_title %}&#1591;&#1604;&#1576;&#1575;&#1578; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">&#1591;&#1604;&#1576;&#1575;&#1578; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;</h1>
+    <p class="page-subtitle">&#1605;&#1578;&#1575;&#1576;&#1593;&#1577; &#1591;&#1604;&#1576;&#1575;&#1578; &#1573;&#1580;&#1575;&#1586;&#1577; &#1575;&#1604;&#1571;&#1576;&#1606;&#1575;&#1569;</p>
+  </div>
+  <a href="{{ url_for('parent.create_leave_request') }}" class="btn btn-primary">
+    <i class="bi bi-plus-circle me-2"></i>&#1578;&#1602;&#1583;&#1610;&#1605; &#1591;&#1604;&#1576; &#1573;&#1580;&#1575;&#1586;&#1577;
+  </a>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>&#1575;&#1604;&#1591;&#1575;&#1604;&#1576;</th>
+          <th>&#1575;&#1604;&#1606;&#1608;&#1593;</th>
+          <th>&#1605;&#1606;</th>
+          <th>&#1573;&#1604;&#1609;</th>
+          <th>&#1575;&#1604;&#1581;&#1575;&#1604;&#1577;</th>
+          <th>&#1575;&#1604;&#1573;&#1580;&#1585;&#1575;&#1569;&#1575;&#1578;</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for leave_request in requests %}
+        <tr>
+          <td>{{ leave_request.student.full_name if leave_request.student else '-' }}</td>
+          <td>{{ type_labels.get(leave_request.leave_type, leave_request.leave_type) }}</td>
+          <td>{{ leave_request.from_date.strftime('%Y-%m-%d') if leave_request.from_date else '-' }}</td>
+          <td>{{ leave_request.to_date.strftime('%Y-%m-%d') if leave_request.to_date else '-' }}</td>
+          <td><span class="badge-status badge-active">{{ status_labels.get(leave_request.status, leave_request.status) }}</span></td>
+          <td>
+            <a href="{{ url_for('parent.leave_request_detail', request_id=leave_request.id) }}"
+               class="btn btn-sm btn-outline-primary" title="&#1593;&#1585;&#1590;">
+              <i class="bi bi-eye"></i>
+            </a>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="text-center text-muted py-5">
+            <i class="bi bi-calendar2-check" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            &#1604;&#1575; &#1578;&#1608;&#1580;&#1583; &#1591;&#1604;&#1576;&#1575;&#1578; &#1573;&#1580;&#1575;&#1586;&#1577;.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

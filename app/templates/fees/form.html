@@ -19,7 +19,37 @@
           <div class="row g-3 mb-4">
             <div class="col-md-6">
               <label class="form-label">الطالب <span class="text-danger">*</span></label>
-              <select name="student_id" class="form-select" required>
+              <input type="hidden" name="student_id" id="studentId"
+                     value="{{ selected_student.id if selected_student is defined and selected_student else '' }}">
+              <div class="student-search">
+                <div class="input-group">
+                  <span class="input-group-text"><i class="bi bi-search"></i></span>
+                  <input type="search" id="studentSearch" class="form-control"
+                         placeholder="&#1575;&#1576;&#1581;&#1579; &#1593;&#1606; &#1575;&#1604;&#1591;&#1575;&#1604;&#1576; &#1576;&#1575;&#1604;&#1575;&#1587;&#1605;"
+                         autocomplete="off"
+                         value="{{ selected_student.full_name if selected_student is defined and selected_student else '' }}">
+                </div>
+                <div id="studentResults" class="student-results d-none"></div>
+                <div id="selectedStudent" class="selected-student {{ '' if selected_student is defined and selected_student else 'd-none' }}">
+                  {% if selected_student is defined and selected_student %}
+                  {% set selected_section = selected_student.section %}
+                  {% set selected_grade = selected_section.grade if selected_section else none %}
+                  <i class="bi bi-person-check-fill"></i>
+                  <span>
+                    {{ selected_student.full_name }}
+                    <small>
+                      {{ selected_grade.name if selected_grade else '' }}
+                      {% if selected_section %} - {{ selected_section.name }}{% endif %}
+                    </small>
+                  </span>
+                  <button type="button" id="clearStudent" class="btn btn-sm btn-outline-secondary">
+                    &#1578;&#1594;&#1610;&#1610;&#1585;
+                  </button>
+                  {% endif %}
+                </div>
+              </div>
+              {# Search-only selector: students are loaded on demand. #}
+              <select class="d-none" tabindex="-1" aria-hidden="true">
                 <option value="">— اختر الطالب —</option>
                 {% for s in students %}
                 <option value="{{ s.id }}">{{ s.full_name }} ({{ s.student_id }})</option>
@@ -106,7 +136,176 @@
 {% endblock %}
 
 {% block extra_js %}
+<style>
+.student-search { position: relative; }
+.student-results {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15,37,64,.12);
+  max-height: 260px;
+  overflow-y: auto;
+}
+.student-result-item {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: right;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.student-result-item:hover,
+.student-result-item:focus {
+  background: #f0f4f8;
+}
+.student-result-name {
+  font-weight: 700;
+  color: var(--text);
+}
+.student-result-meta {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.selected-student {
+  margin-top: 8px;
+  border: 1px solid #cfe8dc;
+  background: #e8f8f0;
+  color: #155724;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.selected-student span { flex: 1; font-weight: 700; }
+.selected-student small {
+  display: block;
+  color: #49725c;
+  font-size: 12px;
+  margin-top: 2px;
+}
+</style>
 <script>
+const studentSearchUrl = "{{ url_for('fees.search_students') }}";
+const studentSearch = document.getElementById('studentSearch');
+const studentId = document.getElementById('studentId');
+const studentResults = document.getElementById('studentResults');
+const selectedStudent = document.getElementById('selectedStudent');
+const feeForm = document.getElementById('feeForm');
+let studentSearchTimer = null;
+
+function hideStudentResults() {
+  studentResults.classList.add('d-none');
+  studentResults.innerHTML = '';
+}
+
+function studentMeta(student) {
+  const parts = [];
+  if (student.grade) parts.push(student.grade);
+  if (student.section) parts.push(student.section);
+  if (student.student_id) parts.push(student.student_id);
+  return parts.join(' - ');
+}
+
+function chooseStudent(student) {
+  studentId.value = student.id;
+  studentSearch.value = student.full_name;
+  selectedStudent.classList.remove('d-none');
+  selectedStudent.innerHTML = `
+    <i class="bi bi-person-check-fill"></i>
+    <span>
+      ${student.full_name}
+      <small>${studentMeta(student)}</small>
+    </span>
+    <button type="button" id="clearStudent" class="btn btn-sm btn-outline-secondary">
+      &#1578;&#1594;&#1610;&#1610;&#1585;
+    </button>`;
+  hideStudentResults();
+}
+
+function renderStudentResults(students) {
+  if (!students.length) {
+    studentResults.innerHTML = '<div class="text-muted text-center py-3">&#1604;&#1575; &#1578;&#1608;&#1580;&#1583; &#1606;&#1578;&#1575;&#1574;&#1580; &#1605;&#1591;&#1575;&#1576;&#1602;&#1577;</div>';
+    studentResults.classList.remove('d-none');
+    return;
+  }
+  studentResults.innerHTML = students.map(student => `
+    <button type="button" class="student-result-item" data-student="${encodeURIComponent(JSON.stringify(student))}">
+      <span>
+        <span class="student-result-name">${student.full_name}</span>
+        <span class="student-result-meta d-block">${studentMeta(student)}</span>
+      </span>
+      <i class="bi bi-chevron-left text-muted"></i>
+    </button>
+  `).join('');
+  studentResults.classList.remove('d-none');
+}
+
+function searchStudents() {
+  const q = studentSearch.value.trim();
+  studentId.value = '';
+  selectedStudent.classList.add('d-none');
+  selectedStudent.innerHTML = '';
+  if (q.length < 2) {
+    hideStudentResults();
+    return;
+  }
+  fetch(`${studentSearchUrl}?q=${encodeURIComponent(q)}`, {
+    headers: { 'Accept': 'application/json' }
+  })
+    .then(response => response.ok ? response.json() : { results: [] })
+    .then(data => renderStudentResults(data.results || []))
+    .catch(() => renderStudentResults([]));
+}
+
+if (studentSearch) {
+  studentSearch.addEventListener('input', () => {
+    clearTimeout(studentSearchTimer);
+    studentSearchTimer = setTimeout(searchStudents, 250);
+  });
+}
+
+if (studentResults) {
+  studentResults.addEventListener('click', event => {
+    const item = event.target.closest('.student-result-item');
+    if (!item) return;
+    chooseStudent(JSON.parse(decodeURIComponent(item.dataset.student)));
+  });
+}
+
+if (selectedStudent) {
+  selectedStudent.addEventListener('click', event => {
+    if (!event.target.closest('#clearStudent')) return;
+    studentId.value = '';
+    studentSearch.value = '';
+    selectedStudent.classList.add('d-none');
+    selectedStudent.innerHTML = '';
+    studentSearch.focus();
+  });
+}
+
+document.addEventListener('click', event => {
+  if (!event.target.closest('.student-search')) hideStudentResults();
+});
+
+if (feeForm) {
+  feeForm.addEventListener('submit', event => {
+    if (!studentId.value) {
+      event.preventDefault();
+      studentSearch.focus();
+      renderStudentResults([]);
+    }
+  });
+}
+
 function calcNet() {
   const total    = parseFloat(document.getElementById('totalAmount').value) || 0;
   const discount = parseFloat(document.getElementById('discount').value) || 0;

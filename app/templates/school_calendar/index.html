@@ -1,0 +1,344 @@
+{% extends "shared/base.html" %}
+{% block title %}التقويم الدراسي — العطل والإجازات{% endblock %}
+{% block page_title %}التقويم الدراسي{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">التقويم الدراسي</h1>
+    <p class="page-subtitle">إدارة العطل الأسبوعية والإجازات الرسمية — {{ school.school_name_ar or school.school_name }}</p>
+  </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }} alert-dismissible fade show">{{ msg }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+{% endwith %}
+
+<div class="row g-4">
+
+  {# ── Left column: settings + add form ─────────────────────────────────── #}
+  <div class="col-lg-5">
+
+    {# Weekly off days card #}
+    <div class="card mb-4">
+      <div class="card-header fw-bold">
+        <i class="bi bi-calendar-week me-1"></i>أيام العطلة الأسبوعية
+      </div>
+      <div class="card-body">
+        <p class="text-muted small mb-3">
+          حدّد أيام الأسبوع التي لا تُعقد فيها الدراسة. لن يُنشأ غياب تلقائي في هذه الأيام.
+        </p>
+        <form method="POST" action="{{ url_for('school_calendar.save_weekly') }}">
+          <div class="row g-2 mb-3">
+            {% for day_num in range(7) %}
+            <div class="col-6">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox"
+                       name="day_{{ day_num }}" id="day_{{ day_num }}"
+                       value="{{ day_num }}"
+                       {{ 'checked' if day_num in off_set }}>
+                <label class="form-check-label" for="day_{{ day_num }}">
+                  {{ weekday_labels[day_num] }}
+                </label>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm">
+            <i class="bi bi-save me-1"></i>حفظ الإعداد
+          </button>
+        </form>
+        {% if off_set %}
+        <div class="mt-2">
+          <span class="text-muted small">الحالي:
+            {% for d in off_set|sort %}
+            <span class="badge bg-secondary">{{ weekday_labels[d] }}</span>
+            {% endfor %}
+          </span>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    {# Add holiday card #}
+    <div class="card">
+      <div class="card-header fw-bold">
+        <i class="bi bi-plus-circle me-1"></i>إضافة عطلة / إجازة
+      </div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('school_calendar.add') }}">
+          <div class="mb-3">
+            <label class="form-label">اسم العطلة <span class="text-danger">*</span></label>
+            <input type="text" name="name" class="form-control" required
+                   placeholder="مثال: عيد الأضحى المبارك">
+          </div>
+          <div class="row g-2 mb-3">
+            <div class="col-6">
+              <label class="form-label">من تاريخ <span class="text-danger">*</span></label>
+              <input type="date" name="start_date" class="form-control" required
+                     value="{{ today.isoformat() }}">
+            </div>
+            <div class="col-6">
+              <label class="form-label">إلى تاريخ <span class="text-danger">*</span></label>
+              <input type="date" name="end_date" class="form-control" required
+                     value="{{ today.isoformat() }}">
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">نوع العطلة</label>
+            <select name="holiday_type" class="form-select">
+              {% for key, label in holiday_type_labels.items() %}
+              <option value="{{ key }}" {{ 'selected' if key == 'official' }}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">العام الدراسي (اختياري)</label>
+            <select name="academic_year_id" class="form-select">
+              <option value="">— كل الأعوام —</option>
+              {% for y in all_years %}
+              <option value="{{ y.id }}" {{ 'selected' if year and y.id == year.id }}>{{ y.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">ملاحظات</label>
+            <textarea name="notes" class="form-control" rows="2" placeholder="اختياري"></textarea>
+          </div>
+          <div class="mb-3 form-check">
+            <input class="form-check-input" type="checkbox" name="is_global" id="isGlobal">
+            <label class="form-check-label" for="isGlobal">
+              عطلة عامة (تنطبق على جميع المدارس)
+            </label>
+          </div>
+          <button type="submit" class="btn btn-success w-100">
+            <i class="bi bi-calendar-plus me-1"></i>إضافة العطلة
+          </button>
+        </form>
+      </div>
+    </div>
+
+  </div>
+
+  {# ── Right column: holidays table ──────────────────────────────────────── #}
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-list-ul me-1"></i>العطل والإجازات</span>
+        <span class="badge bg-primary">{{ holidays|length }}</span>
+      </div>
+
+      {% if holidays %}
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>اسم العطلة</th>
+              <th>من</th>
+              <th>إلى</th>
+              <th>النوع</th>
+              <th>النطاق</th>
+              <th>الحالة</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for h in holidays %}
+            <tr class="{{ 'text-muted' if not h.is_active }}">
+              <td>
+                <strong>{{ h.name }}</strong>
+                {% if h.notes %}
+                <div class="text-muted small">{{ h.notes }}</div>
+                {% endif %}
+              </td>
+              <td class="text-nowrap">{{ h.start_date.strftime('%Y-%m-%d') }}</td>
+              <td class="text-nowrap">
+                {{ h.end_date.strftime('%Y-%m-%d') }}
+                {% if h.start_date != h.end_date %}
+                <div class="text-muted small">
+                  {{ (h.end_date - h.start_date).days + 1 }} أيام
+                </div>
+                {% endif %}
+              </td>
+              <td>
+                {% set type_colors = {'official': 'primary', 'summer': 'warning', 'emergency': 'danger', 'custom': 'secondary'} %}
+                <span class="badge bg-{{ type_colors.get(h.holiday_type, 'secondary') }}">
+                  {{ holiday_type_labels.get(h.holiday_type, h.holiday_type) }}
+                </span>
+              </td>
+              <td>
+                {% if h.school_id is none %}
+                <span class="badge bg-info text-dark"><i class="bi bi-globe me-1"></i>عامة</span>
+                {% else %}
+                <span class="badge bg-light text-dark border">مدرسية</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if h.is_active %}
+                <span class="badge bg-success">مفعّلة</span>
+                {% else %}
+                <span class="badge bg-secondary">معطّلة</span>
+                {% endif %}
+              </td>
+              <td class="text-nowrap">
+                {# Toggle active #}
+                <form method="POST"
+                      action="{{ url_for('school_calendar.toggle', holiday_id=h.id) }}"
+                      class="d-inline">
+                  <button type="submit"
+                          class="btn btn-sm {{ 'btn-outline-secondary' if h.is_active else 'btn-outline-success' }}"
+                          title="{{ 'تعطيل' if h.is_active else 'تفعيل' }}">
+                    <i class="bi {{ 'bi-pause-circle' if h.is_active else 'bi-play-circle' }}"></i>
+                  </button>
+                </form>
+
+                {# Edit — open modal #}
+                <button type="button"
+                        class="btn btn-sm btn-outline-primary"
+                        title="تعديل"
+                        data-bs-toggle="modal"
+                        data-bs-target="#editModal"
+                        data-holiday-id="{{ h.id }}"
+                        data-name="{{ h.name }}"
+                        data-start="{{ h.start_date.isoformat() }}"
+                        data-end="{{ h.end_date.isoformat() }}"
+                        data-type="{{ h.holiday_type }}"
+                        data-notes="{{ h.notes or '' }}"
+                        data-global="{{ '1' if h.school_id is none else '0' }}"
+                        data-year="{{ h.academic_year_id or '' }}">
+                  <i class="bi bi-pencil"></i>
+                </button>
+
+                {# Delete #}
+                <form method="POST"
+                      action="{{ url_for('school_calendar.delete', holiday_id=h.id) }}"
+                      class="d-inline"
+                      onsubmit="return confirm('حذف العطلة «{{ h.name }}»؟')">
+                  <button type="submit" class="btn btn-sm btn-outline-danger" title="حذف">
+                    <i class="bi bi-trash"></i>
+                  </button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="card-body text-center text-muted py-5">
+        <i class="bi bi-calendar-x" style="font-size:2.5rem"></i>
+        <p class="mt-2">لا توجد عطل مضافة بعد.</p>
+      </div>
+      {% endif %}
+    </div>
+
+    {# Info box #}
+    <div class="alert alert-info mt-3 small">
+      <i class="bi bi-info-circle me-1"></i>
+      <strong>ملاحظة:</strong> لن يُسجَّل غياب تلقائي في أيام العطل الأسبوعية أو أي عطلة مفعّلة في هذه القائمة.
+      تسجيل الحضور اليدوي والبصمة الجهاز يعملان بشكل طبيعي في أيام العطل.
+    </div>
+  </div>
+
+</div>
+
+{# ── Edit modal ──────────────────────────────────────────────────────────── #}
+<div class="modal fade" id="editModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="POST" id="editForm" action="">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-pencil-square me-1"></i>تعديل العطلة</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">اسم العطلة <span class="text-danger">*</span></label>
+            <input type="text" name="name" id="editName" class="form-control" required>
+          </div>
+          <div class="row g-2 mb-3">
+            <div class="col-6">
+              <label class="form-label">من تاريخ <span class="text-danger">*</span></label>
+              <input type="date" name="start_date" id="editStartDate" class="form-control" required>
+            </div>
+            <div class="col-6">
+              <label class="form-label">إلى تاريخ <span class="text-danger">*</span></label>
+              <input type="date" name="end_date" id="editEndDate" class="form-control" required>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">نوع العطلة</label>
+            <select name="holiday_type" id="editType" class="form-select">
+              {% for key, label in holiday_type_labels.items() %}
+              <option value="{{ key }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">العام الدراسي (اختياري)</label>
+            <select name="academic_year_id" id="editYear" class="form-select">
+              <option value="">— كل الأعوام —</option>
+              {% for y in all_years %}
+              <option value="{{ y.id }}">{{ y.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">ملاحظات</label>
+            <textarea name="notes" id="editNotes" class="form-control" rows="2"></textarea>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="is_global" id="editGlobal">
+            <label class="form-check-label" for="editGlobal">
+              عطلة عامة (تنطبق على جميع المدارس)
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+          <button type="submit" class="btn btn-primary">
+            <i class="bi bi-save me-1"></i>حفظ التعديلات
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  var editModal = document.getElementById('editModal');
+  if (!editModal) return;
+
+  editModal.addEventListener('show.bs.modal', function (e) {
+    var btn     = e.relatedTarget;
+    var id      = btn.dataset.holidayId;
+    var baseUrl = "{{ url_for('school_calendar.edit', holiday_id=0) }}".replace('/0/', '/' + id + '/');
+
+    document.getElementById('editForm').action = baseUrl;
+    document.getElementById('editName').value      = btn.dataset.name;
+    document.getElementById('editStartDate').value = btn.dataset.start;
+    document.getElementById('editEndDate').value   = btn.dataset.end;
+    document.getElementById('editNotes').value     = btn.dataset.notes;
+
+    var typeSelect = document.getElementById('editType');
+    Array.from(typeSelect.options).forEach(function (o) {
+      o.selected = (o.value === btn.dataset.type);
+    });
+
+    var yearSelect = document.getElementById('editYear');
+    Array.from(yearSelect.options).forEach(function (o) {
+      o.selected = (o.value === btn.dataset.year);
+    });
+
+    document.getElementById('editGlobal').checked = (btn.dataset.global === '1');
+  });
+})();
+</script>
+{% endblock %}

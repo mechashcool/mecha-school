@@ -1,0 +1,77 @@
+{% extends "shared/base.html" %}
+{% block title %}&#1578;&#1601;&#1575;&#1589;&#1610;&#1604; &#1591;&#1604;&#1576; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;{% endblock %}
+{% block page_title %}&#1578;&#1601;&#1575;&#1589;&#1610;&#1604; &#1591;&#1604;&#1576; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">&#1591;&#1604;&#1576; &#1573;&#1580;&#1575;&#1586;&#1577;</h1>
+    <p class="page-subtitle">{{ leave_request.student.full_name if leave_request.student else '-' }}</p>
+  </div>
+  <a href="{{ url_for('admin.leave_requests_list') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>&#1585;&#1580;&#1608;&#1593;
+  </a>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <div class="text-muted">&#1608;&#1604;&#1610; &#1575;&#1604;&#1571;&#1605;&#1585;</div>
+            <div class="fw-600">{{ leave_request.parent.full_name if leave_request.parent else '-' }}</div>
+          </div>
+          <div class="col-md-6">
+            <div class="text-muted">&#1606;&#1608;&#1593; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;</div>
+            <div class="fw-600">{{ type_labels.get(leave_request.leave_type, leave_request.leave_type) }}</div>
+          </div>
+          <div class="col-md-6">
+            <div class="text-muted">&#1605;&#1606; &#1578;&#1575;&#1585;&#1610;&#1582;</div>
+            <div class="fw-600">{{ leave_request.from_date.strftime('%Y-%m-%d') if leave_request.from_date else '-' }}</div>
+          </div>
+          <div class="col-md-6">
+            <div class="text-muted">&#1573;&#1604;&#1609; &#1578;&#1575;&#1585;&#1610;&#1582;</div>
+            <div class="fw-600">{{ leave_request.to_date.strftime('%Y-%m-%d') if leave_request.to_date else '-' }}</div>
+          </div>
+          <div class="col-12">
+            <div class="text-muted">&#1605;&#1604;&#1575;&#1581;&#1592;&#1575;&#1578;</div>
+            <div style="white-space:pre-wrap">{{ leave_request.notes or '-' }}</div>
+          </div>
+        </div>
+        {% if leave_request.attachment_path %}
+        <hr>
+        <a href="{{ resolve_photo_url(leave_request.attachment_path) or leave_request.attachment_path }}"
+           target="_blank" class="btn btn-sm btn-outline-primary">
+          <i class="bi bi-paperclip me-1"></i>&#1593;&#1585;&#1590; &#1575;&#1604;&#1605;&#1585;&#1601;&#1602;
+        </a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="mb-3">&#1578;&#1581;&#1583;&#1610;&#1579; &#1575;&#1604;&#1591;&#1604;&#1576;</h5>
+        <form method="POST">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+          <div class="mb-3">
+            <label class="form-label">&#1575;&#1604;&#1581;&#1575;&#1604;&#1577;</label>
+            <select name="status" class="form-select" required>
+              <option value="approved" {% if leave_request.status == 'approved' %}selected{% endif %}>{{ status_labels.get('approved') }}</option>
+              <option value="rejected" {% if leave_request.status == 'rejected' %}selected{% endif %}>{{ status_labels.get('rejected') }}</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">&#1605;&#1604;&#1575;&#1581;&#1592;&#1577; &#1575;&#1604;&#1573;&#1583;&#1575;&#1585;&#1577;</label>
+            <textarea name="manager_note" class="form-control" rows="6">{{ leave_request.manager_note or '' }}</textarea>
+          </div>
+          <button class="btn btn-primary">
+            <i class="bi bi-check2-circle me-1"></i>&#1581;&#1601;&#1592;
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

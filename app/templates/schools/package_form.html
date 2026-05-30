@@ -1,0 +1,883 @@
+{% extends "shared/base.html" %}
+{% block title %}{{ 'تعديل باقة' if package else 'باقة جديدة' }} — {{ package.name if package else '' }}{% endblock %}
+{% block page_title %}{{ 'تعديل باقة' if package else 'إنشاء باقة جديدة' }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">
+      <i class="bi bi-{{ 'pencil-square' if package else 'plus-circle-fill' }} me-2"></i>
+      {{ 'تعديل الباقة: ' + package.name if package else 'إنشاء باقة جديدة' }}
+    </h1>
+    <p class="text-muted mb-0">صمّم الباقة بتحديد الوحدات والميزات والإعدادات المناسبة</p>
+  </div>
+  <a href="{{ url_for('schools.packages_list') }}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }} alert-dismissible fade show">
+    {{ msg }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+{% endwith %}
+
+{% if package %}
+<div class="alert alert-warning d-flex gap-2 py-2 mb-3" style="font-size:13px">
+  <i class="bi bi-exclamation-triangle-fill flex-shrink-0 mt-1"></i>
+  <div>
+    <strong>تنبيه عند التعديل:</strong>
+    تعديل الباقة لن يؤثر تلقائياً على المدارس التي طُبِّقت عليها هذه الباقة مسبقاً (نظام اللقطة).
+    لتحديث مدرسة معينة، افتح صفحة ميزاتها وأعد تطبيق الباقة يدوياً.
+  </div>
+</div>
+{% endif %}
+
+<form method="POST" id="pkgForm">
+  <input type="hidden" name="csrf_token"
+         value="{{ csrf_token() if csrf_token is defined else '' }}">
+
+  {# ── Basic info ──────────────────────────────────────────────────────────── #}
+  <div class="card mb-3">
+    <div class="card-header fw-bold"><i class="bi bi-info-circle me-1"></i>معلومات الباقة</div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label fw-600">اسم الباقة <span class="text-danger">*</span></label>
+          <input type="text" name="name" class="form-control"
+                 value="{{ package.name if package else '' }}"
+                 placeholder="مثال: الباقة الكاملة" required>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label fw-600">الحالة</label>
+          <div class="form-check form-switch mt-2">
+            <input class="form-check-input" type="checkbox" name="is_active" id="is_active"
+                   {{ 'checked' if not package or package.is_active }}>
+            <label class="form-check-label" for="is_active">نشطة (يمكن تطبيقها على المدارس)</label>
+          </div>
+        </div>
+        <div class="col-12">
+          <label class="form-label fw-600">وصف اختياري</label>
+          <textarea name="description" class="form-control" rows="2"
+                    placeholder="وصف مختصر لمحتويات هذه الباقة…">{{ package.description if package and package.description else '' }}</textarea>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Live summary bar ────────────────────────────────────────────────────── #}
+  <div class="row g-2 mb-3">
+    <div class="col-6 col-sm-3">
+      <div class="card border-0 shadow-sm text-center py-2 h-100">
+        <div class="fs-3 fw-bold text-success mb-0" id="smryModOn">0</div>
+        <div class="small text-muted">وحدات مفعّلة</div>
+      </div>
+    </div>
+    <div class="col-6 col-sm-3">
+      <div class="card border-0 shadow-sm text-center py-2 h-100">
+        <div class="fs-3 fw-bold text-secondary mb-0" id="smryModOff">0</div>
+        <div class="small text-muted">وحدات معطّلة</div>
+      </div>
+    </div>
+    <div class="col-6 col-sm-3">
+      <div class="card border-0 shadow-sm text-center py-2 h-100">
+        <div class="fs-3 fw-bold text-primary mb-0" id="smryFeatOn">0</div>
+        <div class="small text-muted">ميزات مفعّلة</div>
+      </div>
+    </div>
+    <div class="col-6 col-sm-3">
+      <div class="card border-0 shadow-sm text-center py-2 h-100">
+        <div class="fs-3 fw-bold text-danger mb-0" id="smryActOff">0</div>
+        <div class="small text-muted">إجراءات معطّلة</div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Tabs (3 tabs only) ──────────────────────────────────────────────────── #}
+  <ul class="nav nav-tabs mb-0" id="pkgTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link active" data-bs-toggle="tab"
+              data-bs-target="#pkgtab-mods" type="button">
+        <i class="bi bi-grid me-1"></i>الوحدات والميزات
+      </button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" data-bs-toggle="tab"
+              data-bs-target="#pkgtab-form" type="button">
+        <i class="bi bi-input-cursor-text me-1"></i>نموذج الطالب
+      </button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" data-bs-toggle="tab"
+              data-bs-target="#pkgtab-mc" type="button">
+        <i class="bi bi-sliders2 me-1"></i>إعدادات الوحدات
+      </button>
+    </li>
+  </ul>
+
+  <div class="tab-content border border-top-0 rounded-bottom mb-3 bg-white" id="pkgTabContent">
+
+    {# ════════════════════════════════════════════════════════════════════════ #}
+    {# Tab 1: Modules + Features                                               #}
+    {# ════════════════════════════════════════════════════════════════════════ #}
+    <div class="tab-pane fade show active p-3" id="pkgtab-mods" role="tabpanel">
+
+      {# Toolbar #}
+      <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+        <div class="flex-grow-1" style="min-width:180px;max-width:280px">
+          <div class="input-group input-group-sm">
+            <span class="input-group-text bg-white"><i class="bi bi-search text-muted"></i></span>
+            <input type="text" id="pkgSearch" class="form-control border-start-0"
+                   placeholder="بحث عن وحدة…" autocomplete="off">
+          </div>
+        </div>
+        <div class="d-flex gap-1">
+          <button type="button" class="btn btn-xs btn-outline-secondary" id="pkgExpandAll"
+                  title="توسيع الكل">
+            <i class="bi bi-arrows-expand"></i>
+          </button>
+          <button type="button" class="btn btn-xs btn-outline-secondary" id="pkgCollapseAll"
+                  title="طي الكل">
+            <i class="bi bi-arrows-collapse"></i>
+          </button>
+        </div>
+        <div class="d-flex gap-1 ms-auto">
+          <button type="button" class="btn btn-sm btn-success" id="pkgBtnSelectAll">
+            <i class="bi bi-check2-all me-1"></i>تفعيل الكل
+          </button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="pkgBtnClearAll">
+            <i class="bi bi-x-circle me-1"></i>تعطيل الكل
+          </button>
+        </div>
+      </div>
+
+      {# Module cards #}
+      {% for mod_key, mod in modules.items() %}
+      {% set mod_cfg = config.get('modules', {}) %}
+      {% set mod_on  = mod_cfg.get(mod_key, true) %}
+      {% set feat_cfg = config.get('features', {}) %}
+
+      <div class="card mb-2 pkg-module-card" data-module="{{ mod_key }}"
+           data-label="{{ mod.label }}">
+        <div class="card-header py-2 d-flex align-items-center gap-2
+                    {{ 'bg-success bg-opacity-10 border-success' if mod_on else 'bg-light' }}"
+             id="pkghdr_{{ mod_key }}">
+
+          {# Checkbox + label + badge #}
+          <input class="form-check-input flex-shrink-0 pkg-module-cb"
+                 type="checkbox" name="module_{{ mod_key }}"
+                 id="pkgmod_{{ mod_key }}" {{ 'checked' if mod_on }}>
+          <label class="d-flex align-items-center gap-2 mb-0 fw-bold flex-grow-1"
+                 for="pkgmod_{{ mod_key }}" style="cursor:pointer;font-size:14px;min-width:0">
+            <i class="bi {{ mod.icon }} text-primary flex-shrink-0"></i>
+            <span class="text-truncate">{{ mod.label }}</span>
+          </label>
+          <span class="badge flex-shrink-0 {{ 'bg-success' if mod_on else 'bg-secondary' }} pkg-mod-badge">
+            {{ 'مفعّل' if mod_on else 'معطّل' }}
+          </span>
+
+          {# Action buttons #}
+          <div class="d-flex gap-1 flex-shrink-0 ms-auto">
+            <button type="button" class="btn btn-xs btn-outline-success pkg-enable-feats py-0 px-2"
+                    data-module="{{ mod_key }}" title="تفعيل كل ميزات هذه الوحدة">
+              <i class="bi bi-check2-all"></i>
+            </button>
+            <button type="button" class="btn btn-xs btn-outline-secondary pkg-disable-feats py-0 px-2"
+                    data-module="{{ mod_key }}" title="تعطيل كل ميزات هذه الوحدة">
+              <i class="bi bi-dash-circle"></i>
+            </button>
+            {% if module_defs.get(mod_key, {}).get('actions') %}
+            <button type="button" class="btn btn-xs btn-outline-info pkg-enable-actions py-0 px-2"
+                    data-module="{{ mod_key }}" title="تفعيل كل إجراءات هذه الوحدة">
+              <i class="bi bi-play-fill"></i>
+            </button>
+            <button type="button" class="btn btn-xs btn-outline-warning pkg-disable-actions py-0 px-2"
+                    data-module="{{ mod_key }}" title="تعطيل كل إجراءات هذه الوحدة">
+              <i class="bi bi-stop-fill"></i>
+            </button>
+            {% endif %}
+            <button type="button" class="btn btn-xs btn-outline-secondary py-0 px-2 pkg-toggle-card"
+                    data-bs-toggle="collapse"
+                    data-bs-target="#pkgcollapse_{{ mod_key }}"
+                    title="طي / توسيع">
+              <i class="bi bi-chevron-down"></i>
+            </button>
+          </div>
+        </div>
+
+        {# Opacity overlay (for disabled-module dimming) #}
+        <div id="pkgfeats_{{ mod_key }}"
+             style="{{ 'opacity:.4;pointer-events:none' if not mod_on }}">
+          <div class="card-body py-2 collapse show" id="pkgcollapse_{{ mod_key }}">
+            <div class="row g-2">
+              {% for feat_key, feat in features.items() if feat.module == mod_key %}
+              {% set feat_on = feat_cfg.get(feat_key, true) %}
+              <div class="col-md-6 col-lg-4 col-xl-3">
+                <label class="d-flex align-items-center gap-2 p-2 rounded border pkg-feat-label
+                              {{ 'border-primary bg-primary bg-opacity-10' if (feat_on and mod_on) else 'border-light bg-light' }}"
+                       for="pkgfeat_{{ feat_key | replace('.', '_') }}"
+                       style="cursor:pointer;font-size:13px">
+                  <input class="form-check-input pkg-feature-cb flex-shrink-0"
+                         type="checkbox"
+                         name="feature_{{ feat_key | replace('.', '_') }}"
+                         id="pkgfeat_{{ feat_key | replace('.', '_') }}"
+                         data-module="{{ mod_key }}"
+                         {{ 'checked' if feat_on }}
+                         {{ 'disabled' if not mod_on }}>
+                  <span class="flex-grow-1">{{ feat.label }}</span>
+                  <span class="badge pkg-feat-badge flex-shrink-0
+                               {{ 'bg-primary' if (feat_on and mod_on) else 'bg-secondary' }}"
+                        style="font-size:10px">
+                    {{ 'مفعّل' if (feat_on and mod_on) else 'معطّل' }}
+                  </span>
+                </label>
+              </div>
+              {% endfor %}
+            </div>
+            {% if mod.description %}
+            <small class="text-muted d-block mt-2">{{ mod.description }}</small>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+
+    </div>{# /pkgtab-mods #}
+
+    {# ════════════════════════════════════════════════════════════════════════ #}
+    {# Tab 2: Student Form                                                     #}
+    {# ════════════════════════════════════════════════════════════════════════ #}
+    <div class="tab-pane fade p-3" id="pkgtab-form" role="tabpanel">
+      {% set mc_sf = config.get('module_configs', {}).get('students', {}) %}
+      {% set sf_fallback = config.get('student_form', {}) %}
+      {% set sf_hidden_sections = mc_sf.get('hidden_sections', sf_fallback.get('hidden_sections', [])) %}
+      {% set sf_hidden_fields   = mc_sf.get('hidden_fields',   sf_fallback.get('hidden_fields', [])) %}
+      {% set sf_required_fields = mc_sf.get('required_fields', sf_fallback.get('required_fields', [])) %}
+
+      <div class="d-flex gap-2 mb-3 flex-wrap">
+        <button type="button" class="btn btn-sm btn-outline-success" id="sfEnableAll">
+          <i class="bi bi-eye me-1"></i>إظهار الكل
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="sfDisableAll">
+          <i class="bi bi-eye-slash me-1"></i>إخفاء الكل
+        </button>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header fw-bold">
+          <i class="bi bi-layout-sidebar-reverse text-accent me-1"></i>أقسام النموذج
+        </div>
+        <div class="card-body p-0">
+          <table class="table table-hover mb-0" style="font-size:14px">
+            <thead class="table-light">
+              <tr>
+                <th style="width:55%">القسم</th>
+                <th class="text-center"><i class="bi bi-eye text-success me-1"></i>إظهار</th>
+                <th class="text-muted small text-center">مفتاح</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for sec in all_sections %}
+              <tr>
+                <td class="fw-600">{{ section_labels[sec] }}</td>
+                <td class="text-center">
+                  <div class="form-check form-switch d-flex justify-content-center">
+                    <input class="form-check-input sf-section-cb" type="checkbox"
+                           name="sf_section_{{ sec }}"
+                           {{ 'checked' if sec not in sf_hidden_sections }}>
+                  </div>
+                </td>
+                <td class="text-muted small font-monospace text-center">{{ sec }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header fw-bold">
+          <i class="bi bi-input-cursor-text text-accent me-1"></i>الحقول الفردية
+        </div>
+        <div class="card-body p-0">
+          <table class="table table-hover mb-0" style="font-size:14px">
+            <thead class="table-light">
+              <tr>
+                <th style="width:35%">الحقل</th>
+                <th class="text-center"><i class="bi bi-eye text-success me-1"></i>إظهار</th>
+                <th class="text-center"><i class="bi bi-asterisk text-danger me-1"></i>مطلوب</th>
+                <th class="text-muted small text-center">مفتاح</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for fld in all_fields %}
+              {% set fld_hidden = fld in sf_hidden_fields %}
+              <tr>
+                <td class="fw-600">{{ field_labels[fld] }}</td>
+                <td class="text-center">
+                  <div class="form-check form-switch d-flex justify-content-center">
+                    <input class="form-check-input pkg-sf-vis-cb sf-field-cb" type="checkbox"
+                           name="sf_field_{{ fld }}"
+                           id="pksf_vis_{{ fld }}"
+                           data-field="{{ fld }}"
+                           {{ 'checked' if not fld_hidden }}>
+                  </div>
+                </td>
+                <td class="text-center">
+                  <div class="form-check form-switch d-flex justify-content-center">
+                    <input class="form-check-input" type="checkbox"
+                           name="sf_req_{{ fld }}"
+                           id="pksf_req_{{ fld }}"
+                           {{ 'checked' if fld in sf_required_fields }}
+                           {{ 'disabled' if fld_hidden }}>
+                  </div>
+                </td>
+                <td class="text-muted small font-monospace text-center">{{ fld }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="card-footer text-muted py-2" style="font-size:12px">
+          <i class="bi bi-info-circle me-1"></i>تعطيل "إظهار" يُبطل "مطلوب" تلقائياً.
+        </div>
+      </div>
+    </div>{# /pkgtab-form #}
+
+    {# ════════════════════════════════════════════════════════════════════════ #}
+    {# Tab 3: Module Configurations (accordion)                                #}
+    {# ════════════════════════════════════════════════════════════════════════ #}
+    <div class="tab-pane fade p-3" id="pkgtab-mc" role="tabpanel">
+
+      <div class="d-flex gap-2 mb-3 flex-wrap align-items-center">
+        <button type="button" class="btn btn-sm btn-outline-success" id="mcEnableAll">
+          <i class="bi bi-check2-all me-1"></i>تفعيل كل الإجراءات
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="mcDisableAll">
+          <i class="bi bi-x-circle me-1"></i>تعطيل كل الإجراءات
+        </button>
+        <div class="vr mx-1"></div>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="mcExpandAll"
+                title="توسيع الكل">
+          <i class="bi bi-arrows-expand me-1"></i>توسيع الكل
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="mcCollapseAll"
+                title="طي الكل">
+          <i class="bi bi-arrows-collapse me-1"></i>طي الكل
+        </button>
+      </div>
+
+      <div id="mcAccordion">
+        {% for mk, mdef in module_defs.items() %}
+        {% set mc = config.get('module_configs', {}).get(mk, {}) %}
+        {% set hidden_sec_set   = mc.get('hidden_sections', []) %}
+        {% set hidden_fld_set   = mc.get('hidden_fields', []) %}
+        {% set required_fld_set = mc.get('required_fields', []) %}
+        {% set disabled_act_set = mc.get('disabled_actions', []) %}
+
+        <div class="card mb-2 border">
+          <div class="card-header py-2 d-flex align-items-center gap-2 bg-light"
+               style="cursor:pointer"
+               data-bs-toggle="collapse"
+               data-bs-target="#mcpane_{{ mk }}">
+            <i class="bi bi-sliders2 text-primary"></i>
+            <span class="fw-bold flex-grow-1" style="font-size:14px">{{ mdef.label }}</span>
+            <span class="badge bg-secondary" style="font-size:10px">
+              {% set act_total = mdef.get('actions', {})|length %}
+              {% set fld_total = mdef.get('fields', {})|length %}
+              {% set sec_total = mdef.get('sections', {})|length %}
+              {{ act_total + fld_total + sec_total }} إعداد
+            </span>
+            <i class="bi bi-chevron-down mc-chevron flex-shrink-0"></i>
+          </div>
+          <div id="mcpane_{{ mk }}" class="collapse">
+            <div class="card-body py-3">
+
+              <div class="alert alert-light border d-flex gap-2 py-2 mb-3" style="font-size:12px">
+                <i class="bi bi-info-circle-fill flex-shrink-0 mt-1 text-info"></i>
+                <div>إعدادات <strong>{{ mdef.label }}</strong> ستُنسخ إلى المدرسة عند تطبيق الباقة.</div>
+              </div>
+
+              {# Per-module bulk controls #}
+              <div class="d-flex gap-2 mb-3 flex-wrap">
+                {% if mdef.get('actions') %}
+                <button type="button" class="btn btn-xs btn-outline-success mc-mod-enable-acts py-1 px-2"
+                        data-mk="{{ mk }}">
+                  <i class="bi bi-play-fill me-1"></i>تفعيل الإجراءات
+                </button>
+                <button type="button" class="btn btn-xs btn-outline-secondary mc-mod-disable-acts py-1 px-2"
+                        data-mk="{{ mk }}">
+                  <i class="bi bi-stop-fill me-1"></i>تعطيل الإجراءات
+                </button>
+                {% endif %}
+                {% if mdef.get('sections') %}
+                <button type="button" class="btn btn-xs btn-outline-info mc-mod-show-secs py-1 px-2"
+                        data-mk="{{ mk }}">
+                  <i class="bi bi-eye me-1"></i>إظهار الأقسام
+                </button>
+                <button type="button" class="btn btn-xs btn-outline-warning mc-mod-hide-secs py-1 px-2"
+                        data-mk="{{ mk }}">
+                  <i class="bi bi-eye-slash me-1"></i>إخفاء الأقسام
+                </button>
+                {% endif %}
+              </div>
+
+              {# Sections #}
+              {% if mdef.get('sections') %}
+              <div class="card mb-3">
+                <div class="card-header fw-bold py-2" style="font-size:13px">
+                  <i class="bi bi-layout-text-sidebar text-accent me-1"></i>الأقسام
+                </div>
+                <div class="card-body p-0">
+                  <table class="table table-hover mb-0" style="font-size:13px">
+                    <thead class="table-light">
+                      <tr>
+                        <th style="width:60%">القسم</th>
+                        <th class="text-center"><i class="bi bi-eye text-success me-1"></i>إظهار</th>
+                        <th class="text-muted small">مفتاح</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for sec_key, sec_label in mdef.sections.items() %}
+                      <tr>
+                        <td class="fw-600">{{ sec_label }}</td>
+                        <td class="text-center">
+                          <div class="form-check form-switch d-flex justify-content-center">
+                            <input class="form-check-input mc-section-cb" type="checkbox"
+                                   name="mc_{{ mk }}_section_{{ sec_key }}"
+                                   data-mk="{{ mk }}"
+                                   {{ 'checked' if sec_key not in hidden_sec_set }}>
+                          </div>
+                        </td>
+                        <td class="text-muted small font-monospace">{{ sec_key }}</td>
+                      </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              {% endif %}
+
+              {# Fields #}
+              {% if mdef.get('fields') %}
+              <div class="card mb-3">
+                <div class="card-header fw-bold py-2" style="font-size:13px">
+                  <i class="bi bi-input-cursor-text text-accent me-1"></i>الحقول
+                </div>
+                <div class="card-body p-0">
+                  <table class="table table-hover mb-0" style="font-size:13px">
+                    <thead class="table-light">
+                      <tr>
+                        <th style="width:40%">الحقل</th>
+                        <th class="text-center"><i class="bi bi-eye text-success me-1"></i>إظهار</th>
+                        <th class="text-center"><i class="bi bi-asterisk text-danger me-1"></i>مطلوب</th>
+                        <th class="text-muted small">مفتاح</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for fld_key, fld_label in mdef.fields.items() %}
+                      {% set fld_hidden = fld_key in hidden_fld_set %}
+                      <tr>
+                        <td class="fw-600">{{ fld_label }}</td>
+                        <td class="text-center">
+                          <div class="form-check form-switch d-flex justify-content-center">
+                            <input class="form-check-input pkg-mc-vis-cb" type="checkbox"
+                                   name="mc_{{ mk }}_field_{{ fld_key }}"
+                                   id="pkg_mc_{{ mk }}_vis_{{ fld_key }}"
+                                   data-module="{{ mk }}" data-field="{{ fld_key }}"
+                                   {{ 'checked' if not fld_hidden }}>
+                          </div>
+                        </td>
+                        <td class="text-center">
+                          <div class="form-check form-switch d-flex justify-content-center">
+                            <input class="form-check-input" type="checkbox"
+                                   name="mc_{{ mk }}_req_{{ fld_key }}"
+                                   id="pkg_mc_{{ mk }}_req_{{ fld_key }}"
+                                   {{ 'checked' if fld_key in required_fld_set }}
+                                   {{ 'disabled' if fld_hidden }}>
+                          </div>
+                        </td>
+                        <td class="text-muted small font-monospace">{{ fld_key }}</td>
+                      </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+                <div class="card-footer text-muted py-2" style="font-size:12px">
+                  <i class="bi bi-info-circle me-1"></i>تعطيل "إظهار" يُبطل "مطلوب" تلقائياً.
+                </div>
+              </div>
+              {% endif %}
+
+              {# Actions #}
+              {% if mdef.get('actions') %}
+              <div class="card mb-3">
+                <div class="card-header fw-bold py-2" style="font-size:13px">
+                  <i class="bi bi-hand-index-thumb text-accent me-1"></i>الإجراءات
+                </div>
+                <div class="card-body p-0">
+                  <table class="table table-hover mb-0" style="font-size:13px">
+                    <thead class="table-light">
+                      <tr>
+                        <th style="width:65%">الإجراء</th>
+                        <th class="text-center"><i class="bi bi-check-circle text-success me-1"></i>مفعّل</th>
+                        <th class="text-muted small">مفتاح</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for act_key, act_label in mdef.actions.items() %}
+                      <tr>
+                        <td class="fw-600">{{ act_label }}</td>
+                        <td class="text-center">
+                          <div class="form-check form-switch d-flex justify-content-center">
+                            <input class="form-check-input mc-action-cb" type="checkbox"
+                                   name="mc_{{ mk }}_action_{{ act_key }}"
+                                   data-mk="{{ mk }}"
+                                   {{ 'checked' if act_key not in disabled_act_set }}>
+                          </div>
+                        </td>
+                        <td class="text-muted small font-monospace">{{ act_key }}</td>
+                      </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              {% endif %}
+
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+    </div>{# /pkgtab-mc #}
+
+  </div>{# /tab-content #}
+
+  {# ── Sticky save bar ─────────────────────────────────────────────────────── #}
+  <div class="d-flex gap-3 align-items-center justify-content-between
+              bg-white border-top shadow-sm px-4 py-3"
+       style="position:sticky;bottom:0;z-index:1020;">
+    <span class="text-muted small">
+      <i class="bi bi-info-circle me-1"></i>
+      {{ 'تعديل الباقة: ' + package.name if package else 'باقة جديدة — لم يتم الحفظ بعد' }}
+    </span>
+    <div class="d-flex gap-2">
+      <a href="{{ url_for('schools.packages_list') }}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-right me-1"></i>إلغاء
+      </a>
+      <button type="submit" class="btn btn-primary px-4">
+        <i class="bi bi-check-lg me-1"></i>
+        {{ 'حفظ التعديلات' if package else 'حفظ الباقة' }}
+      </button>
+    </div>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  'use strict';
+
+  const modCBs  = Array.from(document.querySelectorAll('.pkg-module-cb'));
+  const featCBs = Array.from(document.querySelectorAll('.pkg-feature-cb'));
+
+  function getModFeats(key) {
+    return featCBs.filter(cb => cb.dataset.module === key);
+  }
+
+  /* ── Restyle a feature label ─────────────────────────────────────────────── */
+  function styleFeatLabel(cb) {
+    const lbl   = cb.closest('.pkg-feat-label');
+    const badge = lbl && lbl.querySelector('.pkg-feat-badge');
+    const modCb = document.getElementById('pkgmod_' + cb.dataset.module);
+    const active = cb.checked && modCb && modCb.checked;
+    if (!lbl) return;
+    lbl.classList.toggle('border-primary', !!active);
+    lbl.classList.toggle('bg-primary',     !!active);
+    lbl.classList.toggle('bg-opacity-10',  !!active);
+    lbl.classList.toggle('border-light',   !active);
+    lbl.classList.toggle('bg-light',       !active);
+    if (badge) {
+      badge.classList.toggle('bg-primary',   !!active);
+      badge.classList.toggle('bg-secondary', !active);
+      badge.textContent = active ? 'مفعّل' : 'معطّل';
+    }
+  }
+
+  /* ── Restyle a module card header + features ─────────────────────────────── */
+  function styleModCard(cb) {
+    const key     = cb.name.replace('module_', '');
+    const card    = cb.closest('.pkg-module-card');
+    const hdr     = card && card.querySelector('.card-header');
+    const badge   = hdr  && hdr.querySelector('.pkg-mod-badge');
+    const overlay = document.getElementById('pkgfeats_' + key);
+
+    if (cb.checked) {
+      if (hdr) {
+        hdr.classList.remove('bg-light');
+        hdr.classList.add('bg-success', 'bg-opacity-10', 'border-success');
+      }
+      if (badge) { badge.className = 'badge flex-shrink-0 bg-success pkg-mod-badge'; badge.textContent = 'مفعّل'; }
+      if (overlay) { overlay.style.opacity = ''; overlay.style.pointerEvents = ''; }
+      getModFeats(key).forEach(function (fcb) { fcb.disabled = false; styleFeatLabel(fcb); });
+    } else {
+      if (hdr) {
+        hdr.classList.add('bg-light');
+        hdr.classList.remove('bg-success', 'bg-opacity-10', 'border-success');
+      }
+      if (badge) { badge.className = 'badge flex-shrink-0 bg-secondary pkg-mod-badge'; badge.textContent = 'معطّل'; }
+      if (overlay) { overlay.style.opacity = '0.4'; overlay.style.pointerEvents = 'none'; }
+      getModFeats(key).forEach(function (fcb) { fcb.disabled = true; styleFeatLabel(fcb); });
+    }
+    updateSummary();
+  }
+
+  /* ── Module + feature change listeners ──────────────────────────────────── */
+  modCBs.forEach(function (cb) { cb.addEventListener('change', function () { styleModCard(cb); }); });
+  featCBs.forEach(function (cb) { cb.addEventListener('change', function () { styleFeatLabel(cb); updateSummary(); }); });
+
+  /* ── Per-module: enable / disable all features ───────────────────────────── */
+  document.querySelectorAll('.pkg-enable-feats').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var key   = btn.dataset.module;
+      var modCb = document.getElementById('pkgmod_' + key);
+      if (modCb && !modCb.checked) { modCb.checked = true; styleModCard(modCb); }
+      getModFeats(key).forEach(function (cb) { cb.checked = true; styleFeatLabel(cb); });
+      updateSummary();
+    });
+  });
+  document.querySelectorAll('.pkg-disable-feats').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      getModFeats(btn.dataset.module).forEach(function (cb) { cb.checked = false; styleFeatLabel(cb); });
+      updateSummary();
+    });
+  });
+
+  /* ── Per-module (from modules tab): toggle actions in MC tab ─────────────── */
+  document.querySelectorAll('.pkg-enable-actions').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('[name^="mc_' + btn.dataset.module + '_action_"]')
+        .forEach(function (cb) { cb.checked = true; });
+      updateSummary();
+    });
+  });
+  document.querySelectorAll('.pkg-disable-actions').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('[name^="mc_' + btn.dataset.module + '_action_"]')
+        .forEach(function (cb) { cb.checked = false; });
+      updateSummary();
+    });
+  });
+
+  /* ── Collapse chevron sync ───────────────────────────────────────────────── */
+  document.querySelectorAll('[id^="pkgcollapse_"]').forEach(function (el) {
+    el.addEventListener('show.bs.collapse', function () {
+      var btn  = document.querySelector('[data-bs-target="#' + this.id + '"]');
+      var icon = btn && btn.querySelector('i');
+      if (icon) { icon.classList.replace('bi-chevron-up', 'bi-chevron-down'); }
+    });
+    el.addEventListener('hide.bs.collapse', function () {
+      var btn  = document.querySelector('[data-bs-target="#' + this.id + '"]');
+      var icon = btn && btn.querySelector('i');
+      if (icon) { icon.classList.replace('bi-chevron-down', 'bi-chevron-up'); }
+    });
+  });
+
+  /* MC accordion chevron sync */
+  document.querySelectorAll('[id^="mcpane_"]').forEach(function (el) {
+    var hdr  = el.previousElementSibling;
+    var icon = hdr && hdr.querySelector('.mc-chevron');
+    if (!icon) return;
+    el.addEventListener('show.bs.collapse', function () {
+      icon.classList.replace('bi-chevron-down', 'bi-chevron-up');
+    });
+    el.addEventListener('hide.bs.collapse', function () {
+      icon.classList.replace('bi-chevron-up', 'bi-chevron-down');
+    });
+  });
+
+  /* ── Expand / Collapse all module cards ──────────────────────────────────── */
+  document.getElementById('pkgExpandAll') && document.getElementById('pkgExpandAll').addEventListener('click', function () {
+    document.querySelectorAll('[id^="pkgcollapse_"]').forEach(function (el) {
+      if (!el.classList.contains('show')) bootstrap.Collapse.getOrCreateInstance(el).show();
+    });
+  });
+  document.getElementById('pkgCollapseAll') && document.getElementById('pkgCollapseAll').addEventListener('click', function () {
+    document.querySelectorAll('[id^="pkgcollapse_"]').forEach(function (el) {
+      if (el.classList.contains('show')) bootstrap.Collapse.getOrCreateInstance(el).hide();
+    });
+  });
+
+  /* ── Global enable / disable EVERYTHING ─────────────────────────────────── */
+  function setAllInputs(on) {
+    /* Modules */
+    modCBs.forEach(function (cb) { cb.checked = on; styleModCard(cb); });
+    /* Features — re-check all after styleModCard re-enables them */
+    if (on) { featCBs.forEach(function (cb) { cb.checked = true; styleFeatLabel(cb); }); }
+
+    /* Student form sections */
+    document.querySelectorAll('.sf-section-cb').forEach(function (cb) { cb.checked = on; });
+
+    /* Student form fields + required coupling */
+    document.querySelectorAll('.sf-field-cb').forEach(function (cb) {
+      cb.checked = on;
+      var reqEl = document.getElementById('pksf_req_' + cb.dataset.field);
+      if (reqEl) {
+        if (!on) { reqEl.checked = false; reqEl.disabled = true; }
+        else      { reqEl.disabled = false; }
+      }
+    });
+
+    /* Module config sections */
+    document.querySelectorAll('.mc-section-cb').forEach(function (cb) { cb.checked = on; });
+
+    /* Module config fields + required coupling */
+    document.querySelectorAll('.pkg-mc-vis-cb').forEach(function (cb) {
+      cb.checked = on;
+      var reqEl = document.getElementById('pkg_mc_' + cb.dataset.module + '_req_' + cb.dataset.field);
+      if (reqEl) {
+        if (!on) { reqEl.checked = false; reqEl.disabled = true; }
+        else      { reqEl.disabled = false; }
+      }
+    });
+
+    /* Module config actions */
+    document.querySelectorAll('.mc-action-cb').forEach(function (cb) { cb.checked = on; });
+
+    updateSummary();
+  }
+
+  document.getElementById('pkgBtnSelectAll') && document.getElementById('pkgBtnSelectAll').addEventListener('click', function () { setAllInputs(true); });
+  document.getElementById('pkgBtnClearAll')  && document.getElementById('pkgBtnClearAll').addEventListener('click',  function () { setAllInputs(false); });
+
+  /* ── Student form bulk controls ──────────────────────────────────────────── */
+  document.getElementById('sfEnableAll') && document.getElementById('sfEnableAll').addEventListener('click', function () {
+    document.querySelectorAll('.sf-section-cb, .sf-field-cb').forEach(function (cb) {
+      cb.checked = true;
+      if (cb.classList.contains('sf-field-cb')) {
+        var reqEl = document.getElementById('pksf_req_' + cb.dataset.field);
+        if (reqEl) reqEl.disabled = false;
+      }
+    });
+    updateSummary();
+  });
+  document.getElementById('sfDisableAll') && document.getElementById('sfDisableAll').addEventListener('click', function () {
+    document.querySelectorAll('.sf-section-cb').forEach(function (cb) { cb.checked = false; });
+    document.querySelectorAll('.sf-field-cb').forEach(function (cb) {
+      cb.checked = false;
+      var reqEl = document.getElementById('pksf_req_' + cb.dataset.field);
+      if (reqEl) { reqEl.checked = false; reqEl.disabled = true; }
+    });
+    updateSummary();
+  });
+
+  /* Student form field: visible → enables required */
+  document.querySelectorAll('.pkg-sf-vis-cb').forEach(function (visEl) {
+    var reqEl = document.getElementById('pksf_req_' + visEl.dataset.field);
+    if (!reqEl) return;
+    visEl.addEventListener('change', function () {
+      if (!this.checked) { reqEl.checked = false; reqEl.disabled = true; }
+      else                { reqEl.disabled = false; }
+      updateSummary();
+    });
+  });
+
+  /* ── MC tab: global action controls ─────────────────────────────────────── */
+  document.getElementById('mcEnableAll') && document.getElementById('mcEnableAll').addEventListener('click', function () {
+    document.querySelectorAll('.mc-action-cb').forEach(function (cb) { cb.checked = true; });
+    updateSummary();
+  });
+  document.getElementById('mcDisableAll') && document.getElementById('mcDisableAll').addEventListener('click', function () {
+    document.querySelectorAll('.mc-action-cb').forEach(function (cb) { cb.checked = false; });
+    updateSummary();
+  });
+
+  /* MC tab: accordion expand / collapse all */
+  document.getElementById('mcExpandAll') && document.getElementById('mcExpandAll').addEventListener('click', function () {
+    document.querySelectorAll('#mcAccordion [id^="mcpane_"]').forEach(function (el) {
+      if (!el.classList.contains('show')) bootstrap.Collapse.getOrCreateInstance(el).show();
+    });
+  });
+  document.getElementById('mcCollapseAll') && document.getElementById('mcCollapseAll').addEventListener('click', function () {
+    document.querySelectorAll('#mcAccordion [id^="mcpane_"]').forEach(function (el) {
+      if (el.classList.contains('show')) bootstrap.Collapse.getOrCreateInstance(el).hide();
+    });
+  });
+
+  /* ── MC tab: per-module bulk controls ────────────────────────────────────── */
+  document.querySelectorAll('.mc-mod-enable-acts').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('[name^="mc_' + btn.dataset.mk + '_action_"]')
+        .forEach(function (cb) { cb.checked = true; });
+      updateSummary();
+    });
+  });
+  document.querySelectorAll('.mc-mod-disable-acts').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('[name^="mc_' + btn.dataset.mk + '_action_"]')
+        .forEach(function (cb) { cb.checked = false; });
+      updateSummary();
+    });
+  });
+  document.querySelectorAll('.mc-mod-show-secs').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('[name^="mc_' + btn.dataset.mk + '_section_"]')
+        .forEach(function (cb) { cb.checked = true; });
+    });
+  });
+  document.querySelectorAll('.mc-mod-hide-secs').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('[name^="mc_' + btn.dataset.mk + '_section_"]')
+        .forEach(function (cb) { cb.checked = false; });
+    });
+  });
+
+  /* Module config field: visible → enables required */
+  document.querySelectorAll('.pkg-mc-vis-cb').forEach(function (visEl) {
+    var reqEl = document.getElementById('pkg_mc_' + visEl.dataset.module + '_req_' + visEl.dataset.field);
+    if (!reqEl) return;
+    visEl.addEventListener('change', function () {
+      if (!this.checked) { reqEl.checked = false; reqEl.disabled = true; }
+      else                { reqEl.disabled = false; }
+    });
+  });
+
+  /* ── Search: filter module cards ─────────────────────────────────────────── */
+  var pkgSearch = document.getElementById('pkgSearch');
+  if (pkgSearch) {
+    pkgSearch.addEventListener('input', function () {
+      var q = this.value.toLowerCase().trim();
+      document.querySelectorAll('.pkg-module-card').forEach(function (card) {
+        var label = (card.dataset.label || '').toLowerCase();
+        card.style.display = (!q || label.indexOf(q) !== -1) ? '' : 'none';
+      });
+    });
+  }
+
+  /* ── Summary counters ────────────────────────────────────────────────────── */
+  function updateSummary() {
+    var modOn  = modCBs.filter(function (cb) { return cb.checked; }).length;
+    var modOff = modCBs.length - modOn;
+    var featOn = featCBs.filter(function (cb) { return cb.checked && !cb.disabled; }).length;
+    var actOff = document.querySelectorAll('.mc-action-cb:not(:checked)').length;
+
+    function setEl(id, val) {
+      var el = document.getElementById(id);
+      if (el) el.textContent = val;
+    }
+    setEl('smryModOn',  modOn);
+    setEl('smryModOff', modOff);
+    setEl('smryFeatOn', featOn);
+    setEl('smryActOff', actOff);
+  }
+
+  /* ── Init ────────────────────────────────────────────────────────────────── */
+  updateSummary();
+})();
+</script>
+{% endblock %}

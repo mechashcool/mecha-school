@@ -1,0 +1,125 @@
+{% extends "shared/base.html" %}
+{% block title %}{{ 'تعديل جهاز' if device else 'إضافة جهاز' }}{% endblock %}
+{% block page_title %}{{ 'تعديل جهاز' if device else 'إضافة جهاز' }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ 'تعديل جهاز' if device else 'إضافة جهاز جديد' }}</h1>
+    <p class="page-subtitle">{{ device.name if device else 'جهاز Hikvision للحضور والانصراف' }}</p>
+  </div>
+  <a href="{{ url_for('attendance_devices.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>العودة للقائمة
+  </a>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }} alert-dismissible fade show">{{ msg }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+{% endwith %}
+
+<div class="card" style="max-width:680px">
+  <div class="card-body">
+    <form method="POST">
+      <div class="row g-3">
+
+        <div class="col-12">
+          <label class="form-label">اسم الجهاز <span class="text-danger">*</span></label>
+          <input type="text" name="name" class="form-control" required
+                 value="{{ form.get('name') or (device.name if device else '') }}"
+                 placeholder="مثال: جهاز المدخل الرئيسي">
+        </div>
+
+        <div class="col-md-8">
+          <label class="form-label">عنوان IP <span class="text-danger">*</span></label>
+          <input type="text" name="ip_address" class="form-control" required
+                 value="{{ form.get('ip_address') or (device.ip_address if device else '') }}"
+                 placeholder="192.168.1.80">
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">المنفذ</label>
+          <input type="number" name="port" class="form-control"
+                 value="{{ form.get('port') or (device.port if device else 80) }}"
+                 min="1" max="65535">
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">اسم المستخدم</label>
+          <input type="text" name="username" class="form-control" autocomplete="off"
+                 value="{{ form.get('username') or (device.username if device else 'admin') }}">
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">
+            كلمة المرور
+            {% if device %}<span class="text-muted small">(اتركها فارغة للإبقاء على الحالية)</span>{% else %}<span class="text-danger">*</span>{% endif %}
+          </label>
+          <div class="input-group">
+            <input type="password" name="password" id="pwdInput" class="form-control"
+                   autocomplete="new-password"
+                   placeholder="{{ 'أدخل كلمة المرور الجديدة لتغييرها' if device else 'كلمة مرور الجهاز' }}">
+            <button class="btn btn-outline-secondary" type="button" id="pwdToggle" tabindex="-1">
+              <i class="bi bi-eye" id="pwdEye"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">الرقم التسلسلي للجهاز (Device SN) <span class="text-danger">*</span></label>
+          <input type="text" name="device_sn" class="form-control" required
+                 value="{{ form.get('device_sn') or (device.device_sn if device else '') }}"
+                 placeholder="DS-K1T342MFWX-E120250307V043800ENGE5390799">
+          <div class="form-text">يُستخدم هذا الرقم لتسجيل الحضور في النظام — يجب أن يطابق الرقم المسجّل في إعدادات الجهاز.</div>
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">نوع الجهاز / مخصص لـ <span class="text-danger">*</span></label>
+          {% set cur_scope = form.get('device_scope') or (device.device_scope if device else 'students') %}
+          <select name="device_scope" class="form-select" required>
+            <option value="students"  {{ 'selected' if cur_scope == 'students' }}>الطلاب فقط</option>
+            <option value="employees" {{ 'selected' if cur_scope == 'employees' }}>الموظفون فقط</option>
+            <option value="mixed"     {{ 'selected' if cur_scope == 'mixed' }}>مختلط (طلاب وموظفون)</option>
+          </select>
+          <div class="form-text">يحدد نوع البيانات المربوطة بهذا الجهاز وكيفية معالجة سجلات الحضور الواردة.</div>
+        </div>
+
+        <div class="col-12">
+          <label class="form-label">ملاحظات</label>
+          <textarea name="notes" class="form-control" rows="2"
+                    placeholder="موقع الجهاز أو أي ملاحظات إضافية">{{ form.get('notes') or (device.notes if device else '') }}</textarea>
+        </div>
+
+      </div>
+
+      <div class="mt-4 d-flex gap-2">
+        <button type="submit" class="btn btn-primary">
+          <i class="bi bi-check-circle me-1"></i>{{ 'حفظ التعديلات' if device else 'إضافة الجهاز' }}
+        </button>
+        <a href="{{ url_for('attendance_devices.index') }}" class="btn btn-outline-secondary">إلغاء</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const inp = document.getElementById('pwdInput');
+  const eye = document.getElementById('pwdEye');
+  document.getElementById('pwdToggle').addEventListener('click', function () {
+    if (inp.type === 'password') {
+      inp.type = 'text';
+      eye.className = 'bi bi-eye-slash';
+    } else {
+      inp.type = 'password';
+      eye.className = 'bi bi-eye';
+    }
+  });
+})();
+</script>
+{% endblock %}

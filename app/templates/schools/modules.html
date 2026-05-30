@@ -1,0 +1,296 @@
+{% extends "shared/base.html" %}
+{% block title %}إدارة ميزات المدرسة — {{ school.school_name_ar or school.school_name }}{% endblock %}
+{% block page_title %}إدارة الوحدات والميزات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">
+      <i class="bi bi-toggles me-2"></i>إدارة الوحدات والميزات
+    </h1>
+    <p class="text-muted mb-0">
+      {{ school.school_name_ar or school.school_name }}
+      <span class="badge bg-secondary ms-2">
+        {{ school_enabled_modules | length }} / {{ modules | length }} وحدة مفعّلة
+      </span>
+      <span class="badge bg-primary ms-1" id="featBadge">
+        {{ school_enabled_features | length }} / {{ features | length }} ميزة مفعّلة
+      </span>
+    </p>
+  </div>
+  <a href="{{ url_for('schools.detail', school_id=school.id) }}"
+     class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }} alert-dismissible fade show">
+    {{ msg }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+{% endwith %}
+
+<div class="alert alert-info d-flex gap-2 align-items-start mb-4">
+  <i class="bi bi-info-circle-fill flex-shrink-0 mt-1"></i>
+  <div>
+    <strong>ملاحظة:</strong>
+    تؤثر هذه الإعدادات على مدير المدرسة وموظفيها فقط.
+    <br>
+    <strong>الوحدات</strong>: تحكم بإظهار القسم كاملاً في القائمة الجانبية وحجب الوصول المباشر للروابط.
+    <br>
+    <strong>الميزات</strong>: تحكم بتفاصيل الصلاحيات داخل كل وحدة (إضافة، تعديل، حذف، تصدير، إلخ).
+    إذا كانت الوحدة معطّلة فجميع ميزاتها تُعدّ معطّلة تلقائياً.
+  </div>
+</div>
+
+<form method="POST"
+      action="{{ url_for('schools.school_modules', school_id=school.id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+
+  {# ── Global controls ─────────────────────────────────────────────────────── #}
+  <div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <h6 class="mb-0"><i class="bi bi-sliders me-2"></i>التحكم العام</h6>
+      <div class="d-flex gap-2 flex-wrap justify-content-end">
+        <button type="button" class="btn btn-sm btn-outline-success" id="btnSelectAll">
+          <i class="bi bi-check2-all me-1"></i>تفعيل الكل
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="btnClearAll">
+          <i class="bi bi-x-lg me-1"></i>تعطيل الكل
+        </button>
+        {% for preset_key, preset in presets.items() %}
+        {% set fp = feature_presets.get(preset_key, {}) %}
+        <button type="button"
+                class="btn btn-sm btn-outline-primary btn-preset"
+                data-modules="{{ preset.modules | join(',') }}"
+                data-features="{{ fp.get('features', preset.modules) | join(',') if fp else '' }}">
+          <i class="bi bi-collection-fill me-1"></i>{{ preset.label }}
+        </button>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  {# ── Module cards with sub-features ──────────────────────────────────────── #}
+  {% for key, mod in modules.items() %}
+  {% set mod_enabled = key in school_enabled_modules %}
+  {% set mod_feats = [] %}
+  {% for fk, fv in features.items() %}{% if fv.module == key %}{% if mod_feats.append(fk) %}{% endif %}{% endif %}{% endfor %}
+  {% set enabled_feat_count = mod_feats | selectattr('__class__.__name__', 'equalto', 'str') | list | length %}
+
+  <div class="card mb-3 module-card" data-module="{{ key }}">
+    <div class="card-header py-2 d-flex align-items-center justify-content-between
+                {{ 'bg-success bg-opacity-10 border-success' if mod_enabled else 'bg-light' }}">
+      <div class="d-flex align-items-center gap-3">
+        <input class="form-check-input module-cb flex-shrink-0"
+               type="checkbox"
+               name="modules"
+               value="{{ key }}"
+               id="mod_{{ key }}"
+               {{ 'checked' if mod_enabled }}>
+        <label class="d-flex align-items-center gap-2 mb-0 fw-bold" for="mod_{{ key }}"
+               style="cursor:pointer">
+          <i class="bi {{ mod.icon }} text-primary"></i>
+          {{ mod.label }}
+        </label>
+        <span class="badge {{ 'bg-success' if mod_enabled else 'bg-secondary' }} module-badge">
+          {{ 'مفعّل' if mod_enabled else 'معطّل' }}
+        </span>
+        <small class="text-muted">
+          (<span class="feat-enabled-count">{{ mod_feats | selectattr('__self__', 'defined') | list | length }}</span>/{{ mod_feats | length }} ميزة)
+        </small>
+      </div>
+      <div class="d-flex gap-2">
+        <button type="button" class="btn btn-xs btn-outline-success btn-enable-mod-feats py-0 px-2"
+                data-module="{{ key }}" title="تفعيل كل ميزات هذه الوحدة" style="font-size:11px">
+          <i class="bi bi-check2-all"></i> الكل
+        </button>
+        <button type="button" class="btn btn-xs btn-outline-secondary btn-disable-mod-feats py-0 px-2"
+                data-module="{{ key }}" title="تعطيل كل ميزات هذه الوحدة" style="font-size:11px">
+          <i class="bi bi-x-lg"></i> لا شيء
+        </button>
+        <button type="button" class="btn btn-xs btn-outline-secondary py-0 px-2 btn-toggle-feats"
+                data-module="{{ key }}" style="font-size:11px">
+          <i class="bi bi-chevron-down"></i>
+        </button>
+      </div>
+    </div>
+
+    <div class="card-body py-2 module-features-body" id="feats_{{ key }}"
+         style="{{ 'opacity:.45;pointer-events:none' if not mod_enabled }}">
+      <div class="row g-2">
+        {% for feat_key, feat in features.items() if feat.module == key %}
+        {% set feat_on = feat_key in school_enabled_features %}
+        <div class="col-md-6 col-lg-4 col-xl-3">
+          <label class="d-flex align-items-center gap-2 p-2 rounded border feature-label
+                        {{ 'border-primary bg-primary bg-opacity-10' if (feat_on and mod_enabled) else 'border-light bg-light' }}"
+                 for="feat_{{ feat_key | replace('.', '_') }}"
+                 style="cursor:pointer;font-size:13px">
+            <input class="form-check-input feature-cb flex-shrink-0"
+                   type="checkbox"
+                   name="features"
+                   value="{{ feat_key }}"
+                   id="feat_{{ feat_key | replace('.', '_') }}"
+                   data-module="{{ key }}"
+                   {{ 'checked' if feat_on }}
+                   {{ 'disabled' if not mod_enabled }}>
+            <span class="flex-grow-1">{{ feat.label }}</span>
+            <span class="badge feat-badge
+                         {{ 'bg-primary' if (feat_on and mod_enabled) else 'bg-secondary' }}"
+                  style="font-size:10px">
+              {{ 'مفعّل' if (feat_on and mod_enabled) else 'معطّل' }}
+            </span>
+          </label>
+        </div>
+        {% endfor %}
+      </div>
+      <small class="text-muted d-block mt-2">{{ mod.description }}</small>
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="d-flex gap-2 justify-content-end pb-4 mt-3">
+    <a href="{{ url_for('schools.detail', school_id=school.id) }}"
+       class="btn btn-secondary">إلغاء</a>
+    <button type="submit" class="btn btn-primary px-4">
+      <i class="bi bi-check-lg me-1"></i>حفظ الإعدادات
+    </button>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const moduleCBs  = Array.from(document.querySelectorAll('.module-cb'));
+  const featureCBs = Array.from(document.querySelectorAll('.feature-cb'));
+  if (!moduleCBs.length) return;
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+
+  function getModuleFeatures(moduleKey) {
+    return featureCBs.filter(cb => cb.dataset.module === moduleKey);
+  }
+
+  function styleFeatureLabel(cb) {
+    const lbl   = cb.closest('.feature-label');
+    const badge = lbl?.querySelector('.feat-badge');
+    const modEnabled = document.getElementById('mod_' + cb.dataset.module)?.checked;
+    const active = cb.checked && modEnabled;
+    if (!lbl) return;
+    lbl.classList.toggle('border-primary', !!active);
+    lbl.classList.toggle('bg-primary',     !!active);
+    lbl.classList.toggle('bg-opacity-10',  !!active);
+    lbl.classList.toggle('border-light',   !active);
+    lbl.classList.toggle('bg-light',       !active);
+    if (badge) {
+      badge.classList.toggle('bg-primary',   !!active);
+      badge.classList.toggle('bg-secondary', !active);
+      badge.textContent = active ? 'مفعّل' : 'معطّل';
+    }
+  }
+
+  function styleModuleCard(cb) {
+    const key  = cb.value;
+    const card = cb.closest('.module-card');
+    const hdr  = card?.querySelector('.card-header');
+    const badge = hdr?.querySelector('.module-badge');
+    const body = document.getElementById('feats_' + key);
+
+    if (cb.checked) {
+      hdr?.classList.replace('bg-light', 'bg-success');
+      hdr?.classList.add('bg-opacity-10', 'border-success');
+      if (badge) { badge.classList.replace('bg-secondary', 'bg-success'); badge.textContent = 'مفعّل'; }
+      if (body) { body.style.opacity = ''; body.style.pointerEvents = ''; }
+      getModuleFeatures(key).forEach(fcb => { fcb.disabled = false; styleFeatureLabel(fcb); });
+    } else {
+      hdr?.classList.replace('bg-success', 'bg-light');
+      hdr?.classList.remove('bg-opacity-10', 'border-success');
+      if (badge) { badge.classList.replace('bg-success', 'bg-secondary'); badge.textContent = 'معطّل'; }
+      if (body) { body.style.opacity = '0.45'; body.style.pointerEvents = 'none'; }
+      getModuleFeatures(key).forEach(fcb => { fcb.disabled = true; styleFeatureLabel(fcb); });
+    }
+    updateFeatBadge();
+  }
+
+  function updateFeatBadge() {
+    const total   = featureCBs.length;
+    const enabled = featureCBs.filter(cb => cb.checked && !cb.disabled).length;
+    const badge   = document.getElementById('featBadge');
+    if (badge) badge.textContent = enabled + ' / ' + total + ' ميزة مفعّلة';
+  }
+
+  // ── Init ─────────────────────────────────────────────────────────────────
+  moduleCBs.forEach(cb => cb.addEventListener('change', () => styleModuleCard(cb)));
+  featureCBs.forEach(cb => cb.addEventListener('change', () => { styleFeatureLabel(cb); updateFeatBadge(); }));
+
+  // ── Enable/disable all features in one module ─────────────────────────────
+  document.querySelectorAll('.btn-enable-mod-feats').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const modKey = btn.dataset.module;
+      const modCB  = document.getElementById('mod_' + modKey);
+      if (modCB && !modCB.checked) { modCB.checked = true; styleModuleCard(modCB); }
+      getModuleFeatures(modKey).forEach(cb => { cb.checked = true; styleFeatureLabel(cb); });
+      updateFeatBadge();
+    });
+  });
+
+  document.querySelectorAll('.btn-disable-mod-feats').forEach(btn => {
+    btn.addEventListener('click', () => {
+      getModuleFeatures(btn.dataset.module).forEach(cb => { cb.checked = false; styleFeatureLabel(cb); });
+      updateFeatBadge();
+    });
+  });
+
+  // ── Collapse/expand feature body ──────────────────────────────────────────
+  document.querySelectorAll('.btn-toggle-feats').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const body = document.getElementById('feats_' + btn.dataset.module);
+      const icon = btn.querySelector('i');
+      if (!body) return;
+      const hidden = body.style.display === 'none';
+      body.style.display = hidden ? '' : 'none';
+      icon?.classList.toggle('bi-chevron-down', hidden);
+      icon?.classList.toggle('bi-chevron-up',   !hidden);
+    });
+  });
+
+  // ── Global select / clear all ─────────────────────────────────────────────
+  document.getElementById('btnSelectAll')?.addEventListener('click', () => {
+    moduleCBs.forEach(cb  => { cb.checked = true;  styleModuleCard(cb); });
+    featureCBs.forEach(cb => { cb.checked = true;  styleFeatureLabel(cb); });
+    updateFeatBadge();
+  });
+
+  document.getElementById('btnClearAll')?.addEventListener('click', () => {
+    moduleCBs.forEach(cb  => { cb.checked = false; styleModuleCard(cb); });
+    featureCBs.forEach(cb => { cb.checked = false; styleFeatureLabel(cb); });
+    updateFeatBadge();
+  });
+
+  // ── Preset buttons ────────────────────────────────────────────────────────
+  document.querySelectorAll('.btn-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const mods = new Set((btn.dataset.modules || '').split(',').map(s => s.trim()).filter(Boolean));
+      const fts  = new Set((btn.dataset.features || '').split(',').map(s => s.trim()).filter(Boolean));
+
+      // First apply modules
+      moduleCBs.forEach(cb => { cb.checked = mods.has(cb.value); styleModuleCard(cb); });
+
+      // Then apply features (styleModuleCard re-enables/disables feature CBs)
+      featureCBs.forEach(cb => {
+        if (!cb.disabled) {
+          cb.checked = fts.has(cb.value);
+          styleFeatureLabel(cb);
+        }
+      });
+      updateFeatBadge();
+    });
+  });
+
+  updateFeatBadge();
+})();
+</script>
+{% endblock %}

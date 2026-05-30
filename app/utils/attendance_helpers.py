@@ -55,3 +55,55 @@ def determine_check_in_status(check_in_time, settings):
         if check_in_time >= settings.att_late_threshold:
             return 'late'
     return 'present'
+
+
+def is_holiday_date(check_date, school_id, school=None):
+    """
+    Return True if check_date must be skipped for automatic absence because:
+      1. It falls on a weekday listed in school.weekly_off_days  (e.g. "4,5" → Fri+Sat).
+      2. It is inside any active SchoolHoliday range for this school or a global holiday
+         (school_id IS NULL in school_holidays).
+
+    Pass school= to avoid an extra DB hit when the School object is already loaded.
+    Uses bypass_tenant_scope so this is safe to call from background tasks and
+    from the AI Face WebSocket service (no request context).
+    """
+    from app.models import School, SchoolHoliday, db
+
+    if school is None and school_id:
+        school = (School.query
+                  .execution_options(bypass_tenant_scope=True)
+                  .get(school_id))
+
+    # ── weekly day-off check ──────────────────────────────────────────────────
+    if school and school.weekly_off_days:
+        try:
+            off_days = {
+                int(d.strip())
+                for d in school.weekly_off_days.split(',')
+                if d.strip().isdigit()
+            }
+            if check_date.weekday() in off_days:
+                return True
+        except (ValueError, AttributeError):
+            pass
+
+    # ── named holiday check ───────────────────────────────────────────────────
+    q = (SchoolHoliday.query
+         .execution_options(bypass_tenant_scope=True)
+         .filter(
+             SchoolHoliday.is_active == True,
+             SchoolHoliday.start_date <= check_date,
+             SchoolHoliday.end_date   >= check_date,
+         ))
+    if school_id:
+        q = q.filter(
+            db.or_(
+                SchoolHoliday.school_id == school_id,
+                SchoolHoliday.school_id.is_(None),
+            )
+        )
+    else:
+        q = q.filter(SchoolHoliday.school_id.is_(None))
+
+    return q.first() is not None

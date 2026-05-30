@@ -114,6 +114,106 @@ def any_permission_required(*perm_names):
     return decorator
 
 
+def _wants_json():
+    """True when the caller expects a JSON response (AJAX / JSON body / JSON Accept)."""
+    if request.is_json:
+        return True
+    if 'application/json' in request.headers.get('Accept', ''):
+        return True
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return True
+    return False
+
+
+def action_required(module_key, action_key):
+    """
+    Block the route if the given action is disabled for the current user's school.
+
+    - Super admin always passes through.
+    - School staff with disabled action:
+        • AJAX/JSON requests  → JSON  {'ok': False, 'error': '…'} 403
+        • HTML requests       → flash Arabic message + redirect to referrer
+    - Fail-open: no config row → action considered enabled.
+    """
+    def decorator(f):
+        @wraps(f)
+        def wrapped(*args, **kwargs):
+            if not current_user.is_authenticated:
+                return redirect(url_for('auth.login'))
+            if not getattr(current_user, 'is_super_admin', False):
+                school_id = getattr(current_user, 'school_id', None)
+                from app.utils.school_config import get_school_config
+                cfg = get_school_config(school_id)
+                if not cfg.action_enabled(module_key, action_key):
+                    if _wants_json():
+                        from flask import jsonify
+                        return jsonify({'ok': False,
+                                        'error': 'هذه الميزة غير مفعلة لهذه المدرسة'}), 403
+                    flash('هذه الميزة غير مفعلة لهذه المدرسة.', 'warning')
+                    return redirect(request.referrer or url_for('admin.dashboard'))
+            return f(*args, **kwargs)
+        return wrapped
+    return decorator
+
+
+def module_required(module_key):
+    """
+    Block the route if the given module is disabled for the current user's school.
+
+    Use this when a route belongs to a blueprint that also serves other modules
+    (e.g. subjects inside the sections blueprint) so the global BLUEPRINT_MODULE
+    guard cannot be used.
+
+    - Super admin always passes through.
+    - Fail-open: no SchoolModule row → module considered enabled.
+    """
+    def decorator(f):
+        @wraps(f)
+        def wrapped(*args, **kwargs):
+            if not current_user.is_authenticated:
+                return redirect(url_for('auth.login'))
+            if not getattr(current_user, 'is_super_admin', False):
+                school_id = getattr(current_user, 'school_id', None)
+                from app.utils.modules import is_module_enabled
+                if not is_module_enabled(school_id, module_key):
+                    if _wants_json():
+                        from flask import jsonify
+                        return jsonify({'ok': False,
+                                        'error': 'هذه الميزة غير مفعلة لهذه المدرسة'}), 403
+                    flash('هذه الميزة غير مفعلة لهذه المدرسة.', 'warning')
+                    return redirect(request.referrer or url_for('admin.dashboard'))
+            return f(*args, **kwargs)
+        return wrapped
+    return decorator
+
+
+def section_required(module_key, section_key):
+    """
+    Block the route if the given section is hidden for the current user's school.
+
+    Same AJAX/HTML split as action_required.
+    """
+    def decorator(f):
+        @wraps(f)
+        def wrapped(*args, **kwargs):
+            if not current_user.is_authenticated:
+                return redirect(url_for('auth.login'))
+            if not getattr(current_user, 'is_super_admin', False):
+                school_id = getattr(current_user, 'school_id', None)
+                from app.utils.school_config import get_school_config
+                cfg = get_school_config(school_id)
+                if not cfg.section_visible(module_key, section_key):
+                    if _wants_json():
+                        from flask import jsonify
+                        return jsonify({'ok': False,
+                                        'error': 'هذا القسم غير مفعل لهذه المدرسة'}), 403
+                    flash('هذا القسم غير مفعل لهذه المدرسة.', 'warning')
+                    return redirect(request.referrer or url_for('admin.dashboard'))
+            return f(*args, **kwargs)
+        return wrapped
+    return decorator
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  SCHOOL-SCOPING HELPERS
 # ─────────────────────────────────────────────────────────────────────────────

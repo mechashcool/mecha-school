@@ -32,34 +32,71 @@
         </div>
         <div class="card-body">
           <div class="row g-3">
+
+            {# full_name — always visible and required #}
             <div class="col-md-6">
               <label class="form-label">الاسم الكامل <span class="text-danger">*</span></label>
               <input type="text" name="full_name" class="form-control" required
                      value="{{ student.full_name if student else '' }}">
             </div>
+
+            {# date_of_birth #}
+            {% if form_cfg.field_visible('date_of_birth') %}
             <div class="col-md-6">
-              <label class="form-label">تاريخ الميلاد <span class="text-danger">*</span></label>
-              <input type="date" name="date_of_birth" class="form-control" required
+              <label class="form-label">
+                تاريخ الميلاد
+                {% if form_cfg.field_required('date_of_birth') %}<span class="text-danger">*</span>{% endif %}
+              </label>
+              <input type="date" name="date_of_birth" class="form-control"
+                     {% if form_cfg.field_required('date_of_birth') %}required{% endif %}
                      value="{{ student.date_of_birth.isoformat() if student and student.date_of_birth else '' }}">
             </div>
+            {% endif %}
+
+            {# gender #}
+            {% if form_cfg.field_visible('gender') %}
             <div class="col-md-6">
-              <label class="form-label">الجنس <span class="text-danger">*</span></label>
-              <select name="gender" class="form-select" required>
+              <label class="form-label">
+                الجنس
+                {% if form_cfg.field_required('gender') %}<span class="text-danger">*</span>{% endif %}
+              </label>
+              <select name="gender" class="form-select"
+                      {% if form_cfg.field_required('gender') %}required{% endif %}>
                 <option value="">— اختر —</option>
                 <option value="male"   {{ 'selected' if student and student.gender == 'male' }}>ذكر</option>
                 <option value="female" {{ 'selected' if student and student.gender == 'female' }}>أنثى</option>
               </select>
             </div>
+            {% endif %}
+
+            {# nationality #}
+            {% if form_cfg.field_visible('nationality') %}
             <div class="col-md-6">
-              <label class="form-label">الجنسية</label>
+              <label class="form-label">
+                الجنسية
+                {% if form_cfg.field_required('nationality') %}<span class="text-danger">*</span>{% endif %}
+              </label>
               <input type="text" name="nationality" class="form-control"
+                     {% if form_cfg.field_required('nationality') %}required{% endif %}
                      value="{{ student.nationality if student else '' }}">
             </div>
+            {% endif %}
+
+            {# phone #}
+            {% if form_cfg.field_visible('phone') %}
             <div class="col-md-6">
-              <label class="form-label">رقم الهاتف</label>
+              <label class="form-label">
+                رقم الهاتف
+                {% if form_cfg.field_required('phone') %}<span class="text-danger">*</span>{% endif %}
+              </label>
               <input type="tel" name="phone" class="form-control"
+                     {% if form_cfg.field_required('phone') %}required{% endif %}
                      value="{{ student.phone if student else '' }}">
             </div>
+            {% endif %}
+
+            {# class / section — stage + grade + section #}
+            {% if form_cfg.section_visible('class_section') %}
             <div class="col-md-4">
               <label class="form-label">المرحلة الدراسية</label>
               <select id="fStage" class="form-select">
@@ -97,10 +134,20 @@
                 {% endfor %}
               </select>
             </div>
+            {% endif %}
+
+            {# address #}
+            {% if form_cfg.field_visible('address') %}
             <div class="col-12">
-              <label class="form-label">العنوان</label>
-              <textarea name="address" class="form-control" rows="2">{{ student.address if student else '' }}</textarea>
+              <label class="form-label">
+                العنوان
+                {% if form_cfg.field_required('address') %}<span class="text-danger">*</span>{% endif %}
+              </label>
+              <textarea name="address" class="form-control" rows="2"
+                        {% if form_cfg.field_required('address') %}required{% endif %}>{{ student.address if student else '' }}</textarea>
             </div>
+            {% endif %}
+
             {% if student %}
             <div class="col-md-6">
               <label class="form-label">الحالة</label>
@@ -117,21 +164,33 @@
         </div>
       </div>
 
-      <!-- Guardian -->
+      {# ─── Guardian section ──────────────────────────────────────────────── #}
+      {% if form_cfg.section_visible('guardian_info') %}
       <div class="card">
         <div class="card-header">
           <i class="bi bi-people-fill text-accent"></i>بيانات ولي الأمر
         </div>
         <div class="card-body">
           <div class="row g-3">
+            {% if form_cfg.field_visible('guardian_name') %}
             <div class="col-md-6">
-              <label class="form-label">اسم ولي الأمر</label>
+              <label class="form-label">
+                اسم ولي الأمر
+                {% if form_cfg.field_required('guardian_name') %}<span class="text-danger">*</span>{% endif %}
+              </label>
               <input type="text" name="guardian_name" class="form-control"
+                     {% if form_cfg.field_required('guardian_name') %}required{% endif %}
                      value="{{ student.guardian_name if student else '' }}">
             </div>
+            {% endif %}
+            {% if form_cfg.field_visible('guardian_relation') %}
             <div class="col-md-6">
-              <label class="form-label">صلة القرابة</label>
-              <select name="guardian_relation" class="form-select">
+              <label class="form-label">
+                صلة القرابة
+                {% if form_cfg.field_required('guardian_relation') %}<span class="text-danger">*</span>{% endif %}
+              </label>
+              <select name="guardian_relation" class="form-select"
+                      {% if form_cfg.field_required('guardian_relation') %}required{% endif %}>
                 <option value="">— اختر —</option>
                 {% for rel in ['أب','أم','أخ','أخت','جد','جدة','عم','عمة','خال','خالة','آخر'] %}
                 <option value="{{ rel }}"
@@ -141,28 +200,243 @@
                 {% endfor %}
               </select>
             </div>
+            {% endif %}
+            {% if form_cfg.field_visible('guardian_phone') %}
             <div class="col-md-6">
-              <label class="form-label">هاتف ولي الأمر</label>
+              <label class="form-label">
+                هاتف ولي الأمر
+                {% if form_cfg.field_required('guardian_phone') %}<span class="text-danger">*</span>{% endif %}
+              </label>
               <input type="tel" name="guardian_phone" class="form-control"
+                     {% if form_cfg.field_required('guardian_phone') %}required{% endif %}
                      value="{{ student.guardian_phone if student else '' }}">
             </div>
+            {% endif %}
+            {% if form_cfg.field_visible('guardian_email') %}
             <div class="col-md-6">
-              <label class="form-label">بريد ولي الأمر</label>
+              <label class="form-label">
+                بريد ولي الأمر
+                {% if form_cfg.field_required('guardian_email') %}<span class="text-danger">*</span>{% endif %}
+              </label>
               <input type="email" name="guardian_email" class="form-control"
+                     {% if form_cfg.field_required('guardian_email') %}required{% endif %}
                      value="{{ student.guardian_email if student else '' }}">
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      {# ─── Parent Account ────────────────────────────────────────────────── #}
+      {% if not student %}
+      {# ── Add Student: link to existing parent OR create new account ──────── #}
+
+      {# Link to existing parent #}
+      {% if form_cfg.section_visible('link_existing_parent') and available_parents %}
+      <div class="card mt-4">
+        <div class="card-header"><i class="bi bi-person-check-fill text-accent"></i>ربط بولي أمر موجود</div>
+        <div class="card-body">
+          <p class="text-muted small mb-3">
+            <i class="bi bi-info-circle me-1"></i>
+            اختر حساب ولي الأمر الموجود من القائمة لربطه بهذا الطالب مباشرةً.
+            إذا اخترت من هنا <strong>لن يُنشأ حساب جديد</strong>.
+          </p>
+          <input type="text" id="parentSearchAdd" class="form-control mb-2"
+                 placeholder="بحث عن ولي الأمر…">
+          <select name="link_existing_parent_id" id="parentSelectAdd" class="form-select">
+            <option value="">— اختر ولي الأمر (اختياري) —</option>
+            {% for p in available_parents %}
+            <option value="{{ p.id }}">{{ p.full_name }} (@{{ p.username }}){% if p.phone %} — {{ p.phone }}{% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      {% endif %}
+
+      {# Create new parent account #}
+      {% if form_cfg.section_visible('create_parent_account') %}
+      <div class="card mt-4">
+        <div class="card-header"><i class="bi bi-person-badge-fill text-accent"></i>إنشاء حساب ولي أمر جديد</div>
+        <div class="card-body">
+          <p class="text-muted small mb-3">
+            <i class="bi bi-info-circle me-1"></i>
+            أدخل كلمة المرور فقط وسيتم توليد اسم المستخدم تلقائياً بصيغة <code>XXX-PAR-000001</code>.
+            يمكنك أيضاً كتابة اسم مستخدم مخصص. إذا تركت كلمة المرور فارغة، لن يُنشأ الحساب.
+          </p>
+          <div class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label">اسم المستخدم <span class="text-muted fw-400">(اختياري — يُولَّد تلقائياً)</span></label>
+              <input type="text" name="parent_username" class="form-control"
+                     placeholder="اتركه فارغاً للتوليد التلقائي" autocomplete="off">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">كلمة المرور</label>
+              <input type="password" name="parent_password" class="form-control"
+                     autocomplete="new-password">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">تأكيد كلمة المرور</label>
+              <input type="password" name="parent_password_confirm" class="form-control"
+                     autocomplete="new-password">
             </div>
           </div>
         </div>
       </div>
+      {% endif %}
+
+      {% else %}
+      {# ── Edit Student: existing parents list + link existing + create new ─── #}
+
+      {# Existing linked parents with unlink button #}
+      {% if linked_parents %}
+      <div class="card mt-4">
+        <div class="card-header"><i class="bi bi-people-fill text-accent"></i>أولياء الأمور المرتبطون</div>
+        <div class="card-body p-0">
+          {% for p in linked_parents %}
+          <div class="d-flex align-items-center gap-3 px-4 py-3 border-bottom">
+            <div style="width:36px;height:36px;border-radius:8px;background:#1a3a5c;
+                        display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700">
+              {{ (p.full_name or '?')[0] }}
+            </div>
+            <div class="flex-grow-1">
+              <div style="font-weight:700;font-size:14px">{{ p.full_name }}</div>
+              <div style="font-size:12px;color:#9aabb8">@{{ p.username }}</div>
+            </div>
+            <span class="badge {{ 'bg-success' if p.is_active else 'bg-secondary' }} me-1">
+              {{ 'نشط' if p.is_active else 'معطّل' }}
+            </span>
+            <button type="submit"
+                    form="unlink-form-{{ p.id }}"
+                    onclick="return confirm('هل تريد إلغاء ربط {{ p.full_name }} من هذا الطالب؟')"
+                    class="btn btn-sm btn-outline-danger" title="إلغاء الربط">
+              <i class="bi bi-person-dash"></i>
+            </button>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {# Link to existing parent (edit mode — only shows unlinked parents) #}
+      {% if form_cfg.section_visible('link_existing_parent') and available_parents %}
+      <div class="card mt-4">
+        <div class="card-header"><i class="bi bi-person-check-fill text-accent"></i>ربط بولي أمر موجود</div>
+        <div class="card-body">
+          <p class="text-muted small mb-3">
+            <i class="bi bi-info-circle me-1"></i>
+            اختر حساباً من القائمة لربطه بهذا الطالب دون إنشاء حساب جديد.
+          </p>
+          <input type="text" id="parentSearchEdit" class="form-control mb-2"
+                 placeholder="بحث عن ولي الأمر…">
+          <select name="link_existing_parent_id" id="parentSelectEdit" class="form-select">
+            <option value="">— اختر ولي الأمر (اختياري) —</option>
+            {% for p in available_parents %}
+            <option value="{{ p.id }}">{{ p.full_name }} (@{{ p.username }}){% if p.phone %} — {{ p.phone }}{% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      {% endif %}
+
+      {# Create new parent account (edit mode) #}
+      {% if form_cfg.section_visible('create_parent_account') %}
+      <div class="card mt-4">
+        <div class="card-header"><i class="bi bi-person-badge-fill text-accent"></i>إنشاء حساب دخول لولي الأمر</div>
+        <div class="card-body">
+          <p class="text-muted small mb-3">
+            <i class="bi bi-info-circle me-1"></i>
+            سيُنشأ الحساب باستخدام بيانات ولي الأمر المُدخلة أعلاه (الاسم، الهاتف، البريد).
+            اترك اسم المستخدم فارغاً إذا لم تكن بحاجة لإنشاء حساب.
+          </p>
+          <div class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label">اسم المستخدم</label>
+              <input type="text" name="new_parent_username" class="form-control"
+                     placeholder="مثال: parent_ali" autocomplete="off">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">كلمة المرور</label>
+              <input type="password" name="new_parent_password" class="form-control"
+                     autocomplete="new-password">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">تأكيد كلمة المرور</label>
+              <input type="password" name="new_parent_password_confirm" class="form-control"
+                     autocomplete="new-password">
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+      {% endif %}
+
+      {# ─── Attendance Device Mapping ──────────────────────────────────────── #}
+      {% if form_cfg.section_visible('attendance_device') and 'attendance_devices.mappings' in enabled_features and active_devices %}
+      <div class="card mt-4">
+        <div class="card-header"><i class="bi bi-hdd-network-fill text-accent"></i>بيانات جهاز الحضور</div>
+        <div class="card-body">
+          {% if student and existing_device_mappings %}
+          <p class="small fw-bold text-muted mb-2">الأجهزة المرتبطة حالياً:</p>
+          {% for m in existing_device_mappings %}
+          <div class="d-flex align-items-center gap-2 mb-2 px-3 py-2 rounded"
+               style="background:#f0f4f8;font-size:13px">
+            <i class="bi bi-hdd-network text-primary"></i>
+            <span class="fw-600">{{ m.device.name }}</span>
+            <span class="text-muted mx-1">—</span>
+            <code>{{ m.employee_no_string }}</code>
+            <span class="badge {{ 'bg-success' if m.is_active else 'bg-secondary' }} ms-auto">
+              {{ 'نشط' if m.is_active else 'معطّل' }}
+            </span>
+          </div>
+          {% endfor %}
+          <hr class="my-3">
+          <p class="small text-muted mb-2">تحديث أو إضافة ربط جهاز:</p>
+          {% endif %}
+          <p class="text-muted small mb-3">
+            <i class="bi bi-info-circle me-1"></i>
+            اكتب نفس الرقم الموجود داخل جهاز الحضور لهذا الطالب.
+          </p>
+          <div class="row g-3 align-items-end">
+            <div class="col-md-4">
+              <label class="form-label">رقم الطالب في الجهاز</label>
+              <input type="text" name="employee_no_string" class="form-control"
+                     placeholder="مثال: 1 أو 25 أو 630"
+                     pattern="[0-9]*" inputmode="numeric">
+            </div>
+            <div class="col-md-{{ '8' if active_devices|length == 1 else '5' }}">
+              <label class="form-label">اختيار الجهاز</label>
+              <select name="device_id" class="form-select" id="deviceSelect">
+                <option value="">— اختر الجهاز —</option>
+                {% for dev in active_devices %}
+                <option value="{{ dev.id }}">{{ dev.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            {% if active_devices|length > 1 %}
+            <div class="col-md-3 d-flex align-items-end pb-1">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="all_devices" value="1"
+                       id="allDevicesCb"
+                       onchange="document.getElementById('deviceSelect').disabled = this.checked">
+                <label class="form-check-label small" for="allDevicesCb">ربط بكل الأجهزة</label>
+              </div>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endif %}
     </div>
 
     <!-- Sidebar: Photo + Notes -->
     <div class="col-lg-4">
+      {% if form_cfg.section_visible('student_photo') %}
       <div class="card mb-4">
         <div class="card-header"><i class="bi bi-camera-fill text-accent"></i>صورة الطالب</div>
         <div class="card-body text-center">
-          {% if student and student.photo %}
-          <img src="{{ url_for('static', filename=student.photo) }}"
+          {% if student and resolve_photo_url(student.photo) %}
+          <img src="{{ resolve_photo_url(student.photo) }}"
                class="rounded-12 mb-3" style="width:120px;height:120px;object-fit:cover">
           {% else %}
           <div class="mb-3" style="width:120px;height:120px;border-radius:12px;
@@ -171,10 +445,16 @@
             <i class="bi bi-person-fill"></i>
           </div>
           {% endif %}
+          {% if 'students.photo_upload' in enabled_features %}
           <input type="file" name="photo" class="form-control form-control-sm" accept="image/*">
+          {% else %}
+          <div class="text-muted small mt-1"><i class="bi bi-lock me-1"></i>رفع الصور غير مفعّل</div>
+          {% endif %}
         </div>
       </div>
+      {% endif %}
 
+      {% if 'students.documents_upload' in enabled_features and form_cfg.section_visible('student_documents') %}
       <div class="card mb-4">
         <div class="card-header"><i class="bi bi-folder-fill text-accent"></i>مستندات الطالب</div>
         <div class="card-body">
@@ -200,11 +480,13 @@
             <i class="bi bi-plus-lg"></i> إضافة مستند آخر
           </button>
           <div class="text-muted mt-2" style="font-size:12px">
-            يمكنك رفع أكثر من مستند في نفس الوقت. سيتم حفظ الملفات داخل مجلد <code>static/uploads/students/documents/</code>.
+            يمكنك رفع أكثر من مستند في نفس الوقت.
           </div>
         </div>
       </div>
+      {% endif %}
 
+      {% if form_cfg.section_visible('notes') %}
       <div class="card">
         <div class="card-header"><i class="bi bi-sticky-fill text-accent"></i>ملاحظات</div>
         <div class="card-body">
@@ -212,6 +494,7 @@
                     placeholder="أي ملاحظات إضافية...">{{ student.notes if student else '' }}</textarea>
         </div>
       </div>
+      {% endif %}
     </div>
   </div>
 
@@ -223,6 +506,17 @@
     <a href="{{ url_for('students.index') }}" class="btn btn-outline-secondary px-5">إلغاء</a>
   </div>
 </form>
+
+{# Unlink-parent forms live OUTSIDE the main form to avoid illegal nesting #}
+{% if student and linked_parents %}
+{% for p in linked_parents %}
+<form id="unlink-form-{{ p.id }}" method="POST"
+      action="{{ url_for('students.unlink_parent', student_id=student.id) }}">
+  <input type="hidden" name="parent_user_id" value="{{ p.id }}">
+</form>
+{% endfor %}
+{% endif %}
+
 {% endblock %}
 {% block extra_js %}
 <script>
@@ -294,5 +588,23 @@
       event.target.closest('.document-row')?.remove();
     }
   });
+
+/* Live search for existing-parent dropdowns */
+(function () {
+  [['parentSearchAdd', 'parentSelectAdd'],
+   ['parentSearchEdit', 'parentSelectEdit']].forEach(function ([searchId, selectId]) {
+    const search = document.getElementById(searchId);
+    const sel    = document.getElementById(selectId);
+    if (!search || !sel) return;
+    const opts = Array.from(sel.options);
+    search.addEventListener('input', function () {
+      const q = this.value.toLowerCase();
+      sel.innerHTML = '';
+      opts.forEach(function (o) {
+        if (!q || o.text.toLowerCase().includes(q)) sel.appendChild(o.cloneNode(true));
+      });
+    });
+  });
+})();
 </script>
 {% endblock %}

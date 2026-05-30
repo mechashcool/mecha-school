@@ -1,0 +1,47 @@
+{% extends "shared/base.html" %}
+{% block title %}تسجيل جرد{% endblock %}
+{% block page_title %}تسجيل جرد{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">تسجيل جرد سنوي</h1></div>
+  <a href="{{ url_for('inventory.counts') }}" class="btn btn-outline-secondary">رجوع</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST" class="row g-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+      <div class="col-md-6">
+        <label class="form-label">المادة</label>
+        <select name="item_id" class="form-select" required>
+          <option value="">اختر المادة</option>
+          {% for item in items %}
+          <option value="{{ item.id }}">{{ item.name }} - كمية النظام: {{ item.current_quantity }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">الكمية الفعلية</label>
+        <input type="number" name="actual_quantity" class="form-control" step="0.01" min="0" required>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">تاريخ الجرد</label>
+        <input type="date" name="count_date" class="form-control" value="{{ today.strftime('%Y-%m-%d') if today else '' }}" required>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">سبب الفرق</label>
+        <input type="text" name="reason" class="form-control">
+      </div>
+      <div class="col-12">
+        <label class="form-label">ملاحظات</label>
+        <textarea name="notes" class="form-control" rows="3"></textarea>
+      </div>
+      <div class="col-12 d-flex gap-2">
+        <button class="btn btn-primary">حفظ</button>
+        <a href="{{ url_for('inventory.counts') }}" class="btn btn-outline-secondary">إلغاء</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

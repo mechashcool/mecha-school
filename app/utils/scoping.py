@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from flask import g, has_request_context, session
+from flask import g, has_request_context, request, session
 from flask_login import current_user
 from sqlalchemy import event
 from sqlalchemy.orm import Session, with_loader_criteria
@@ -18,20 +18,24 @@ _REGISTERED = False
 
 def _models():
     from app.models import (
-        AcademicYear, Announcement, AuditLog, Device, Employee,
+        AcademicYear, Announcement, AttendanceDevice, AuditLog, Complaint,
+        Device, DeviceEventLog, DeviceStudentMapping, Employee,
         EmployeeAttendance, EmployeeDocument, EmployeeEvaluation, Exam,
         ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord,
-        FeeType, Grade, Notification, PushNotification, Revenue,
+        FeeType, Grade, InventoryCategory, InventoryCount, InventoryItem,
+        InventoryMovement, LeaveRequest, Notification, PushNotification, Revenue,
         RevenueCategory, SalaryRecord, Schedule,
         Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
         Subject, User,
     )
 
     school_scoped = (
-        AcademicYear, Announcement, AuditLog, Device, Employee,
+        AcademicYear, Announcement, AttendanceDevice, AuditLog, Complaint,
+        Device, DeviceEventLog, DeviceStudentMapping, Employee,
         EmployeeAttendance, EmployeeDocument, EmployeeEvaluation, Exam,
         ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord,
-        FeeType, Grade, Notification, PushNotification, Revenue,
+        FeeType, Grade, InventoryCategory, InventoryCount, InventoryItem,
+        InventoryMovement, LeaveRequest, Notification, PushNotification, Revenue,
         RevenueCategory, SalaryRecord, Schedule,
         Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
         Subject, User,
@@ -40,9 +44,10 @@ def _models():
     # they persist across academic years so that a year rollover does not
     # require re-entering master student data.
     year_scoped = (
-        EmployeeAttendance, EmployeeEvaluation, Exam, ExamResult, Expense,
-        FeeInstallment, FeeRecord, FeeType, Grade, Revenue, SalaryRecord,
-        Schedule, Section, StudentAttendance, Subject,
+        Complaint, EmployeeAttendance, EmployeeEvaluation, Exam, ExamResult, Expense,
+        FeeInstallment, FeeRecord, FeeType, Grade, InventoryCategory,
+        InventoryCount, InventoryItem, InventoryMovement, Revenue, SalaryRecord,
+        Schedule, Section, StudentAttendance, Subject, LeaveRequest,
     )
     return school_scoped, year_scoped
 
@@ -184,6 +189,10 @@ def _set_request_scope():
     """Cache request scope once so ORM events do not need to query repeatedly."""
     if not has_request_context():
         return
+    if request.endpoint is None or request.endpoint == 'static':
+        return
+    if request.path.startswith('/static/'):
+        return
 
     try:
         g.tenant_scope_role_name = _current_role_name()
@@ -254,9 +263,10 @@ def set_hardware_scope(device):
 def _inherit_scope(session_, obj):
     """Populate school/year from strong parent relationships before validation."""
     from app.models import (
-        AcademicYear, Employee, EmployeeAttendance, EmployeeDocument,
+        AcademicYear, Complaint, Employee, EmployeeAttendance, EmployeeDocument,
         EmployeeEvaluation, Exam, ExamResult, Expense, FeeInstallment,
-        FeeRecord, Grade, Notification, PushNotification, Revenue, SalaryRecord, Schedule,
+        FeeRecord, Grade, InventoryCategory, InventoryCount, InventoryItem,
+        InventoryMovement, LeaveRequest, Notification, PushNotification, Revenue, SalaryRecord, Schedule,
         Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
         Subject, User,
     )
@@ -360,6 +370,24 @@ def _inherit_scope(session_, obj):
         if getattr(obj, 'academic_year_id', None) is None:
             ay = _academic_year_for_date(session_, obj.school_id, obj.start_date)
             obj.academic_year_id = ay.id if ay else current_academic_year_id()
+    elif isinstance(obj, (Complaint, LeaveRequest)):
+        student = obj.student or load(Student, obj.student_id)
+        if student and getattr(obj, 'school_id', None) is None:
+            obj.school_id = student.school_id
+        if student and getattr(obj, 'academic_year_id', None) is None:
+            obj.academic_year_id = student.academic_year_id or current_academic_year_id()
+    elif isinstance(obj, InventoryItem):
+        category = obj.category or load(InventoryCategory, obj.category_id)
+        if category and getattr(obj, 'school_id', None) is None:
+            obj.school_id = category.school_id
+        if category and getattr(obj, 'academic_year_id', None) is None:
+            obj.academic_year_id = category.academic_year_id
+    elif isinstance(obj, (InventoryMovement, InventoryCount)):
+        item = obj.item or load(InventoryItem, obj.item_id)
+        if item and getattr(obj, 'school_id', None) is None:
+            obj.school_id = item.school_id
+        if item and getattr(obj, 'academic_year_id', None) is None:
+            obj.academic_year_id = item.academic_year_id
     elif isinstance(obj, PushNotification):
         copy_scope(obj.user or load(User, obj.user_id), year=False)
     elif isinstance(obj, Notification):
@@ -369,9 +397,10 @@ def _inherit_scope(session_, obj):
 def _validate_relationship_scope(session_, obj):
     """Reject rows whose direct relationships cross school/year boundaries."""
     from app.models import (
-        AcademicYear, Employee, EmployeeAttendance, EmployeeDocument,
+        AcademicYear, Complaint, Employee, EmployeeAttendance, EmployeeDocument,
         EmployeeEvaluation, Exam, ExamResult, Expense, FeeInstallment,
-        FeeRecord, Grade, Revenue, RevenueCategory, SalaryRecord, Schedule,
+        FeeRecord, Grade, InventoryCategory, InventoryCount, InventoryItem,
+        InventoryMovement, LeaveRequest, Revenue, RevenueCategory, SalaryRecord, Schedule,
         Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
         Subject, ExpenseCategory, Notification, User,
     )
@@ -488,6 +517,25 @@ def _validate_relationship_scope(session_, obj):
         student = obj.student or load(Student, obj.student_id)
         require(student and student.school_id == obj.school_id,
                 'StudentSuspension must match student school')
+    elif isinstance(obj, (Complaint, LeaveRequest)):
+        student = obj.student or load(Student, obj.student_id)
+        parent = obj.parent or load(User, obj.parent_id)
+        require(student and student.school_id == obj.school_id,
+                'Parent request must match student school')
+        require(parent and parent.school_id == obj.school_id,
+                'Parent request must match parent school')
+    elif isinstance(obj, InventoryItem):
+        category = obj.category or load(InventoryCategory, obj.category_id)
+        require(category and category.school_id == obj.school_id,
+                'InventoryItem must match category school')
+        require(category and category.academic_year_id == obj.academic_year_id,
+                'InventoryItem must match category academic year')
+    elif isinstance(obj, (InventoryMovement, InventoryCount)):
+        item = obj.item or load(InventoryItem, obj.item_id)
+        require(item and item.school_id == obj.school_id,
+                'Inventory transaction must match item school')
+        require(item and item.academic_year_id == obj.academic_year_id,
+                'Inventory transaction must match item academic year')
 
 
 def _before_flush(session_, flush_context, instances):

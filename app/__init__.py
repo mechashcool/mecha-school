@@ -3,7 +3,7 @@ Al-Muhandis School Management System
 Application Factory  (Phase 6: Multi-Tenant)
 """
 import os
-from flask import Flask
+from flask import Flask, request
 from flask_login import LoginManager
 from flask_migrate import Migrate
 
@@ -34,6 +34,10 @@ def create_app(config_name=None):
     login_manager.login_view = 'auth.login'
     login_manager.login_message = 'يرجى تسجيل الدخول للوصول إلى هذه الصفحة.'
     login_manager.login_message_category = 'warning'
+
+    @app.teardown_appcontext
+    def cleanup_db_session(exc=None):
+        db.session.remove()
 
     @login_manager.user_loader
     def load_user(user_id):
@@ -74,8 +78,12 @@ def create_app(config_name=None):
     from app.blueprints.super_admin  import super_admin_bp
     # Transport routes
     from app.blueprints.transport    import transport_bp
+    from app.blueprints.inventory    import inventory_bp
     # Mobile API — JWT-authenticated REST layer
-    from app.blueprints.mobile_api   import mobile_api_bp
+    from app.blueprints.mobile_api        import mobile_api_bp
+    from app.blueprints.attendance_devices import attendance_devices_bp
+    from app.blueprints.school_calendar   import school_calendar_bp
+    from app.blueprints.homework          import homework_bp
 
     app.register_blueprint(auth_bp,          url_prefix='/auth')
     app.register_blueprint(admin_bp,         url_prefix='/admin')
@@ -100,10 +108,27 @@ def create_app(config_name=None):
     app.register_blueprint(schools_bp,       url_prefix='/schools')
     app.register_blueprint(super_admin_bp,   url_prefix='/admin/super')
     app.register_blueprint(transport_bp,     url_prefix='/transport')
-    app.register_blueprint(mobile_api_bp,   url_prefix='/api/mobile/v1')
+    app.register_blueprint(inventory_bp,     url_prefix='/inventory')
+    app.register_blueprint(mobile_api_bp,          url_prefix='/api/mobile/v1')
+    app.register_blueprint(attendance_devices_bp,  url_prefix='/attendance-devices')
+    app.register_blueprint(school_calendar_bp,     url_prefix='/school-calendar')
+    app.register_blueprint(homework_bp,            url_prefix='/homework')
 
     # ── Jinja2 globals ────────────────────────────────────────────────────────
-    app.jinja_env.globals.update(enumerate=enumerate, zip=zip, len=len)
+    from app.utils.helpers import resolve_photo_url
+    app.jinja_env.globals.update(enumerate=enumerate, zip=zip, len=len,
+                                 resolve_photo_url=resolve_photo_url)
+
+    # ── Jinja2 filters ────────────────────────────────────────────────────────
+    from datetime import timezone as _tz, timedelta as _td
+    _baghdad = _tz(_td(hours=3))  # Iraq is UTC+3, no DST
+
+    def _to_baghdad(dt, fmt='%Y-%m-%d %H:%M'):
+        if not dt:
+            return ''
+        return dt.replace(tzinfo=_tz.utc).astimezone(_baghdad).strftime(fmt)
+
+    app.jinja_env.filters['to_baghdad'] = _to_baghdad
 
     # ── Root redirect ─────────────────────────────────────────────────────────
     from flask import redirect, url_for
@@ -124,61 +149,120 @@ def create_app(config_name=None):
     def inject_globals():
         from flask_login import current_user
         from datetime import date, datetime
-        from app.models import School, SchoolSettings
-        from app.utils.decorators import get_current_school, get_active_year
 
         unread_count = 0
-        if current_user.is_authenticated:
-            from app.models import Notification, NotificationRead
-            from app.utils.notification_visibility import notification_visible_to
-            read_ids = db.session.query(NotificationRead.notification_id)\
-                         .filter_by(user_id=current_user.id).subquery()
-            unread_count = Notification.query\
-                .filter(notification_visible_to(current_user))\
-                .filter(Notification.id.notin_(read_ids))\
-                .count()
-
-        # Current school for the request.
-        # `school` keeps the same name used throughout all existing templates
-        # (school.school_name, school.logo_path, etc.).
         current_school   = None
         active_year      = None   # VIEW year (may be historical); for display
         real_active_year = None   # CURRENT active year only; for write-guards
         all_schools      = []
         all_school_years = []     # all years for this school; for year-switcher
 
-        try:
-            if current_user.is_authenticated:
-                from app.utils.decorators import get_view_year
-                current_school = get_current_school()
-                if current_school:
-                    real_active_year = get_active_year(current_school.id)
-                    active_year      = get_view_year(current_school.id)
-                # Super admin gets a list of all schools for the switcher widget
-                if current_user.is_super_admin:
-                    all_schools = School.query.filter_by(is_active=True)\
-                                              .order_by(School.id).all()
-                # School managers get a list of all their school's years for the
-                # year-switcher widget in the sidebar.
-                elif current_school:
-                    from app.models import AcademicYear
-                    all_school_years = (
-                        AcademicYear.query
-                        .execution_options(bypass_tenant_scope=True)
-                        .filter_by(school_id=current_school.id)
-                        .order_by(AcademicYear.start_date.desc())
-                        .all()
-                    )
-        except Exception:
-            pass
+        skip_db_context = (
+            request.endpoint is None
+            or request.endpoint == 'static'
+            or request.path.startswith('/static/')
+        )
 
-        # Fallback to legacy SchoolSettings so old templates still work
-        # if no School rows exist yet (e.g., during a fresh install before seeding).
-        if current_school is None:
+        if not skip_db_context:
+            if current_user.is_authenticated:
+                try:
+                    from app.models import Notification, NotificationRead
+                    from app.utils.notification_visibility import notification_visible_to
+                    read_ids = db.session.query(NotificationRead.notification_id)\
+                                 .filter_by(user_id=current_user.id).subquery()
+                    unread_count = Notification.query\
+                        .filter(notification_visible_to(current_user))\
+                        .filter(Notification.id.notin_(read_ids))\
+                        .count()
+                except Exception:
+                    db.session.rollback()
+                    unread_count = 0
+
+                try:
+                    from app.models import AcademicYear, School, SchoolSettings
+                    from app.utils.decorators import (
+                        get_current_school, get_active_year, get_view_year,
+                    )
+
+                    current_school = get_current_school()
+                    if current_school:
+                        real_active_year = get_active_year(current_school.id)
+                        active_year      = get_view_year(current_school.id)
+                    # Super admin gets a list of all schools for the switcher widget
+                    if current_user.is_super_admin:
+                        all_schools = School.query.filter_by(is_active=True)\
+                                                  .order_by(School.id).all()
+                    # School managers get a list of all their school's years for the
+                    # year-switcher widget in the sidebar.
+                    elif current_school:
+                        all_school_years = (
+                            AcademicYear.query
+                            .execution_options(bypass_tenant_scope=True)
+                            .filter_by(school_id=current_school.id)
+                            .order_by(AcademicYear.start_date.desc())
+                            .all()
+                        )
+
+                    # Fallback to legacy SchoolSettings so old templates still work
+                    # if no School rows exist yet (e.g., during a fresh install before seeding).
+                    if current_school is None:
+                        current_school = SchoolSettings.get()
+                except Exception:
+                    db.session.rollback()
+
+            # Inject enabled_modules set for sidebar and template guards.
             try:
-                current_school = SchoolSettings.get()
+                from app.utils.modules import get_enabled_modules, MODULES
+                if current_user.is_authenticated:
+                    _school_id = (None if current_user.is_super_admin
+                                  else getattr(current_user, 'school_id', None))
+                    enabled_modules = get_enabled_modules(_school_id)
+                else:
+                    enabled_modules = set()
             except Exception:
-                pass
+                db.session.rollback()
+                from app.utils.modules import MODULES
+                enabled_modules = set(MODULES.keys())  # fail-open: show all
+
+            if current_school is None:
+                try:
+                    from app.models import SchoolSettings
+                    current_school = SchoolSettings.get()
+                except Exception:
+                    db.session.rollback()
+
+            # Inject enabled_features for granular capability guards.
+            try:
+                from app.utils.features import get_enabled_features, FEATURES
+                if current_user.is_authenticated:
+                    _feat_school_id = (None if current_user.is_super_admin
+                                       else getattr(current_user, 'school_id', None))
+                    enabled_features = get_enabled_features(_feat_school_id)
+                else:
+                    enabled_features = set()
+            except Exception:
+                db.session.rollback()
+                from app.utils.features import FEATURES
+                enabled_features = set(FEATURES.keys())  # fail-open: show all
+
+            # Inject school_cfg — per-school module config (sections/fields/actions).
+            try:
+                from app.utils.school_config import get_school_config
+                if current_user.is_authenticated and not current_user.is_super_admin:
+                    _cfg_school_id = getattr(current_user, 'school_id', None)
+                else:
+                    _cfg_school_id = None  # super admin: NullSchoolConfig (all open)
+                school_cfg = get_school_config(_cfg_school_id)
+            except Exception:
+                db.session.rollback()
+                from app.utils.school_config import NullSchoolConfig
+                school_cfg = NullSchoolConfig()
+        else:
+            # Static file or no endpoint — no module context needed.
+            enabled_modules  = set()
+            enabled_features = set()
+            from app.utils.school_config import NullSchoolConfig
+            school_cfg = NullSchoolConfig()
 
         # True when a school user is viewing a historical (non-current) year.
         # Injected into all templates so they can hide write-action buttons.
@@ -201,26 +285,68 @@ def create_app(config_name=None):
             all_schools          = all_schools,             # for super-admin switcher
             active_school_id     = _session.get('active_school_id'),
             is_historical_year   = is_historical_year,      # read-only guard for templates
+            enabled_modules      = enabled_modules,         # set of enabled module keys
+            enabled_features     = enabled_features,        # set of enabled feature keys
+            school_cfg           = school_cfg,              # SchoolConfig for section/field/action guards
         )
 
+    # ── Module access guard ───────────────────────────────────────────────────
+    @app.before_request
+    def _check_module_access():
+        """Block school users from blueprints whose module is disabled."""
+        from flask_login import current_user
+        if not current_user.is_authenticated or current_user.is_super_admin:
+            return None
+        blueprint = request.blueprint
+        if not blueprint:
+            return None
+        from app.utils.modules import BLUEPRINT_MODULE, MODULES, is_module_enabled
+        module_key = BLUEPRINT_MODULE.get(blueprint)
+        if not module_key:
+            return None
+        school_id = getattr(current_user, 'school_id', None)
+        if not is_module_enabled(school_id, module_key):
+            from flask import render_template as _rt
+            return _rt('shared/module_disabled.html',
+                       module_label=MODULES[module_key]['label']), 403
+
     # ── Error handlers ────────────────────────────────────────────────────────
+    def _render_error_page(template_name):
+        try:
+            db.session.rollback()
+            return app.jinja_env.get_template(template_name).render()
+        except Exception:
+            return (
+                '<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8">'
+                '<title>خطأ</title><body><h1>حدث خطأ</h1></body></html>'
+            )
+
     @app.errorhandler(403)
     def forbidden(e):
-        from flask import render_template
-        return render_template('shared/403.html'), 403
+        return _render_error_page('shared/403.html'), 403
 
     @app.errorhandler(404)
     def not_found(e):
-        from flask import render_template
-        return render_template('shared/404.html'), 404
+        return _render_error_page('shared/404.html'), 404
 
     @app.errorhandler(500)
     def server_error(e):
-        from flask import render_template
-        return render_template('shared/500.html'), 500
+        return _render_error_page('shared/500.html'), 500
 
     # ── Upload folder ─────────────────────────────────────────────────────────
     uploads_dir = os.path.join(app.root_path, 'static', 'uploads')
     os.makedirs(uploads_dir, exist_ok=True)
+
+    # ── Hikvision auto-sync (opt-in via HIKVISION_AUTO_SYNC=true) ─────────────
+    from app.services.hikvision import start_auto_sync
+    start_auto_sync(app)
+
+    # ── AI Face 11 WebSocket receiver (always-on; AIFACE_WS_ENABLED=false to disable) ──
+    from app.services.ai_face_ws import start_ai_face_ws_server
+    start_ai_face_ws_server(app)
+
+    # ── Auto-attendance scheduler (always-on; ATTENDANCE_SCHEDULER_DISABLED=true to opt out) ──
+    from app.services.auto_attendance import start_auto_attendance_scheduler
+    start_auto_attendance_scheduler(app)
 
     return app

@@ -1,0 +1,56 @@
+{% extends "shared/base.html" %}
+{% block title %}&#1578;&#1602;&#1583;&#1610;&#1605; &#1588;&#1603;&#1608;&#1609;{% endblock %}
+{% block page_title %}&#1578;&#1602;&#1583;&#1610;&#1605; &#1588;&#1603;&#1608;&#1609;{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">&#1578;&#1602;&#1583;&#1610;&#1605; &#1588;&#1603;&#1608;&#1609;</h1></div>
+  <a href="{{ url_for('parent.complaints') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>&#1585;&#1580;&#1608;&#1593;
+  </a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST" enctype="multipart/form-data" class="row g-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+      <div class="col-md-6">
+        <label class="form-label">&#1575;&#1604;&#1591;&#1575;&#1604;&#1576;</label>
+        <select name="student_id" class="form-select" required>
+          <option value="">&#1575;&#1582;&#1578;&#1585; &#1575;&#1604;&#1591;&#1575;&#1604;&#1576;</option>
+          {% for student in children %}
+          <option value="{{ student.id }}">{{ student.full_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">&#1606;&#1608;&#1593; &#1575;&#1604;&#1588;&#1603;&#1608;&#1609;</label>
+        <select name="complaint_type" class="form-select" required>
+          <option value="">&#1575;&#1582;&#1578;&#1585; &#1575;&#1604;&#1606;&#1608;&#1593;</option>
+          {% for key, label in type_labels.items() %}
+          <option value="{{ key }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-12">
+        <label class="form-label">&#1593;&#1606;&#1608;&#1575;&#1606; &#1575;&#1604;&#1588;&#1603;&#1608;&#1609;</label>
+        <input type="text" name="title" class="form-control" maxlength="200" required>
+      </div>
+      <div class="col-12">
+        <label class="form-label">&#1578;&#1601;&#1575;&#1589;&#1610;&#1604; &#1575;&#1604;&#1588;&#1603;&#1608;&#1609;</label>
+        <textarea name="details" class="form-control" rows="6" required></textarea>
+      </div>
+      <div class="col-12">
+        <label class="form-label">&#1575;&#1604;&#1605;&#1585;&#1601;&#1602; <span class="text-muted">(&#1575;&#1582;&#1578;&#1610;&#1575;&#1585;&#1610;)</span></label>
+        <input type="file" name="attachment" class="form-control">
+      </div>
+      <div class="col-12 d-flex gap-2">
+        <button class="btn btn-primary">
+          <i class="bi bi-send-fill me-1"></i>&#1573;&#1585;&#1587;&#1575;&#1604;
+        </button>
+        <a href="{{ url_for('parent.complaints') }}" class="btn btn-outline-secondary">&#1573;&#1604;&#1594;&#1575;&#1569;</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

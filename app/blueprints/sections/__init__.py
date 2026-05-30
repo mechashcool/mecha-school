@@ -9,7 +9,8 @@ from app.models import (
     db, Grade, Section, Subject, AcademicYear, Employee, Student,
     Exam, Schedule, teacher_subjects,
 )
-from app.utils.decorators import admin_required, get_current_school, get_active_year, historical_guard
+from app.utils.decorators import (admin_required, get_current_school, get_active_year,
+                                   historical_guard, module_required, action_required)
 
 sections_bp = Blueprint('sections', __name__,
                           template_folder='../../templates/sections')
@@ -228,8 +229,8 @@ STAGES = ['ابتدائية', 'متوسطة', 'إعدادية']
 @sections_bp.route('/subjects')
 @login_required
 @admin_required
+@module_required('subjects')
 def subjects():
-    school = get_current_school()
     q        = request.args.get('q', '').strip()
     stage_f  = request.args.get('stage', '').strip()
     grade_f  = request.args.get('grade_id', type=int)
@@ -237,10 +238,9 @@ def subjects():
     query = Subject.query.order_by(Subject.name)
     if q:
         query = query.filter(
-            Subject.name.ilike(f'%{q}%') | Subject.code.ilike(f'%{q}%')
+            db.or_(Subject.name.ilike(f'%{q}%'), Subject.code.ilike(f'%{q}%'))
         )
     if stage_f:
-        # match either the subject's own stage or its linked grade's stage
         query = (query
                  .outerjoin(Grade, Subject.grade_id == Grade.id)
                  .filter(db.or_(Subject.stage == stage_f, Grade.stage == stage_f)))
@@ -249,7 +249,6 @@ def subjects():
 
     all_subjects = query.all()
 
-    # Build grouped structure for display: [(stage_key, [(grade_name, [subjects])]), ...]
     stage_order = ['ابتدائية', 'متوسطة', 'إعدادية']
     stage_map = {}
     for s in all_subjects:
@@ -277,27 +276,78 @@ def subjects():
 @login_required
 @historical_guard
 @admin_required
+@module_required('subjects')
+@action_required('subjects', 'create')
 def create_subject():
+    from app.utils.school_config import get_school_config
     school = get_current_school()
-    year = get_active_year(school.id) if school else None
+    year   = get_active_year(school.id) if school else None
     if not school or not year:
         flash('حدد مدرسة بعام دراسي نشط أولاً.', 'danger')
         return redirect(url_for('sections.subjects'))
 
-    name        = request.form.get('name', '').strip()
-    code        = request.form.get('code', '').strip().upper()
-    desc        = request.form.get('description', '').strip()
-    stage       = request.form.get('stage', '').strip() or None
-    grade_id    = request.form.get('grade_id', type=int) or None
-    total_marks = request.form.get('total_marks', type=float) or None
-    pass_marks  = request.form.get('pass_marks',  type=float) or None
+    cfg = get_school_config(school.id)
 
-    if not name or not code:
-        flash('الاسم والرمز مطلوبان.', 'danger')
+    # ── name ─────────────────────────────────────────────────────────────────
+    name = ''
+    if cfg.field_visible('subjects', 'name'):
+        name = request.form.get('name', '').strip()
+        if not name:  # name is always logically required even if config says optional
+            flash('اسم المادة مطلوب.', 'danger')
+            return redirect(url_for('sections.subjects'))
+    if not name:
+        flash('اسم المادة مطلوب.', 'danger')
         return redirect(url_for('sections.subjects'))
-    if Subject.query.filter_by(code=code).first():
+
+    # ── code ──────────────────────────────────────────────────────────────────
+    code = None
+    if cfg.field_visible('subjects', 'code'):
+        code = request.form.get('code', '').strip().upper() or None
+        if cfg.field_required('subjects', 'code') and not code:
+            flash('رمز المادة مطلوب.', 'danger')
+            return redirect(url_for('sections.subjects'))
+    if code and Subject.query.filter_by(code=code).first():
         flash('رمز المادة مستخدم بالفعل.', 'danger')
         return redirect(url_for('sections.subjects'))
+
+    # ── stage ─────────────────────────────────────────────────────────────────
+    stage = None
+    if cfg.field_visible('subjects', 'stage'):
+        stage = request.form.get('stage', '').strip() or None
+        if cfg.field_required('subjects', 'stage') and not stage:
+            flash('المرحلة مطلوبة.', 'danger')
+            return redirect(url_for('sections.subjects'))
+
+    # ── grade ─────────────────────────────────────────────────────────────────
+    grade_id = None
+    if cfg.field_visible('subjects', 'grade'):
+        grade_id = request.form.get('grade_id', type=int) or None
+        if cfg.field_required('subjects', 'grade') and not grade_id:
+            flash('الصف مطلوب.', 'danger')
+            return redirect(url_for('sections.subjects'))
+
+    # ── marks ─────────────────────────────────────────────────────────────────
+    total_marks = None
+    if cfg.field_visible('subjects', 'total_marks'):
+        total_marks = request.form.get('total_marks', type=float) or None
+        if cfg.field_required('subjects', 'total_marks') and total_marks is None:
+            flash('الدرجة الكلية مطلوبة.', 'danger')
+            return redirect(url_for('sections.subjects'))
+
+    pass_marks = None
+    if cfg.field_visible('subjects', 'pass_marks'):
+        pass_marks = request.form.get('pass_marks', type=float) or None
+        if cfg.field_required('subjects', 'pass_marks') and pass_marks is None:
+            flash('درجة النجاح مطلوبة.', 'danger')
+            return redirect(url_for('sections.subjects'))
+
+    # ── description ───────────────────────────────────────────────────────────
+    desc = ''
+    if cfg.field_visible('subjects', 'description'):
+        desc = request.form.get('description', '').strip()
+        if cfg.field_required('subjects', 'description') and not desc:
+            flash('الوصف مطلوب.', 'danger')
+            return redirect(url_for('sections.subjects'))
 
     s = Subject(name=name, code=code, description=desc,
                 stage=stage, grade_id=grade_id,
@@ -313,27 +363,97 @@ def create_subject():
 @login_required
 @historical_guard
 @admin_required
+@module_required('subjects')
+@action_required('subjects', 'edit')
 def edit_subject(sub_id):
+    from app.utils.school_config import get_school_config
     subject = Subject.query.get_or_404(sub_id)
     grades  = Grade.query.order_by(Grade.name).all()
+    school  = get_current_school()
+    cfg     = get_school_config(school.id if school else None)
+
     if request.method == 'POST':
-        subject.name        = request.form.get('name', subject.name).strip()
-        subject.description = request.form.get('description', '').strip()
-        subject.stage       = request.form.get('stage', '').strip() or None
-        subject.grade_id    = request.form.get('grade_id', type=int) or None
-        subject.total_marks = request.form.get('total_marks', type=float) or None
-        subject.pass_marks  = request.form.get('pass_marks',  type=float) or None
+        # ── name ─────────────────────────────────────────────────────────────
+        if cfg.field_visible('subjects', 'name'):
+            name_val = request.form.get('name', '').strip()
+            if not name_val and cfg.field_required('subjects', 'name'):
+                flash('اسم المادة مطلوب.', 'danger')
+                return render_template('sections/edit_subject.html',
+                                       subject=subject, grades=grades,
+                                       stages=STAGES, cfg=cfg)
+            subject.name = name_val or subject.name
+        else:
+            # hidden field sends a hidden input preserving existing value
+            subject.name = request.form.get('name', subject.name).strip() or subject.name
+
+        # ── stage ─────────────────────────────────────────────────────────────
+        if cfg.field_visible('subjects', 'stage'):
+            stage_val = request.form.get('stage', '').strip() or None
+            if cfg.field_required('subjects', 'stage') and not stage_val:
+                flash('المرحلة مطلوبة.', 'danger')
+                return render_template('sections/edit_subject.html',
+                                       subject=subject, grades=grades,
+                                       stages=STAGES, cfg=cfg)
+            subject.stage = stage_val
+        # hidden → preserve existing (no form input sent, so no change needed)
+
+        # ── grade ─────────────────────────────────────────────────────────────
+        if cfg.field_visible('subjects', 'grade'):
+            grade_val = request.form.get('grade_id', type=int) or None
+            if cfg.field_required('subjects', 'grade') and not grade_val:
+                flash('الصف مطلوب.', 'danger')
+                return render_template('sections/edit_subject.html',
+                                       subject=subject, grades=grades,
+                                       stages=STAGES, cfg=cfg)
+            subject.grade_id = grade_val
+        # hidden → preserve existing
+
+        # ── marks ─────────────────────────────────────────────────────────────
+        if cfg.field_visible('subjects', 'total_marks'):
+            tm = request.form.get('total_marks', type=float) or None
+            if cfg.field_required('subjects', 'total_marks') and tm is None:
+                flash('الدرجة الكلية مطلوبة.', 'danger')
+                return render_template('sections/edit_subject.html',
+                                       subject=subject, grades=grades,
+                                       stages=STAGES, cfg=cfg)
+            subject.total_marks = tm
+        # hidden → preserve existing
+
+        if cfg.field_visible('subjects', 'pass_marks'):
+            pm = request.form.get('pass_marks', type=float) or None
+            if cfg.field_required('subjects', 'pass_marks') and pm is None:
+                flash('درجة النجاح مطلوبة.', 'danger')
+                return render_template('sections/edit_subject.html',
+                                       subject=subject, grades=grades,
+                                       stages=STAGES, cfg=cfg)
+            subject.pass_marks = pm
+        # hidden → preserve existing
+
+        # ── description ───────────────────────────────────────────────────────
+        if cfg.field_visible('subjects', 'description'):
+            desc_val = request.form.get('description', '').strip()
+            if cfg.field_required('subjects', 'description') and not desc_val:
+                flash('الوصف مطلوب.', 'danger')
+                return render_template('sections/edit_subject.html',
+                                       subject=subject, grades=grades,
+                                       stages=STAGES, cfg=cfg)
+            subject.description = desc_val
+        # hidden → preserve existing
+
         db.session.commit()
         flash('تم تحديث المادة.', 'success')
         return redirect(url_for('sections.subjects'))
+
     return render_template('sections/edit_subject.html',
-                           subject=subject, grades=grades, stages=STAGES)
+                           subject=subject, grades=grades, stages=STAGES, cfg=cfg)
 
 
 @sections_bp.route('/subjects/<int:sub_id>/delete', methods=['POST'])
 @login_required
 @historical_guard
 @admin_required
+@module_required('subjects')
+@action_required('subjects', 'delete')
 def delete_subject(sub_id):
     subject = Subject.query.get_or_404(sub_id)
     db.session.delete(subject)

@@ -1,0 +1,50 @@
+{% extends "shared/base.html" %}
+{% block title %}الجرد السنوي{% endblock %}
+{% block page_title %}الجرد السنوي{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">الجرد السنوي</h1></div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('inventory.index') }}" class="btn btn-outline-secondary">المواد</a>
+    <a href="{{ url_for('inventory.create_count') }}" class="btn btn-primary">
+      <i class="bi bi-clipboard-check me-1"></i>تسجيل جرد
+    </a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>التاريخ</th>
+          <th>المادة</th>
+          <th>كمية النظام</th>
+          <th>الكمية الفعلية</th>
+          <th>الفرق</th>
+          <th>الحالة</th>
+          <th>القائم بالجرد</th>
+          <th>السبب</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in counts %}
+        <tr>
+          <td>{{ row.count_date.strftime('%Y-%m-%d') if row.count_date else '-' }}</td>
+          <td>{{ row.item.name if row.item else '-' }}</td>
+          <td>{{ row.system_quantity }}</td>
+          <td>{{ row.actual_quantity }}</td>
+          <td>{{ row.difference }}</td>
+          <td><span class="badge-status badge-active">{{ status_labels.get(row.status, row.status) }}</span></td>
+          <td>{{ row.counter.full_name if row.counter else '-' }}</td>
+          <td>{{ row.reason or '-' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="text-center text-muted py-5">لا توجد سجلات جرد.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

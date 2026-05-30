@@ -1,0 +1,23 @@
+{% extends "shared/base.html" %}
+{% block title %}ميزة غير مفعّلة{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-column align-items-center justify-content-center py-5 text-center"
+     style="min-height:60vh">
+  <div style="font-size:4rem;color:#6c757d" class="mb-3">
+    <i class="bi bi-lock-fill"></i>
+  </div>
+  <h2 class="fw-bold mb-2">هذه الميزة غير مفعّلة لهذه المدرسة</h2>
+  {% if module_label %}
+  <p class="text-muted mb-1">
+    الوحدة: <strong>{{ module_label }}</strong>
+  </p>
+  {% endif %}
+  <p class="text-muted mb-4">
+    يرجى التواصل مع مسؤول النظام لتفعيل هذه الميزة.
+  </p>
+  <a href="{{ url_for('admin.dashboard') }}" class="btn btn-primary">
+    <i class="bi bi-grid-1x2-fill me-1"></i>العودة إلى لوحة التحكم
+  </a>
+</div>
+{% endblock %}

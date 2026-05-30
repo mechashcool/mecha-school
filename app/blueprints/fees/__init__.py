@@ -5,14 +5,40 @@ from flask import Blueprint, render_template, redirect, url_for, flash, request,
 from flask_login import login_required, current_user
 from datetime import date, datetime as dt
 from sqlalchemy import func
+from sqlalchemy.orm import joinedload
 
-from app.models import (db, FeeRecord, FeeInstallment, FeeType, Student, AcademicYear, SchoolSettings, Revenue, RevenueCategory)
+from app.models import (db, FeeRecord, FeeInstallment, FeeType, Student, AcademicYear, SchoolSettings, Revenue, RevenueCategory, Section)
 from app.utils.decorators import (permission_required, get_current_school,
                                    get_active_year, get_view_year, historical_guard)
 from app.utils.helpers import generate_receipt_no
 from app.utils.audit import log_action
 
 fees_bp = Blueprint('fees', __name__, template_folder='../../templates/fees')
+
+
+def _active_fee_student_query(school, year):
+    query = (
+        Student.query
+        .options(joinedload(Student.section).joinedload(Section.grade))
+        .filter_by(status='active')
+    )
+    if school:
+        query = query.filter(Student.school_id == school.id)
+    if year:
+        query = query.filter(Student.academic_year_id == year.id)
+    return query
+
+
+def _student_payload(student):
+    section = student.section
+    grade = section.grade if section else None
+    return {
+        'id': student.id,
+        'student_id': student.student_id,
+        'full_name': student.full_name,
+        'grade': grade.name if grade else '',
+        'section': section.name if section else '',
+    }
 
 
 @fees_bp.route('/')
@@ -86,12 +112,6 @@ def create():
     if not school or not year:
         flash('Select a school with an active academic year before creating fee records.', 'danger')
         return redirect(url_for('fees.index'))
-    students_q = Student.query.filter_by(status='active')
-    if school:
-        students_q = students_q.filter_by(school_id=school.id)
-    if year:
-        students_q = students_q.filter_by(academic_year_id=year.id)
-    students  = students_q.order_by(Student.full_name).all()
     fee_types = FeeType.query.all()
     years_q   = AcademicYear.query
     if school:
@@ -102,12 +122,22 @@ def create():
         selected_student_id = request.form.get('student_id', type=int)
         selected_fee_type_id = request.form.get('fee_type_id', type=int)
         selected_year_id = request.form.get('academic_year_id', type=int) or (year.id if year else None)
+        selected_student = (
+            _active_fee_student_query(school, year)
+            .filter(Student.id == selected_student_id)
+            .first()
+        ) if selected_student_id else None
+        if not selected_student:
+            flash('يرجى اختيار طالب من طلاب المدرسة والسنة الدراسية الحالية.', 'danger')
+            return render_template('fees/form.html',
+                                   fee_types=fee_types, years=years), 400
         if FeeRecord.query.filter_by(student_id=selected_student_id,
                                      fee_type_id=selected_fee_type_id,
                                      academic_year_id=selected_year_id).first():
             flash('A fee record for this student, fee type, and academic year already exists.', 'danger')
             return render_template('fees/form.html',
-                                   students=students, fee_types=fee_types, years=years)
+                                   fee_types=fee_types, years=years,
+                                   selected_student=selected_student)
         record = FeeRecord(
             student_id       = selected_student_id,
             fee_type_id      = selected_fee_type_id,
@@ -142,7 +172,30 @@ def create():
         return redirect(url_for('fees.index'))
 
     return render_template('fees/form.html',
-                           students=students, fee_types=fee_types, years=years)
+                           fee_types=fee_types, years=years)
+
+
+@fees_bp.route('/students/search')
+@login_required
+@permission_required('manage_fees')
+def search_students():
+    school = get_current_school()
+    year = get_active_year(school.id) if school else None
+    if not school or not year:
+        return jsonify({'results': []})
+
+    term = request.args.get('q', '').strip()
+    if len(term) < 2:
+        return jsonify({'results': []})
+
+    students = (
+        _active_fee_student_query(school, year)
+        .filter(Student.full_name.ilike(f'%{term}%'))
+        .order_by(Student.full_name)
+        .limit(20)
+        .all()
+    )
+    return jsonify({'results': [_student_payload(student) for student in students]})
 
 
 @fees_bp.route('/pay/<int:inst_id>', methods=['POST'])

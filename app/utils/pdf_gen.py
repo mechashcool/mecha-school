@@ -683,3 +683,228 @@ def generate_error_pdf(title, message) -> bytes | None:
 
     doc.build(elements)
     return buf.getvalue()
+
+
+# ─── EMPLOYEE ATTENDANCE PDF ──────────────────────────────────────────────────
+
+def generate_employee_attendance_pdf(rows, date_from: str, date_to: str,
+                                     school=None) -> bytes | None:
+    """
+    Generate a professional Arabic RTL PDF summary for employee attendance.
+    rows: list of stat dicts from get_employees_attendance_summary().
+    Returns bytes or None if ReportLab is unavailable.
+    """
+    if not _get_rl():
+        return None
+
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.units import cm
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.colors import HexColor
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    arabic_font_registered = _register_arabic_fonts(pdfmetrics, TTFont)
+    fn = 'Amiri' if arabic_font_registered else 'Helvetica'
+    fn_b = 'Amiri-Bold' if arabic_font_registered else 'Helvetica-Bold'
+
+    ar = _shape_arabic_text
+    HEADER_BG = HexColor('#1a3a5c')
+    ALT_BG = HexColor('#f0f4f8')
+    WHITE = colors.white
+
+    buf_pdf = BytesIO()
+    doc = SimpleDocTemplate(buf_pdf, pagesize=landscape(A4),
+                            leftMargin=1.5 * cm, rightMargin=1.5 * cm,
+                            topMargin=1.5 * cm, bottomMargin=1.5 * cm)
+
+    title_s = ParagraphStyle('t2', fontName=fn_b, fontSize=14,
+                              alignment=1, textColor=HexColor('#1a3a5c'))
+    sub_s = ParagraphStyle('s2', fontName=fn, fontSize=10,
+                            alignment=1, textColor=HexColor('#555555'))
+
+    elements = []
+    school_name = (school.school_name_ar or school.school_name) if school else ''
+    if school_name:
+        elements.append(Paragraph(ar(school_name), title_s))
+        elements.append(Spacer(1, 0.2 * cm))
+    elements.append(Paragraph(ar('تقرير حضور الموظفين'), title_s))
+    elements.append(Paragraph(ar(f'{date_from}  —  {date_to}'), sub_s))
+    elements.append(Spacer(1, 0.6 * cm))
+
+    col_headers = ['نسبة الحضور', 'انصراف', 'غائب', 'متأخر', 'حاضر',
+                   'أيام العمل', 'المسمى الوظيفي', 'القسم', 'اسم الموظف', '#']
+    col_widths = [2.8*cm, 2*cm, 1.8*cm, 1.8*cm, 1.8*cm,
+                  2.2*cm, 3.5*cm, 3*cm, 4.5*cm, 1*cm]
+
+    th_s = ParagraphStyle('th2', fontName=fn_b, fontSize=8, alignment=1, textColor=WHITE)
+    td_s = ParagraphStyle('td2', fontName=fn, fontSize=8, alignment=1)
+
+    table_data = [[Paragraph(ar(h), th_s) for h in col_headers]]
+    row_alt = []
+    for i, row in enumerate(rows, 1):
+        emp = row['employee']
+        table_data.append([
+            Paragraph(ar(f"{row['rate']}%"), td_s),
+            Paragraph(str(row['checked_out']), td_s),
+            Paragraph(str(row['absent']), td_s),
+            Paragraph(str(row['late']), td_s),
+            Paragraph(str(row['present']), td_s),
+            Paragraph(str(row['working_days']), td_s),
+            Paragraph(ar(emp.job_title or '—'), td_s),
+            Paragraph(ar(emp.department or '—'), td_s),
+            Paragraph(ar(emp.full_name), td_s),
+            Paragraph(str(i), td_s),
+        ])
+        if i % 2 == 0:
+            row_alt.append(i)
+
+    style_cmds = [
+        ('BACKGROUND', (0, 0), (-1, 0), HEADER_BG),
+        ('FONTNAME', (0, 0), (-1, -1), fn),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID', (0, 0), (-1, -1), 0.3, HexColor('#cccccc')),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+    ]
+    for ri in row_alt:
+        style_cmds.append(('BACKGROUND', (0, ri), (-1, ri), ALT_BG))
+
+    tbl = Table(table_data, colWidths=col_widths, repeatRows=1)
+    tbl.setStyle(TableStyle(style_cmds))
+    elements.append(tbl)
+
+    elements.append(Spacer(1, 0.4 * cm))
+    footer_s2 = ParagraphStyle('f2', fontName=fn, fontSize=8,
+                                alignment=1, textColor=HexColor('#9aabb8'))
+    elements.append(Paragraph(
+        ar(f'تم الإنشاء: {datetime.utcnow().strftime("%Y-%m-%d %H:%M")} | نظام المهندس'),
+        footer_s2))
+
+    doc.build(elements)
+    return buf_pdf.getvalue()
+
+
+def generate_single_employee_attendance_pdf(emp_row, date_from: str, date_to: str,
+                                             school=None) -> bytes | None:
+    """
+    Generate a detailed PDF for one employee (day-by-day breakdown).
+    emp_row: stat dict from calculate_employee_stats().
+    """
+    if not _get_rl():
+        return None
+
+    from reportlab.lib.pagesizes import A4, portrait
+    from reportlab.lib.units import cm
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.colors import HexColor
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    arabic_font_registered = _register_arabic_fonts(pdfmetrics, TTFont)
+    fn = 'Amiri' if arabic_font_registered else 'Helvetica'
+    fn_b = 'Amiri-Bold' if arabic_font_registered else 'Helvetica-Bold'
+    ar = _shape_arabic_text
+    emp = emp_row['employee']
+
+    HEADER_BG = HexColor('#1a3a5c')
+    ALT_BG = HexColor('#f0f4f8')
+    ABSENT_BG = HexColor('#ffe0e0')
+    LATE_BG = HexColor('#fff3cd')
+    WHITE = colors.white
+
+    buf_emp = BytesIO()
+    doc = SimpleDocTemplate(buf_emp, pagesize=portrait(A4),
+                            leftMargin=1.5 * cm, rightMargin=1.5 * cm,
+                            topMargin=1.5 * cm, bottomMargin=1.5 * cm)
+
+    title_s = ParagraphStyle('te', fontName=fn_b, fontSize=13, alignment=1,
+                              textColor=HexColor('#1a3a5c'))
+    sub_s = ParagraphStyle('se', fontName=fn, fontSize=10, alignment=1,
+                            textColor=HexColor('#555555'))
+    th_s = ParagraphStyle('the', fontName=fn_b, fontSize=8, alignment=1, textColor=WHITE)
+    td_s = ParagraphStyle('tde', fontName=fn, fontSize=8, alignment=1)
+
+    elements = []
+    school_name = (school.school_name_ar or school.school_name) if school else ''
+    if school_name:
+        elements.append(Paragraph(ar(school_name), title_s))
+        elements.append(Spacer(1, 0.2 * cm))
+    elements.append(Paragraph(ar(emp.full_name), title_s))
+    elements.append(Paragraph(ar(f"{emp.department or '—'} | {emp.job_title or '—'}"), sub_s))
+    elements.append(Paragraph(ar(f'{date_from}  —  {date_to}'), sub_s))
+    elements.append(Spacer(1, 0.5 * cm))
+
+    # Summary row
+    summary_data = [
+        [Paragraph(ar(h), ParagraphStyle('ssh', fontName=fn_b, fontSize=9,
+                                          alignment=1, textColor=WHITE))
+         for h in ['أيام العمل', 'حاضر', 'متأخر', 'غائب', 'انصراف', 'نسبة الحضور']],
+        [Paragraph(ar(str(v)), ParagraphStyle('ssv', fontName=fn_b, fontSize=11,
+                                               alignment=1, textColor=HexColor('#1a3a5c')))
+         for v in [emp_row['working_days'], emp_row['present'], emp_row['late'],
+                   emp_row['absent'], emp_row['checked_out'], f"{emp_row['rate']}%"]],
+    ]
+    s_tbl = Table(summary_data, colWidths=[2.8*cm]*6)
+    s_tbl.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), HEADER_BG),
+        ('FONTNAME', (0, 0), (-1, -1), fn),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('GRID', (0, 0), (-1, -1), 0.3, HexColor('#cccccc')),
+    ]))
+    elements.append(s_tbl)
+    elements.append(Spacer(1, 0.5 * cm))
+
+    STATUS_AR = {'present': 'حاضر', 'absent': 'غائب', 'late': 'متأخر'}
+    d_headers = ['ملاحظات', 'الجهاز', 'المصدر', 'الحالة',
+                 'وقت الانصراف', 'وقت الحضور', 'التاريخ', '#']
+    d_widths = [3*cm, 2.5*cm, 2*cm, 2*cm, 2.5*cm, 2.5*cm, 2.8*cm, 1*cm]
+
+    detail_data = [[Paragraph(ar(h), th_s) for h in d_headers]]
+    row_bgs = []
+    for i, day in enumerate(emp_row.get('daily', []), 1):
+        status = day.get('status', '')
+        dev = day.get('device')
+        detail_data.append([
+            Paragraph(ar(day.get('notes') or '—'), td_s),
+            Paragraph(ar(dev.name if dev else '—'), td_s),
+            Paragraph(ar(day.get('source') or '—'), td_s),
+            Paragraph(ar(STATUS_AR.get(status, status)), td_s),
+            Paragraph(day['check_out'].strftime('%H:%M') if day.get('check_out') else '—', td_s),
+            Paragraph(day['check_in'].strftime('%H:%M') if day.get('check_in') else '—', td_s),
+            Paragraph(day['date'].strftime('%Y-%m-%d') if day.get('date') else '', td_s),
+            Paragraph(str(i), td_s),
+        ])
+        if status == 'absent':
+            row_bgs.append((i, ABSENT_BG))
+        elif status == 'late':
+            row_bgs.append((i, LATE_BG))
+        elif i % 2 == 0:
+            row_bgs.append((i, ALT_BG))
+
+    sc = [
+        ('BACKGROUND', (0, 0), (-1, 0), HEADER_BG),
+        ('FONTNAME', (0, 0), (-1, -1), fn),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID', (0, 0), (-1, -1), 0.3, HexColor('#cccccc')),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]
+    for ri, bg in row_bgs:
+        sc.append(('BACKGROUND', (0, ri), (-1, ri), bg))
+
+    d_tbl = Table(detail_data, colWidths=d_widths, repeatRows=1)
+    d_tbl.setStyle(TableStyle(sc))
+    elements.append(d_tbl)
+
+    doc.build(elements)
+    return buf_emp.getvalue()

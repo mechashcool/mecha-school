@@ -11,25 +11,36 @@
 </div>
 
 <div class="row g-4">
-  <!-- Add form -->
+
+  {# ── Add form (only when create action is enabled) ──────────────────────── #}
+  {% if school_cfg.action_enabled('subjects', 'create') %}
   <div class="col-lg-4">
     <div class="card">
       <div class="card-header"><i class="bi bi-plus-circle-fill text-accent me-1"></i>إضافة مادة</div>
       <div class="card-body">
         <form method="POST" action="{{ url_for('sections.create_subject') }}">
+
+          {% if school_cfg.field_visible('subjects', 'name') %}
           <div class="mb-3">
             <label class="form-label">اسم المادة <span class="text-danger">*</span></label>
             <input type="text" name="name" class="form-control" required
                    placeholder="مثال: الرياضيات، اللغة العربية...">
           </div>
+          {% endif %}
+
+          {% if school_cfg.field_visible('subjects', 'code') %}
           <div class="mb-3">
-            <label class="form-label">الرمز <span class="text-danger">*</span></label>
-            <input type="text" name="code" class="form-control" required
+            <label class="form-label">الرمز{% if school_cfg.field_required('subjects', 'code') %} <span class="text-danger">*</span>{% endif %}</label>
+            <input type="text" name="code" class="form-control"
+                   {{ 'required' if school_cfg.field_required('subjects', 'code') }}
                    placeholder="مثال: MATH, ARB, SCI"
                    style="text-transform:uppercase">
           </div>
+          {% endif %}
+
+          {% if school_cfg.field_visible('subjects', 'stage') %}
           <div class="mb-3">
-            <label class="form-label">المرحلة</label>
+            <label class="form-label">المرحلة{% if school_cfg.field_required('subjects', 'stage') %} <span class="text-danger">*</span>{% endif %}</label>
             <select name="stage" class="form-select" id="addStage">
               <option value="">— اختر المرحلة —</option>
               {% for st in stages %}
@@ -37,8 +48,11 @@
               {% endfor %}
             </select>
           </div>
+          {% endif %}
+
+          {% if school_cfg.field_visible('subjects', 'grade') %}
           <div class="mb-3">
-            <label class="form-label">الصف</label>
+            <label class="form-label">الصف{% if school_cfg.field_required('subjects', 'grade') %} <span class="text-danger">*</span>{% endif %}</label>
             <select name="grade_id" class="form-select" id="addGrade">
               <option value="">— اختر الصف —</option>
               {% for g in grades %}
@@ -46,22 +60,37 @@
               {% endfor %}
             </select>
           </div>
+          {% endif %}
+
+          {% if school_cfg.field_visible('subjects', 'total_marks') or school_cfg.field_visible('subjects', 'pass_marks') %}
           <div class="row g-2 mb-3">
+            {% if school_cfg.field_visible('subjects', 'total_marks') %}
             <div class="col-6">
-              <label class="form-label">الدرجة الكلية</label>
+              <label class="form-label">الدرجة الكلية{% if school_cfg.field_required('subjects', 'total_marks') %} <span class="text-danger">*</span>{% endif %}</label>
               <input type="number" name="total_marks" class="form-control"
-                     min="0" step="0.5" placeholder="100">
+                     min="0" step="0.5" placeholder="100"
+                     {{ 'required' if school_cfg.field_required('subjects', 'total_marks') }}>
             </div>
+            {% endif %}
+            {% if school_cfg.field_visible('subjects', 'pass_marks') %}
             <div class="col-6">
-              <label class="form-label">درجة النجاح</label>
+              <label class="form-label">درجة النجاح{% if school_cfg.field_required('subjects', 'pass_marks') %} <span class="text-danger">*</span>{% endif %}</label>
               <input type="number" name="pass_marks" class="form-control"
-                     min="0" step="0.5" placeholder="50">
+                     min="0" step="0.5" placeholder="50"
+                     {{ 'required' if school_cfg.field_required('subjects', 'pass_marks') }}>
             </div>
+            {% endif %}
           </div>
+          {% endif %}
+
+          {% if school_cfg.field_visible('subjects', 'description') %}
           <div class="mb-3">
-            <label class="form-label">الوصف</label>
-            <textarea name="description" class="form-control" rows="2"></textarea>
+            <label class="form-label">الوصف{% if school_cfg.field_required('subjects', 'description') %} <span class="text-danger">*</span>{% endif %}</label>
+            <textarea name="description" class="form-control" rows="2"
+                      {{ 'required' if school_cfg.field_required('subjects', 'description') }}></textarea>
           </div>
+          {% endif %}
+
           <button type="submit" class="btn btn-primary w-100">
             <i class="bi bi-plus-circle-fill me-2"></i>إضافة
           </button>
@@ -69,10 +98,12 @@
       </div>
     </div>
   </div>
+  {% endif %}{# create action #}
 
-  <!-- Subjects list -->
-  <div class="col-lg-8">
-    <!-- Filter bar -->
+  {# ── Subjects list ──────────────────────────────────────────────────────── #}
+  <div class="{{ 'col-lg-8' if school_cfg.action_enabled('subjects', 'create') else 'col-12' }}">
+
+    {# Filter bar #}
     <div class="card mb-3">
       <div class="card-body py-2">
         <form method="GET" action="{{ url_for('sections.subjects') }}" class="row g-2 align-items-end">
@@ -80,6 +111,7 @@
             <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm"
                    placeholder="بحث بالاسم أو الرمز...">
           </div>
+          {% if school_cfg.field_visible('subjects', 'stage') %}
           <div class="col-6 col-sm-3">
             <select name="stage" class="form-select form-select-sm" id="filterStage">
               <option value="">كل المراحل</option>
@@ -88,6 +120,8 @@
               {% endfor %}
             </select>
           </div>
+          {% endif %}
+          {% if school_cfg.field_visible('subjects', 'grade') %}
           <div class="col-6 col-sm-3">
             <select name="grade_id" class="form-select form-select-sm" id="filterGrade">
               <option value="">كل الصفوف</option>
@@ -97,6 +131,7 @@
               {% endfor %}
             </select>
           </div>
+          {% endif %}
           <div class="col-12 col-sm-2 d-flex gap-1">
             <button type="submit" class="btn btn-sm btn-primary flex-fill">
               <i class="bi bi-search"></i>
@@ -152,33 +187,49 @@
             <table class="table table-hover mb-0" style="font-size:13px">
               <thead>
                 <tr>
-                  <th>الرمز</th>
+                  {% if school_cfg.field_visible('subjects', 'code') %}<th>الرمز</th>{% endif %}
                   <th>اسم المادة</th>
-                  <th class="text-center">الدرجة الكلية</th>
-                  <th class="text-center">درجة النجاح</th>
-                  <th>الوصف</th>
+                  {% if school_cfg.field_visible('subjects', 'total_marks') %}<th class="text-center">الدرجة الكلية</th>{% endif %}
+                  {% if school_cfg.field_visible('subjects', 'pass_marks') %}<th class="text-center">درجة النجاح</th>{% endif %}
+                  {% if school_cfg.field_visible('subjects', 'description') %}<th>الوصف</th>{% endif %}
+                  {% if school_cfg.action_enabled('subjects', 'edit') or school_cfg.action_enabled('subjects', 'delete') %}
                   <th>الإجراءات</th>
+                  {% endif %}
                 </tr>
               </thead>
               <tbody>
                 {% for s in grade_subjects %}
                 <tr>
+                  {% if school_cfg.field_visible('subjects', 'code') %}
                   <td>
+                    {% if s.code %}
                     <span class="badge" style="background:#e8f4fd;color:#1a3a5c;
                           font-weight:700;font-size:12px;letter-spacing:.5px">
                       {{ s.code }}
                     </span>
+                    {% else %}—{% endif %}
                   </td>
+                  {% endif %}
                   <td class="fw-600">{{ s.name }}</td>
+                  {% if school_cfg.field_visible('subjects', 'total_marks') %}
                   <td class="text-center">{{ s.total_marks | int if s.total_marks else '—' }}</td>
+                  {% endif %}
+                  {% if school_cfg.field_visible('subjects', 'pass_marks') %}
                   <td class="text-center">{{ s.pass_marks  | int if s.pass_marks  else '—' }}</td>
+                  {% endif %}
+                  {% if school_cfg.field_visible('subjects', 'description') %}
                   <td class="text-muted" style="max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
                     {{ s.description or '—' }}
                   </td>
+                  {% endif %}
+                  {% if school_cfg.action_enabled('subjects', 'edit') or school_cfg.action_enabled('subjects', 'delete') %}
                   <td>
                     <div class="d-flex gap-1">
+                      {% if school_cfg.action_enabled('subjects', 'edit') %}
                       <a href="{{ url_for('sections.edit_subject', sub_id=s.id) }}"
                          class="btn btn-sm btn-outline-primary"><i class="bi bi-pencil"></i></a>
+                      {% endif %}
+                      {% if school_cfg.action_enabled('subjects', 'delete') %}
                       <form method="POST"
                             action="{{ url_for('sections.delete_subject', sub_id=s.id) }}"
                             class="d-inline">
@@ -187,8 +238,10 @@
                           <i class="bi bi-trash"></i>
                         </button>
                       </form>
+                      {% endif %}
                     </div>
                   </td>
+                  {% endif %}
                 </tr>
                 {% endfor %}
               </tbody>
@@ -199,41 +252,43 @@
       </div>
     {% endfor %}
     {% endif %}
-  </div>
-</div>
+  </div>{# /list col #}
+
+</div>{# /row #}
 
 <script>
 (function () {
   // ── Filter-bar cascade ────────────────────────────────────────────────
   const filterStageEl = document.getElementById('filterStage');
   const filterGradeEl = document.getElementById('filterGrade');
-  const filterGradeOpts = Array.from(filterGradeEl.options).slice(1);
-
-  function filterBarGrades() {
-    const stage = filterStageEl.value;
-    for (const opt of filterGradeOpts) {
-      opt.hidden = stage ? opt.dataset.stage !== stage : false;
+  if (filterStageEl && filterGradeEl) {
+    const filterGradeOpts = Array.from(filterGradeEl.options).slice(1);
+    function filterBarGrades() {
+      const stage = filterStageEl.value;
+      for (const opt of filterGradeOpts) {
+        opt.hidden = stage ? opt.dataset.stage !== stage : false;
+      }
+      const sel = filterGradeEl.selectedOptions[0];
+      if (sel && sel.hidden) filterGradeEl.value = '';
     }
-    // if selected grade is now hidden, clear the selection
-    const sel = filterGradeEl.selectedOptions[0];
-    if (sel && sel.hidden) filterGradeEl.value = '';
+    filterStageEl.addEventListener('change', filterBarGrades);
+    filterBarGrades();
   }
-  filterStageEl.addEventListener('change', filterBarGrades);
-  filterBarGrades(); // respect URL-param selection on page load
 
   // ── Add-form cascade ─────────────────────────────────────────────────
   const stageEl = document.getElementById('addStage');
   const gradeEl = document.getElementById('addGrade');
-  const allGradeOptions = Array.from(gradeEl.options).slice(1);
-
-  function filterGrades() {
-    const stage = stageEl.value;
-    gradeEl.value = '';
-    for (const opt of allGradeOptions) {
-      opt.hidden = stage ? opt.dataset.stage !== stage : false;
+  if (stageEl && gradeEl) {
+    const allGradeOptions = Array.from(gradeEl.options).slice(1);
+    function filterGrades() {
+      const stage = stageEl.value;
+      gradeEl.value = '';
+      for (const opt of allGradeOptions) {
+        opt.hidden = stage ? opt.dataset.stage !== stage : false;
+      }
     }
+    stageEl.addEventListener('change', filterGrades);
   }
-  stageEl.addEventListener('change', filterGrades);
 })();
 </script>
 {% endblock %}

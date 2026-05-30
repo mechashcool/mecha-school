@@ -7,8 +7,12 @@ from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    admin_required, get_current_school, get_active_year, get_view_year,
                                    historical_guard)
 from app.utils.attendance_helpers import (determine_check_in_status,
-                                           get_local_now, get_local_date)
+                                           get_local_now, get_local_date,
+                                           is_holiday_date)
 from app.services.notifications import NotificationService
+
+import logging
+_log = logging.getLogger(__name__)
 
 attendance_bp = Blueprint('attendance', __name__,
                            template_folder='../../templates/attendance')
@@ -29,34 +33,68 @@ def _get_settings():
     return SchoolSettings.get()
 
 
-def _run_auto_absent(school, year, settings):
+def _run_auto_absent(school, year, settings, recorded_by_id=None):
     """
     Mark all active students who have no attendance record for today as absent.
-    Sets source='automatic'. Blocked if current time is before att_absence_threshold.
+    Sets source='automatic'. Blocked if current time is before att_absence_threshold,
+    or if today is a weekly holiday / named school holiday.
     Sends parent notifications for newly marked students.
-    Returns {'too_early': bool, 'count': int, 'students': list}.
+    Returns {'too_early': bool, 'holiday': bool, 'count': int, 'students': list}.
+
+    recorded_by_id — pass current_user.id from web requests; None from background jobs.
+    Fully idempotent: calling multiple times per day is safe (won't create duplicates).
     """
-    today    = get_local_date(settings)
-    now_time = get_local_now(settings).time()
-    cutoff   = getattr(settings, 'att_absence_threshold', None)
+    school_id   = school.id if school else None
+    school_name = getattr(school, 'name', f'school_{school_id}')
+    today       = get_local_date(settings)
+    now_local   = get_local_now(settings)
+    now_time    = now_local.time()
+    cutoff      = getattr(settings, 'att_absence_threshold', None)
+
+    _log.info(
+        '[attendance] _run_auto_absent school_id=%s "%s" date=%s '
+        'local_now=%s cutoff=%s year_id=%s',
+        school_id, school_name, today,
+        now_local.strftime('%H:%M:%S'), cutoff,
+        year.id if year else None,
+    )
 
     if cutoff and now_time < cutoff:
-        return {'too_early': True, 'count': 0, 'students': []}
+        _log.info('[attendance] school_id=%s — absence time not yet reached '
+                  '(now=%s < cutoff=%s) — skipped', school_id, now_time, cutoff)
+        return {'too_early': True, 'holiday': False, 'count': 0, 'students': []}
 
-    all_students_q = Student.query.filter_by(status='active')
+    if school and is_holiday_date(today, school_id, school):
+        _log.info('[attendance] school_id=%s date=%s — holiday detected — absent skipped',
+                  school_id, today)
+        return {'too_early': False, 'holiday': True, 'count': 0, 'students': []}
+
+    _log.info('[attendance] school_id=%s date=%s — normal school day, querying students',
+              school_id, today)
+
+    # Use bypass_tenant_scope so queries work correctly from background threads
+    # (no Flask request context → current_school_id() returns None → no auto-filter).
+    all_students_q = (Student.query
+                      .execution_options(bypass_tenant_scope=True)
+                      .filter_by(status='active'))
     if school:
-        all_students_q = all_students_q.filter_by(school_id=school.id)
+        all_students_q = all_students_q.filter_by(school_id=school_id)
     if year:
         all_students_q = all_students_q.filter_by(academic_year_id=year.id)
     all_students = all_students_q.all()
     student_ids  = [s.id for s in all_students]
 
+    _log.info('[attendance] school_id=%s active_students=%d year_id=%s',
+              school_id, len(student_ids), year.id if year else None)
+
     if not student_ids:
-        return {'too_early': False, 'count': 0, 'students': []}
+        _log.info('[attendance] school_id=%s — no active students found, skip', school_id)
+        return {'too_early': False, 'holiday': False, 'count': 0, 'students': []}
 
     already_ids = {
         row.student_id for row in
         StudentAttendance.query
+            .execution_options(bypass_tenant_scope=True)
             .filter_by(date=today)
             .filter(StudentAttendance.student_id.in_(student_ids))
             .with_entities(StudentAttendance.student_id)
@@ -64,29 +102,47 @@ def _run_auto_absent(school, year, settings):
     }
     unmarked = [s for s in all_students if s.id not in already_ids]
 
+    _log.info(
+        '[attendance] school_id=%s date=%s existing_attendance=%d missing_attendance=%d',
+        school_id, today, len(already_ids), len(unmarked),
+    )
+
     for student in unmarked:
         db.session.add(StudentAttendance(
             student_id       = student.id,
-            school_id        = school.id if school else None,
+            school_id        = school_id,
             academic_year_id = year.id if year else None,
             date             = today,
             status           = 'absent',
             source           = 'automatic',
-            recorded_by      = current_user.id,
+            recorded_by      = recorded_by_id,
         ))
     if unmarked:
         db.session.commit()
+        _log.info('[attendance] school_id=%s — committed %d absent records',
+                  school_id, len(unmarked))
 
+    notified = 0
     for student in unmarked:
-        NotificationService.send_to_parents_of_student(
-            student.id,
-            'غياب الطالب عن المدرسة',
-            f'طالبك {student.full_name} غاب عن المدرسة اليوم.',
-            ntype='attendance',
-            data={'action': 'absent', 'source': 'automatic', 'date': today.isoformat()}
-        )
+        try:
+            NotificationService.send_to_parents_of_student(
+                student.id,
+                'غياب الطالب عن المدرسة',
+                f'طالبك {student.full_name} غاب عن المدرسة اليوم.',
+                ntype='attendance',
+                data={'action': 'absent', 'source': 'automatic', 'date': today.isoformat()}
+            )
+            notified += 1
+            _log.info('[attendance] absent notification sent student_id=%s name=%s date=%s',
+                      student.id, student.full_name, today)
+        except Exception:
+            _log.exception('[attendance] notification failed student_id=%s', student.id)
 
-    return {'too_early': False, 'count': len(unmarked), 'students': unmarked}
+    _log.info(
+        '[attendance] school_id=%s date=%s — absent_created=%d notifications_sent=%d',
+        school_id, today, len(unmarked), notified,
+    )
+    return {'too_early': False, 'holiday': False, 'count': len(unmarked), 'students': unmarked}
 
 
 @attendance_bp.route('/')
@@ -141,7 +197,7 @@ def index():
     if sel_date == today and school and not _is_teacher():
         _auto_year = get_active_year(school.id)
         if _auto_year:
-            _run_auto_absent(school, _auto_year, settings)
+            _run_auto_absent(school, _auto_year, settings, recorded_by_id=current_user.id)
 
     # Attendance records for the selected date
     filtered_section_ids = [s.id for s in filtered_sections]
@@ -150,16 +206,46 @@ def index():
                  .join(Student, StudentAttendance.student_id == Student.id)
                  .filter(StudentAttendance.date == sel_date)
                  .filter(Student.section_id.in_(filtered_section_ids)))
-        if q:
-            att_q = att_q.filter(
-                db.or_(
-                    Student.full_name.ilike(f'%{q}%'),
-                    Student.student_id.ilike(f'%{q}%'),
-                )
-            )
         day_records = att_q.order_by(Student.full_name).all()
     else:
         day_records = []
+
+    # Student name search — finds ALL matching active students (with or without
+    # an attendance record for the selected date) so the search never misses a
+    # student just because they haven't checked in yet.
+    students_found = []
+    if q:
+        sq = (Student.query
+              .filter_by(status='active')
+              .filter(db.or_(
+                  Student.full_name.ilike(f'%{q}%'),
+                  Student.student_id.ilike(f'%{q}%'),
+              )))
+        if school:
+            sq = sq.filter_by(school_id=school.id)
+        if filtered_section_ids:
+            sq = sq.filter(Student.section_id.in_(filtered_section_ids))
+        matching_students = sq.order_by(Student.full_name).all()
+        if matching_students:
+            m_ids = [s.id for s in matching_students]
+            att_map = {
+                r.student_id: r
+                for r in StudentAttendance.query
+                   .filter_by(date=sel_date)
+                   .filter(StudentAttendance.student_id.in_(m_ids))
+                   .all()
+            }
+            for stu in matching_students:
+                students_found.append({'student': stu, 'record': att_map.get(stu.id)})
+
+    is_holiday_sel = is_holiday_date(sel_date, school.id, school) if school else False
+    auto_absent_count_sel = 0
+    if is_holiday_sel and school:
+        auto_absent_count_sel = (
+            StudentAttendance.query
+            .filter_by(date=sel_date, status='absent', source='automatic')
+            .count()
+        )
 
     return render_template('attendance/index.html',
                            sections=filtered_sections,
@@ -167,8 +253,11 @@ def index():
                            all_grades=all_grades,
                            today=today, settings=settings,
                            sel_date=sel_date, day_records=day_records,
+                           students_found=students_found,
                            sel_stage=sel_stage, sel_grade_id=sel_grade_id,
-                           sel_section_id=sel_section_id, q=q)
+                           sel_section_id=sel_section_id, q=q,
+                           is_holiday_sel=is_holiday_sel,
+                           auto_absent_count_sel=auto_absent_count_sel)
 
 
 @attendance_bp.route('/take/<int:section_id>', methods=['GET', 'POST'])
@@ -304,6 +393,8 @@ def take(section_id):
         # Check-out push notifications
         departure_str = now_time.strftime('%H:%M')
         for student in newly_checked_out:
+            _log.info('[attendance] check_out notification sent student_id=%s name=%s date=%s',
+                      student.id, student.full_name, att_date)
             NotificationService.send_to_parents_of_student(
                 student.id,
                 'انصراف الطالب من المدرسة',
@@ -322,6 +413,8 @@ def take(section_id):
             else:
                 title = 'تأخر الطالب عن موعد الحضور'
                 body  = f'طالبك {student.full_name} وصل متأخراً الساعة {arrival_str}.'
+            _log.info('[attendance] %s notification sent student_id=%s name=%s date=%s',
+                      status, student.id, student.full_name, att_date)
             NotificationService.send_to_parents_of_student(
                 student.id, title, body, ntype='attendance',
                 data={'action': 'check_in', 'status': status,
@@ -356,12 +449,16 @@ def mark_absent_today():
     settings = _get_settings()
     year     = get_active_year(school.id) if school else None
 
-    result = _run_auto_absent(school, year, settings)
+    result = _run_auto_absent(school, year, settings, recorded_by_id=current_user.id)
 
     if result['too_early']:
         cutoff = getattr(settings, 'att_absence_threshold', None)
         cutoff_str = cutoff.strftime('%H:%M') if cutoff else ''
         flash(f'لا يمكن تسجيل الغياب قبل وقت الغياب المحدد ({cutoff_str}).', 'warning')
+        return redirect(url_for('attendance.index'))
+
+    if result.get('holiday'):
+        flash('هذا اليوم عطلة، لا يتم تسجيل الغياب التلقائي.', 'info')
         return redirect(url_for('attendance.index'))
 
     count = result['count']
@@ -422,11 +519,18 @@ def student_profile(student_id):
 @login_required
 @permission_required('take_attendance')
 def report():
-    settings   = SchoolSettings.get()
+    school      = get_current_school()
+    settings    = _get_settings()
     local_today = get_local_date(settings)
-    section_id  = request.args.get('section_id', type=int)
-    start       = request.args.get('start', local_today.replace(day=1).isoformat())
-    end         = request.args.get('end',   local_today.isoformat())
+
+    # ── Filter params ──────────────────────────────────────────────────────
+    section_id = request.args.get('section_id', type=int)
+    grade_id   = request.args.get('grade_id',   type=int)
+    stage      = request.args.get('stage', '').strip()
+    q          = request.args.get('q', '').strip()
+    start      = request.args.get('start', local_today.replace(day=1).isoformat())
+    end        = request.args.get('end',   local_today.isoformat())
+    submitted  = bool(request.args)  # True after first form submit
 
     try:
         start_date = dt.strptime(start, '%Y-%m-%d').date()
@@ -435,20 +539,68 @@ def report():
         start_date = local_today.replace(day=1)
         end_date   = local_today
 
+    # ── Section pool (teacher-scoped or school/year-scoped) ────────────────
+    year = get_view_year(school.id) if school else None
     if _is_teacher():
-        teacher_ids = get_teacher_section_ids(current_user)
-        sections    = Section.query.filter(Section.id.in_(teacher_ids)).all() if teacher_ids else []
-        if section_id and section_id not in teacher_ids:
+        teacher_ids  = get_teacher_section_ids(current_user)
+        all_sections = (Section.query.filter(Section.id.in_(teacher_ids)).all()
+                        if teacher_ids else [])
+        allowed_ids  = {s.id for s in all_sections}
+        if section_id and section_id not in allowed_ids:
             section_id = None
     else:
-        sections = Section.query.all()
+        if school and year:
+            _gids        = [g.id for g in Grade.query.filter_by(academic_year_id=year.id).all()]
+            all_sections = (Section.query.filter(Section.grade_id.in_(_gids)).all()
+                            if _gids else [])
+        else:
+            all_sections = Section.query.all()
 
-    records = []
+    # Grades available from those sections (for the grade dropdown)
+    _gid_set  = {s.grade_id for s in all_sections if s.grade_id}
+    all_grades = (Grade.query.filter(Grade.id.in_(_gid_set)).order_by(Grade.name).all()
+                  if _gid_set else [])
+
+    # ── Apply stage / grade / section filters to get allowed section IDs ───
+    grade_map         = {g.id: g for g in all_grades}
+    filtered_sections = list(all_sections)
+    if stage:
+        filtered_sections = [s for s in filtered_sections
+                             if grade_map.get(s.grade_id)
+                             and grade_map[s.grade_id].stage == stage]
+    if grade_id:
+        filtered_sections = [s for s in filtered_sections if s.grade_id == grade_id]
     if section_id:
-        students = (Student.query
-                    .execution_options(include_all_years=True)
-                    .filter_by(section_id=section_id, status='active')
-                    .all())
+        filtered_sections = [s for s in filtered_sections if s.id == section_id]
+    allowed_section_ids = [s.id for s in filtered_sections]
+
+    # ── Build records ───────────────────────────────────────────────────────
+    records = []
+    if submitted:
+        sq = (Student.query
+              .execution_options(include_all_years=True)
+              .filter_by(status='active'))
+        if school:
+            sq = sq.filter_by(school_id=school.id)
+        if stage or grade_id or section_id:
+            # At least one section-level filter active
+            if allowed_section_ids:
+                sq = sq.filter(Student.section_id.in_(allowed_section_ids))
+            else:
+                sq = sq.filter(Student.id == -1)   # impossible → empty result
+        else:
+            # No section filter — use the full section pool for this user
+            pool_ids = [s.id for s in all_sections]
+            if pool_ids:
+                sq = sq.filter(Student.section_id.in_(pool_ids))
+            else:
+                sq = sq.filter(Student.id == -1)
+        if q:
+            sq = sq.filter(db.or_(
+                Student.full_name.ilike(f'%{q}%'),
+                Student.student_id.ilike(f'%{q}%'),
+            ))
+        students = sq.order_by(Student.full_name).all()
         for s in students:
             atts = (StudentAttendance.query
                     .filter_by(student_id=s.id)
@@ -464,8 +616,13 @@ def report():
             })
 
     return render_template('attendance/report.html',
-                           records=records, sections=sections,
-                           section_id=section_id, start=start, end=end)
+                           records=records,
+                           all_sections=all_sections,
+                           all_grades=all_grades,
+                           section_id=section_id, grade_id=grade_id,
+                           stage=stage, q=q,
+                           start=start, end=end,
+                           submitted=submitted)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -553,3 +710,51 @@ def delete_suspension(susp_id):
     db.session.commit()
     flash('تم إلغاء إيقاف الطالب.', 'success')
     return redirect(url_for('attendance.suspensions'))
+
+
+@attendance_bp.route('/cleanup-holiday-absences', methods=['POST'])
+@login_required
+@admin_required
+def cleanup_holiday_absences():
+    """
+    Delete auto-generated absent records for a date that is (or was) a holiday.
+    Only removes records with source='automatic' and status='absent'.
+    Manual records, RFID punches, and all other sources are untouched.
+    """
+    school   = get_current_school()
+    date_str = request.form.get('date', '').strip()
+    try:
+        cleanup_date = dt.strptime(date_str, '%Y-%m-%d').date()
+    except ValueError:
+        flash('تاريخ غير صحيح.', 'danger')
+        return redirect(url_for('attendance.index'))
+
+    if not is_holiday_date(cleanup_date, school.id if school else None):
+        flash('هذا اليوم ليس عطلة — لا يمكن تنظيف سجلات الغياب التلقائي.', 'danger')
+        return redirect(url_for('attendance.index', date=date_str))
+
+    # Collect IDs first; delete by PK to avoid join-delete dialect issues.
+    ids_q = (
+        StudentAttendance.query
+        .filter_by(date=cleanup_date, status='absent', source='automatic')
+        .join(Student, StudentAttendance.student_id == Student.id)
+    )
+    if school:
+        ids_q = ids_q.filter(Student.school_id == school.id)
+    ids_to_delete = [row[0] for row in ids_q.with_entities(StudentAttendance.id).all()]
+
+    deleted = len(ids_to_delete)
+    if ids_to_delete:
+        StudentAttendance.query.filter(
+            StudentAttendance.id.in_(ids_to_delete)
+        ).delete(synchronize_session='fetch')
+        db.session.commit()
+
+    _log.info('[attendance] holiday cleanup: deleted %d auto-absent records date=%s school_id=%s',
+              deleted, cleanup_date, school.id if school else None)
+    flash(
+        f'تم حذف {deleted} سجل غياب تلقائي ليوم {date_str}. '
+        '(السجلات اليدوية وسجلات البصمة محفوظة ولم تُمسّ)',
+        'success' if deleted else 'info',
+    )
+    return redirect(url_for('attendance.index', date=date_str))

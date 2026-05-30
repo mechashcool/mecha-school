@@ -8,15 +8,17 @@
     <h1 class="page-title">الطلاب</h1>
     <p class="page-subtitle">إجمالي {{ students.total }} طالب</p>
   </div>
-  {% if current_user.has_permission('add_student') and not is_historical_year %}
+  {% if current_user.has_permission('add_student') and not is_historical_year and 'students.create' in enabled_features %}
   <a href="{{ url_for('students.create') }}" class="btn btn-primary">
     <i class="bi bi-person-plus-fill me-2"></i>إضافة طالب
   </a>
   {% endif %}
+  {% if 'students.export' in enabled_features %}
   <a href="{{ url_for('students.export_excel', status='active') }}"
      class="btn btn-outline-success">
     <i class="bi bi-file-earmark-excel-fill me-1"></i>تصدير Excel
   </a>
+  {% endif %}
 </div>
 
 <!-- Filters -->
@@ -96,8 +98,8 @@
           <td><code class="text-primary-custom fw-600">{{ s.student_id }}</code></td>
           <td>
             <div class="d-flex align-items-center gap-2">
-              {% if s.photo %}
-              <img src="{{ url_for('static', filename=s.photo) }}"
+              {% if resolve_photo_url(s.photo) %}
+              <img src="{{ resolve_photo_url(s.photo) }}"
                    style="width:32px;height:32px;border-radius:8px;object-fit:cover">
               {% else %}
               <div style="width:32px;height:32px;border-radius:8px;background:#1a3a5c;
@@ -145,13 +147,13 @@
                  class="btn btn-sm btn-outline-primary" title="عرض">
                 <i class="bi bi-eye"></i>
               </a>
-              {% if current_user.has_permission('edit_student') and not is_historical_year %}
+              {% if current_user.has_permission('edit_student') and not is_historical_year and 'students.edit' in enabled_features %}
               <a href="{{ url_for('students.edit', student_id=s.id) }}"
                  class="btn btn-sm btn-outline-secondary" title="تعديل">
                 <i class="bi bi-pencil"></i>
               </a>
               {% endif %}
-              {% if current_user.has_permission('delete_student') and not is_historical_year %}
+              {% if current_user.has_permission('delete_student') and not is_historical_year and 'students.delete' in enabled_features %}
                 {% if s.status != 'archived' %}
                 {# Archive: safe deactivation for school managers #}
                 <form method="POST" action="{{ url_for('students.archive', student_id=s.id) }}" class="d-inline">

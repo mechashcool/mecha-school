@@ -3,11 +3,15 @@ from flask import (Blueprint, render_template, redirect, url_for,
                    flash, request, abort)
 from flask_login import login_required, current_user
 from sqlalchemy.orm import joinedload
-from app.models import db, Student, Section, Grade, AcademicYear, StudentDocument, parent_students
+from app.models import (db, Student, Section, Grade, AcademicYear, StudentDocument,
+                        parent_students, User, Role, AttendanceDevice, DeviceStudentMapping)
 from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    get_current_school, get_active_year, get_view_year,
                                    historical_guard)
-from app.utils.helpers import save_uploaded_file, generate_student_id
+from app.utils.helpers import save_uploaded_file
+from app.utils import code_generator
+from app.utils.features import feature_required, is_feature_enabled
+from app.utils.student_form_config import get_student_form_config
 
 students_bp = Blueprint('students', __name__,
                          template_folder='../../templates/students')
@@ -161,30 +165,106 @@ def create():
         grades_q = grades_q.filter_by(school_id=school.id, academic_year_id=year.id)
     grades = grades_q.order_by(Grade.name).all()
 
+    active_devices = []
+    if school and is_feature_enabled(school.id, 'attendance_devices.mappings'):
+        active_devices = (AttendanceDevice.query
+                         .filter_by(school_id=school.id, is_active=True)
+                         .order_by(AttendanceDevice.name).all())
+
+    parent_role = Role.query.filter_by(name='parent').first()
+    available_parents = []
+    if school and parent_role:
+        available_parents = (User.query
+                             .filter_by(school_id=school.id, role_id=parent_role.id,
+                                        is_active=True)
+                             .order_by(User.full_name)
+                             .all())
+
+    form_cfg = get_student_form_config(school.id)
+
     if request.method == 'POST':
+        # ── Pre-validate parent account and device mapping fields ────────────
+        parent_username         = request.form.get('parent_username', '').strip()
+        parent_password         = request.form.get('parent_password', '').strip()
+        parent_password_confirm = request.form.get('parent_password_confirm', '').strip()
+        employee_no_string      = request.form.get('employee_no_string', '').strip()
+        _dev_id_raw             = request.form.get('device_id', '').strip()
+        device_id               = int(_dev_id_raw) if _dev_id_raw.isdigit() else None
+        all_devices_flag        = request.form.get('all_devices') == '1'
+
+        def _re_render(msg):
+            flash(msg, 'danger')
+            return render_template('students/form.html', student=None, sections=sections,
+                                   grades=grades, stages=['ابتدائية', 'متوسطة', 'إعدادية'],
+                                   selected_grade_id=None, selected_stage=None,
+                                   active_devices=active_devices,
+                                   available_parents=available_parents,
+                                   linked_parents=[], existing_device_mappings=[],
+                                   form_cfg=form_cfg)
+
+        # ── Backend enforcement of required fields per school config ─────────
+        _cfg_errors = form_cfg.validate(request.form)
+        if _cfg_errors:
+            for _err in _cfg_errors:
+                flash(_err, 'danger')
+            return _re_render('')
+
+        # Auto-generate parent username when password is supplied but username is blank
+        if parent_password and not parent_username:
+            parent_username = code_generator.generate_username(school.id, 'parent')
+
+        if parent_username:
+            if not parent_password:
+                return _re_render('يجب إدخال كلمة المرور لإنشاء حساب ولي الأمر')
+            if parent_password != parent_password_confirm:
+                return _re_render('كلمة المرور غير متطابقة')
+            if User.query.filter_by(username=parent_username).first():
+                return _re_render('اسم المستخدم مستخدم مسبقاً، يرجى اختيار اسم مستخدم آخر')
+
+        if employee_no_string:
+            if not employee_no_string.isdigit():
+                return _re_render('رقم الطالب في جهاز الحضور يجب أن يكون أرقاماً فقط')
+            _check_devs = active_devices if all_devices_flag else (
+                [d for d in active_devices if d.id == device_id] if device_id else [])
+            for _dev in _check_devs:
+                _conflict = (DeviceStudentMapping.query
+                             .filter_by(device_id=_dev.id, employee_no_string=employee_no_string)
+                             .first())
+                if _conflict:
+                    return _re_render(f'الرقم {employee_no_string} مستخدم مسبقاً في جهاز "{_dev.name}"')
+
         from datetime import datetime as dt
-        last_student = Student.query.order_by(Student.id.desc()).first()
-        student_id   = generate_student_id(last_student.id if last_student else 0)
+        student_id = code_generator.generate_student_id(school.id)
 
         section_id = request.form.get('section_id', type=int)
         if _is_teacher() and section_id not in get_teacher_section_ids(current_user):
             abort(403)
 
+        _school_id_for_feat = school.id if school else None
         photo_path = None
-        if 'photo' in request.files:
+        if 'photo' in request.files and is_feature_enabled(_school_id_for_feat, 'students.photo_upload'):
             photo_path = save_uploaded_file(request.files['photo'], 'students')
 
-        dob_str = request.form.get('date_of_birth')
+        dob_str = request.form.get('date_of_birth', '').strip()
         dob     = dt.strptime(dob_str, '%Y-%m-%d').date() if dob_str else None
+
+        gender_val = request.form.get('gender', '').strip() or None
+
+        # Backend validation for visible fields that are configured as required
+        if form_cfg.field_visible('date_of_birth') and form_cfg.field_required('date_of_birth') and not dob:
+            return _re_render('تاريخ الميلاد مطلوب')
+        if form_cfg.field_visible('gender') and form_cfg.field_required('gender') and not gender_val:
+            return _re_render('الجنس مطلوب')
 
         student = Student(
             student_id        = student_id,
             full_name         = request.form.get('full_name', '').strip(),
             date_of_birth     = dob,
-            gender            = request.form.get('gender', ''),
+            gender            = gender_val,
             nationality       = request.form.get('nationality', '').strip(),
             address           = request.form.get('address', '').strip(),
             phone             = request.form.get('phone', '').strip(),
+            rfid_tag_id       = request.form.get('rfid_tag_id', '').strip() or None,
             section_id        = section_id,
             guardian_name     = request.form.get('guardian_name', '').strip(),
             guardian_phone    = request.form.get('guardian_phone', '').strip(),
@@ -196,32 +276,119 @@ def create():
             school_id         = school.id if school else None,
             academic_year_id  = year.id   if year   else None,
         )
-        db.session.add(student)
-        db.session.flush()
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+        from sqlalchemy.exc import IntegrityError as _IntegrityError
+        try:
+            db.session.add(student)
+            db.session.flush()
+        except _IntegrityError as _exc:
+            db.session.rollback()
+            _exc_str = str(_exc).lower()
+            _log.error('Student flush IntegrityError: %s', str(_exc)[:800])
+            # Match only the student_id uniqueness constraint, not RFID or FK violations.
+            _is_student_id_conflict = (
+                'uq_student_school_student_id' in _exc_str
+                or 'ix_students_student_id' in _exc_str
+                or ('student_id' in _exc_str and 'unique' in _exc_str)
+            )
+            if _is_student_id_conflict:
+                return _re_render('رقم الطالب مستخدم مسبقاً، يرجى المحاولة مرة أخرى')
+            if 'uq_student_school_rfid_tag' in _exc_str:
+                return _re_render('رقم RFID مستخدم مسبقاً لطالب آخر في هذه المدرسة')
+            return _re_render('تعذر حفظ بيانات الطالب بسبب تعارض في القيم. يرجى المحاولة مرة أخرى')
 
-        doc_types = request.form.getlist('document_type[]')
-        doc_files = request.files.getlist('document_file[]')
-        for doc_type, doc_file in zip(doc_types, doc_files):
-            if doc_file and doc_file.filename:
-                saved = save_uploaded_file(
-                    doc_file,
-                    'students/documents',
-                    prefix=f"{student.student_id}_{doc_type or 'document'}"
+        if is_feature_enabled(_school_id_for_feat, 'students.documents_upload') and form_cfg.section_visible('student_documents'):
+            doc_types = request.form.getlist('document_type[]')
+            doc_files = request.files.getlist('document_file[]')
+            for doc_type, doc_file in zip(doc_types, doc_files):
+                if doc_file and doc_file.filename:
+                    saved = save_uploaded_file(
+                        doc_file,
+                        'students/documents',
+                        prefix=f"{student.student_id}_{doc_type or 'document'}"
+                    )
+                    if saved:
+                        db.session.add(StudentDocument(
+                            student_id=student.id,
+                            document_type=doc_type.strip() or 'وثيقة',
+                            file_path=saved,
+                        ))
+
+        # ── Create parent user account ───────────────────────────────────────
+        parent_created = False
+        if parent_username:
+            parent_role = Role.query.filter_by(name='parent').first()
+            if parent_role:
+                _parent_email = None
+                if student.guardian_email:
+                    if not User.query.filter_by(email=student.guardian_email).first():
+                        _parent_email = student.guardian_email
+                parent_user = User(
+                    username=parent_username,
+                    full_name=student.guardian_name or parent_username,
+                    email=_parent_email,
+                    phone=student.guardian_phone or None,
+                    school_id=school.id,
+                    role_id=parent_role.id,
+                    is_active=True,
                 )
-                if saved:
-                    db.session.add(StudentDocument(
+                parent_user.set_password(parent_password)
+                db.session.add(parent_user)
+                db.session.flush()
+                db.session.execute(
+                    parent_students.insert().values(
+                        user_id=parent_user.id,
                         student_id=student.id,
-                        document_type=doc_type.strip() or 'وثيقة',
-                        file_path=saved,
-                    ))
+                        relation=student.guardian_relation or 'guardian',
+                    )
+                )
+                parent_created = True
+
+        # ── Create attendance device mappings ────────────────────────────────
+        if employee_no_string and employee_no_string.isdigit():
+            _map_devs = active_devices if all_devices_flag else (
+                [d for d in active_devices if d.id == device_id] if device_id else [])
+            for _dev in _map_devs:
+                db.session.add(DeviceStudentMapping(
+                    school_id=school.id,
+                    device_id=_dev.id,
+                    employee_no_string=employee_no_string,
+                    student_id=student.id,
+                    is_active=True,
+                ))
+
+        # ── Link to existing parent account ──────────────────────────────────
+        _link_parent_id = request.form.get('link_existing_parent_id', type=int)
+        _linked_parent_name = None
+        if _link_parent_id and not parent_created:
+            _ep = User.query.filter_by(id=_link_parent_id, school_id=school.id,
+                                       role_id=parent_role.id if parent_role else 0).first()
+            if _ep:
+                db.session.execute(
+                    parent_students.insert().values(
+                        user_id=_ep.id,
+                        student_id=student.id,
+                        relation=student.guardian_relation or 'guardian',
+                    )
+                )
+                _linked_parent_name = _ep.full_name
 
         db.session.commit()
         flash(f'تم إضافة الطالب {student.full_name} برقم {student.student_id}.', 'success')
+        if parent_created:
+            flash(f'تم إنشاء حساب ولي الأمر بنجاح. اسم المستخدم: {parent_username}', 'success')
+        if _linked_parent_name:
+            flash(f'تم ربط الطالب بولي الأمر {_linked_parent_name} بنجاح.', 'success')
         return redirect(url_for('students.index'))
 
     return render_template('students/form.html', student=None, sections=sections,
                            grades=grades, stages=['ابتدائية', 'متوسطة', 'إعدادية'],
-                           selected_grade_id=None, selected_stage=None)
+                           selected_grade_id=None, selected_stage=None,
+                           active_devices=active_devices,
+                           available_parents=available_parents,
+                           linked_parents=[], existing_device_mappings=[],
+                           form_cfg=form_cfg)
 
 
 @students_bp.route('/<int:student_id>/edit', methods=['GET', 'POST'])
@@ -266,61 +433,231 @@ def edit(student_id):
     selected_grade    = next((g for g in grades if g.id == selected_grade_id), None)
     selected_stage    = selected_grade.stage if selected_grade else None
 
+    active_devices = []
+    if school and is_feature_enabled(school.id, 'attendance_devices.mappings'):
+        active_devices = (AttendanceDevice.query
+                         .filter_by(school_id=school.id, is_active=True)
+                         .order_by(AttendanceDevice.name).all())
+    linked_parents = student.parents.all()
+    existing_device_mappings = student.device_mappings.all()
+
+    form_cfg = get_student_form_config(school.id) if school else get_student_form_config(0)
+
+    parent_role = Role.query.filter_by(name='parent').first()
+    available_parents = []
+    if school and parent_role:
+        linked_ids = {p.id for p in linked_parents}
+        available_parents = [
+            u for u in (User.query
+                        .filter_by(school_id=school.id, role_id=parent_role.id,
+                                   is_active=True)
+                        .order_by(User.full_name)
+                        .all())
+            if u.id not in linked_ids
+        ]
+
     if request.method == 'POST':
         from datetime import datetime as dt
+
+        # ── Backend enforcement of required fields per school config ─────────
+        _cfg_errors = form_cfg.validate(request.form)
+        if _cfg_errors:
+            for _err in _cfg_errors:
+                flash(_err, 'danger')
+            return render_template(
+                'students/form.html', student=student, sections=sections,
+                grades=grades, stages=['ابتدائية', 'متوسطة', 'إعدادية'],
+                selected_grade_id=selected_grade_id, selected_stage=selected_stage,
+                active_devices=active_devices, available_parents=available_parents,
+                linked_parents=linked_parents,
+                existing_device_mappings=existing_device_mappings,
+                form_cfg=form_cfg,
+            )
+
         new_section_id = request.form.get('section_id', type=int)
         if _is_teacher() and new_section_id not in get_teacher_section_ids(current_user):
             abort(403)
 
-        student.full_name         = request.form.get('full_name', student.full_name).strip()
-        student.gender            = request.form.get('gender', student.gender)
-        student.nationality       = request.form.get('nationality', '').strip()
-        student.address           = request.form.get('address', '').strip()
-        student.phone             = request.form.get('phone', '').strip()
-        student.section_id        = new_section_id
-        # Keep academic_year_id in sync with the assigned section's year so
-        # the student's record reflects the year they are actively enrolled in.
-        if new_section_id and year:
-            student.academic_year_id = year.id
-        student.guardian_name     = request.form.get('guardian_name', '').strip()
-        student.guardian_phone    = request.form.get('guardian_phone', '').strip()
-        student.guardian_email    = request.form.get('guardian_email', '').strip()
-        student.guardian_relation = request.form.get('guardian_relation', '').strip()
-        student.status            = request.form.get('status', student.status)
-        student.notes             = request.form.get('notes', '').strip()
+        # full_name — always updated
+        student.full_name = request.form.get('full_name', student.full_name).strip()
 
-        dob_str = request.form.get('date_of_birth')
-        if dob_str:
-            student.date_of_birth = dt.strptime(dob_str, '%Y-%m-%d').date()
+        # Only update visible fields; preserve existing data for hidden ones
+        if form_cfg.field_visible('gender'):
+            student.gender = request.form.get('gender', student.gender)
+        if form_cfg.field_visible('nationality'):
+            student.nationality = request.form.get('nationality', '').strip()
+        if form_cfg.field_visible('address'):
+            student.address = request.form.get('address', '').strip()
+        if form_cfg.field_visible('phone'):
+            student.phone = request.form.get('phone', '').strip()
+        if form_cfg.field_visible('date_of_birth'):
+            dob_str = request.form.get('date_of_birth')
+            if dob_str:
+                student.date_of_birth = dt.strptime(dob_str, '%Y-%m-%d').date()
 
-        if 'photo' in request.files and request.files['photo'].filename:
+        if form_cfg.section_visible('class_section'):
+            student.section_id = new_section_id
+            # Keep academic_year_id in sync with the assigned section's year so
+            # the student's record reflects the year they are actively enrolled in.
+            if new_section_id and year:
+                student.academic_year_id = year.id
+        else:
+            # section hidden — preserve existing assignment
+            pass
+
+        if form_cfg.section_visible('guardian_info'):
+            if form_cfg.field_visible('guardian_name'):
+                student.guardian_name = request.form.get('guardian_name', '').strip()
+            if form_cfg.field_visible('guardian_phone'):
+                student.guardian_phone = request.form.get('guardian_phone', '').strip()
+            if form_cfg.field_visible('guardian_email'):
+                student.guardian_email = request.form.get('guardian_email', '').strip()
+            if form_cfg.field_visible('guardian_relation'):
+                student.guardian_relation = request.form.get('guardian_relation', '').strip()
+
+        student.status = request.form.get('status', student.status)
+
+        if form_cfg.section_visible('notes'):
+            student.notes = request.form.get('notes', '').strip()
+
+        _edit_school_id = school.id if school else None
+        if ('photo' in request.files and request.files['photo'].filename
+                and is_feature_enabled(_edit_school_id, 'students.photo_upload')):
             photo_path = save_uploaded_file(request.files['photo'], 'students')
             if photo_path:
                 student.photo = photo_path
 
-        doc_types = request.form.getlist('document_type[]')
-        doc_files = request.files.getlist('document_file[]')
-        for doc_type, doc_file in zip(doc_types, doc_files):
-            if doc_file and doc_file.filename:
-                saved = save_uploaded_file(
-                    doc_file,
-                    'students/documents',
-                    prefix=f"{student.student_id}_{doc_type or 'document'}"
-                )
-                if saved:
-                    db.session.add(StudentDocument(
-                        student_id=student.id,
-                        document_type=doc_type.strip() or 'وثيقة',
-                        file_path=saved,
-                    ))
+        if is_feature_enabled(_edit_school_id, 'students.documents_upload') and form_cfg.section_visible('student_documents'):
+            doc_types = request.form.getlist('document_type[]')
+            doc_files = request.files.getlist('document_file[]')
+            for doc_type, doc_file in zip(doc_types, doc_files):
+                if doc_file and doc_file.filename:
+                    saved = save_uploaded_file(
+                        doc_file,
+                        'students/documents',
+                        prefix=f"{student.student_id}_{doc_type or 'document'}"
+                    )
+                    if saved:
+                        db.session.add(StudentDocument(
+                            student_id=student.id,
+                            document_type=doc_type.strip() or 'وثيقة',
+                            file_path=saved,
+                        ))
+
+        # ── Attendance device mapping update/create ──────────────────────────
+        _emp_no = request.form.get('employee_no_string', '').strip()
+        _raw_dev = request.form.get('device_id', '').strip()
+        _dev_id  = int(_raw_dev) if _raw_dev.isdigit() else None
+        _all_dev = request.form.get('all_devices') == '1'
+
+        if _emp_no:
+            if not _emp_no.isdigit():
+                flash('رقم الطالب في جهاز الحضور يجب أن يكون أرقاماً فقط', 'warning')
+            else:
+                _dev_targets = active_devices if _all_dev else (
+                    [d for d in active_devices if d.id == _dev_id] if _dev_id else [])
+                for _dev in _dev_targets:
+                    _existing_map = (DeviceStudentMapping.query
+                                     .filter_by(device_id=_dev.id, student_id=student.id)
+                                     .first())
+                    if _existing_map:
+                        _existing_map.employee_no_string = _emp_no
+                        _existing_map.is_active = True
+                    else:
+                        _conflict = (DeviceStudentMapping.query
+                                     .filter_by(device_id=_dev.id, employee_no_string=_emp_no)
+                                     .first())
+                        if _conflict:
+                            flash(f'الرقم {_emp_no} مستخدم مسبقاً في جهاز "{_dev.name}"', 'warning')
+                        else:
+                            db.session.add(DeviceStudentMapping(
+                                school_id=school.id,
+                                device_id=_dev.id,
+                                employee_no_string=_emp_no,
+                                student_id=student.id,
+                                is_active=True,
+                            ))
+
+        # ── Add new parent account (edit form) ──────────────────────────────
+        # Guardian profile fields come from the student record (already updated above)
+        _np_username = request.form.get('new_parent_username', '').strip()
+        _np_password = request.form.get('new_parent_password', '').strip()
+        _np_confirm  = request.form.get('new_parent_password_confirm', '').strip()
+
+        _parent_added = False
+        if _np_username:
+            if not student.guardian_name:
+                flash('يرجى إدخال اسم ولي الأمر في قسم "بيانات ولي الأمر" أولاً', 'danger')
+            elif not _np_password:
+                flash('يجب إدخال كلمة المرور لإنشاء حساب ولي الأمر', 'danger')
+            elif _np_password != _np_confirm:
+                flash('كلمة المرور غير متطابقة', 'danger')
+            elif User.query.filter_by(username=_np_username).first():
+                flash('اسم المستخدم مستخدم مسبقاً، الرجاء اختيار اسم مستخدم آخر', 'danger')
+            else:
+                _np_role = Role.query.filter_by(name='parent').first()
+                if _np_role:
+                    _np_email_val = None
+                    if student.guardian_email and not User.query.filter_by(email=student.guardian_email).first():
+                        _np_email_val = student.guardian_email
+                    _new_parent = User(
+                        username=_np_username,
+                        full_name=student.guardian_name,
+                        email=_np_email_val,
+                        phone=student.guardian_phone or None,
+                        school_id=school.id,
+                        role_id=_np_role.id,
+                        is_active=True,
+                    )
+                    _new_parent.set_password(_np_password)
+                    db.session.add(_new_parent)
+                    db.session.flush()
+                    db.session.execute(
+                        parent_students.insert().values(
+                            user_id=_new_parent.id,
+                            student_id=student.id,
+                            relation=student.guardian_relation or 'guardian',
+                        )
+                    )
+                    _parent_added = True
+
+        # ── Link to existing parent account (edit) ───────────────────────────
+        _link_parent_id = request.form.get('link_existing_parent_id', type=int)
+        _linked_parent_name = None
+        if _link_parent_id and not _parent_added:
+            _ep = User.query.filter_by(id=_link_parent_id, school_id=school.id,
+                                       role_id=parent_role.id if parent_role else 0).first()
+            if _ep:
+                _already = db.session.query(parent_students.c.user_id).filter(
+                    parent_students.c.user_id == _ep.id,
+                    parent_students.c.student_id == student.id,
+                ).first()
+                if not _already:
+                    db.session.execute(
+                        parent_students.insert().values(
+                            user_id=_ep.id,
+                            student_id=student.id,
+                            relation=student.guardian_relation or 'guardian',
+                        )
+                    )
+                    _linked_parent_name = _ep.full_name
 
         db.session.commit()
         flash('تم تحديث بيانات الطالب بنجاح.', 'success')
+        if _parent_added:
+            flash('تم إنشاء حساب ولي الأمر وربطه بالطالب بنجاح.', 'success')
+        if _linked_parent_name:
+            flash(f'تم ربط الطالب بولي الأمر {_linked_parent_name} بنجاح.', 'success')
         return redirect(url_for('students.view', student_id=student.id))
 
     return render_template('students/form.html', student=student, sections=sections,
                            grades=grades, stages=['ابتدائية', 'متوسطة', 'إعدادية'],
-                           selected_grade_id=selected_grade_id, selected_stage=selected_stage)
+                           selected_grade_id=selected_grade_id, selected_stage=selected_stage,
+                           active_devices=active_devices,
+                           available_parents=available_parents,
+                           linked_parents=linked_parents,
+                           existing_device_mappings=existing_device_mappings,
+                           form_cfg=form_cfg)
 
 
 @students_bp.route('/<int:student_id>')
@@ -351,6 +688,7 @@ def view(student_id):
 @login_required
 @historical_guard
 @permission_required('delete_student')
+@feature_required('students.delete')
 def archive(student_id):
     """Set a student's status to archived (or any non-active status).
     This is the safe, data-preserving alternative to hard delete for school managers."""
@@ -381,6 +719,7 @@ def archive(student_id):
 @login_required
 @historical_guard
 @permission_required('delete_student')
+@feature_required('students.delete')
 def delete(student_id):
     """Permanent hard delete — super_admin only.
     School managers must use the archive route instead."""
@@ -422,9 +761,38 @@ def delete(student_id):
     return redirect(url_for('students.index'))
 
 
+@students_bp.route('/<int:student_id>/unlink-parent', methods=['POST'])
+@login_required
+@historical_guard
+@permission_required('edit_student')
+def unlink_parent(student_id):
+    """Remove a parent ↔ student link from the parent_students junction."""
+    student = Student.query.execution_options(include_all_years=True).get_or_404(student_id)
+    school  = get_current_school()
+    if school and student.school_id and student.school_id != school.id:
+        abort(403)
+
+    parent_id = request.form.get('parent_user_id', type=int)
+    if parent_id:
+        parent = User.query.filter_by(id=parent_id, school_id=school.id).first()
+        if parent:
+            db.session.execute(
+                parent_students.delete().where(
+                    (parent_students.c.user_id    == parent_id) &
+                    (parent_students.c.student_id == student_id)
+                )
+            )
+            db.session.commit()
+            flash(f'تم إلغاء ربط ولي الأمر {parent.full_name} من هذا الطالب.', 'success')
+        else:
+            flash('ولي الأمر غير موجود أو لا ينتمي لهذه المدرسة.', 'danger')
+    return redirect(url_for('students.edit', student_id=student_id))
+
+
 @students_bp.route('/export/excel')
 @login_required
 @permission_required('view_students')
+@feature_required('students.export')
 def export_excel():
     from flask import Response
     from app.utils.excel_export import export_students

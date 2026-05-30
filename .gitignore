@@ -70,3 +70,32 @@ pip-log.txt
 # Distribution
 *.zip
 *.tar.gz
+
+# Local test payloads
+acs_event_body.json
+attendance_test*.json
+hik_events.json
+hikvision_sync_body.json
+
+# Local/runtime files
+.env
+.env.*
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.log
+app/static/uploads/
+instance/
+*.db
+*.sqlite
+
+# Sensitive Firebase/Admin keys
+firebase-service-account*.json
+service-account*.json
+*serviceAccount*.json
+
+# AI Face raw captures / debug dumps
+tools/captures/
+tools/captures_ws/
+*.bin

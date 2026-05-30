@@ -1,0 +1,314 @@
+{% extends "shared/base.html" %}
+{% block title %}{{ 'تعديل واجب' if hw else 'إضافة واجب' }}{% endblock %}
+{% block page_title %}{{ 'تعديل واجب' if hw else 'إضافة واجب جديد' }}{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex align-items-center justify-content-between mb-3">
+  <h1 class="page-title mb-0">{{ 'تعديل: ' + hw.title if hw else 'واجب جديد' }}</h1>
+  <a href="{{ url_for('homework.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+{% if not sections and not current_user.is_admin_user %}
+{# No sections — show blocking notice, hide form #}
+<div class="alert alert-warning d-flex gap-2 align-items-start">
+  <i class="bi bi-exclamation-triangle-fill flex-shrink-0 mt-1"></i>
+  <div>
+    <strong>لا يمكن إنشاء واجب</strong><br>
+    لا توجد شعب أو مواد مرتبطة بحسابك.
+    يرجى التواصل مع مسؤول المدرسة لتعيينك في المواد والشعب المناسبة.
+  </div>
+</div>
+<a href="{{ url_for('homework.index') }}" class="btn btn-secondary">
+  <i class="bi bi-arrow-right me-1"></i>العودة إلى قائمة الواجبات
+</a>
+{% else %}
+
+<form method="POST"
+      action="{{ url_for('homework.edit', hw_id=hw.id) if hw else url_for('homework.create') }}"
+      enctype="multipart/form-data">
+
+  <input type="hidden" name="csrf_token"
+         value="{{ csrf_token() if csrf_token is defined else '' }}">
+
+  <div class="row g-4">
+
+    {# ── Main column ────────────────────────────────────────────────────────── #}
+    <div class="col-lg-8">
+
+      <div class="card mb-3">
+        <div class="card-header fw-bold">
+          <i class="bi bi-journal-text text-primary me-1"></i>بيانات الواجب
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+
+            {# Title #}
+            <div class="col-12">
+              <label class="form-label">عنوان الواجب <span class="text-danger">*</span></label>
+              <input type="text" name="title" class="form-control" required
+                     placeholder="مثال: حل تمارين الفصل الثالث"
+                     value="{{ hw.title if hw else '' }}">
+            </div>
+
+            {# Subject #}
+            {% if school_cfg.field_visible('homework', 'subject') %}
+            <div class="col-md-6">
+              <label class="form-label">المادة</label>
+              <select name="subject_id" id="subjectSelect" class="form-select">
+                <option value="">— اختر المادة —</option>
+                {% for s in subjects %}
+                <option value="{{ s.id }}"
+                        data-grade="{{ s.grade_id or '' }}"
+                  {{ 'selected' if hw and hw.subject_id == s.id }}>
+                  {{ s.name }}{% if s.grade %} ({{ s.grade.name }}){% endif %}
+                </option>
+                {% endfor %}
+              </select>
+              {% if not subjects %}
+              <div class="form-text text-warning">
+                <i class="bi bi-exclamation-triangle me-1"></i>
+                لا توجد مواد مرتبطة بحسابك — يمكنك تحديد الشعبة فقط.
+              </div>
+              {% endif %}
+            </div>
+            {% endif %}
+
+            {# Grade / Stage — UI-only filter, no name submitted #}
+            {% if school_cfg.field_visible('homework', 'grade') %}
+            <div class="col-md-6">
+              <label class="form-label">المرحلة / الصف</label>
+              <select id="gradeSelect" class="form-select">
+                <option value="">— اختر الصف —</option>
+                {% for g in grades %}
+                <option value="{{ g.id }}"
+                  {{ 'selected' if hw and hw.section and hw.section.grade_id == g.id }}>
+                  {{ g.name }}{% if g.stage %} — {{ g.stage }}{% endif %}
+                </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">يُستخدم لتصفية الشعب أدناه.</div>
+            </div>
+            {% endif %}
+
+            {# Section #}
+            {% if school_cfg.field_visible('homework', 'section') %}
+            <div class="col-md-6">
+              <label class="form-label">الشعبة <span class="text-danger">*</span></label>
+              <select name="section_id" id="sectionSelect" class="form-select" required>
+                <option value="">— اختر الشعبة —</option>
+                {% for sec in sections %}
+                <option value="{{ sec.id }}"
+                        data-grade="{{ sec.grade_id }}"
+                  {{ 'selected' if hw and hw.section_id == sec.id }}>
+                  {{ sec.name }}{% if sec.grade %} — {{ sec.grade.name }}{% endif %}
+                </option>
+                {% endfor %}
+              </select>
+            </div>
+            {% endif %}
+
+            {# Publish date #}
+            {% if school_cfg.field_visible('homework', 'publish_date') %}
+            <div class="col-md-6">
+              <label class="form-label">تاريخ النشر <span class="text-danger">*</span></label>
+              <input type="date" name="publish_date" class="form-control" required
+                     value="{{ hw.publish_date.strftime('%Y-%m-%d') if hw else today.strftime('%Y-%m-%d') }}">
+            </div>
+            {% endif %}
+
+            {# Due date #}
+            {% if school_cfg.field_visible('homework', 'due_date') %}
+            <div class="col-md-6">
+              <label class="form-label">تاريخ التسليم <span class="text-danger">*</span></label>
+              <input type="date" name="due_date" class="form-control" required
+                     value="{{ hw.due_date.strftime('%Y-%m-%d') if hw else '' }}"
+                     id="dueDate">
+            </div>
+            {% endif %}
+
+            {# Notes / description #}
+            {% if school_cfg.field_visible('homework', 'notes') %}
+            <div class="col-12">
+              <label class="form-label">الملاحظات / وصف الواجب</label>
+              <textarea name="description" class="form-control" rows="4"
+                        placeholder="اكتب تعليمات الواجب هنا...">{{ hw.description if hw else '' }}</textarea>
+            </div>
+            {% endif %}
+
+          </div>
+        </div>
+      </div>
+
+      {# ── Attachment ─────────────────────────────────────────────────────── #}
+      {% if school_cfg.field_visible('homework', 'attachment') %}
+      <div class="card mb-3">
+        <div class="card-header fw-bold">
+          <i class="bi bi-paperclip text-secondary me-1"></i>المرفق (اختياري)
+        </div>
+        <div class="card-body">
+
+          {% if hw and hw.attachment_path %}
+          <div class="mb-3 p-3 bg-light rounded">
+            <p class="small fw-bold mb-2">المرفق الحالي:</p>
+            {% set att_url = resolve_photo_url(hw.attachment_path) or hw.attachment_path %}
+            {% if hw.attachment_type == 'image' %}
+            <img src="{{ att_url }}" alt="مرفق" class="img-fluid rounded mb-2"
+                 style="max-height:200px;object-fit:contain"
+                 onerror="this.alt='تعذر تحميل الصورة'">
+            {% elif hw.attachment_type == 'pdf' %}
+            <a href="{{ att_url }}" target="_blank" class="btn btn-sm btn-outline-danger mb-2">
+              <i class="bi bi-file-earmark-pdf-fill me-1"></i>عرض PDF الحالي
+            </a>
+            {% endif %}
+            <div class="form-check mt-1">
+              <input class="form-check-input" type="checkbox" name="clear_attachment" value="1"
+                     id="clearAttach">
+              <label class="form-check-label small text-danger" for="clearAttach">
+                حذف المرفق الحالي
+              </label>
+            </div>
+          </div>
+          {% endif %}
+
+          <label class="form-label">
+            {% if hw and hw.attachment_path %}رفع مرفق جديد (يستبدل الحالي){% else %}رفع مرفق{% endif %}
+          </label>
+          <input type="file" name="attachment" class="form-control"
+                 accept=".jpg,.jpeg,.png,.webp,.pdf">
+          <div class="form-text">الأنواع المقبولة: صورة (jpg, jpeg, png, webp) أو ملف PDF. الحجم الأقصى: 16 MB.</div>
+        </div>
+      </div>
+      {% endif %}
+
+    </div>
+
+    {# ── Sidebar: summary card ───────────────────────────────────────────────── #}
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header fw-bold">
+          <i class="bi bi-info-circle me-1"></i>ملخص
+        </div>
+        <div class="card-body">
+
+          {% if not current_user.is_admin_user %}
+          {# Teacher-scope summary #}
+          {% if not subjects %}
+          <div class="alert alert-info small py-2 mb-2">
+            <i class="bi bi-info-circle me-1"></i>
+            لا توجد مواد مرتبطة بحسابك. يمكنك اختيار الشعبة فقط.
+          </div>
+          {% endif %}
+
+          <p class="small text-muted mb-1">
+            <i class="bi bi-mortarboard me-1"></i>
+            المراحل المتاحة: <strong>{{ grades|length }}</strong>
+          </p>
+          <p class="small text-muted mb-1">
+            <i class="bi bi-diagram-3 me-1"></i>
+            الشعب المتاحة: <strong>{{ sections|length }}</strong>
+          </p>
+          <p class="small text-muted mb-3">
+            <i class="bi bi-book me-1"></i>
+            المواد المتاحة: <strong>{{ subjects|length }}</strong>
+          </p>
+          <div class="alert alert-light border small py-2">
+            <i class="bi bi-shield-lock me-1 text-primary"></i>
+            تظهر فقط المواد والشعب المرتبطة بحسابك.
+          </div>
+          {% else %}
+          {# Admin summary #}
+          <p class="small text-muted mb-1">
+            المراحل: <strong>{{ grades|length }}</strong><br>
+            الشعب: <strong>{{ sections|length }}</strong><br>
+            المواد: <strong>{{ subjects|length }}</strong>
+          </p>
+          {% endif %}
+
+          <hr class="my-3">
+
+          <div class="d-grid gap-2">
+            <button type="submit" class="btn btn-primary"
+                    {{ 'disabled' if not sections and not current_user.is_admin_user }}>
+              <i class="bi bi-check-lg me-1"></i>
+              {{ 'حفظ التعديلات' if hw else 'إضافة الواجب' }}
+            </button>
+            <a href="{{ url_for('homework.index') }}" class="btn btn-outline-secondary">
+              إلغاء
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</form>
+
+<script>
+(function () {
+  var gradeEl   = document.getElementById('gradeSelect');
+  var sectionEl = document.getElementById('sectionSelect');
+  var subjectEl = document.getElementById('subjectSelect');
+
+  /* ── Grade → Section cascade ─────────────────────────────────────────── */
+  function filterSections() {
+    if (!gradeEl || !sectionEl) return;
+    var gid = gradeEl.value;
+    var opts = sectionEl.querySelectorAll('option[data-grade]');
+    var currentVal = sectionEl.value;
+    opts.forEach(function (opt) {
+      var match = !gid || String(opt.dataset.grade) === String(gid);
+      opt.hidden = !match;
+      if (opt.disabled !== undefined) opt.disabled = !match;
+    });
+    /* Deselect if the currently-selected section is now filtered out */
+    if (currentVal) {
+      var sel = sectionEl.querySelector('option[value="' + currentVal + '"]');
+      if (sel && sel.hidden) sectionEl.value = '';
+    }
+  }
+
+  /* ── Grade → Subject cascade (soft: just hide non-matching) ─────────── */
+  function filterSubjects() {
+    if (!gradeEl || !subjectEl) return;
+    var gid = gradeEl.value;
+    var opts = subjectEl.querySelectorAll('option[data-grade]');
+    opts.forEach(function (opt) {
+      /* subjects with no grade_id (data-grade="") are always visible */
+      var match = !gid || !opt.dataset.grade || String(opt.dataset.grade) === String(gid);
+      opt.hidden = !match;
+    });
+    var sel = subjectEl.querySelector('option[value="' + subjectEl.value + '"]');
+    if (sel && sel.hidden) subjectEl.value = '';
+  }
+
+  if (gradeEl) {
+    gradeEl.addEventListener('change', function () {
+      filterSections();
+      filterSubjects();
+    });
+    /* Apply filters immediately if a grade is pre-selected (edit page) */
+    if (gradeEl.value) {
+      filterSections();
+      filterSubjects();
+    }
+  }
+
+  /* ── Due date >= publish date ─────────────────────────────────────────── */
+  var form = document.querySelector('form');
+  if (form) {
+    form.addEventListener('submit', function (e) {
+      var pub = document.querySelector('[name="publish_date"]');
+      var due = document.getElementById('dueDate');
+      if (pub && due && pub.value && due.value && due.value < pub.value) {
+        e.preventDefault();
+        alert('تاريخ التسليم يجب ألا يكون قبل تاريخ النشر.');
+        due.focus();
+      }
+    });
+  }
+})();
+</script>
+{% endif %}{# end if sections #}
+{% endblock %}

@@ -168,6 +168,57 @@
       </div>
       {% endif %}
 
+      <!-- Modules / Feature flags (create only) -->
+      {% if not school and modules %}
+      <div class="card mb-4" id="modulesCard">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <h6 class="mb-0"><i class="bi bi-toggles me-2"></i>ميزات المدرسة / وحدات النظام</h6>
+          <span class="badge bg-secondary" id="moduleBadge">0 / {{ modules|length }} محدد</span>
+        </div>
+        <div class="card-body">
+          <!-- Quick-select preset buttons -->
+          <div class="d-flex flex-wrap gap-2 mb-3">
+            <button type="button" class="btn btn-sm btn-outline-primary" id="btnSelectAll">
+              <i class="bi bi-check2-all me-1"></i>تحديد الكل
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="btnClearAll">
+              <i class="bi bi-x-lg me-1"></i>إلغاء تحديد الكل
+            </button>
+            {% for preset_key, preset in presets.items() %}
+            <button type="button" class="btn btn-sm btn-outline-success btn-preset"
+                    data-modules="{{ preset.modules | join(',') }}">
+              <i class="bi bi-collection-fill me-1"></i>{{ preset.label }}
+            </button>
+            {% endfor %}
+          </div>
+          <div class="form-text mb-3 text-muted">
+            اختر الميزات التي ستكون متاحة لمدير هذه المدرسة. يمكن تعديلها لاحقاً.
+            <br>إذا تركت الكل غير محدد، سيُعامَل النظام على أن جميع الميزات مفعّلة.
+          </div>
+          <div class="row g-2">
+            {% for key, mod in modules.items() %}
+            <div class="col-md-6 col-lg-4">
+              <div class="form-check p-0">
+                <label class="d-flex align-items-start gap-2 p-2 rounded border module-checkbox-label
+                              {{ 'border-primary bg-primary bg-opacity-10' if key in selected_modules else 'border-light' }}"
+                       style="cursor:pointer;transition:all .15s" for="mod_{{ key }}">
+                  <input class="form-check-input module-cb flex-shrink-0 mt-1" type="checkbox"
+                         name="modules" value="{{ key }}" id="mod_{{ key }}"
+                         {{ 'checked' if key in selected_modules }}>
+                  <span>
+                    <i class="bi {{ mod.icon }} text-primary me-1"></i>
+                    <strong class="d-block">{{ mod.label }}</strong>
+                    <small class="text-muted">{{ mod.description }}</small>
+                  </span>
+                </label>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
     </div>
 
     <!-- Right: Logo + Currency + Status -->
@@ -245,10 +296,56 @@
 
 {% block scripts %}
 <script>
+/* Color picker sync */
 const colorInput = document.querySelector('input[type="color"]');
 const hexInput   = document.getElementById('colorHex');
 if (colorInput && hexInput) {
   colorInput.addEventListener('input', () => { hexInput.value = colorInput.value; });
 }
+
+/* Module checkboxes */
+(function () {
+  const cbs    = Array.from(document.querySelectorAll('.module-cb'));
+  const badge  = document.getElementById('moduleBadge');
+  const total  = cbs.length;
+  if (!cbs.length) return;
+
+  function updateBadge() {
+    const checked = cbs.filter(c => c.checked).length;
+    if (badge) badge.textContent = checked + ' / ' + total + ' محدد';
+  }
+
+  function styleLabel(cb) {
+    const lbl = cb.closest('.module-checkbox-label');
+    if (!lbl) return;
+    if (cb.checked) {
+      lbl.classList.add('border-primary', 'bg-primary', 'bg-opacity-10');
+      lbl.classList.remove('border-light');
+    } else {
+      lbl.classList.remove('border-primary', 'bg-primary', 'bg-opacity-10');
+      lbl.classList.add('border-light');
+    }
+  }
+
+  cbs.forEach(cb => {
+    cb.addEventListener('change', () => { styleLabel(cb); updateBadge(); });
+  });
+
+  document.getElementById('btnSelectAll')?.addEventListener('click', () => {
+    cbs.forEach(cb => { cb.checked = true; styleLabel(cb); }); updateBadge();
+  });
+  document.getElementById('btnClearAll')?.addEventListener('click', () => {
+    cbs.forEach(cb => { cb.checked = false; styleLabel(cb); }); updateBadge();
+  });
+  document.querySelectorAll('.btn-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const preset = new Set((btn.dataset.modules || '').split(',').map(s => s.trim()));
+      cbs.forEach(cb => { cb.checked = preset.has(cb.value); styleLabel(cb); });
+      updateBadge();
+    });
+  });
+
+  updateBadge();
+})();
 </script>
 {% endblock %}

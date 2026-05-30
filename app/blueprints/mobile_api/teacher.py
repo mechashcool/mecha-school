@@ -27,7 +27,7 @@ Security rules
 • Exam creation: the supplied section_id must be in the teacher's section set.
 • Result entry: the exam's section_id must be in the teacher's section set.
 """
-from datetime import date, timedelta
+from datetime import date, timedelta, timezone
 from datetime import datetime as _dt
 
 from flask import abort, g, request
@@ -38,6 +38,7 @@ from app.models import (
     Employee,
     Exam,
     ExamResult,
+    Homework,
     Notification,
     NotificationRead,
     Schedule,
@@ -50,7 +51,7 @@ from app.models import (
 from app.utils.notification_visibility import notification_visible_to
 
 from . import mobile_api_bp
-from .utils import jwt_required, role_required, ok, err
+from .utils import jwt_required, role_required, ok, err, photo_url
 
 
 # ─── Shared helpers ───────────────────────────────────────────────────────────
@@ -229,7 +230,7 @@ def teacher_section_students(section_id):
                 'student_id': s.student_id,
                 'name':       s.full_name,
                 'gender':     s.gender,
-                'photo':      s.photo,
+                'photo':      photo_url(s.photo),
                 'status':     s.status,
             }
             for s in students
@@ -284,7 +285,7 @@ def teacher_student_profile(student_id):
             'student_id':      student.student_id,
             'name':            student.full_name,
             'gender':          student.gender,
-            'photo':           student.photo,
+            'photo':           photo_url(student.photo),
             'date_of_birth':   student.date_of_birth.isoformat() if student.date_of_birth else None,
             'phone':           student.phone,
             'section':         student.section.name       if student.section else None,
@@ -661,8 +662,179 @@ def teacher_notifications():
                 'body':    n.body,
                 'ntype':   n.ntype,
                 'is_read': n.id in read_ids,
-                'sent_at': n.created_at.isoformat() if n.created_at else None,
+                'sent_at': n.created_at.replace(tzinfo=timezone.utc).isoformat() if n.created_at else None,
             }
             for n in rows
         ],
     )
+
+
+# ─── Teacher homework ─────────────────────────────────────────────────────────
+
+def _hw_attachment_url(hw: Homework) -> str | None:
+    if not hw.attachment_path:
+        return None
+    if hw.attachment_path.startswith(('http://', 'https://')):
+        return hw.attachment_path
+    return photo_url(hw.attachment_path)
+
+
+@mobile_api_bp.route('/teacher/homework', methods=['GET'])
+@jwt_required()
+@role_required('teacher')
+def teacher_homework_list():
+    """
+    List homework created by this teacher for the current academic year.
+    Blocked if the school's homework module is disabled (api_access action).
+
+    Query params: limit (default 50, max 100), offset (default 0).
+    """
+    from app.utils.school_config import get_school_config
+    from app.utils.decorators import get_active_year
+
+    user = g.mobile_user
+    cfg  = get_school_config(user.school_id)
+    if not cfg.action_enabled('homework', 'api_access'):
+        return err('الوصول إلى الواجبات غير مفعل لهذه المدرسة.', 403)
+
+    emp = _get_employee()
+    if not emp:
+        return err('employee_profile_not_found', 404)
+
+    from app.models import AcademicYear
+    year = AcademicYear.query.filter_by(school_id=emp.school_id, is_current=True).first()
+    if not year:
+        return ok(count=0, homework=[])
+
+    limit  = min(int(request.args.get('limit', 50)), 100)
+    offset = max(int(request.args.get('offset', 0)), 0)
+
+    q = (Homework.query
+         .filter_by(teacher_id=emp.id, academic_year_id=year.id, is_active=True)
+         .order_by(Homework.publish_date.desc(), Homework.id.desc()))
+
+    total = q.count()
+    rows  = q.offset(offset).limit(limit).all()
+
+    return ok(
+        total=total,
+        limit=limit,
+        offset=offset,
+        homework=[
+            {
+                'id':             hw.id,
+                'title':          hw.title,
+                'subject':        hw.subject.name if hw.subject else None,
+                'section':        hw.section.name if hw.section else None,
+                'grade':          hw.section.grade.name if hw.section and hw.section.grade else None,
+                'publish_date':   hw.publish_date.isoformat() if hw.publish_date else None,
+                'due_date':       hw.due_date.isoformat() if hw.due_date else None,
+                'description':    hw.description,
+                'attachment_url': _hw_attachment_url(hw),
+                'attachment_type': hw.attachment_type,
+            }
+            for hw in rows
+        ],
+    )
+
+
+@mobile_api_bp.route('/teacher/homework', methods=['POST'])
+@jwt_required()
+@role_required('teacher')
+def teacher_homework_create():
+    """
+    Create a new homework assignment from the mobile app.
+
+    Expected JSON body:
+        title        str   required
+        section_id   int   required
+        subject_id   int   optional
+        publish_date str   YYYY-MM-DD  required
+        due_date     str   YYYY-MM-DD  required
+        description  str   optional
+    """
+    from app.utils.school_config import get_school_config
+    from datetime import datetime as _dt
+
+    user = g.mobile_user
+    cfg  = get_school_config(user.school_id)
+    if not cfg.action_enabled('homework', 'api_access'):
+        return err('الوصول إلى الواجبات غير مفعل لهذه المدرسة.', 403)
+    if not cfg.action_enabled('homework', 'create'):
+        return err('إضافة الواجبات غير مفعلة لهذه المدرسة.', 403)
+
+    emp = _get_employee()
+    if not emp:
+        return err('employee_profile_not_found', 404)
+
+    data = request.get_json(silent=True) or {}
+
+    title        = (data.get('title') or '').strip()
+    section_id   = data.get('section_id')
+    subject_id   = data.get('subject_id')
+    publish_date = data.get('publish_date', '')
+    due_date_str = data.get('due_date', '')
+    description  = (data.get('description') or '').strip() or None
+
+    if not title:
+        return err('title is required')
+    if not section_id:
+        return err('section_id is required')
+    if not publish_date or not due_date_str:
+        return err('publish_date and due_date are required')
+
+    try:
+        pub_dt = _dt.strptime(publish_date, '%Y-%m-%d').date()
+        due_dt = _dt.strptime(due_date_str, '%Y-%m-%d').date()
+    except ValueError:
+        return err('invalid date format — use YYYY-MM-DD')
+
+    if due_dt < pub_dt:
+        return err('due_date must not be before publish_date')
+
+    allowed_sec_ids = _teacher_section_ids(emp)
+    if section_id not in allowed_sec_ids:
+        return err('section not in teacher assignments', 403)
+
+    if subject_id:
+        from sqlalchemy import select as _sel
+        allowed_subj_ids = {
+            row.subject_id
+            for row in db.session.execute(
+                _sel(teacher_subjects.c.subject_id).where(
+                    teacher_subjects.c.employee_id == emp.id
+                )
+            ).fetchall()
+        }
+        if subject_id not in allowed_subj_ids:
+            return err('subject not in teacher assignments', 403)
+
+    from app.models import AcademicYear
+    year = AcademicYear.query.filter_by(school_id=emp.school_id, is_current=True).first()
+    if not year:
+        return err('no active academic year', 400)
+
+    hw = Homework(
+        school_id=emp.school_id,
+        academic_year_id=year.id,
+        teacher_id=emp.id,
+        subject_id=subject_id or None,
+        section_id=section_id,
+        title=title,
+        description=description,
+        publish_date=pub_dt,
+        due_date=due_dt,
+        is_active=True,
+    )
+    db.session.add(hw)
+    db.session.commit()
+
+    return ok(
+        message='تم إضافة الواجب بنجاح.',
+        homework={
+            'id':           hw.id,
+            'title':        hw.title,
+            'publish_date': hw.publish_date.isoformat(),
+            'due_date':     hw.due_date.isoformat(),
+        },
+    ), 201

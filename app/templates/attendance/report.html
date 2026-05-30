@@ -10,44 +10,109 @@
   </a>
 </div>
 
+{# ── Filters ───────────────────────────────────────────────────────────── #}
 <div class="card mb-4">
   <div class="card-body py-3">
-    <form method="GET" class="d-flex gap-3 flex-wrap align-items-end">
-      <div>
-        <label class="form-label mb-1" style="font-size:12.5px">الشعبة</label>
-        <select name="section_id" class="form-select">
-          <option value="">— اختر الشعبة —</option>
-          {% for sec in sections %}
-          <option value="{{ sec.id }}" {{ 'selected' if section_id == sec.id }}>
+    <form method="GET" class="row g-2 align-items-end" id="report-filter-form">
+
+      {# Student name #}
+      <div class="col-md-3">
+        <label class="form-label mb-1 fw-600">
+          <i class="bi bi-search me-1"></i>اسم الطالب
+        </label>
+        <input type="text" name="q" class="form-control"
+               placeholder="ابحث بالاسم أو الرقم..."
+               value="{{ q }}">
+      </div>
+
+      {# Stage #}
+      <div class="col-md-2">
+        <label class="form-label mb-1 fw-600">المرحلة الدراسية</label>
+        <select name="stage" class="form-select" id="rpt-stage">
+          <option value="">كل المراحل</option>
+          <option value="ابتدائية"  {% if stage == 'ابتدائية'  %}selected{% endif %}>الابتدائية</option>
+          <option value="متوسطة"    {% if stage == 'متوسطة'    %}selected{% endif %}>المتوسطة</option>
+          <option value="إعدادية"   {% if stage == 'إعدادية'   %}selected{% endif %}>الإعدادية</option>
+        </select>
+      </div>
+
+      {# Grade #}
+      <div class="col-md-2">
+        <label class="form-label mb-1 fw-600">الصف</label>
+        <select name="grade_id" class="form-select" id="rpt-grade">
+          <option value="">كل الصفوف</option>
+          {% for g in all_grades %}
+          <option value="{{ g.id }}" data-stage="{{ g.stage or '' }}"
+                  {% if grade_id == g.id %}selected{% endif %}>
+            {{ g.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      {# Section #}
+      <div class="col-md-2">
+        <label class="form-label mb-1 fw-600">الشعبة</label>
+        <select name="section_id" class="form-select" id="rpt-section">
+          <option value="">كل الشعب</option>
+          {% for sec in all_sections %}
+          <option value="{{ sec.id }}"
+                  data-grade="{{ sec.grade_id }}"
+                  {% if section_id == sec.id %}selected{% endif %}>
             {{ sec.grade.name }} — شعبة {{ sec.name }}
           </option>
           {% endfor %}
         </select>
       </div>
-      <div>
-        <label class="form-label mb-1" style="font-size:12.5px">من</label>
+
+      {# Date range #}
+      <div class="col-md-1">
+        <label class="form-label mb-1 fw-600">من</label>
         <input type="date" name="start" class="form-control" value="{{ start }}">
       </div>
-      <div>
-        <label class="form-label mb-1" style="font-size:12.5px">إلى</label>
+      <div class="col-md-1">
+        <label class="form-label mb-1 fw-600">إلى</label>
         <input type="date" name="end" class="form-control" value="{{ end }}">
       </div>
-      <button class="btn btn-primary align-self-end"><i class="bi bi-search me-1"></i>عرض</button>
+
+      {# Buttons #}
+      <div class="col-md-1 d-flex gap-2">
+        <button class="btn btn-primary flex-grow-1">
+          <i class="bi bi-search me-1"></i>عرض
+        </button>
+        {% if submitted %}
+        <a href="{{ url_for('attendance.report') }}" class="btn btn-outline-secondary"
+           title="مسح الفلاتر"><i class="bi bi-x-lg"></i></a>
+        {% endif %}
+      </div>
+
     </form>
   </div>
 </div>
 
+{# ── Results ───────────────────────────────────────────────────────────── #}
 {% if records %}
-{# ── Summary table ───────────────��─────────────────────────────────────────── #}
 <div class="card mb-4">
-  <div class="card-header fw-600">
-    <i class="bi bi-bar-chart-fill text-accent me-1"></i>ملخص الحضور
+  <div class="card-header d-flex align-items-center justify-content-between fw-600">
+    <span>
+      <i class="bi bi-bar-chart-fill text-accent me-1"></i>ملخص الحضور
+      {% if q or stage or grade_id or section_id %}
+      <small class="text-muted fw-400 me-2">
+        ({% if q %}بحث: "{{ q }}"{% endif %}
+        {% if stage %} · المرحلة: {{ stage }}{% endif %}
+        {% if grade_id %} · الصف{% endif %}
+        {% if section_id %} · الشعبة{% endif %})
+      </small>
+      {% endif %}
+    </span>
+    <small class="text-muted">{{ records|length }} طالب · {{ start }} إلى {{ end }}</small>
   </div>
   <div class="table-wrapper">
     <table class="table">
       <thead>
         <tr>
           <th>الطالب</th><th>رقمه</th>
+          <th>الصف / الشعبة</th>
           <th class="text-success">حاضر</th>
           <th class="text-danger">غائب</th>
           <th class="text-warning">متأخر</th>
@@ -63,6 +128,11 @@
         <tr>
           <td class="fw-600">{{ r.student.full_name }}</td>
           <td><code>{{ r.student.student_id }}</code></td>
+          <td style="font-size:12px;color:#555">
+            {% if r.student.section %}
+              {{ r.student.section.grade.name }} / {{ r.student.section.name }}
+            {% else %}—{% endif %}
+          </td>
           <td class="text-success fw-700">{{ r.present }}</td>
           <td class="text-danger fw-700">{{ r.absent }}</td>
           <td class="text-warning fw-700">{{ r.late }}</td>
@@ -89,7 +159,7 @@
         </tr>
         {# ── Per-day detail row ── #}
         <tr id="det_{{ r.student.id }}" style="display:none;background:#f8fbff">
-          <td colspan="8" class="p-0">
+          <td colspan="9" class="p-0">
             <div class="px-4 py-3">
               {% if r.details %}
               <table class="table table-sm mb-0">
@@ -134,17 +204,75 @@
     </table>
   </div>
 </div>
-{% elif section_id %}
-<div class="card">
-  <div class="card-body text-center text-muted py-5">لا توجد بيانات حضور لهذه الفترة</div>
+
+{% elif submitted %}
+<div class="alert alert-secondary mb-4 py-3 d-flex align-items-center gap-3">
+  <i class="bi bi-search" style="font-size:22px;opacity:.4;flex-shrink:0"></i>
+  <div>
+    <strong>لا توجد نتائج مطابقة للبحث</strong><br>
+    <span style="font-size:13px">لم يُعثر على بيانات حضور تطابق الفلاتر المحددة للفترة من {{ start }} إلى {{ end }}.</span>
+  </div>
+</div>
+
+{% else %}
+<div class="alert alert-info d-flex align-items-center gap-2 py-3" style="font-size:14px">
+  <i class="bi bi-info-circle-fill flex-shrink-0" style="font-size:18px"></i>
+  اختر الفلاتر المناسبة ثم اضغط <strong class="mx-1">عرض</strong> للحصول على تقرير الحضور.
 </div>
 {% endif %}
+
 {% endblock %}
 
 {% block extra_js %}
 <script>
+(function () {
+  var stageEl   = document.getElementById('rpt-stage');
+  var gradeEl   = document.getElementById('rpt-grade');
+  var sectionEl = document.getElementById('rpt-section');
+  if (!stageEl) return;
+
+  var allGradeOpts   = Array.from(gradeEl.options).slice(1).map(function(o){ return o.cloneNode(true); });
+  var allSectionOpts = Array.from(sectionEl.options).slice(1).map(function(o){ return o.cloneNode(true); });
+
+  function rebuildGrades() {
+    var stg  = stageEl.value;
+    var prev = gradeEl.value;
+    while (gradeEl.options.length > 1) gradeEl.remove(1);
+    allGradeOpts.forEach(function(o) {
+      if (!stg || o.dataset.stage === stg) gradeEl.add(o.cloneNode(true));
+    });
+    gradeEl.value = prev;
+    rebuildSections();
+  }
+
+  function rebuildSections() {
+    var gid  = gradeEl.value;
+    var prev = sectionEl.value;
+    while (sectionEl.options.length > 1) sectionEl.remove(1);
+    allSectionOpts.forEach(function(o) {
+      if (!gid || o.dataset.grade === gid) sectionEl.add(o.cloneNode(true));
+    });
+    sectionEl.value = prev;
+  }
+
+  stageEl.addEventListener('change', function() {
+    gradeEl.value   = '';
+    sectionEl.value = '';
+    rebuildGrades();
+  });
+  gradeEl.addEventListener('change', function() {
+    sectionEl.value = '';
+    rebuildSections();
+  });
+
+  /* Restore cascade state on page load (when server-side values are set) */
+  rebuildGrades();
+})();
+</script>
+
+<script>
 function toggleDetail(id) {
-  const row = document.getElementById(id);
+  var row = document.getElementById(id);
   if (row) row.style.display = (row.style.display === 'none' ? 'table-row' : 'none');
 }
 </script>

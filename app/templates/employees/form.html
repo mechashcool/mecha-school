@@ -13,10 +13,16 @@
 <form method="POST"
       action="{{ url_for('employees.edit', emp_id=employee.id) if employee else url_for('employees.create') }}"
       enctype="multipart/form-data">
+
   <div class="row g-4">
+    {# ── Left column: cards ──────────────────────────────────────────────── #}
     <div class="col-lg-8">
-      <div class="card mb-4">
-        <div class="card-header"><i class="bi bi-person-badge-fill text-accent"></i>البيانات الأساسية</div>
+
+      {# ── 1. Basic Info ───────────────────────────────────────────────── #}
+      <div class="card mb-3">
+        <div class="card-header">
+          <i class="bi bi-person-badge-fill text-accent me-1"></i>البيانات الأساسية
+        </div>
         <div class="card-body">
           <div class="row g-3">
             <div class="col-md-6">
@@ -24,17 +30,27 @@
               <input type="text" name="full_name" class="form-control" required
                      value="{{ employee.full_name if employee else '' }}">
             </div>
+            {% if school_cfg.field_visible('employees', 'job_title') %}
             <div class="col-md-6">
-              <label class="form-label">المسمى الوظيفي <span class="text-danger">*</span></label>
-              <input type="text" name="job_title" class="form-control" required
+              <label class="form-label">المسمى الوظيفي{% if school_cfg.field_required('employees', 'job_title') %} <span class="text-danger">*</span>{% endif %}</label>
+              <input type="text" name="job_title" class="form-control"
+                     {{ 'required' if school_cfg.field_required('employees', 'job_title') }}
                      value="{{ employee.job_title if employee else '' }}">
             </div>
+            {% elif employee and employee.job_title %}
+            <input type="hidden" name="job_title" value="{{ employee.job_title }}">
+            {% endif %}
+            {% if school_cfg.field_visible('employees', 'department') %}
             <div class="col-md-6">
               <label class="form-label">القسم</label>
               <input type="text" name="department" class="form-control"
                      value="{{ employee.department if employee else '' }}"
                      placeholder="مثال: التدريس، المالية، الإدارة...">
             </div>
+            {% elif employee and employee.department %}
+            <input type="hidden" name="department" value="{{ employee.department }}">
+            {% endif %}
+            {% if school_cfg.field_visible('employees', 'gender') %}
             <div class="col-md-6">
               <label class="form-label">الجنس</label>
               <select name="gender" class="form-select">
@@ -43,21 +59,47 @@
                 <option value="female" {{ 'selected' if employee and employee.gender == 'female' }}>أنثى</option>
               </select>
             </div>
+            {% elif employee and employee.gender %}
+            <input type="hidden" name="gender" value="{{ employee.gender }}">
+            {% endif %}
+            {% if school_cfg.field_visible('employees', 'phone') %}
             <div class="col-md-6">
-              <label class="form-label">رقم الهاتف</label>
+              <label class="form-label">رقم الهاتف{% if school_cfg.field_required('employees', 'phone') %} <span class="text-danger">*</span>{% endif %}</label>
               <input type="tel" name="phone" class="form-control"
+                     {{ 'required' if school_cfg.field_required('employees', 'phone') }}
                      value="{{ employee.phone if employee else '' }}">
             </div>
+            {% elif employee and employee.phone %}
+            <input type="hidden" name="phone" value="{{ employee.phone }}">
+            {% endif %}
+            {% if school_cfg.field_visible('employees', 'email') %}
             <div class="col-md-6">
               <label class="form-label">البريد الإلكتروني</label>
               <input type="email" name="email" class="form-control"
                      value="{{ employee.email if employee else '' }}">
             </div>
+            {% elif employee and employee.email %}
+            <input type="hidden" name="email" value="{{ employee.email }}">
+            {% endif %}
+            {% if school_cfg.field_visible('employees', 'nationality') %}
             <div class="col-md-6">
               <label class="form-label">الجنسية</label>
               <input type="text" name="nationality" class="form-control"
                      value="{{ employee.nationality if employee else '' }}">
             </div>
+            {% elif employee and employee.nationality %}
+            <input type="hidden" name="nationality" value="{{ employee.nationality }}">
+            {% endif %}
+            {% if school_cfg.field_visible('employees', 'date_of_birth') %}
+            <div class="col-md-6">
+              <label class="form-label">تاريخ الميلاد</label>
+              <input type="date" name="date_of_birth" class="form-control"
+                     value="{{ employee.date_of_birth.isoformat() if employee and employee.date_of_birth else '' }}">
+            </div>
+            {% elif employee and employee.date_of_birth %}
+            <input type="hidden" name="date_of_birth" value="{{ employee.date_of_birth.isoformat() }}">
+            {% endif %}
+            {% if school_cfg.field_visible('employees', 'contract_type') %}
             <div class="col-md-6">
               <label class="form-label">نوع العقد</label>
               <select name="contract_type" class="form-select">
@@ -67,16 +109,27 @@
                 <option value="contract"   {{ 'selected' if employee and employee.contract_type == 'contract' }}>عقد</option>
               </select>
             </div>
+            {% elif employee and employee.contract_type %}
+            <input type="hidden" name="contract_type" value="{{ employee.contract_type }}">
+            {% endif %}
+            {% if school_cfg.field_visible('employees', 'base_salary') %}
             <div class="col-md-6">
               <label class="form-label">الراتب الأساسي (د.ع) <span class="text-danger">*</span></label>
               <input type="number" name="base_salary" class="form-control" min="0" step="1000" required
                      value="{{ employee.base_salary if employee else '' }}">
             </div>
+            {% elif employee %}
+            <input type="hidden" name="base_salary" value="{{ employee.base_salary or 0 }}">
+            {% endif %}
+            {% if school_cfg.field_visible('employees', 'hire_date') %}
             <div class="col-md-6">
               <label class="form-label">تاريخ التعيين</label>
               <input type="date" name="hire_date" class="form-control"
                      value="{{ employee.hire_date.isoformat() if employee and employee.hire_date else '' }}">
             </div>
+            {% elif employee and employee.hire_date %}
+            <input type="hidden" name="hire_date" value="{{ employee.hire_date.isoformat() }}">
+            {% endif %}
             {% if employee %}
             <div class="col-md-6">
               <label class="form-label">الحالة</label>
@@ -87,40 +140,276 @@
               </select>
             </div>
             {% endif %}
+            {% if school_cfg.field_visible('employees', 'address') %}
             <div class="col-12">
               <label class="form-label">العنوان</label>
               <textarea name="address" class="form-control" rows="2">{{ employee.address if employee else '' }}</textarea>
             </div>
+            {% elif employee and employee.address %}
+            <input type="hidden" name="address" value="{{ employee.address }}">
+            {% endif %}
           </div>
         </div>
       </div>
-    </div>
 
+      {# ── 2. System Account ───────────────────────────────────────────── #}
+      {% if school_cfg.section_visible('employees', 'system_account') %}
+      <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center"
+             role="button"
+             data-bs-toggle="collapse"
+             data-bs-target="#collapseAccount"
+             aria-expanded="{{ 'true' if linked_user else 'false' }}">
+          <span><i class="bi bi-person-lock text-accent me-1"></i>حساب النظام</span>
+          <i class="bi bi-chevron-down collapse-chevron"></i>
+        </div>
+        <div class="collapse{{ ' show' if linked_user }}" id="collapseAccount">
+          <div class="card-body">
+            {% if linked_user %}
+            {# Edit existing account #}
+            <div class="alert alert-info py-2 mb-3">
+              <i class="bi bi-check-circle-fill me-1"></i>
+              مرتبط بحساب: <strong>{{ linked_user.username }}</strong>
+            </div>
+            <div class="row g-3">
+              <div class="col-md-6">
+                <label class="form-label">الدور الوظيفي</label>
+                <select name="role_id" class="form-select">
+                  {% for role in roles %}
+                  <option value="{{ role.id }}"
+                    {{ 'selected' if linked_user.role_id == role.id }}>{{ role.name }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-md-6 d-flex align-items-end">
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" name="user_is_active"
+                         id="chkUserActiveEdit" value="1"
+                         {{ 'checked' if linked_user.is_active }}>
+                  <label class="form-check-label" for="chkUserActiveEdit">الحساب فعّال</label>
+                </div>
+              </div>
+              <div class="col-12">
+                <div class="form-check mb-2">
+                  <input class="form-check-input" type="checkbox" name="reset_password"
+                         id="chkResetPw" value="1"
+                         onchange="document.getElementById('pwResetBlock').classList.toggle('d-none',!this.checked)">
+                  <label class="form-check-label" for="chkResetPw">تغيير كلمة المرور</label>
+                </div>
+                <div id="pwResetBlock" class="d-none">
+                  <input type="password" name="user_password" class="form-control"
+                         placeholder="كلمة المرور الجديدة" autocomplete="new-password">
+                </div>
+              </div>
+            </div>
+            {% else %}
+            {# Create new account #}
+            <div class="form-check mb-3">
+              <input class="form-check-input" type="checkbox" name="create_account"
+                     id="chkCreateAccount" value="1"
+                     onchange="document.getElementById('accountFields').classList.toggle('d-none',!this.checked)">
+              <label class="form-check-label fw-semibold" for="chkCreateAccount">
+                إنشاء حساب دخول للموظف
+              </label>
+            </div>
+            <div id="accountFields" class="d-none">
+              <div class="row g-3">
+                <div class="col-md-6">
+                  <label class="form-label">اسم المستخدم <span class="text-muted fw-400">(اختياري — يُولَّد تلقائياً)</span></label>
+                  <input type="text" name="username" class="form-control"
+                         autocomplete="off" placeholder="اتركه فارغاً للتوليد التلقائي">
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label">كلمة المرور <span class="text-danger">*</span></label>
+                  <input type="password" name="user_password" class="form-control"
+                         autocomplete="new-password">
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label">الدور الوظيفي <span class="text-danger">*</span></label>
+                  <select name="role_id" class="form-select">
+                    <option value="">— اختر —</option>
+                    {% for role in roles %}
+                    <option value="{{ role.id }}">{{ role.name }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="col-md-6 d-flex align-items-end">
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="user_is_active"
+                           id="chkUserActive" value="1" checked>
+                    <label class="form-check-label" for="chkUserActive">الحساب فعّال</label>
+                  </div>
+                </div>
+              </div>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endif %}{# system_account section #}
+
+      {# ── 3. Teacher Assignments ──────────────────────────────────────── #}
+      {% if school_cfg.section_visible('employees', 'teacher_assignment') %}
+      {% set has_assignments = (existing_homeroom_ids or existing_section_ids or existing_subject_ids) %}
+      <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center"
+             role="button"
+             data-bs-toggle="collapse"
+             data-bs-target="#collapseTeacher"
+             aria-expanded="{{ 'true' if has_assignments else 'false' }}">
+          <span><i class="bi bi-journal-bookmark-fill text-accent me-1"></i>إعدادات التدريسي</span>
+          <i class="bi bi-chevron-down collapse-chevron"></i>
+        </div>
+        <div class="collapse{{ ' show' if has_assignments }}" id="collapseTeacher">
+          <div class="card-body">
+            {# Hidden flag so backend knows this section was submitted #}
+            <input type="hidden" name="save_teacher_section" value="1">
+
+            {% if sections %}
+            {# Homeroom sections #}
+            <h6 class="fw-semibold mb-2">الصفوف الرئيسية (مشرف الصف)</h6>
+            <div class="row g-2 mb-4">
+              {% for grade in grades %}
+              {% set grade_sections = sections | selectattr('grade_id', 'equalto', grade.id) | list %}
+              {% if grade_sections %}
+              <div class="col-12">
+                <div class="fw-medium text-muted small mb-1">{{ grade.name }}</div>
+                <div class="d-flex flex-wrap gap-2">
+                  {% for sec in grade_sections %}
+                  <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="checkbox"
+                           name="homeroom_section_ids" value="{{ sec.id }}"
+                           id="hr_sec_{{ sec.id }}"
+                           {{ 'checked' if sec.id in existing_homeroom_ids }}>
+                    <label class="form-check-label" for="hr_sec_{{ sec.id }}">{{ sec.name }}</label>
+                  </div>
+                  {% endfor %}
+                </div>
+              </div>
+              {% endif %}
+              {% endfor %}
+            </div>
+
+            {# Teaching sections #}
+            <h6 class="fw-semibold mb-2">الشعب التي يُدرّسها</h6>
+            <div class="row g-2 mb-4">
+              {% for grade in grades %}
+              {% set grade_sections = sections | selectattr('grade_id', 'equalto', grade.id) | list %}
+              {% if grade_sections %}
+              <div class="col-12">
+                <div class="fw-medium text-muted small mb-1">{{ grade.name }}</div>
+                <div class="d-flex flex-wrap gap-2">
+                  {% for sec in grade_sections %}
+                  <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="checkbox"
+                           name="teaching_section_ids" value="{{ sec.id }}"
+                           id="ts_sec_{{ sec.id }}"
+                           {{ 'checked' if sec.id in existing_section_ids }}>
+                    <label class="form-check-label" for="ts_sec_{{ sec.id }}">{{ sec.name }}</label>
+                  </div>
+                  {% endfor %}
+                </div>
+              </div>
+              {% endif %}
+              {% endfor %}
+            </div>
+
+            {# Subjects #}
+            {% if subjects %}
+            <h6 class="fw-semibold mb-2">المواد الدراسية</h6>
+            <div class="d-flex flex-wrap gap-2">
+              {% for subj in subjects %}
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="checkbox"
+                       name="subject_ids" value="{{ subj.id }}"
+                       id="subj_{{ subj.id }}"
+                       {{ 'checked' if subj.id in existing_subject_ids }}>
+                <label class="form-check-label" for="subj_{{ subj.id }}">{{ subj.name }}</label>
+              </div>
+              {% endfor %}
+            </div>
+            {% endif %}
+
+            {% else %}
+            <p class="text-muted mb-0">
+              <i class="bi bi-info-circle me-1"></i>
+              لا توجد شعب أو مواد محددة للعام الدراسي الحالي.
+            </p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endif %}{# teacher_assignment section #}
+
+      {# ── 4. Attendance Device (read-only — managed from Attendance Devices page) ── #}
+      <div class="card mb-3">
+        <div class="card-header">
+          <i class="bi bi-fingerprint text-accent me-1"></i>جهاز الحضور
+        </div>
+        <div class="card-body">
+          {% if existing_device_mapping %}
+          <div class="d-flex align-items-center gap-3 flex-wrap">
+            <span class="badge bg-success fs-6">
+              <i class="bi bi-check-circle me-1"></i>مرتبط بجهاز
+            </span>
+            <span class="text-muted">
+              رقم التسجيل: <strong>{{ existing_device_mapping.enrollment_no }}</strong>
+            </span>
+            {% if existing_device_mapping.device %}
+            <span class="text-muted">
+              الجهاز: <strong>{{ existing_device_mapping.device.name }}</strong>
+            </span>
+            <a href="{{ url_for('attendance_devices.mappings', device_id=existing_device_mapping.device_id) }}"
+               class="btn btn-sm btn-outline-primary" target="_blank">
+              <i class="bi bi-box-arrow-up-right me-1"></i>إدارة الربط
+            </a>
+            {% endif %}
+          </div>
+          {% else %}
+          <p class="text-muted mb-1">
+            <i class="bi bi-info-circle me-1"></i>
+            لم يُربط هذا الموظف بجهاز حضور بعد.
+          </p>
+          <a href="{{ url_for('attendance_devices.index') }}" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-fingerprint me-1"></i>الذهاب إلى أجهزة الحضور
+          </a>
+          {% endif %}
+        </div>
+      </div>
+
+    </div>{# /col-lg-8 #}
+
+    {# ── Right sidebar ──────────────────────────────────────────────────── #}
     <div class="col-lg-4">
-      <div class="card mb-4">
-        <div class="card-header"><i class="bi bi-camera-fill text-accent"></i>صورة الموظف</div>
+      {% if school_cfg.section_visible('employees', 'photo') %}
+      <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-camera-fill text-accent me-1"></i>صورة الموظف</div>
         <div class="card-body text-center">
-          {% if employee and employee.photo %}
-          <img src="{{ url_for('static', filename=employee.photo) }}"
+          {% if employee and resolve_photo_url(employee.photo) %}
+          <img src="{{ resolve_photo_url(employee.photo) }}"
                class="rounded-12 mb-3" style="width:120px;height:120px;object-fit:cover">
           {% else %}
-          <div class="mb-3" style="width:120px;height:120px;border-radius:12px;
-                background:#f0f4f8;display:flex;align-items:center;justify-content:center;
-                margin:0 auto;font-size:40px;color:#9aabb8">
+          <div class="mb-3 mx-auto"
+               style="width:120px;height:120px;border-radius:12px;
+                      background:#f0f4f8;display:flex;align-items:center;
+                      justify-content:center;font-size:40px;color:#9aabb8">
             <i class="bi bi-person-fill"></i>
           </div>
           {% endif %}
           <input type="file" name="photo" class="form-control form-control-sm" accept="image/*">
         </div>
       </div>
+      {% endif %}{# photo section #}
+
       <div class="card">
-        <div class="card-header"><i class="bi bi-sticky-fill text-accent"></i>ملاحظات</div>
+        <div class="card-header"><i class="bi bi-sticky-fill text-accent me-1"></i>ملاحظات</div>
         <div class="card-body">
-          <textarea name="notes" class="form-control" rows="5">{{ employee.notes if employee else '' }}</textarea>
+          <textarea name="notes" class="form-control" rows="6">{{ employee.notes if employee else '' }}</textarea>
         </div>
       </div>
     </div>
-  </div>
+
+  </div>{# /row #}
 
   <div class="mt-4 d-flex gap-3">
     <button type="submit" class="btn btn-primary px-5">
@@ -129,5 +418,11 @@
     </button>
     <a href="{{ url_for('employees.index') }}" class="btn btn-outline-secondary px-5">إلغاء</a>
   </div>
+
 </form>
+
+<style>
+.collapse-chevron { transition: transform .2s; }
+[aria-expanded="true"] .collapse-chevron { transform: rotate(180deg); }
+</style>
 {% endblock %}

@@ -9,8 +9,8 @@ import datetime
 
 from flask import g, request
 
-from app.models import db, User, Employee
-from .utils import encode_token, jwt_required, ok, err
+from app.models import db, User, Employee, MobileDeviceToken
+from .utils import encode_token, jwt_required, ok, err, photo_url
 
 # Circular import guard — routes are registered by __init__.py after the bp is created
 from . import mobile_api_bp
@@ -109,7 +109,7 @@ def login():
                 'id':         s.id,
                 'student_id': s.student_id,
                 'name':       s.full_name,
-                'photo':      s.photo,
+                'photo':      photo_url(s.photo),
                 'section':    s.section.name if s.section else None,
                 'grade':      s.section.grade.name if s.section and s.section.grade else None,
             }
@@ -124,7 +124,7 @@ def login():
                 'employee_id': emp.employee_id,
                 'name':        emp.full_name,
                 'job_title':   emp.job_title,
-                'photo':       emp.photo,
+                'photo':       photo_url(emp.photo),
             }
 
     return ok(
@@ -136,6 +136,76 @@ def login():
         school=_school_payload(user.school),
         children=children,
         employee=employee,
+    )
+
+
+# ─── Register device token ───────────────────────────────────────────────────
+
+@mobile_api_bp.route('/auth/register-device', methods=['POST'])
+@jwt_required()
+def register_device():
+    """
+    Register or refresh an FCM device token for the authenticated user.
+
+    Request body (JSON):
+      {
+        "fcm_token":   "<Firebase Cloud Messaging token>",   required
+        "platform":    "android" | "ios" | "web",            optional — default "android"
+        "device_name": "Samsung Galaxy S24"                  optional — free text label
+      }
+
+    Behaviour:
+      • Token already registered to THIS user  → touch last_seen_at, update
+        platform/device_name, re-activate.
+      • Token registered to a DIFFERENT user   → reassign to current user
+        (covers app reinstall / device handover scenarios).
+      • Token not seen before                  → create a new row.
+
+    Also writes the token to User.device_token so the existing FCM notification
+    service (which reads that field) keeps working without changes.
+    """
+    user    = g.mobile_user
+    payload = request.get_json(silent=True) or {}
+    token   = (payload.get('fcm_token') or '').strip()
+
+    if not token:
+        return err('fcm_token is required')
+
+    platform    = (payload.get('platform')    or 'android').strip()[:20]
+    device_name = (payload.get('device_name') or '').strip()[:200] or None
+
+    existing = MobileDeviceToken.query.filter_by(fcm_token=token).first()
+
+    if existing:
+        # Reassign if owned by a different user (device transfer / reinstall)
+        if existing.user_id != user.id:
+            existing.user_id   = user.id
+            existing.school_id = user.school_id
+        existing.platform    = platform
+        existing.device_name = device_name
+        existing.touch()
+    else:
+        existing = MobileDeviceToken(
+            user_id     = user.id,
+            school_id   = user.school_id,
+            fcm_token   = token,
+            platform    = platform,
+            device_name = device_name,
+        )
+        db.session.add(existing)
+
+    # Keep legacy single-token field in sync so existing notification service works
+    user.device_token = token
+
+    db.session.commit()
+
+    return ok(
+        message='device_registered',
+        device={
+            'platform':     existing.platform,
+            'device_name':  existing.device_name,
+            'last_seen_at': existing.last_seen_at.isoformat() if existing.last_seen_at else None,
+        },
     )
 
 

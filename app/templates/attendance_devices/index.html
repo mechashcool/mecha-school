@@ -1,0 +1,565 @@
+{% extends "shared/base.html" %}
+{% block title %}أجهزة الحضور{% endblock %}
+{% block page_title %}أجهزة الحضور{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">أجهزة الحضور</h1>
+    <p class="page-subtitle">إدارة أجهزة Hikvision لتسجيل الحضور والانصراف</p>
+  </div>
+  {% if school_cfg.action_enabled('attendance_devices', 'add_device') %}
+  <a href="{{ url_for('attendance_devices.new_device') }}" class="btn btn-primary">
+    <i class="bi bi-plus-circle me-1"></i>إضافة جهاز
+  </a>
+  {% endif %}
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }} alert-dismissible fade show">{{ msg }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+{% endwith %}
+
+{% if devices %}
+
+{# ── AI Face live WebSocket status panel ──────────────────────────────────── #}
+<div class="card mb-3" id="aiface-status-card">
+  <div class="card-header d-flex align-items-center justify-content-between py-2">
+    <span><i class="bi bi-broadcast me-1 text-primary"></i>حالة اتصال AI Face (WebSocket)</span>
+    <span class="text-muted small" id="aiface-status-updated"></span>
+  </div>
+  <div class="card-body p-0" id="aiface-status-body">
+    <p class="text-muted small p-3 mb-0">جارٍ تحميل حالة الاتصال…</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>اسم الجهاز</th>
+          <th>عنوان IP</th>
+          <th>الرقم التسلسلي</th>
+          <th>الحالة</th>
+          <th>WS / AI Face</th>
+          <th>آخر مزامنة</th>
+          <th>الربط</th>
+          <th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for dev in devices %}
+        <tr>
+          <td>
+            <strong>{{ dev.name }}</strong>
+            {% if dev.notes %}
+            <div class="text-muted small">{{ dev.notes }}</div>
+            {% endif %}
+          </td>
+          <td><code>{{ dev.ip_address }}:{{ dev.port }}</code></td>
+          <td><code class="small" id="sn-{{ dev.device_sn }}">{{ dev.device_sn }}</code></td>
+          <td>
+            {% if dev.is_active %}
+            <span class="badge bg-success">مفعّل</span>
+            {% else %}
+            <span class="badge bg-secondary">معطّل</span>
+            {% endif %}
+          </td>
+          <td id="ws-status-{{ dev.device_sn }}" class="small text-muted">—</td>
+          <td class="text-muted small">
+            {{ dev.last_sync_at.strftime('%Y-%m-%d %H:%M') if dev.last_sync_at else '—' }}
+          </td>
+          {% if school_cfg.section_visible('attendance_devices', 'student_mappings') %}
+          <td>
+            <a href="{{ url_for('attendance_devices.mappings', device_id=dev.id) }}"
+               class="btn btn-sm btn-outline-primary">
+              <i class="bi bi-person-lines-fill me-1"></i>ربط الطلاب
+            </a>
+          </td>
+          {% else %}
+          <td class="text-muted small">—</td>
+          {% endif %}
+          <td>
+            <div class="d-flex gap-1 flex-wrap">
+              <!-- Test connection -->
+              {% if school_cfg.action_enabled('attendance_devices', 'test_connection') %}
+              <button class="btn btn-sm btn-outline-info btn-test-conn"
+                      data-device-id="{{ dev.id }}"
+                      data-device-name="{{ dev.name }}"
+                      title="اختبار الاتصال">
+                <i class="bi bi-wifi"></i>
+              </button>
+              {% endif %}
+              <!-- Sync -->
+              {% if school_cfg.action_enabled('attendance_devices', 'sync') %}
+              <button class="btn btn-sm btn-outline-success btn-sync"
+                      data-device-id="{{ dev.id }}"
+                      data-device-name="{{ dev.name }}"
+                      title="مزامنة الحضور">
+                <i class="bi bi-arrow-repeat"></i>
+              </button>
+              {% endif %}
+              <!-- Logs -->
+              {% if school_cfg.action_enabled('attendance_devices', 'view_logs') %}
+              <a href="{{ url_for('attendance_devices.logs', device_id=dev.id) }}"
+                 class="btn btn-sm btn-outline-secondary" title="السجلات الخام">
+                <i class="bi bi-journal-text"></i>
+              </a>
+              {% endif %}
+              <!-- Edit -->
+              {% if school_cfg.action_enabled('attendance_devices', 'edit_device') %}
+              <a href="{{ url_for('attendance_devices.edit_device', device_id=dev.id) }}"
+                 class="btn btn-sm btn-outline-warning" title="تعديل">
+                <i class="bi bi-pencil"></i>
+              </a>
+              {% endif %}
+              <!-- Toggle -->
+              <form method="POST"
+                    action="{{ url_for('attendance_devices.toggle_device', device_id=dev.id) }}"
+                    class="d-inline">
+                <button type="submit" class="btn btn-sm btn-outline-{{ 'danger' if dev.is_active else 'success' }}"
+                        title="{{ 'تعطيل' if dev.is_active else 'تفعيل' }}">
+                  <i class="bi bi-{{ 'toggle-on' if dev.is_active else 'toggle-off' }}"></i>
+                </button>
+              </form>
+              <!-- Delete -->
+              {% if school_cfg.action_enabled('attendance_devices', 'delete_device') %}
+              <form method="POST"
+                    action="{{ url_for('attendance_devices.delete_device', device_id=dev.id) }}"
+                    class="d-inline"
+                    onsubmit="return confirm('هل تريد حذف الجهاز {{ dev.name }}؟ سيتم حذف جميع السجلات والربطات المرتبطة.')">
+                <button type="submit" class="btn btn-sm btn-outline-danger" title="حذف">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="text-center py-5 text-muted">
+  <i class="bi bi-camera-video-off" style="font-size:3rem"></i>
+  <p class="mt-3">لا توجد أجهزة مضافة بعد.</p>
+  {% if school_cfg.action_enabled('attendance_devices', 'add_device') %}
+  <a href="{{ url_for('attendance_devices.new_device') }}" class="btn btn-primary">
+    <i class="bi bi-plus-circle me-1"></i>إضافة جهاز
+  </a>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- Result modal -->
+<div class="modal fade" id="resultModal" tabindex="-1">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="resultModalTitle">النتيجة</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="resultModalBody"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const modal      = new bootstrap.Modal(document.getElementById('resultModal'));
+  const modalTitle = document.getElementById('resultModalTitle');
+  const modalBody  = document.getElementById('resultModalBody');
+
+  function showModal(title, html) {
+    modalTitle.textContent = title;
+    modalBody.innerHTML    = html;
+    modal.show();
+  }
+
+  function esc(s) {
+    return String(s == null ? '—' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ── Connection test ────────────────────────────────────────────────────────
+  document.querySelectorAll('.btn-test-conn').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      const id   = this.dataset.deviceId;
+      const name = this.dataset.deviceName;
+      showModal('اختبار الاتصال — ' + name,
+        '<div class="text-center"><div class="spinner-border text-info"></div><p class="mt-2">جارٍ الاتصال…</p></div>');
+      try {
+        const resp = await fetch(`/attendance-devices/${id}/test-connection`, { method: 'POST' });
+        const data = await resp.json();
+        if (data.ok) {
+          showModal('تم الاتصال بالجهاز بنجاح ✓',
+            `<div class="alert alert-success mb-0">
+              <strong>${esc(data.message)}</strong><br>
+              الطراز: ${esc(data.model)}<br>
+              الرقم التسلسلي: ${esc(data.serial_no)}
+            </div>`);
+        } else {
+          showModal('تعذر الاتصال بالجهاز ✗',
+            `<div class="alert alert-danger mb-0"><strong>${esc(data.message)}</strong><br>${esc(data.error)}</div>`);
+        }
+      } catch (e) {
+        showModal('خطأ', `<div class="alert alert-danger mb-0">${esc(e)}</div>`);
+      }
+    });
+  });
+
+  // ── Sync result builder ────────────────────────────────────────────────────
+
+  const STATUS_CFG = {
+    'processed':       ['success',   'تم التسجيل'],
+    'already_attended':['info',      'مسجل مسبقاً'],
+    'duplicate':       ['secondary', 'مكرر'],
+    'unmatched':       ['warning',   'بدون ربط'],
+    'error':           ['danger',    'خطأ'],
+    'ignored':         ['light',     'متجاهل'],
+    'skipped_older':   ['light',     'أقدم'],
+    'pending':         ['info',      'معلق'],
+  };
+  const ACTION_LABEL = {
+    'check_in':           'دخول',
+    'check_out':          'خروج',
+    'already_checked_in': 'مسجل مسبقاً',
+  };
+
+  function badge(status) {
+    const cfg    = STATUS_CFG[status] || ['secondary', status];
+    const txtCls = cfg[0] === 'light' ? 'text-dark' : 'text-white';
+    return `<span class="badge bg-${cfg[0]} ${txtCls}">${cfg[1]}</span>`;
+  }
+
+  function eventsTable(events, title, collapsed) {
+    if (!events || !events.length) return '';
+    const rows = events.map(function(ev) {
+      const ts     = ev.event_time
+        ? ev.event_time.replace('T',' ').substring(0,19) : '—';
+      const verify = (ev.verify_mode || '').replace(/OrFp|OrCard|OrPw/gi,'…');
+      const stuCol = ev.student
+        ? `<span class="text-muted small">${esc(ev.student_code)}</span><br>${esc(ev.student)}`
+        : '—';
+      const actionTxt = ev.action ? ACTION_LABEL[ev.action] || ev.action : '';
+      const reasonTxt = ev.reason || '';
+      return `<tr>
+        <td><code>${esc(ev.serial_no)}</code></td>
+        <td><code>${esc(ev.employee_no)}</code></td>
+        <td class="small">${esc(ev.person_name)}</td>
+        <td class="small text-muted" style="white-space:nowrap">${ts}</td>
+        <td class="small text-muted"><code>${esc(ev.major)}/${esc(ev.minor)}</code></td>
+        <td class="small text-muted">${esc(verify)}</td>
+        <td class="small">${stuCol}</td>
+        <td>${badge(ev.status)}</td>
+        <td class="small">${actionTxt ? `<strong>${esc(actionTxt)}</strong><br>` : ''}${esc(reasonTxt)}</td>
+      </tr>`;
+    }).join('');
+
+    const uid = 'tbl_' + Math.random().toString(36).slice(2);
+    const collapseClass = collapsed ? '' : 'show';
+    return `
+      <div class="mt-3">
+        <button class="btn btn-sm btn-outline-secondary w-100 text-start mb-1"
+                type="button" data-bs-toggle="collapse" data-bs-target="#${uid}">
+          ${title} (${events.length})
+        </button>
+        <div class="collapse ${collapseClass}" id="${uid}">
+          <div class="table-responsive" style="max-height:320px;overflow-y:auto">
+            <table class="table table-sm table-bordered mb-0" style="font-size:.80rem">
+              <thead class="table-light" style="position:sticky;top:0">
+                <tr>
+                  <th>serialNo</th><th>empNo</th><th>الاسم</th>
+                  <th>الوقت</th><th>major/minor</th><th>التحقق</th>
+                  <th>الطالب</th><th>الحالة</th><th>التفاصيل</th>
+                </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function buildSyncResult(data) {
+    const s       = data.summary || {};
+    const events  = s.events_detail || [];
+    const attEvts = events.filter(function(e) { return e.status !== 'ignored'; });
+    const ignEvts = events.filter(function(e) { return e.status === 'ignored'; });
+
+    const newCount   = s.processed || 0;
+    const alertClass = newCount > 0 ? 'alert-success' : 'alert-info';
+
+    let html = `<div class="alert ${alertClass} mb-2">
+      ${newCount > 0
+        ? `<strong>تم تسجيل ${newCount} حضور/انصراف جديد.</strong>`
+        : '<strong>لم يُسجَّل حضور جديد.</strong> انظر التفاصيل أدناه.'}
+    </div>
+
+    <table class="table table-sm mb-0">
+      <tr><td>الأحداث المُجلَبة من الجهاز</td>
+          <td><strong>${s.events_fetched||0}</strong></td></tr>
+      <tr class="table-success">
+        <td>✓ حضور/انصراف مُسجَّل (جديد)</td>
+        <td><strong>${s.processed||0}</strong></td></tr>
+      <tr><td>مسجل حضور مسبقاً اليوم</td>
+          <td>${s.already_attended||0}</td></tr>
+      <tr><td>مكرر (سبق المعالجة الكاملة)</td>
+          <td>${s.duplicate||0}</td></tr>
+      <tr><td>بدون ربط طالب</td>
+          <td>${s.unmatched||0}</td></tr>
+      <tr><td>أخطاء</td>
+          <td>${s.error||0}</td></tr>
+      <tr class="table-light"><td>أحداث باب/نظام (متجاهلة)</td>
+          <td>${s.skipped_invalid||0}</td></tr>
+      <tr class="table-light"><td>أحداث قديمة (نفس الموظف)</td>
+          <td>${s.skipped_older||0}</td></tr>`;
+
+    if (s.newest_serial)
+      html += `<tr><td>أحدث serialNo في الجهاز</td>
+                   <td><code>${esc(s.newest_serial)}</code></td></tr>`;
+    if (s.newest_valid_serial)
+      html += `<tr><td>أحدث serialNo حضور صالح</td>
+                   <td><code>${esc(s.newest_valid_serial)}</code></td></tr>`;
+
+    html += `</table>`;
+    html += eventsTable(attEvts, 'أحداث الحضور', false);
+    html += eventsTable(ignEvts, 'أحداث الجهاز المتجاهلة (باب / نظام)', true);
+    return html;
+  }
+
+  // ── AI Face live WebSocket status polling ─────────────────────────────────
+  (function () {
+    const statusBody    = document.getElementById('aiface-status-body');
+    const statusUpdated = document.getElementById('aiface-status-updated');
+    if (!statusBody) return;
+
+    function wsStatusHtml(all) {
+      const sns = Object.keys(all);
+      if (!sns.length) {
+        return '<p class="text-muted small p-3 mb-0">لا توجد أجهزة AI Face مع رقم تسلسلي.</p>';
+      }
+      let rows = '';
+      for (const sn of sns) {
+        const st       = all[sn];
+        const deviceId = st.device_id || '';
+
+        const connBadge    = st.ws_connected
+          ? '<span class="badge bg-success">متصل</span>'
+          : '<span class="badge bg-secondary">غير متصل</span>';
+        const staleBadge   = st.getnewlog_stale
+          ? '<span class="badge bg-warning text-dark ms-1">stale</span>' : '';
+        const pollBadge    = st.poll_task_running
+          ? '<span class="badge bg-info text-dark ms-1">polling</span>' : '';
+        const timeoutBadge = st.getnewlog_timeout_count > 0
+          ? `<span class="badge bg-danger ms-1">timeouts: ${st.getnewlog_timeout_count}</span>` : '';
+
+        // Update per-row WS cell in the main device table
+        const cell = document.getElementById('ws-status-' + sn);
+        if (cell) cell.innerHTML = connBadge + staleBadge + pollBadge + timeoutBadge;
+
+        // Pull buttons — event delegation on #aiface-status-body handles clicks
+        const pullBtns = deviceId ? `
+          <div class="btn-group btn-group-sm">
+            <button class="btn btn-outline-primary btn-aiface-pull"
+                    data-device-id="${deviceId}" data-cmd="getnewlog" data-stn="false"
+                    title="getnewlog stn=false — السجلات الجديدة منذ آخر سحب">
+              <i class="bi bi-cloud-download"></i> جديد
+            </button>
+            <button class="btn btn-outline-warning btn-aiface-pull"
+                    data-device-id="${deviceId}" data-cmd="getnewlog" data-stn="true"
+                    title="getnewlog stn=true — كل السجلات منذ الاتصال">
+              <i class="bi bi-cloud-arrow-down-fill"></i> stn=true
+            </button>
+            <button class="btn btn-outline-danger btn-aiface-pull"
+                    data-device-id="${deviceId}" data-cmd="getalllog" data-stn="true"
+                    title="getalllog — كل السجلات التاريخية بغض النظر عن المؤشر">
+              <i class="bi bi-archive"></i> getalllog
+            </button>
+          </div>` : '<span class="text-muted">—</span>';
+
+        rows += `<tr>
+          <td><code class="small">${esc(sn)}</code><div class="text-muted" style="font-size:10px">${esc(st.device_name || '')}</div></td>
+          <td>${connBadge}${staleBadge}${pollBadge}${timeoutBadge}</td>
+          <td class="small">${esc(st.last_reg_at) || '—'}</td>
+          <td class="small">${esc(st.last_sendlog_at) || '—'}</td>
+          <td class="small">${esc(st.last_getnewlog_success_at) || '—'}</td>
+          <td class="small">${esc(st.last_disconnect_at) || '—'}</td>
+          <td>${pullBtns}</td>
+        </tr>`;
+      }
+      return `
+        <div class="table-responsive">
+          <table class="table table-sm mb-0" style="font-size:12px">
+            <thead class="table-light">
+              <tr>
+                <th>SN / الجهاز</th>
+                <th>الحالة</th>
+                <th>آخر reg</th>
+                <th>آخر sendlog</th>
+                <th>آخر getnewlog ناجح</th>
+                <th>آخر انقطاع</th>
+                <th>سحب السجلات يدوياً</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+    }
+
+    async function refreshStatus() {
+      try {
+        const resp = await fetch('{{ url_for("attendance_devices.aiface_live_status") }}');
+        const data = await resp.json();
+        statusBody.innerHTML = wsStatusHtml(data);
+        const now = new Date();
+        statusUpdated.textContent = 'آخر تحديث: ' +
+          now.toLocaleTimeString('ar-IQ', { hour12: false });
+      } catch (e) {
+        statusBody.innerHTML =
+          '<p class="text-danger small p-3 mb-0">تعذر جلب حالة AI Face.</p>';
+      }
+    }
+
+    refreshStatus();
+    setInterval(refreshStatus, 15000);  // refresh every 15 s
+
+    // ── Manual pull buttons (event delegation — statusBody innerHTML is replaced) ─
+    statusBody.addEventListener('click', async function (e) {
+      const btn = e.target.closest('.btn-aiface-pull');
+      if (!btn) return;
+
+      const deviceId = btn.dataset.deviceId;
+      const cmd      = btn.dataset.cmd;
+      const stn      = btn.dataset.stn !== 'false';  // 'true'→true, 'false'→false
+
+      showModal(
+        `سحب السجلات — ${cmd} stn=${stn}`,
+        '<div class="text-center"><div class="spinner-border text-primary"></div>'
+        + '<p class="mt-2">جارٍ إرسال الأمر إلى الجهاز… (مهلة 25 ثانية)</p></div>'
+      );
+
+      try {
+        const resp = await fetch(`/attendance-devices/${deviceId}/aiface-pull-logs`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ cmd, stn, process: true }),
+        });
+        const data = await resp.json();
+
+        let html = '';
+        if (!data.ok) {
+          const cls = data.offline ? 'warning' : (data.timeout ? 'warning' : 'danger');
+          html = `<div class="alert alert-${cls} mb-2">${esc(data.error || 'خطأ غير معروف')}</div>`;
+          if (data.hint)
+            html += `<div class="alert alert-info small mb-0">${esc(data.hint)}</div>`;
+        } else {
+          html += `<div class="row mb-3">
+            <div class="col-md-6">
+              <h6 class="text-muted">الأمر المُرسَل</h6>
+              <pre class="bg-light border rounded p-2 small mb-0">${esc(JSON.stringify(data.cmd_sent, null, 2))}</pre>
+            </div>
+            <div class="col-md-6">
+              <h6 class="text-muted">استجابة الجهاز (بدون records)</h6>
+              <pre class="bg-light border rounded p-2 small mb-0">${esc(JSON.stringify(data.raw_response, null, 2))}</pre>
+            </div>
+          </div>`;
+
+          if (!data.records_count) {
+            html += `<div class="alert alert-warning">
+              الجهاز أعاد <strong>count=${data.count}</strong> — لا سجلات جديدة.
+              ${data.hint ? '<hr class="my-1"><small>' + esc(data.hint) + '</small>' : ''}
+            </div>`;
+          } else {
+            const p = data.processing;
+            html += `<div class="alert alert-success mb-2">
+              الجهاز أعاد <strong>${data.count}</strong> سجل (${data.records_count} في الاستجابة).
+            </div>`;
+            if (p) {
+              html += `<table class="table table-sm table-bordered mb-3" style="max-width:360px">
+                <tr class="table-success"><td>حضور مُسجَّل (جديد)</td><td><strong>${p.processed}</strong></td></tr>
+                <tr><td>متخطَّى (مكرر/موجود)</td><td>${p.skipped}</td></tr>
+                <tr><td>بدون ربط (no mapping)</td><td>${p.unmatched}</td></tr>
+                <tr><td>أخطاء</td><td>${p.errors}</td></tr>
+              </table>`;
+            }
+            if (data.records_preview && data.records_preview.length) {
+              const recRows = data.records_preview.map(function (r) {
+                return `<tr>
+                  <td>${esc(r.enrollid)}</td>
+                  <td>${esc(r.name || '—')}</td>
+                  <td style="white-space:nowrap">${esc(r.time)}</td>
+                  <td>${esc(r.mode)}</td>
+                  <td>${esc(r.inout)}</td>
+                  <td>${esc(r.event)}</td>
+                </tr>`;
+              }).join('');
+              html += `<h6>السجلات (${data.records_preview.length} من ${data.records_count})</h6>
+                <div class="table-responsive" style="max-height:280px;overflow-y:auto">
+                  <table class="table table-sm table-bordered mb-0" style="font-size:11px">
+                    <thead class="table-light sticky-top">
+                      <tr><th>enrollid</th><th>name</th><th>time</th>
+                          <th>mode</th><th>inout</th><th>event</th></tr>
+                    </thead>
+                    <tbody>${recRows}</tbody>
+                  </table>
+                </div>`;
+            }
+          }
+        }
+
+        showModal(`${cmd} stn=${stn} — النتيجة`, html);
+        refreshStatus();  // refresh panel after pull
+      } catch (err) {
+        showModal('خطأ في الاتصال',
+          `<div class="alert alert-danger">${esc(String(err))}</div>`);
+      }
+    });
+  })();
+
+  // ── Sync button ────────────────────────────────────────────────────────────
+  document.querySelectorAll('.btn-sync').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      const id   = this.dataset.deviceId;
+      const name = this.dataset.deviceName;
+      // Use local date in YYYY-MM-DD (avoids UTC midnight shift in Baghdad time).
+      const now   = new Date();
+      const today = now.getFullYear() + '-'
+        + String(now.getMonth()+1).padStart(2,'0') + '-'
+        + String(now.getDate()).padStart(2,'0');
+
+      showModal('مزامنة الحضور — ' + name,
+        '<div class="text-center"><div class="spinner-border text-success"></div>'
+        + '<p class="mt-2">جارٍ جلب الأحداث وتحليلها…</p></div>');
+      try {
+        const resp = await fetch(`/attendance-devices/${id}/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date: today }),
+        });
+        const data = await resp.json();
+        if (data.ok) {
+          showModal('نتيجة مزامنة الحضور', buildSyncResult(data));
+        } else {
+          showModal('تعذر مزامنة الحضور ✗',
+            `<div class="alert alert-danger mb-0"><strong>${esc(data.message)}</strong><br>${esc(data.error)}</div>`);
+        }
+      } catch (e) {
+        showModal('خطأ', `<div class="alert alert-danger mb-0">${esc(e)}</div>`);
+      }
+    });
+  });
+})();
+</script>
+{% endblock %}

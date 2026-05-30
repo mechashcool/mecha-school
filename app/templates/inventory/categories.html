@@ -1,0 +1,59 @@
+{% extends "shared/base.html" %}
+{% block title %}تصنيفات المخازن{% endblock %}
+{% block page_title %}تصنيفات المخازن{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">تصنيفات المخازن</h1></div>
+  <a href="{{ url_for('inventory.index') }}" class="btn btn-outline-secondary">رجوع</a>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-body">
+        <form method="POST" class="row g-3">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+          <div class="col-12">
+            <label class="form-label">اسم التصنيف</label>
+            <input type="text" name="name" class="form-control" required>
+          </div>
+          <div class="col-12">
+            <label class="form-label">الوصف</label>
+            <textarea name="description" class="form-control" rows="3"></textarea>
+          </div>
+          <div class="col-12">
+            <button class="btn btn-primary">إضافة</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="table-wrapper">
+        <table class="table table-hover mb-0">
+          <thead><tr><th>التصنيف</th><th>الوصف</th><th>عدد المواد</th><th>إجراء</th></tr></thead>
+          <tbody>
+            {% for category in categories %}
+            <tr>
+              <td class="fw-700">{{ category.name }}</td>
+              <td>{{ category.description or '-' }}</td>
+              <td>{{ category.items.count() }}</td>
+              <td>
+                <form method="POST"
+                      action="{{ url_for('inventory.delete_category', category_id=category.id) }}"
+                      onsubmit="return confirm('هل أنت متأكد من حذف هذا التصنيف؟');">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+                  <button type="submit" class="btn btn-sm btn-outline-danger">حذف</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

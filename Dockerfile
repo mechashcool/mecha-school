@@ -24,6 +24,6 @@ USER appuser
 
 EXPOSE 5000
 
-# Entrypoint
-CMD ["gunicorn", "--workers=4", "--bind=0.0.0.0:5000", \
-     "--timeout=120", "--access-logfile=-", "wsgi:application"]
+# Entrypoint. Runtime details live in gunicorn.conf.py and can be tuned with
+# WEB_CONCURRENCY, GUNICORN_THREADS, and PORT on Render.
+CMD ["gunicorn", "wsgi:application"]

@@ -1,0 +1,122 @@
+{% extends "shared/base.html" %}
+{% block title %}المخازن{% endblock %}
+{% block page_title %}المخازن{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">المخازن</h1>
+    <p class="page-subtitle">إدارة المواد المخزنية والكميات والتنبيهات</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('inventory.categories') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-tags me-1"></i>التصنيفات
+    </a>
+    <a href="{{ url_for('inventory.counts') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-clipboard-check me-1"></i>الجرد
+    </a>
+    <a href="{{ url_for('inventory.reports') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-bar-chart me-1"></i>التقارير
+    </a>
+    <a href="{{ url_for('inventory.create_movement') }}" class="btn btn-outline-primary">
+      <i class="bi bi-arrow-left-right me-1"></i>حركة مخزن
+    </a>
+    <a href="{{ url_for('inventory.create_item') }}" class="btn btn-primary">
+      <i class="bi bi-plus-circle me-1"></i>إضافة مادة
+    </a>
+  </div>
+</div>
+
+{% if low_count %}
+<div class="alert alert-warning">
+  <i class="bi bi-exclamation-triangle-fill me-1"></i>
+  توجد {{ low_count }} مادة وصلت إلى حد التنبيه أو أقل.
+</div>
+{% endif %}
+
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label">بحث</label>
+        <input type="text" name="q" class="form-control" value="{{ q }}" placeholder="اسم المادة أو الرمز">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">التصنيف</label>
+        <select name="category_id" class="form-select">
+          <option value="">الكل</option>
+          {% for category in categories %}
+          <option value="{{ category.id }}" {% if category_id == category.id %}selected{% endif %}>{{ category.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">الحالة</label>
+        <select name="status" class="form-select">
+          <option value="all" {% if status == 'all' %}selected{% endif %}>الكل</option>
+          <option value="low" {% if status == 'low' %}selected{% endif %}>مواد منخفضة</option>
+        </select>
+      </div>
+      <div class="col-md-2 d-flex gap-2">
+        <button class="btn btn-primary flex-grow-1"><i class="bi bi-search me-1"></i>بحث</button>
+        <a href="{{ url_for('inventory.index') }}" class="btn btn-outline-secondary"><i class="bi bi-x-lg"></i></a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>المادة</th>
+          <th>التصنيف</th>
+          <th>الوحدة</th>
+          <th>الكمية الحالية</th>
+          <th>حد التنبيه</th>
+          <th>المورد</th>
+          <th>الحالة</th>
+          <th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        <tr>
+          <td>
+            <div class="fw-700">{{ item.name }}</div>
+            <div class="text-muted" style="font-size:12px">{{ item.item_code or 'بدون رمز' }}</div>
+          </td>
+          <td>{{ item.category.name if item.category else '-' }}</td>
+          <td>{{ item.unit }}</td>
+          <td>{{ item.current_quantity }}</td>
+          <td>{{ item.minimum_quantity }}</td>
+          <td>{{ item.supplier or '-' }}</td>
+          <td>
+            {% if item.is_low_stock %}
+            <span class="badge-status badge-inactive">منخفض</span>
+            {% else %}
+            <span class="badge-status badge-active">طبيعي</span>
+            {% endif %}
+          </td>
+          <td>
+            <div class="d-flex gap-1">
+              <a href="{{ url_for('inventory.edit_item', item_id=item.id) }}" class="btn btn-sm btn-outline-primary" title="تعديل">
+                <i class="bi bi-pencil"></i>
+              </a>
+              <a href="{{ url_for('inventory.create_movement', item_id=item.id) }}" class="btn btn-sm btn-outline-secondary" title="حركة">
+                <i class="bi bi-arrow-left-right"></i>
+              </a>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8" class="text-center text-muted py-5">لا توجد مواد مخزنية.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

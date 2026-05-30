@@ -172,10 +172,19 @@
           <p class="text-muted mb-3" style="font-size:13px">
             اختر الطلاب المرتبطين بهذا الحساب. يمكن لولي الأمر متابعة جميع الطلاب المختارين.
           </p>
-          <div class="row g-2" style="max-height:260px;overflow-y:auto">
+          <div class="mb-3">
+            <div class="input-group">
+              <span class="input-group-text"><i class="bi bi-search"></i></span>
+              <input type="search" class="form-control link-filter"
+                     data-filter-target="studentOptions"
+                     placeholder="&#1575;&#1576;&#1581;&#1579; &#1576;&#1575;&#1587;&#1605; &#1575;&#1604;&#1591;&#1575;&#1604;&#1576;...">
+            </div>
+          </div>
+          <div class="row g-2" id="studentOptions" style="max-height:260px;overflow-y:auto">
             {% if all_students %}
             {% for student in all_students %}
-            <div class="col-md-4">
+            <div class="col-md-4 link-option"
+                 data-search="{{ (student.full_name ~ ' ' ~ student.student_id)|lower }}">
               <div class="form-check p-2 border rounded"
                    style="cursor:pointer;transition:background .15s"
                    onmouseover="this.style.background='#f8f9fa'"
@@ -220,10 +229,19 @@
           <p class="text-muted mb-3" style="font-size:13px">
             حدد الشعب الدراسية التي يُشرف عليها هذا المعلم. يمكن للمعلم عرض وتسجيل غياب وإدخال درجات طلاب الشعب المختارة فقط.
           </p>
-          <div class="row g-2" style="max-height:260px;overflow-y:auto">
+          <div class="mb-3">
+            <div class="input-group">
+              <span class="input-group-text"><i class="bi bi-search"></i></span>
+              <input type="search" class="form-control link-filter"
+                     data-filter-target="sectionOptions"
+                     placeholder="&#1575;&#1576;&#1581;&#1579; &#1576;&#1575;&#1587;&#1605; &#1575;&#1604;&#1588;&#1593;&#1576;&#1577;...">
+            </div>
+          </div>
+          <div class="row g-2" id="sectionOptions" style="max-height:260px;overflow-y:auto">
             {% if all_sections %}
             {% for section in all_sections %}
-            <div class="col-md-4">
+            <div class="col-md-4 link-option"
+                 data-search="{{ ((section.grade.name if section.grade else '') ~ ' ' ~ section.name)|lower }}">
               <div class="form-check p-2 border rounded"
                    style="cursor:pointer;transition:background .15s"
                    onmouseover="this.style.background='#f0f7fc'"
@@ -266,10 +284,19 @@
           <p class="text-muted mb-3" style="font-size:13px">
             حدد المواد التي يُدرّسها هذا المعلم. يمكن للمعلم إدخال الدرجات والحضور لهذه المواد في الشعب المختارة أعلاه فقط.
           </p>
-          <div class="row g-2" style="max-height:260px;overflow-y:auto">
+          <div class="mb-3">
+            <div class="input-group">
+              <span class="input-group-text"><i class="bi bi-search"></i></span>
+              <input type="search" class="form-control link-filter"
+                     data-filter-target="subjectOptions"
+                     placeholder="&#1575;&#1576;&#1581;&#1579; &#1576;&#1575;&#1587;&#1605; &#1575;&#1604;&#1605;&#1575;&#1583;&#1577;...">
+            </div>
+          </div>
+          <div class="row g-2" id="subjectOptions" style="max-height:260px;overflow-y:auto">
             {% if all_subjects %}
             {% for subject in all_subjects %}
-            <div class="col-md-4">
+            <div class="col-md-4 link-option"
+                 data-search="{{ (subject.name ~ ' ' ~ (subject.code or ''))|lower }}">
               <div class="form-check p-2 border rounded"
                    style="cursor:pointer;transition:background .15s"
                    onmouseover="this.style.background='#f0faf4'"
@@ -332,6 +359,27 @@
   }
   roleSelect.addEventListener('change', togglePanels);
   togglePanels();
+
+  function normalize(value) {
+    return (value || '')
+      .toString()
+      .toLowerCase()
+      .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+      .replace(/[إأآٱ]/g, 'ا')
+      .replace(/ى/g, 'ي')
+      .replace(/ة/g, 'ه');
+  }
+
+  document.querySelectorAll('.link-filter').forEach(input => {
+    const target = document.getElementById(input.dataset.filterTarget);
+    if (!target) return;
+    input.addEventListener('input', () => {
+      const term = normalize(input.value);
+      target.querySelectorAll('.link-option').forEach(option => {
+        option.style.display = normalize(option.dataset.search).includes(term) ? '' : 'none';
+      });
+    });
+  });
 })();
 </script>
 {% endblock %}

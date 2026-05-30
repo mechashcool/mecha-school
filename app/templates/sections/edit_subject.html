@@ -14,17 +14,31 @@
     <div class="card">
       <div class="card-body">
         <form method="POST" action="{{ url_for('sections.edit_subject', sub_id=subject.id) }}">
+
+          {# Code is display-only (never editable) — show/hide based on config #}
+          {% if school_cfg.field_visible('subjects', 'code') %}
           <div class="mb-3">
             <label class="form-label">الرمز</label>
-            <div class="form-control bg-light">{{ subject.code }}</div>
+            <div class="form-control bg-light">{{ subject.code or '—' }}</div>
           </div>
+          {% endif %}
+
+          {# Name — visible or preserved via hidden input #}
+          {% if school_cfg.field_visible('subjects', 'name') %}
           <div class="mb-3">
-            <label class="form-label">الاسم <span class="text-danger">*</span></label>
+            <label class="form-label">الاسم{% if school_cfg.field_required('subjects', 'name') %} <span class="text-danger">*</span>{% endif %}</label>
             <input type="text" name="name" class="form-control"
-                   value="{{ subject.name }}" required>
+                   value="{{ subject.name }}"
+                   {{ 'required' if school_cfg.field_required('subjects', 'name') }}>
           </div>
+          {% else %}
+          <input type="hidden" name="name" value="{{ subject.name }}">
+          {% endif %}
+
+          {# Stage — visible or preserved silently (backend keeps existing) #}
+          {% if school_cfg.field_visible('subjects', 'stage') %}
           <div class="mb-3">
-            <label class="form-label">المرحلة</label>
+            <label class="form-label">المرحلة{% if school_cfg.field_required('subjects', 'stage') %} <span class="text-danger">*</span>{% endif %}</label>
             <select name="stage" class="form-select" id="editStage">
               <option value="">— اختر المرحلة —</option>
               {% for st in stages %}
@@ -34,8 +48,12 @@
               {% endfor %}
             </select>
           </div>
+          {% endif %}
+
+          {# Grade — visible or preserved silently #}
+          {% if school_cfg.field_visible('subjects', 'grade') %}
           <div class="mb-3">
-            <label class="form-label">الصف</label>
+            <label class="form-label">الصف{% if school_cfg.field_required('subjects', 'grade') %} <span class="text-danger">*</span>{% endif %}</label>
             <select name="grade_id" class="form-select" id="editGrade">
               <option value="">— اختر الصف —</option>
               {% for g in grades %}
@@ -47,26 +65,43 @@
               {% endfor %}
             </select>
           </div>
+          {% endif %}
+
+          {# Marks row — show if at least one is visible #}
+          {% if school_cfg.field_visible('subjects', 'total_marks') or school_cfg.field_visible('subjects', 'pass_marks') %}
           <div class="row g-2 mb-3">
+            {% if school_cfg.field_visible('subjects', 'total_marks') %}
             <div class="col-6">
-              <label class="form-label">الدرجة الكلية</label>
+              <label class="form-label">الدرجة الكلية{% if school_cfg.field_required('subjects', 'total_marks') %} <span class="text-danger">*</span>{% endif %}</label>
               <input type="number" name="total_marks" class="form-control"
                      min="0" step="0.5"
+                     {{ 'required' if school_cfg.field_required('subjects', 'total_marks') }}
                      value="{{ subject.total_marks | int if subject.total_marks else '' }}"
                      placeholder="100">
             </div>
+            {% endif %}
+            {% if school_cfg.field_visible('subjects', 'pass_marks') %}
             <div class="col-6">
-              <label class="form-label">درجة النجاح</label>
+              <label class="form-label">درجة النجاح{% if school_cfg.field_required('subjects', 'pass_marks') %} <span class="text-danger">*</span>{% endif %}</label>
               <input type="number" name="pass_marks" class="form-control"
                      min="0" step="0.5"
+                     {{ 'required' if school_cfg.field_required('subjects', 'pass_marks') }}
                      value="{{ subject.pass_marks | int if subject.pass_marks else '' }}"
                      placeholder="50">
             </div>
+            {% endif %}
           </div>
+          {% endif %}
+
+          {# Description — visible or preserved silently #}
+          {% if school_cfg.field_visible('subjects', 'description') %}
           <div class="mb-3">
-            <label class="form-label">الوصف</label>
-            <textarea name="description" class="form-control" rows="3">{{ subject.description or '' }}</textarea>
+            <label class="form-label">الوصف{% if school_cfg.field_required('subjects', 'description') %} <span class="text-danger">*</span>{% endif %}</label>
+            <textarea name="description" class="form-control" rows="3"
+                      {{ 'required' if school_cfg.field_required('subjects', 'description') }}>{{ subject.description or '' }}</textarea>
           </div>
+          {% endif %}
+
           <div class="d-flex gap-3 mt-4">
             <button type="submit" class="btn btn-primary px-5">حفظ</button>
             <a href="{{ url_for('sections.subjects') }}" class="btn btn-outline-secondary px-4">إلغاء</a>
@@ -81,6 +116,7 @@
 (function () {
   const stageEl = document.getElementById('editStage');
   const gradeEl = document.getElementById('editGrade');
+  if (!stageEl || !gradeEl) return;
   const allGradeOptions = Array.from(gradeEl.options).slice(1);
 
   function filterGrades() {

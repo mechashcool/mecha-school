@@ -8,7 +8,7 @@
     <h1 class="page-title">الموظفون</h1>
     <p class="page-subtitle">إجمالي {{ employees.total }} موظف</p>
   </div>
-  {% if not is_historical_year %}
+  {% if not is_historical_year and school_cfg.action_enabled('employees', 'create') %}
   <a href="{{ url_for('employees.create') }}" class="btn btn-primary">
     <i class="bi bi-person-plus-fill me-2"></i>إضافة موظف
   </a>
@@ -43,8 +43,8 @@
           <td><code class="text-primary-custom fw-600">{{ e.employee_id }}</code></td>
           <td>
             <div class="d-flex align-items-center gap-2">
-              {% if e.photo %}
-              <img src="{{ url_for('static', filename=e.photo) }}"
+              {% if resolve_photo_url(e.photo) %}
+              <img src="{{ resolve_photo_url(e.photo) }}"
                    style="width:32px;height:32px;border-radius:8px;object-fit:cover">
               {% else %}
               <div style="width:32px;height:32px;border-radius:8px;background:#1aab6d;

@@ -104,6 +104,31 @@ def role_required(*roles: str):
     return decorator
 
 
+# ─── Photo URL helper ─────────────────────────────────────────────────────────
+
+def photo_url(photo: str | None) -> str | None:
+    """
+    Return an absolute URL for a stored photo value, safe to embed in JSON.
+
+    - Supabase / CDN URLs (http/https) → returned as-is.
+    - Legacy relative paths → absolute URL built from the current request host,
+      only when the file exists on disk (avoids dead links after Render redeploys).
+    - None / empty / missing file → None (mobile client shows local placeholder).
+    """
+    if not photo:
+        return None
+    if photo.startswith(('http://', 'https://')):
+        return photo
+    import os
+    try:
+        full_path = os.path.join(current_app.root_path, 'static', photo)
+        if not os.path.isfile(full_path):
+            return None
+        return request.host_url.rstrip('/') + '/static/' + photo
+    except Exception:
+        return None
+
+
 # ─── Response helpers ─────────────────────────────────────────────────────────
 
 def ok(**kwargs):

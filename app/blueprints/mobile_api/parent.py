@@ -21,7 +21,7 @@ Security rules
 • All queries are additionally guarded by school_id equality so an ID-swap
   across schools is impossible.
 """
-from datetime import date, timedelta
+from datetime import date, timedelta, timezone
 from datetime import datetime as _dt
 
 from flask import abort, g, request
@@ -32,6 +32,7 @@ from app.models import (
     FeeRecord,
     Exam,
     ExamResult,
+    Homework,
     Notification,
     NotificationRead,
     Schedule,
@@ -42,7 +43,7 @@ from app.models import (
 from app.utils.notification_visibility import notification_visible_to
 
 from . import mobile_api_bp
-from .utils import jwt_required, role_required, ok, err
+from .utils import jwt_required, role_required, ok, err, photo_url
 
 
 # ─── Ownership guard ──────────────────────────────────────────────────────────
@@ -75,7 +76,7 @@ def _student_brief(s: Student) -> dict:
         'id':         s.id,
         'student_id': s.student_id,
         'name':       s.full_name,
-        'photo':      s.photo,
+        'photo':      photo_url(s.photo),
         'gender':     s.gender,
         'section':    s.section.name       if s.section              else None,
         'grade':      s.section.grade.name if s.section and s.section.grade else None,
@@ -459,8 +460,65 @@ def parent_notifications():
                 'body':    n.body,
                 'ntype':   n.ntype,
                 'is_read': n.id in read_ids,
-                'sent_at': n.created_at.isoformat() if n.created_at else None,
+                'sent_at': n.created_at.replace(tzinfo=timezone.utc).isoformat() if n.created_at else None,
             }
             for n in rows
+        ],
+    )
+
+
+# ─── Homework for child ───────────────────────────────────────────────────────
+
+@mobile_api_bp.route('/parent/children/<int:student_id>/homework', methods=['GET'])
+@jwt_required()
+@role_required('parent')
+def parent_child_homework(student_id):
+    """
+    Homework assigned to the child's current section.
+    Only returns active homework for the active academic year.
+
+    Blocked if the school's homework module is disabled (api_access action).
+    """
+    from app.utils.school_config import get_school_config
+    user = g.mobile_user
+    cfg  = get_school_config(user.school_id)
+    if not cfg.action_enabled('homework', 'api_access'):
+        return err('الوصول إلى الواجبات غير مفعل لهذه المدرسة.', 403)
+
+    s = _assert_owns_student(student_id)
+
+    if not s.section_id:
+        return ok(student_id=s.id, count=0, homework=[])
+
+    rows = (Homework.query
+            .filter_by(section_id=s.section_id, is_active=True)
+            .order_by(Homework.publish_date.desc(), Homework.id.desc())
+            .all())
+
+    def _hw_url(hw):
+        if not hw.attachment_path:
+            return None
+        path = hw.attachment_path
+        if path.startswith(('http://', 'https://')):
+            return path
+        return photo_url(path)
+
+    return ok(
+        student_id=s.id,
+        section=s.section.name if s.section else None,
+        count=len(rows),
+        homework=[
+            {
+                'id':             hw.id,
+                'title':          hw.title,
+                'subject':        hw.subject.name if hw.subject else None,
+                'teacher_name':   hw.teacher.full_name if hw.teacher else None,
+                'publish_date':   hw.publish_date.isoformat() if hw.publish_date else None,
+                'due_date':       hw.due_date.isoformat() if hw.due_date else None,
+                'description':    hw.description,
+                'attachment_url': _hw_url(hw),
+                'attachment_type': hw.attachment_type,
+            }
+            for hw in rows
         ],
     )

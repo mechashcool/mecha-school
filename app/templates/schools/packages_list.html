@@ -1,0 +1,122 @@
+{% extends "shared/base.html" %}
+{% block title %}باقات الميزات{% endblock %}
+{% block page_title %}باقات الميزات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title"><i class="bi bi-collection-fill me-2"></i>باقات الميزات</h1>
+    <p class="text-muted mb-0">إنشاء وإدارة الباقات القابلة لإعادة الاستخدام لتطبيقها على المدارس</p>
+  </div>
+  <a href="{{ url_for('schools.create_package') }}" class="btn btn-primary">
+    <i class="bi bi-plus-lg me-1"></i>باقة جديدة
+  </a>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }} alert-dismissible fade show">
+    {{ msg }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+{% endwith %}
+
+<div class="alert alert-info d-flex gap-2 py-2 mb-4" style="font-size:13px">
+  <i class="bi bi-info-circle-fill flex-shrink-0 mt-1"></i>
+  <div>
+    <strong>كيف تعمل الباقات:</strong>
+    إنشاء باقة يحدد مجموعة من الوحدات والميزات وإعدادات نموذج الطالب. عند تطبيق الباقة على مدرسة،
+    تُنسخ الإعدادات فوراً إلى المدرسة (<strong>لقطة فورية</strong>) — تعديل الباقة لاحقاً لن يؤثر
+    تلقائياً على المدارس التي طُبِّقت عليها الباقة مسبقاً. يمكنك دائماً إعادة تطبيق الباقة يدوياً.
+  </div>
+</div>
+
+{% if packages %}
+<div class="row g-3">
+  {% for pkg in packages %}
+  <div class="col-md-6 col-xl-4">
+    <div class="card h-100 {{ 'border-secondary' if not pkg.is_active else '' }}">
+      <div class="card-header d-flex align-items-center justify-content-between py-2">
+        <div class="d-flex align-items-center gap-2">
+          <i class="bi bi-box-seam {{ 'text-primary' if pkg.is_active else 'text-muted' }}"></i>
+          <span class="fw-bold">{{ pkg.name }}</span>
+        </div>
+        <div class="d-flex gap-1">
+          {% if pkg.is_active %}
+          <span class="badge bg-success" style="font-size:10px">نشط</span>
+          {% else %}
+          <span class="badge bg-secondary" style="font-size:10px">غير نشط</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="card-body py-2">
+        {% if pkg.description %}
+        <p class="text-muted small mb-2">{{ pkg.description }}</p>
+        {% endif %}
+
+        {% if pkg.config %}
+        {% set cfg = pkg.config %}
+        {% set enabled_mods = cfg.get('modules', {}).values() | selectattr('__bool__') | list | length if cfg.get('modules') else 0 %}
+        {% set total_mods = cfg.get('modules', {}) | length %}
+        {% set enabled_feats = cfg.get('features', {}).values() | selectattr('__bool__') | list | length if cfg.get('features') else 0 %}
+        {% set total_feats = cfg.get('features', {}) | length %}
+        {% set sf = cfg.get('student_form', {}) %}
+
+        <div class="d-flex flex-wrap gap-2" style="font-size:12px">
+          <span class="badge bg-primary bg-opacity-10 text-primary border border-primary" style="font-size:11px">
+            <i class="bi bi-grid me-1"></i>{{ enabled_mods }}/{{ total_mods }} وحدة
+          </span>
+          <span class="badge bg-success bg-opacity-10 text-success border border-success" style="font-size:11px">
+            <i class="bi bi-toggles me-1"></i>{{ enabled_feats }}/{{ total_feats }} ميزة
+          </span>
+          {% if sf.get('hidden_sections') %}
+          <span class="badge bg-warning text-dark" style="font-size:11px">
+            {{ sf.hidden_sections | length }} قسم مخفي
+          </span>
+          {% endif %}
+          {% if sf.get('hidden_fields') %}
+          <span class="badge bg-orange text-dark" style="font-size:11px;background:#f39c12 !important">
+            {{ sf.hidden_fields | length }} حقل مخفي
+          </span>
+          {% endif %}
+        </div>
+        {% else %}
+        <span class="text-muted small">لا يوجد إعداد — سيطبق كل الميزات</span>
+        {% endif %}
+      </div>
+      <div class="card-footer py-2 d-flex gap-2">
+        <a href="{{ url_for('schools.edit_package', pkg_id=pkg.id) }}"
+           class="btn btn-sm btn-outline-primary flex-grow-1">
+          <i class="bi bi-pencil me-1"></i>تعديل
+        </a>
+        <form method="POST"
+              action="{{ url_for('schools.delete_package', pkg_id=pkg.id) }}"
+              onsubmit="return confirm('حذف الباقة «{{ pkg.name }}»؟ سيُزال ربطها عن جميع المدارس المرتبطة بها. الإعدادات المُطبَّقة على المدارس لن تتغير.')">
+          <button type="submit" class="btn btn-sm btn-outline-danger">
+            <i class="bi bi-trash"></i>
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% else %}
+<div class="card">
+  <div class="card-body text-center py-5">
+    <i class="bi bi-collection display-4 text-muted"></i>
+    <p class="text-muted mt-3 mb-3">لا توجد باقات بعد.</p>
+    <a href="{{ url_for('schools.create_package') }}" class="btn btn-primary">
+      <i class="bi bi-plus-lg me-1"></i>أنشئ باقتك الأولى
+    </a>
+  </div>
+</div>
+{% endif %}
+
+<div class="mt-4">
+  <a href="{{ url_for('schools.index') }}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-right me-1"></i>العودة إلى قائمة المدارس
+  </a>
+</div>
+{% endblock %}

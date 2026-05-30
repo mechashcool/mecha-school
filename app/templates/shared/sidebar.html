@@ -106,6 +106,18 @@
       </a>
     </li>
     <li class="nav-item">
+      <a href="{{ url_for('parent.complaints') }}"
+         class="{{ 'active' if request.endpoint and request.endpoint.startswith('parent.complaint') }}">
+        <i class="bi bi-chat-left-text-fill"></i> &#1575;&#1604;&#1588;&#1603;&#1575;&#1608;&#1609;
+      </a>
+    </li>
+    <li class="nav-item">
+      <a href="{{ url_for('parent.leave_requests') }}"
+         class="{{ 'active' if request.endpoint and request.endpoint.startswith('parent.leave_request') }}">
+        <i class="bi bi-calendar2-check-fill"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;
+      </a>
+    </li>
+    <li class="nav-item">
       <a href="{{ url_for('notifications.index') }}"
          class="{{ 'active' if request.blueprint == 'notifications' }}">
         <i class="bi bi-bell-fill"></i> الإشعارات
@@ -130,7 +142,7 @@
       </a>
     </li>
 
-    {% if current_user.has_permission('view_students') %}
+    {% if current_user.has_permission('view_students') and 'students' in enabled_modules %}
     <li class="nav-section-label">الطلاب</li>
     <li class="nav-item">
       <a href="{{ url_for('students.index') }}"
@@ -140,7 +152,7 @@
     </li>
     {% endif %}
 
-    {% if current_user.has_permission('enter_grades') %}
+    {% if current_user.has_permission('enter_grades') and 'grades' in enabled_modules %}
     <li class="nav-section-label">الدرجات</li>
     <li class="nav-item">
       <a href="{{ url_for('grades.index') }}"
@@ -150,7 +162,18 @@
     </li>
     {% endif %}
 
+    {% if 'homework' in enabled_modules and school_cfg.action_enabled('homework', 'view') %}
+    <li class="nav-section-label">الواجبات</li>
+    <li class="nav-item">
+      <a href="{{ url_for('homework.index') }}"
+         class="{{ 'active' if request.blueprint == 'homework' }}">
+        <i class="bi bi-journal-text"></i> الواجبات
+      </a>
+    </li>
+    {% endif %}
+
     <li class="nav-section-label">النظام</li>
+    {% if 'notifications' in enabled_modules %}
     <li class="nav-item">
       <a href="{{ url_for('notifications.index') }}"
          class="{{ 'active' if request.blueprint == 'notifications' }}">
@@ -160,6 +183,7 @@
         {% endif %}
       </a>
     </li>
+    {% endif %}
     <li class="nav-item" style="margin-top:8px">
       <a href="{{ url_for('auth.logout') }}" style="color:#e07070">
         <i class="bi bi-box-arrow-right"></i> تسجيل الخروج
@@ -187,6 +211,12 @@
         <i class="bi bi-buildings-fill"></i> إدارة المدارس
       </a>
     </li>
+    <li class="nav-item">
+      <a href="{{ url_for('schools.packages_list') }}"
+         class="{{ 'active' if request.endpoint in ['schools.packages_list', 'schools.create_package', 'schools.edit_package', 'schools.delete_package'] }}">
+        <i class="bi bi-collection-fill"></i> باقات الميزات
+      </a>
+    </li>
     {% endif %}
     <li class="nav-item">
       <a href="{{ url_for('admin.dashboard') }}"
@@ -197,7 +227,9 @@
     {% endif %}
 
     {% if not current_user.is_super_admin %}
-    {% if current_user.has_permission('manage_fees') or current_user.has_permission('record_payments') %}
+
+    {# ── Fees ─────────────────────────────────────────────────────────── #}
+    {% if 'fees' in enabled_modules and (current_user.has_permission('manage_fees') or current_user.has_permission('record_payments')) %}
     <li class="nav-item">
       <a href="{{ url_for('fees.index') }}"
          class="{{ 'active' if request.blueprint == 'fees' }}">
@@ -206,7 +238,8 @@
     </li>
     {% endif %}
 
-    {% if current_user.has_permission('view_students') %}
+    {# ── Students ─────────────────────────────────────────────────────── #}
+    {% if 'students' in enabled_modules and current_user.has_permission('view_students') %}
     <li class="nav-section-label">الطلاب</li>
     <li class="nav-item">
       <a href="{{ url_for('students.index') }}"
@@ -216,7 +249,8 @@
     </li>
     {% endif %}
 
-    {% if current_user.has_permission('take_attendance') %}
+    {# ── Attendance ───────────────────────────────────────────────────── #}
+    {% if 'attendance' in enabled_modules and current_user.has_permission('take_attendance') %}
     <li class="nav-item">
       <a href="{{ url_for('attendance.index') }}"
          class="{{ 'active' if request.blueprint == 'attendance' and request.endpoint != 'admin.attendance_settings' and request.endpoint != 'attendance.suspensions' and request.endpoint != 'attendance.create_suspension' and request.endpoint != 'attendance.delete_suspension' }}">
@@ -232,16 +266,33 @@
     </li>
     {% endif %}
     {% endif %}
-    {% if current_user.has_permission('manage_attendance_settings') %}
+    {% if 'attendance' in enabled_modules and current_user.has_permission('manage_attendance_settings') %}
     <li class="nav-item">
       <a href="{{ url_for('admin.attendance_settings') }}"
          class="{{ 'active' if request.endpoint == 'admin.attendance_settings' }}">
         <i class="bi bi-clock-history"></i> إعدادات الحضور
       </a>
     </li>
+    <li class="nav-item">
+      <a href="{{ url_for('school_calendar.index') }}"
+         class="{{ 'active' if request.blueprint == 'school_calendar' }}">
+        <i class="bi bi-calendar2-event-fill"></i> التقويم الدراسي
+      </a>
+    </li>
     {% endif %}
 
-    {% if current_user.has_permission('manage_transport') %}
+    {# ── Attendance devices ────────────────────────────────────────────── #}
+    {% if 'attendance_devices' in enabled_modules and current_user.is_admin_user %}
+    <li class="nav-item">
+      <a href="{{ url_for('attendance_devices.index') }}"
+         class="{{ 'active' if request.blueprint == 'attendance_devices' }}">
+        <i class="bi bi-camera-video-fill"></i> أجهزة الحضور
+      </a>
+    </li>
+    {% endif %}
+
+    {# ── Transport ────────────────────────────────────────────────────── #}
+    {% if 'transport' in enabled_modules and current_user.has_permission('manage_transport') %}
     <li class="nav-item">
       <a href="{{ url_for('transport.index') }}"
          class="{{ 'active' if request.blueprint == 'transport' }}">
@@ -250,7 +301,18 @@
     </li>
     {% endif %}
 
-    {% if current_user.has_permission('enter_grades') %}
+    {# ── Inventory ────────────────────────────────────────────────────── #}
+    {% if 'inventory' in enabled_modules and current_user.is_admin_user %}
+    <li class="nav-item">
+      <a href="{{ url_for('inventory.index') }}"
+         class="{{ 'active' if request.blueprint == 'inventory' }}">
+        <i class="bi bi-box-seam-fill"></i> &#1575;&#1604;&#1605;&#1582;&#1575;&#1586;&#1606;
+      </a>
+    </li>
+    {% endif %}
+
+    {# ── Grades ───────────────────────────────────────────────────────── #}
+    {% if 'grades' in enabled_modules and current_user.has_permission('enter_grades') %}
     <li class="nav-item">
       <a href="{{ url_for('grades.index') }}"
          class="{{ 'active' if request.blueprint == 'grades' }}">
@@ -259,18 +321,43 @@
     </li>
     {% endif %}
 
-    {% if current_user.has_permission('manage_employees') %}
-    <li class="nav-section-label">الموارد البشرية</li>
+    {# ── Homework ─────────────────────────────────────────────────────── #}
+    {% if 'homework' in enabled_modules and current_user.is_admin_user and school_cfg.action_enabled('homework', 'view') %}
     <li class="nav-item">
-      <a href="{{ url_for('employees.index') }}"
-         class="{{ 'active' if request.blueprint == 'employees' }}">
-        <i class="bi bi-person-badge-fill"></i> الموظفون
+      <a href="{{ url_for('homework.index') }}"
+         class="{{ 'active' if request.blueprint == 'homework' }}">
+        <i class="bi bi-journal-text"></i> الواجبات
       </a>
     </li>
     {% endif %}
 
+    {# ── HR: Employees / Salaries / Evaluations ────────────────────────── #}
+    {% if 'employees' in enabled_modules and current_user.has_permission('manage_employees') %}
+    <li class="nav-section-label">الموارد البشرية</li>
+    <li class="nav-item">
+      <a href="{{ url_for('employees.index') }}"
+         class="{{ 'active' if request.blueprint == 'employees' and request.endpoint != 'employees.attendance_report' and request.endpoint != 'employees.attendance_report_detail' }}">
+        <i class="bi bi-person-badge-fill"></i> الموظفون
+      </a>
+    </li>
+    {% if school_cfg.action_enabled('employee_attendance', 'view_report') %}
+    <li class="nav-item">
+      <a href="{{ url_for('employees.attendance_report') }}"
+         class="{{ 'active' if request.endpoint in ['employees.attendance_report', 'employees.attendance_report_detail'] }}">
+        <i class="bi bi-calendar-check-fill"></i> حضور الموظفين
+      </a>
+    </li>
+    {% endif %}
+    {% endif %}
+
+    {# Finance section label: show if any finance module is enabled #}
+    {% if ('finances' in enabled_modules and (current_user.has_permission('manage_revenues') or current_user.has_permission('manage_expenses'))) or
+          ('salaries' in enabled_modules and current_user.has_permission('manage_salaries')) or
+          ('evaluations' in enabled_modules and current_user.has_permission('manage_employees')) %}
     <li class="nav-section-label">المالية العامة</li>
-    {% if current_user.has_permission('manage_revenues') or current_user.has_permission('manage_expenses') %}
+    {% endif %}
+
+    {% if 'finances' in enabled_modules and (current_user.has_permission('manage_revenues') or current_user.has_permission('manage_expenses')) %}
     <li class="nav-item">
       <a href="{{ url_for('finances.index') }}"
          class="{{ 'active' if request.blueprint == 'finances' }}">
@@ -279,7 +366,7 @@
     </li>
     {% endif %}
 
-    {% if current_user.has_permission('manage_salaries') %}
+    {% if 'salaries' in enabled_modules and current_user.has_permission('manage_salaries') %}
     <li class="nav-item">
       <a href="{{ url_for('salaries.index') }}"
          class="{{ 'active' if request.blueprint == 'salaries' }}">
@@ -288,7 +375,7 @@
     </li>
     {% endif %}
 
-    {% if current_user.has_permission('manage_employees') %}
+    {% if 'evaluations' in enabled_modules and current_user.has_permission('manage_employees') %}
     <li class="nav-item">
       <a href="{{ url_for('evaluations.index') }}"
          class="{{ 'active' if request.blueprint == 'evaluations' }}">
@@ -297,7 +384,8 @@
     </li>
     {% endif %}
 
-    {% if current_user.has_permission('view_reports') %}
+    {# ── Reports ──────────────────────────────────────────────────────── #}
+    {% if 'reports' in enabled_modules and current_user.has_permission('view_reports') %}
     <li class="nav-section-label">التقارير</li>
     <li class="nav-item">
       <a href="{{ url_for('reports.index') }}"
@@ -306,10 +394,12 @@
       </a>
     </li>
     {% endif %}
+
     {% endif %}{# not super_admin #}
 
     <li class="nav-section-label">النظام</li>
     {% if not current_user.is_super_admin %}
+    {% if 'notifications' in enabled_modules %}
     <li class="nav-item">
       <a href="{{ url_for('notifications.index') }}"
          class="{{ 'active' if request.blueprint == 'notifications' }}">
@@ -320,22 +410,35 @@
       </a>
     </li>
     {% endif %}
+    {% endif %}
 
     {# Admin-only section — strictly hidden from all non-admin roles #}
     {% if current_user.is_admin_user %}
     {% if not current_user.is_super_admin %}
+    {% if 'sections' in enabled_modules %}
     <li class="nav-item">
       <a href="{{ url_for('sections.index') }}"
-         class="{{ 'active' if request.blueprint == 'sections' }}">
+         class="{{ 'active' if request.blueprint == 'sections' and request.endpoint not in ['sections.subjects', 'sections.edit_subject'] }}">
         <i class="bi bi-grid-3x3-gap-fill"></i> الصفوف والشعب
       </a>
     </li>
+    {% endif %}
+    {% if 'subjects' in enabled_modules %}
+    <li class="nav-item">
+      <a href="{{ url_for('sections.subjects') }}"
+         class="{{ 'active' if request.endpoint in ['sections.subjects', 'sections.edit_subject'] }}">
+        <i class="bi bi-book-fill"></i> المواد الدراسية
+      </a>
+    </li>
+    {% endif %}
+    {% if 'schedules' in enabled_modules %}
     <li class="nav-item">
       <a href="{{ url_for('schedules.index') }}"
          class="{{ 'active' if request.blueprint == 'schedules' }}">
         <i class="bi bi-table"></i> الجداول الدراسية
       </a>
     </li>
+    {% endif %}
     {% endif %}{# not super_admin #}
 
     {# User management link — school managers see school-scoped label #}
@@ -354,6 +457,19 @@
       </a>
     </li>
     {% endif %}
+
+    <li class="nav-item">
+      <a href="{{ url_for('admin.complaints_list') }}"
+         class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.complaint') }}">
+        <i class="bi bi-chat-left-text-fill"></i> &#1575;&#1604;&#1588;&#1603;&#1575;&#1608;&#1609;
+      </a>
+    </li>
+    <li class="nav-item">
+      <a href="{{ url_for('admin.leave_requests_list') }}"
+         class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.leave_request') }}">
+        <i class="bi bi-calendar2-check-fill"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;
+      </a>
+    </li>
 
     {% if current_user.is_super_admin %}
     <li class="nav-item">

@@ -72,6 +72,19 @@ class School(db.Model):
     governorate       = db.Column(db.String(100), nullable=True, index=True)
     price_per_student = db.Column(db.Numeric(12, 2), default=0)
 
+    # Calendar: comma-separated weekday numbers (0=Mon … 6=Sun) that are off,
+    # e.g. "4,5" for Friday+Saturday.  NULL means no weekly holidays configured.
+    weekly_off_days   = db.Column(db.String(20), nullable=True)
+
+    # HR: employee absence limit alerts
+    emp_absence_limit         = db.Column(db.Integer,    nullable=True)
+    emp_absence_period        = db.Column(db.String(20), nullable=True, default='monthly')
+    emp_absence_alert_enabled = db.Column(db.Boolean,   default=True)
+
+    # Last applied feature package (nullable — no package = defaults apply)
+    package_id  = db.Column(db.Integer, db.ForeignKey('feature_packages.id', ondelete='SET NULL'),
+                            nullable=True)
+
     is_active   = db.Column(db.Boolean, default=True)
     created_at  = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at  = db.Column(db.DateTime, default=datetime.utcnow,
@@ -79,6 +92,7 @@ class School(db.Model):
 
     # Relationships
     academic_years = db.relationship('AcademicYear', backref='school', lazy='dynamic')
+    package        = db.relationship('FeaturePackage', foreign_keys=[package_id])
 
     @property
     def current_year(self):
@@ -151,6 +165,123 @@ class SchoolBilling(db.Model):
 
     def __repr__(self):
         return f'<SchoolBilling school={self.school_id} due={self.amount_due} status={self.status}>'
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  0b. FEATURE PACKAGES  (reusable named bundles of module/feature/form config)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class FeaturePackage(db.Model):
+    """
+    A reusable named configuration bundle managed by Super Admin.
+
+    config JSON structure::
+
+        {
+          "modules":  {"students": true, "employees": false, ...},
+          "features": {"students.create": true, "attendance_devices.sync": false, ...},
+          "student_form": {
+              "hidden_sections": ["attendance_device"],
+              "hidden_fields":   ["nationality"],
+              "required_fields": ["phone"]
+          }
+        }
+
+    Assigning a package to a school is a snapshot operation (Option B):
+    the school's existing SchoolModule/SchoolFeature rows are updated from the
+    package config at the moment of assignment.  Later package edits do NOT
+    automatically re-apply to schools that already received the package.
+    """
+    __tablename__ = 'feature_packages'
+
+    id          = db.Column(db.Integer, primary_key=True)
+    name        = db.Column(db.String(150), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    is_active   = db.Column(db.Boolean, nullable=False, default=True)
+    config      = db.Column(db.JSON, nullable=True)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at  = db.Column(db.DateTime, default=datetime.utcnow,
+                            onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f'<FeaturePackage {self.id} — {self.name}>'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  SCHOOL MODULES  (feature flags per school, managed by super admin only)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SchoolModule(db.Model):
+    """
+    One row per (school, module_key) pair.
+    Super admin sets is_enabled; school managers have no access.
+
+    No rows for a school = all modules enabled (backward compatibility with
+    schools created before this feature was introduced).
+    """
+    __tablename__ = 'school_modules'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    school_id  = db.Column(db.Integer,
+                           db.ForeignKey('schools.id', ondelete='CASCADE'),
+                           nullable=False, index=True)
+    module_key = db.Column(db.String(50), nullable=False)
+    is_enabled = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow,
+                           onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('school_id', 'module_key', name='uq_school_module'),
+    )
+
+    school = db.relationship(
+        'School',
+        backref=db.backref('school_modules_list',
+                           cascade='all, delete-orphan', lazy='dynamic'),
+    )
+
+    def __repr__(self):
+        return (f'<SchoolModule school={self.school_id} '
+                f'key={self.module_key} enabled={self.is_enabled}>')
+
+
+class SchoolFeature(db.Model):
+    """
+    One row per (school, feature_key) pair — granular capability control.
+    Super admin sets is_enabled; school managers have no access.
+
+    No rows for a school = all features enabled (backward compatibility with
+    schools created before this feature was introduced).
+
+    If the parent module is disabled, all its features are considered disabled
+    regardless of their individual is_enabled values.
+    """
+    __tablename__ = 'school_features'
+
+    id          = db.Column(db.Integer, primary_key=True)
+    school_id   = db.Column(db.Integer,
+                            db.ForeignKey('schools.id', ondelete='CASCADE'),
+                            nullable=False, index=True)
+    feature_key = db.Column(db.String(100), nullable=False)
+    is_enabled  = db.Column(db.Boolean, nullable=False, default=True)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at  = db.Column(db.DateTime, default=datetime.utcnow,
+                            onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('school_id', 'feature_key', name='uq_school_feature'),
+    )
+
+    school = db.relationship(
+        'School',
+        backref=db.backref('school_features_list',
+                           cascade='all, delete-orphan', lazy='dynamic'),
+    )
+
+    def __repr__(self):
+        return (f'<SchoolFeature school={self.school_id} '
+                f'key={self.feature_key} enabled={self.is_enabled}>')
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -398,7 +529,7 @@ class Subject(db.Model):
 
     id          = db.Column(db.Integer, primary_key=True)
     name        = db.Column(db.String(150), nullable=False)
-    code        = db.Column(db.String(20),  nullable=False)
+    code        = db.Column(db.String(20),  nullable=True)
     school_id   = db.Column(db.Integer, db.ForeignKey('schools.id'),
                             nullable=False, index=True)
     academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'),
@@ -445,10 +576,10 @@ class Student(db.Model):
     # academic_year_id records the enrollment year and is kept for reference.
 
     id            = db.Column(db.Integer, primary_key=True)
-    student_id    = db.Column(db.String(20), nullable=False, index=True)
+    student_id    = db.Column(db.String(40), nullable=False, index=True)
     full_name     = db.Column(db.String(200), nullable=False)
-    date_of_birth = db.Column(db.Date, nullable=False)
-    gender        = db.Column(db.String(10), nullable=False)
+    date_of_birth = db.Column(db.Date, nullable=True)
+    gender        = db.Column(db.String(10), nullable=True)
     nationality   = db.Column(db.String(80), nullable=True)
     address       = db.Column(db.Text, nullable=True)
     phone         = db.Column(db.String(30), nullable=True)
@@ -560,14 +691,79 @@ class StudentSuspension(db.Model):
 #  5. EMPLOYEES
 # ═════════════════════════════════════════════════════════════════════════════
 
+class Complaint(db.Model):
+    __tablename__ = 'complaints'
+    __school_scoped__ = True
+    __year_scoped__ = True
+
+    id               = db.Column(db.Integer, primary_key=True)
+    parent_id        = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    student_id       = db.Column(db.Integer, db.ForeignKey('students.id'), nullable=False, index=True)
+    school_id        = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'), nullable=False, index=True)
+    title            = db.Column(db.String(200), nullable=False)
+    complaint_type   = db.Column(db.String(30), nullable=False)
+    details          = db.Column(db.Text, nullable=False)
+    attachment_path  = db.Column(db.String(500), nullable=True)
+    status           = db.Column(db.String(30), nullable=False, default='new', index=True)
+    manager_reply    = db.Column(db.Text, nullable=True)
+    replied_by       = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    replied_at       = db.Column(db.DateTime, nullable=True)
+    created_at       = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    updated_at       = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    parent = db.relationship('User', foreign_keys=[parent_id],
+                             backref=db.backref('complaints', lazy='dynamic'))
+    student = db.relationship('Student', foreign_keys=[student_id])
+    school = db.relationship('School', foreign_keys=[school_id])
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    replier = db.relationship('User', foreign_keys=[replied_by])
+
+    def __repr__(self):
+        return f'<Complaint {self.id} student={self.student_id}>'
+
+
+class LeaveRequest(db.Model):
+    __tablename__ = 'leave_requests'
+    __school_scoped__ = True
+    __year_scoped__ = True
+
+    id               = db.Column(db.Integer, primary_key=True)
+    parent_id        = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    student_id       = db.Column(db.Integer, db.ForeignKey('students.id'), nullable=False, index=True)
+    school_id        = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'), nullable=False, index=True)
+    leave_type       = db.Column(db.String(30), nullable=False)
+    from_date        = db.Column(db.Date, nullable=False)
+    to_date          = db.Column(db.Date, nullable=False)
+    notes            = db.Column(db.Text, nullable=True)
+    attachment_path  = db.Column(db.String(500), nullable=True)
+    status           = db.Column(db.String(30), nullable=False, default='pending', index=True)
+    manager_note     = db.Column(db.Text, nullable=True)
+    reviewed_by      = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    reviewed_at      = db.Column(db.DateTime, nullable=True)
+    created_at       = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    updated_at       = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    parent = db.relationship('User', foreign_keys=[parent_id],
+                             backref=db.backref('leave_requests', lazy='dynamic'))
+    student = db.relationship('Student', foreign_keys=[student_id])
+    school = db.relationship('School', foreign_keys=[school_id])
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    reviewer = db.relationship('User', foreign_keys=[reviewed_by])
+
+    def __repr__(self):
+        return f'<LeaveRequest {self.id} student={self.student_id}>'
+
+
 class Employee(db.Model):
     __tablename__ = 'employees'
     __school_scoped__ = True
 
     id            = db.Column(db.Integer, primary_key=True)
-    employee_id   = db.Column(db.String(20), nullable=False, index=True)
+    employee_id   = db.Column(db.String(40), nullable=False, index=True)
     full_name     = db.Column(db.String(200), nullable=False)
-    job_title     = db.Column(db.String(150), nullable=False)
+    job_title     = db.Column(db.String(150), nullable=True)
     department    = db.Column(db.String(100), nullable=True)
     date_of_birth = db.Column(db.Date, nullable=True)
     gender        = db.Column(db.String(10), nullable=True)
@@ -594,7 +790,7 @@ class Employee(db.Model):
                                         foreign_keys='Section.teacher_id')
     salary_records   = db.relationship('SalaryRecord',       backref='employee', lazy='dynamic')
     evaluations      = db.relationship('EmployeeEvaluation', backref='employee', lazy='dynamic')
-    attendances      = db.relationship('EmployeeAttendance', backref='employee', lazy='dynamic')
+    attendances      = db.relationship('EmployeeAttendance', back_populates='employee', lazy='dynamic')
 
     school = db.relationship('School', foreign_keys=[school_id],
                              backref=db.backref('employees', lazy='dynamic'))
@@ -927,10 +1123,17 @@ class EmployeeAttendance(db.Model):
     check_out   = db.Column(db.Time, nullable=True)
     recorded_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     notes       = db.Column(db.Text, nullable=True)
+    source      = db.Column(db.String(30), nullable=True)   # 'manual', 'aiface', etc.
+    device_id   = db.Column(db.Integer,
+                            db.ForeignKey('attendance_devices.id', ondelete='SET NULL'),
+                            nullable=True)
     created_at  = db.Column(db.DateTime, default=datetime.utcnow)
 
-    school = db.relationship('School', foreign_keys=[school_id])
+    school        = db.relationship('School', foreign_keys=[school_id])
     academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    employee      = db.relationship('Employee', foreign_keys=[employee_id],
+                                    back_populates='attendances')
+    device        = db.relationship('AttendanceDevice', foreign_keys=[device_id])
 
     __table_args__ = (
         db.UniqueConstraint('employee_id', 'date', name='uq_employee_date'),
@@ -1185,6 +1388,54 @@ class PushNotification(db.Model):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  15b. MOBILE DEVICE TOKENS  (FCM tokens registered by the Flutter app)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class MobileDeviceToken(db.Model):
+    """
+    One row per (user, device) pair.  A user may have multiple active devices.
+
+    The fcm_token column is globally unique — if a token that was previously
+    registered to user A is later submitted by user B (device transferred / app
+    reinstalled under a different account), the row is reassigned to user B.
+
+    The existing User.device_token field is kept in sync so the legacy
+    notification service (which reads user.device_token) keeps working without
+    any changes.
+    """
+    __tablename__ = 'mobile_device_tokens'
+
+    id          = db.Column(db.Integer, primary_key=True)
+    user_id     = db.Column(db.Integer,
+                            db.ForeignKey('users.id', ondelete='CASCADE'),
+                            nullable=False, index=True)
+    school_id   = db.Column(db.Integer,
+                            db.ForeignKey('schools.id', ondelete='CASCADE'),
+                            nullable=False, index=True)
+    fcm_token   = db.Column(db.String(512), nullable=False, unique=True)
+    platform    = db.Column(db.String(20),  nullable=False, default='android')
+    device_name = db.Column(db.String(200), nullable=True)
+    is_active   = db.Column(db.Boolean,     nullable=False, default=True)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+    last_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user   = db.relationship('User',   foreign_keys=[user_id],
+                             backref=db.backref('device_tokens',
+                                                lazy='dynamic',
+                                                cascade='all, delete-orphan'))
+    school = db.relationship('School', foreign_keys=[school_id])
+
+    def touch(self):
+        """Update last_seen_at to now and ensure the token is active."""
+        self.last_seen_at = datetime.utcnow()
+        self.is_active    = True
+
+    def __repr__(self):
+        return (f'<MobileDeviceToken user={self.user_id} '
+                f'platform={self.platform} active={self.is_active}>')
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  16. SCHEDULES
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -1313,6 +1564,128 @@ class StudentTransport(db.Model):
 #  19. WHITE-LABEL / SCHOOL SETTINGS  (global fallback — one row)
 # ═════════════════════════════════════════════════════════════════════════════
 
+class InventoryCategory(db.Model):
+    __tablename__ = 'inventory_categories'
+    __school_scoped__ = True
+    __year_scoped__ = True
+
+    id = db.Column(db.Integer, primary_key=True)
+    school_id = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'), nullable=False, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    school = db.relationship('School', foreign_keys=[school_id])
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('school_id', 'academic_year_id', 'name',
+                            name='uq_inventory_category_school_year_name'),
+    )
+
+    def __repr__(self):
+        return f'<InventoryCategory {self.name}>'
+
+
+class InventoryItem(db.Model):
+    __tablename__ = 'inventory_items'
+    __school_scoped__ = True
+    __year_scoped__ = True
+
+    id = db.Column(db.Integer, primary_key=True)
+    school_id = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'), nullable=False, index=True)
+    category_id = db.Column(db.Integer, db.ForeignKey('inventory_categories.id'), nullable=False, index=True)
+    name = db.Column(db.String(200), nullable=False)
+    item_code = db.Column(db.String(80), nullable=True)
+    unit = db.Column(db.String(40), nullable=False)
+    current_quantity = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    minimum_quantity = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    purchase_price = db.Column(db.Numeric(12, 2), nullable=True)
+    supplier = db.Column(db.String(200), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    image_path = db.Column(db.String(500), nullable=True)
+    is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    school = db.relationship('School', foreign_keys=[school_id])
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    category = db.relationship('InventoryCategory', foreign_keys=[category_id],
+                               backref=db.backref('items', lazy='dynamic'))
+
+    __table_args__ = (
+        db.UniqueConstraint('school_id', 'academic_year_id', 'item_code',
+                            name='uq_inventory_item_school_year_code'),
+    )
+
+    @property
+    def is_low_stock(self):
+        return (self.current_quantity or 0) <= (self.minimum_quantity or 0)
+
+    def __repr__(self):
+        return f'<InventoryItem {self.name}>'
+
+
+class InventoryMovement(db.Model):
+    __tablename__ = 'inventory_movements'
+    __school_scoped__ = True
+    __year_scoped__ = True
+
+    id = db.Column(db.Integer, primary_key=True)
+    school_id = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'), nullable=False, index=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('inventory_items.id'), nullable=False, index=True)
+    movement_type = db.Column(db.String(20), nullable=False)
+    reason = db.Column(db.String(60), nullable=False)
+    quantity = db.Column(db.Numeric(12, 2), nullable=False)
+    movement_date = db.Column(db.Date, nullable=False, default=date.today, index=True)
+    recipient = db.Column(db.String(200), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    attachment_path = db.Column(db.String(500), nullable=True)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    school = db.relationship('School', foreign_keys=[school_id])
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    item = db.relationship('InventoryItem', foreign_keys=[item_id],
+                           backref=db.backref('movements', lazy='dynamic'))
+    creator = db.relationship('User', foreign_keys=[created_by])
+
+    def __repr__(self):
+        return f'<InventoryMovement item={self.item_id} type={self.movement_type}>'
+
+
+class InventoryCount(db.Model):
+    __tablename__ = 'inventory_counts'
+    __school_scoped__ = True
+    __year_scoped__ = True
+
+    id = db.Column(db.Integer, primary_key=True)
+    school_id = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'), nullable=False, index=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('inventory_items.id'), nullable=False, index=True)
+    system_quantity = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    actual_quantity = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    difference = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    status = db.Column(db.String(20), nullable=False, index=True)
+    reason = db.Column(db.String(200), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    counted_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    count_date = db.Column(db.Date, nullable=False, default=date.today, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    school = db.relationship('School', foreign_keys=[school_id])
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    item = db.relationship('InventoryItem', foreign_keys=[item_id],
+                           backref=db.backref('counts', lazy='dynamic'))
+    counter = db.relationship('User', foreign_keys=[counted_by])
+
+    def __repr__(self):
+        return f'<InventoryCount item={self.item_id} date={self.count_date}>'
+
+
 class SchoolSettings(db.Model):
     """
     Legacy single-row global settings kept for backward compatibility.
@@ -1351,3 +1724,338 @@ class SchoolSettings(db.Model):
             db.session.add(obj)
             db.session.commit()
         return obj
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  22a. SCHOOL STUDENT FORM CONFIG  (per-school field visibility / required)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class SchoolStudentFormConfig(db.Model):
+    """
+    Per-school configuration of which fields/sections appear on the
+    student create/edit form.  Managed exclusively by Super Admin.
+
+    hidden_sections : JSON list of section keys to hide entirely.
+    hidden_fields   : JSON list of individual field keys to hide.
+    required_fields : JSON list of field keys to mark as required
+                      (beyond the hardcoded full_name requirement).
+
+    When the row does not exist for a school, all defaults apply
+    (every section/field visible, no extra required fields) so
+    existing schools are not affected.
+    """
+    __tablename__ = 'school_student_form_config'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    school_id  = db.Column(db.Integer, db.ForeignKey('schools.id', ondelete='CASCADE'),
+                           unique=True, nullable=False, index=True)
+    hidden_sections = db.Column(db.JSON, nullable=True)
+    hidden_fields   = db.Column(db.JSON, nullable=True)
+    required_fields = db.Column(db.JSON, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  22b. SCHOOL MODULE CONFIG  (per-school per-module section/field/action config)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class SchoolModuleConfig(db.Model):
+    """
+    Per-school, per-module configuration of which sections/fields/actions are
+    visible or enabled.  Managed exclusively by Super Admin.
+
+    module_key examples: 'employees', 'employee_attendance', 'attendance_devices'
+    (students use SchoolStudentFormConfig for backward compat)
+
+    config JSON structure::
+
+        {
+          "hidden_sections": ["system_account", "teacher_assignment"],
+          "hidden_fields":   ["base_salary", "nationality"],
+          "required_fields": ["phone"],
+          "disabled_actions": ["delete", "export_excel"]
+        }
+
+    No row for a (school, module_key) = everything visible/enabled (fail-open).
+    """
+    __tablename__ = 'school_module_configs'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    school_id  = db.Column(db.Integer, db.ForeignKey('schools.id', ondelete='CASCADE'),
+                           nullable=False, index=True)
+    module_key = db.Column(db.String(50), nullable=False)
+    config     = db.Column(db.JSON, nullable=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('school_id', 'module_key', name='uq_school_module_config'),
+    )
+
+    school = db.relationship('School',
+                             backref=db.backref('module_configs',
+                                                cascade='all, delete-orphan',
+                                                lazy='dynamic'))
+
+    def __repr__(self):
+        return f'<SchoolModuleConfig school={self.school_id} module={self.module_key}>'
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  22. ATTENDANCE DEVICES  (Hikvision face / card / fingerprint readers)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class AttendanceDevice(db.Model):
+    """
+    Physical Hikvision device registered per school.
+    Not year-scoped — the same device serves multiple academic years.
+    """
+    __tablename__ = 'attendance_devices'
+    __school_scoped__ = True
+
+    id               = db.Column(db.Integer, primary_key=True)
+    school_id        = db.Column(db.Integer, db.ForeignKey('schools.id'),
+                                 nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'),
+                                 nullable=True)
+    name             = db.Column(db.String(150), nullable=False)
+    device_type      = db.Column(db.String(30),  nullable=False, default='hikvision')
+    device_scope     = db.Column(db.String(20),  nullable=False, default='students',
+                                 server_default='students')
+    ip_address       = db.Column(db.String(45),  nullable=False)
+    port             = db.Column(db.Integer,     nullable=False, default=80)
+    username         = db.Column(db.String(80),  nullable=False, default='admin')
+    password         = db.Column(db.String(200), nullable=False)
+    device_sn        = db.Column(db.String(100), nullable=False)
+    is_active        = db.Column(db.Boolean,     default=True,  nullable=False, index=True)
+    last_sync_at     = db.Column(db.DateTime,    nullable=True)
+    notes            = db.Column(db.Text,        nullable=True)
+    created_at       = db.Column(db.DateTime,    default=datetime.utcnow)
+    updated_at       = db.Column(db.DateTime,    default=datetime.utcnow,
+                                 onupdate=datetime.utcnow)
+
+    school        = db.relationship('School', foreign_keys=[school_id],
+                                    backref=db.backref('attendance_devices', lazy='dynamic'))
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    event_logs    = db.relationship('DeviceEventLog', backref='device',
+                                    cascade='all, delete-orphan', lazy='dynamic')
+    mappings      = db.relationship('DeviceStudentMapping', backref='device',
+                                    cascade='all, delete-orphan', lazy='dynamic')
+
+    def __repr__(self):
+        return f'<AttendanceDevice {self.name} ip={self.ip_address}>'
+
+
+class DeviceEventLog(db.Model):
+    """
+    Raw access-event record fetched from a Hikvision device.
+    Deduplicated by (device_id, serial_no).
+    status: raw → unmatched / processed / duplicate / error
+    """
+    __tablename__ = 'device_event_logs'
+    __school_scoped__ = True
+
+    id                 = db.Column(db.Integer,   primary_key=True)
+    school_id          = db.Column(db.Integer,   db.ForeignKey('schools.id'),
+                                   nullable=False, index=True)
+    academic_year_id   = db.Column(db.Integer,   db.ForeignKey('academic_years.id'),
+                                   nullable=True)
+    device_id          = db.Column(db.Integer,   db.ForeignKey('attendance_devices.id',
+                                   ondelete='CASCADE'), nullable=False, index=True)
+    serial_no          = db.Column(db.BigInteger, nullable=False)
+    employee_no_string = db.Column(db.String(50), nullable=True)
+    person_name        = db.Column(db.String(200), nullable=True)
+    event_time         = db.Column(db.DateTime,  nullable=True)
+    major              = db.Column(db.Integer,   nullable=True)
+    minor              = db.Column(db.Integer,   nullable=True)
+    verify_mode        = db.Column(db.String(80), nullable=True)
+    picture_url        = db.Column(db.String(500), nullable=True)
+    raw_json           = db.Column(db.Text,      nullable=True)
+    status             = db.Column(db.String(20), nullable=False, default='raw', index=True)
+    error_message      = db.Column(db.Text,      nullable=True)
+    created_at         = db.Column(db.DateTime,  default=datetime.utcnow)
+
+    school        = db.relationship('School', foreign_keys=[school_id])
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('device_id', 'serial_no',
+                            name='uq_device_event_log_device_serial'),
+    )
+
+    def __repr__(self):
+        return f'<DeviceEventLog device={self.device_id} sn={self.serial_no} status={self.status}>'
+
+
+class DeviceStudentMapping(db.Model):
+    """
+    Maps a Hikvision numeric employeeNoString to a student within a device.
+    Not year-scoped — mappings persist across years; a student keeps the
+    same device number from year to year.
+    Unique per (device_id, employee_no_string).
+    """
+    __tablename__ = 'device_student_mappings'
+    __school_scoped__ = True
+
+    id                 = db.Column(db.Integer,   primary_key=True)
+    school_id          = db.Column(db.Integer,   db.ForeignKey('schools.id'),
+                                   nullable=False, index=True)
+    device_id          = db.Column(db.Integer,   db.ForeignKey('attendance_devices.id',
+                                   ondelete='CASCADE'), nullable=False, index=True)
+    employee_no_string = db.Column(db.String(50), nullable=False)
+    student_id         = db.Column(db.Integer,   db.ForeignKey('students.id',
+                                   ondelete='CASCADE'), nullable=False, index=True)
+    is_active          = db.Column(db.Boolean,   default=True, nullable=False)
+    created_at         = db.Column(db.DateTime,  default=datetime.utcnow)
+    updated_at         = db.Column(db.DateTime,  default=datetime.utcnow,
+                                   onupdate=datetime.utcnow)
+
+    school   = db.relationship('School', foreign_keys=[school_id])
+    student  = db.relationship('Student', foreign_keys=[student_id],
+                               backref=db.backref('device_mappings', lazy='dynamic'))
+
+    __table_args__ = (
+        db.UniqueConstraint('device_id', 'employee_no_string',
+                            name='uq_device_student_mapping_device_empno'),
+    )
+
+    def __repr__(self):
+        return (f'<DeviceStudentMapping device={self.device_id} '
+                f'emp={self.employee_no_string} student={self.student_id}>')
+
+
+class DeviceEmployeeMapping(db.Model):
+    """
+    Maps a device enrollment number to an employee for AI Face / Hikvision devices.
+    Not year-scoped — mappings persist across academic years.
+    Unique per (device_id, enrollment_no) to prevent duplicate enrollment IDs on one device.
+    """
+    __tablename__ = 'device_employee_mappings'
+    __school_scoped__ = True
+
+    id            = db.Column(db.Integer,    primary_key=True)
+    school_id     = db.Column(db.Integer,    db.ForeignKey('schools.id'),
+                               nullable=False, index=True)
+    device_id     = db.Column(db.Integer,    db.ForeignKey('attendance_devices.id',
+                               ondelete='CASCADE'), nullable=False, index=True)
+    employee_id   = db.Column(db.Integer,    db.ForeignKey('employees.id',
+                               ondelete='CASCADE'), nullable=False, index=True)
+    enrollment_no = db.Column(db.String(50), nullable=False)
+    is_active     = db.Column(db.Boolean,    default=True, nullable=False)
+    created_at    = db.Column(db.DateTime,   default=datetime.utcnow)
+
+    school   = db.relationship('School', foreign_keys=[school_id])
+    device   = db.relationship('AttendanceDevice', foreign_keys=[device_id],
+                                backref=db.backref('employee_mappings', lazy='dynamic'))
+    employee = db.relationship('Employee', foreign_keys=[employee_id],
+                                backref=db.backref('device_mappings', lazy='dynamic'))
+
+    __table_args__ = (
+        db.UniqueConstraint('device_id', 'enrollment_no',
+                             name='uq_device_employee_enrollid'),
+    )
+
+    def __repr__(self):
+        return (f'<DeviceEmployeeMapping device={self.device_id} '
+                f'enrollid={self.enrollment_no} employee={self.employee_id}>')
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  24. SCHOOL CALENDAR — holidays & breaks
+# ═════════════════════════════════════════════════════════════════════════════
+
+class SchoolHoliday(db.Model):
+    """
+    Date-range holiday or school break.
+
+    school_id=NULL  → global holiday that applies to every school.
+    school_id=<id>  → school-specific holiday.
+
+    NOT __school_scoped__: school_id is intentionally nullable here, so the
+    automatic tenant filter would hide global rows.  Queries must be written
+    explicitly (bypass_tenant_scope + OR school_id IS NULL).
+    """
+    __tablename__ = 'school_holidays'
+
+    HOLIDAY_TYPES = ('official', 'summer', 'emergency', 'custom')
+
+    id               = db.Column(db.Integer, primary_key=True)
+    school_id        = db.Column(db.Integer, db.ForeignKey('schools.id', ondelete='CASCADE'),
+                                 nullable=True, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id', ondelete='SET NULL'),
+                                 nullable=True, index=True)
+    name             = db.Column(db.String(200), nullable=False)
+    start_date       = db.Column(db.Date, nullable=False, index=True)
+    end_date         = db.Column(db.Date, nullable=False)
+    holiday_type     = db.Column(db.String(20), nullable=False, default='official')
+    notes            = db.Column(db.Text, nullable=True)
+    is_active        = db.Column(db.Boolean, nullable=False, default=True)
+    created_by       = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
+                                 nullable=True)
+    created_at       = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at       = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    school        = db.relationship('School', foreign_keys=[school_id],
+                                    backref=db.backref('school_holidays',
+                                                       cascade='all, delete-orphan',
+                                                       lazy='dynamic'))
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    creator       = db.relationship('User', foreign_keys=[created_by])
+
+    @property
+    def is_single_day(self):
+        return self.start_date == self.end_date
+
+    def __repr__(self):
+        scope = f'school={self.school_id}' if self.school_id else 'global'
+        return f'<SchoolHoliday {self.name} {self.start_date}–{self.end_date} {scope}>'
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  24. HOMEWORK
+# ═════════════════════════════════════════════════════════════════════════════
+
+class Homework(db.Model):
+    """
+    Homework assignments created by teachers for specific sections/subjects.
+    Scoped per school and academic year.
+    attachment_type: 'image' | 'pdf' | None
+    """
+    __tablename__ = 'homework'
+    __school_scoped__ = True
+    __year_scoped__ = True
+
+    id               = db.Column(db.Integer, primary_key=True)
+    school_id        = db.Column(db.Integer, db.ForeignKey('schools.id', ondelete='CASCADE'),
+                                 nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id', ondelete='CASCADE'),
+                                 nullable=False, index=True)
+    teacher_id       = db.Column(db.Integer, db.ForeignKey('employees.id', ondelete='SET NULL'),
+                                 nullable=True, index=True)
+    subject_id       = db.Column(db.Integer, db.ForeignKey('subjects.id', ondelete='SET NULL'),
+                                 nullable=True, index=True)
+    section_id       = db.Column(db.Integer, db.ForeignKey('sections.id', ondelete='SET NULL'),
+                                 nullable=True, index=True)
+    title            = db.Column(db.String(300), nullable=False)
+    description      = db.Column(db.Text, nullable=True)
+    publish_date     = db.Column(db.Date, nullable=False)
+    due_date         = db.Column(db.Date, nullable=False)
+    attachment_path  = db.Column(db.String(500), nullable=True)
+    attachment_type  = db.Column(db.String(20), nullable=True)  # image | pdf
+    is_active        = db.Column(db.Boolean, nullable=False, default=True)
+    created_at       = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at       = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    school        = db.relationship('School', foreign_keys=[school_id],
+                                    backref=db.backref('homework_list',
+                                                       cascade='all, delete-orphan',
+                                                       lazy='dynamic'))
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    teacher       = db.relationship('Employee', foreign_keys=[teacher_id],
+                                    backref=db.backref('homework_list', lazy='dynamic'))
+    subject       = db.relationship('Subject', foreign_keys=[subject_id])
+    section       = db.relationship('Section', foreign_keys=[section_id],
+                                    backref=db.backref('homework_list', lazy='dynamic'))
+
+    def __repr__(self):
+        return f'<Homework {self.id} — {self.title}>'

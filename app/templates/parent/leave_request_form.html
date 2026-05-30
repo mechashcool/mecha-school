@@ -1,0 +1,78 @@
+{% extends "shared/base.html" %}
+{% block title %}&#1578;&#1602;&#1583;&#1610;&#1605; &#1591;&#1604;&#1576; &#1573;&#1580;&#1575;&#1586;&#1577;{% endblock %}
+{% block page_title %}&#1578;&#1602;&#1583;&#1610;&#1605; &#1591;&#1604;&#1576; &#1573;&#1580;&#1575;&#1586;&#1577;{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">&#1578;&#1602;&#1583;&#1610;&#1605; &#1591;&#1604;&#1576; &#1573;&#1580;&#1575;&#1586;&#1577;</h1></div>
+  <a href="{{ url_for('parent.leave_requests') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>&#1585;&#1580;&#1608;&#1593;
+  </a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST" enctype="multipart/form-data" class="row g-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+      <div class="col-md-6">
+        <label class="form-label">&#1575;&#1604;&#1591;&#1575;&#1604;&#1576;</label>
+        <select name="student_id" id="studentSelect" class="form-select" required>
+          <option value="" data-info="">&#1575;&#1582;&#1578;&#1585; &#1575;&#1604;&#1591;&#1575;&#1604;&#1576;</option>
+          {% for student in children %}
+          {% set section_info = (student.section.grade.name ~ ' - ' ~ student.section.name) if student.section and student.section.grade else '' %}
+          <option value="{{ student.id }}" data-info="{{ section_info }}">{{ student.full_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">&#1575;&#1604;&#1589;&#1601; &#1608;&#1575;&#1604;&#1588;&#1593;&#1576;&#1577;</label>
+        <input type="text" id="gradeSection" class="form-control" readonly>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">&#1606;&#1608;&#1593; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;</label>
+        <select name="leave_type" class="form-select" required>
+          <option value="">&#1575;&#1582;&#1578;&#1585; &#1575;&#1604;&#1606;&#1608;&#1593;</option>
+          {% for key, label in type_labels.items() %}
+          <option value="{{ key }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">&#1605;&#1606; &#1578;&#1575;&#1585;&#1610;&#1582;</label>
+        <input type="date" name="from_date" class="form-control" required>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">&#1573;&#1604;&#1609; &#1578;&#1575;&#1585;&#1610;&#1582;</label>
+        <input type="date" name="to_date" class="form-control" required>
+      </div>
+      <div class="col-12">
+        <label class="form-label">&#1605;&#1604;&#1575;&#1581;&#1592;&#1575;&#1578;</label>
+        <textarea name="notes" class="form-control" rows="5"></textarea>
+      </div>
+      <div class="col-12">
+        <label class="form-label">&#1575;&#1604;&#1605;&#1585;&#1601;&#1602; <span class="text-muted">(&#1575;&#1582;&#1578;&#1610;&#1575;&#1585;&#1610;)</span></label>
+        <input type="file" name="attachment" class="form-control">
+      </div>
+      <div class="col-12 d-flex gap-2">
+        <button class="btn btn-primary">
+          <i class="bi bi-send-fill me-1"></i>&#1573;&#1585;&#1587;&#1575;&#1604;
+        </button>
+        <a href="{{ url_for('parent.leave_requests') }}" class="btn btn-outline-secondary">&#1573;&#1604;&#1594;&#1575;&#1569;</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+(function() {
+  const studentSelect = document.getElementById('studentSelect');
+  const gradeSection = document.getElementById('gradeSection');
+  if (!studentSelect || !gradeSection) return;
+  function syncInfo() {
+    gradeSection.value = studentSelect.selectedOptions[0]?.dataset.info || '';
+  }
+  studentSelect.addEventListener('change', syncInfo);
+  syncInfo();
+})();
+</script>
+{% endblock %}

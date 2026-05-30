@@ -1,0 +1,141 @@
+{% extends "shared/base.html" %}
+{% block title %}الواجبات{% endblock %}
+{% block page_title %}الواجبات{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="page-title mb-0">الواجبات</h1>
+    <p class="page-subtitle mb-0">
+      {% if is_admin %}جميع الواجبات للعام الدراسي الحالي{% else %}واجباتي للعام الدراسي الحالي{% endif %}
+    </p>
+  </div>
+  {% if school_cfg.action_enabled('homework', 'create') %}
+  <a href="{{ url_for('homework.create') }}" class="btn btn-primary">
+    <i class="bi bi-plus-lg me-1"></i>إضافة واجب
+  </a>
+  {% endif %}
+</div>
+
+{% if homework_list %}
+<div class="row g-3">
+  {% for hw in homework_list %}
+  <div class="col-12 col-md-6 col-xl-4">
+    <div class="card h-100 {% if hw.due_date < today %}border-secondary opacity-75{% elif hw.due_date == today %}border-warning{% else %}border-0{% endif %}">
+      <div class="card-body">
+
+        {# ── Header row ──────────────────────────────────────────────── #}
+        <div class="d-flex justify-content-between align-items-start mb-2">
+          <div class="flex-grow-1 me-2">
+            <h6 class="card-title fw-bold mb-1" style="font-size:.95rem">{{ hw.title }}</h6>
+            <div class="d-flex flex-wrap gap-1">
+              {% if hw.subject %}
+              <span class="badge bg-primary">{{ hw.subject.name }}</span>
+              {% endif %}
+              {% if hw.section %}
+              <span class="badge bg-info text-dark">{{ hw.section.name }}</span>
+              {% if hw.section.grade %}
+              <span class="badge bg-secondary">{{ hw.section.grade.name }}</span>
+              {% endif %}
+              {% endif %}
+            </div>
+          </div>
+          {% if hw.due_date < today %}
+          <span class="badge bg-secondary small">منتهٍ</span>
+          {% elif hw.due_date == today %}
+          <span class="badge bg-warning text-dark small">اليوم</span>
+          {% else %}
+          <span class="badge bg-success small">نشط</span>
+          {% endif %}
+        </div>
+
+        {# ── Dates ───────────────────────────────────────────────────── #}
+        <div class="row g-1 small text-muted mb-2">
+          <div class="col-6">
+            <i class="bi bi-calendar-plus me-1"></i>
+            <span>النشر: {{ hw.publish_date.strftime('%Y-%m-%d') }}</span>
+          </div>
+          <div class="col-6">
+            <i class="bi bi-calendar-check me-1 {{ 'text-danger' if hw.due_date <= today else 'text-success' }}"></i>
+            <span class="{{ 'text-danger fw-bold' if hw.due_date <= today else '' }}">
+              التسليم: {{ hw.due_date.strftime('%Y-%m-%d') }}
+            </span>
+          </div>
+        </div>
+
+        {# ── Teacher (admin view) ─────────────────────────────────────── #}
+        {% if is_admin and hw.teacher %}
+        <div class="small text-muted mb-2">
+          <i class="bi bi-person-fill me-1"></i>{{ hw.teacher.full_name }}
+        </div>
+        {% endif %}
+
+        {# ── Description ─────────────────────────────────────────────── #}
+        {% if hw.description %}
+        <p class="small text-muted mb-2" style="max-height:3.6em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical">
+          {{ hw.description }}
+        </p>
+        {% endif %}
+
+        {# ── Attachment ──────────────────────────────────────────────── #}
+        {% if hw.attachment_path %}
+        <div class="mb-2">
+          {% set att_url = resolve_photo_url(hw.attachment_path) or hw.attachment_path %}
+          {% if hw.attachment_type == 'image' %}
+          <a href="{{ att_url }}" target="_blank">
+            <img src="{{ att_url }}" alt="مرفق" class="img-fluid rounded"
+                 style="max-height:120px;object-fit:cover;width:100%"
+                 onerror="this.style.display='none'">
+          </a>
+          {% elif hw.attachment_type == 'pdf' %}
+          <a href="{{ att_url }}" target="_blank" class="btn btn-sm btn-outline-danger w-100">
+            <i class="bi bi-file-earmark-pdf-fill me-1"></i>عرض ملف PDF
+          </a>
+          {% else %}
+          <a href="{{ att_url }}" target="_blank" class="btn btn-sm btn-outline-secondary w-100">
+            <i class="bi bi-paperclip me-1"></i>المرفق
+          </a>
+          {% endif %}
+        </div>
+        {% endif %}
+
+      </div>
+
+      {# ── Actions ─────────────────────────────────────────────────── #}
+      <div class="card-footer bg-transparent py-2 d-flex gap-1 justify-content-end">
+        {% if school_cfg.action_enabled('homework', 'edit') %}
+        <a href="{{ url_for('homework.edit', hw_id=hw.id) }}"
+           class="btn btn-sm btn-outline-secondary" title="تعديل">
+          <i class="bi bi-pencil"></i>
+        </a>
+        {% endif %}
+        {% if school_cfg.action_enabled('homework', 'delete') %}
+        <form method="POST" action="{{ url_for('homework.delete', hw_id=hw.id) }}"
+              onsubmit="return confirm('هل تريد حذف هذا الواجب؟')">
+          <input type="hidden" name="csrf_token"
+                 value="{{ csrf_token() if csrf_token is defined else '' }}">
+          <button type="submit" class="btn btn-sm btn-outline-danger" title="حذف">
+            <i class="bi bi-trash"></i>
+          </button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% else %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">
+    <i class="bi bi-journal-text" style="font-size:3rem;opacity:.3;display:block;margin-bottom:12px"></i>
+    <p class="mb-0">لا توجد واجبات مسجلة لهذا العام الدراسي.</p>
+    {% if school_cfg.action_enabled('homework', 'create') %}
+    <a href="{{ url_for('homework.create') }}" class="btn btn-primary mt-3">
+      <i class="bi bi-plus-lg me-1"></i>إضافة أول واجب
+    </a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

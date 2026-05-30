@@ -17,6 +17,11 @@ class Config:
     # Session
     PERMANENT_SESSION_LIFETIME = 3600  # 1 hour
 
+    # Supabase Storage — set these in Render environment variables for production
+    SUPABASE_URL         = os.environ.get('SUPABASE_URL', '')
+    SUPABASE_SERVICE_KEY = os.environ.get('SUPABASE_SERVICE_KEY', '')
+    SUPABASE_BUCKET      = os.environ.get('SUPABASE_BUCKET', 'uploads')
+
     @staticmethod
     def init_app(app):
         pass
@@ -34,6 +39,20 @@ class ProductionConfig(Config):
     """Production configuration."""
     DEBUG = False
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL')
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        'pool_pre_ping': True,
+        'pool_recycle': int(os.environ.get('SQLALCHEMY_POOL_RECYCLE', 300)),
+        'pool_size': int(os.environ.get('SQLALCHEMY_POOL_SIZE', 2)),
+        'max_overflow': int(os.environ.get('SQLALCHEMY_MAX_OVERFLOW', 0)),
+        'pool_timeout': int(os.environ.get('SQLALCHEMY_POOL_TIMEOUT', 10)),
+        'connect_args': {
+            'connect_timeout': int(os.environ.get('SQLALCHEMY_CONNECT_TIMEOUT', 10)),
+            'keepalives': 1,
+            'keepalives_idle': 30,
+            'keepalives_interval': 10,
+            'keepalives_count': 5,
+        },
+    }
 
     @classmethod
     def init_app(cls, app):

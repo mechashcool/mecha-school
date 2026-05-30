@@ -36,7 +36,7 @@ from flask_login import login_user, logout_user
 from app import create_app
 from app.models import (
     db, AcademicYear, Employee, Grade, Permission, Role, School, Section,
-    Student, User,
+    Student, Subject, User, teacher_subjects,
 )
 
 
@@ -97,6 +97,16 @@ class SchoolManagerUsersTest(unittest.TestCase):
                 capacity=30,
             )
             db.session.add(section_a)
+            db.session.flush()
+
+            subject_a = Subject(
+                school_id=school_a.id,
+                academic_year_id=year_a.id,
+                grade_id=grade_a.id,
+                name=f'Arabic Math {self.suffix}',
+                code=f'AM{self.suffix[:6]}',
+            )
+            db.session.add(subject_a)
             db.session.flush()
 
             student_a = Student(
@@ -163,6 +173,16 @@ class SchoolManagerUsersTest(unittest.TestCase):
             db.session.add(section_b)
             db.session.flush()
 
+            subject_b = Subject(
+                school_id=school_b.id,
+                academic_year_id=year_b.id,
+                grade_id=grade_b.id,
+                name=f'Other Subject {self.suffix}',
+                code=f'OS{self.suffix[:6]}',
+            )
+            db.session.add(subject_b)
+            db.session.flush()
+
             student_b = Student(
                 student_id=f'SB-{self.suffix}',
                 full_name=f'Student B {self.suffix}',
@@ -199,6 +219,7 @@ class SchoolManagerUsersTest(unittest.TestCase):
                 'year_a_id':       year_a.id,
                 'grade_a_id':      grade_a.id,
                 'section_a_id':    section_a.id,
+                'subject_a_id':    subject_a.id,
                 'student_a_id':    student_a.id,
                 'student_a_pk':    student_a.id,
                 'manager_id':      manager.id,
@@ -206,6 +227,7 @@ class SchoolManagerUsersTest(unittest.TestCase):
                 'year_b_id':       year_b.id,
                 'grade_b_id':      grade_b.id,
                 'section_b_id':    section_b.id,
+                'subject_b_id':    subject_b.id,
                 'student_b_id':    student_b.id,
                 'user_b_id':       user_b.id,
             }
@@ -216,6 +238,19 @@ class SchoolManagerUsersTest(unittest.TestCase):
             ids = self.created
 
             # Clean up any users/employees created during tests
+            for emp in (Employee.query
+                        .execution_options(bypass_tenant_scope=True)
+                        .filter(Employee.school_id.in_([
+                            ids.get('school_a_id'), ids.get('school_b_id')
+                        ]))
+                        .all()):
+                db.session.execute(
+                    teacher_subjects.delete().where(
+                        teacher_subjects.c.employee_id == emp.id
+                    )
+                )
+            db.session.flush()
+
             for model, bypass in [
                 (Employee, True),
                 (User,     True),
@@ -247,6 +282,8 @@ class SchoolManagerUsersTest(unittest.TestCase):
             for model, key in [
                 (Student,      'student_a_id'),
                 (Student,      'student_b_id'),
+                (Subject,      'subject_a_id'),
+                (Subject,      'subject_b_id'),
                 (Section,      'section_a_id'),
                 (Section,      'section_b_id'),
                 (Grade,        'grade_a_id'),
@@ -373,6 +410,100 @@ class SchoolManagerUsersTest(unittest.TestCase):
                             .filter_by(username=username)
                             .one())
             self.assertEqual(created_user.extra_permissions, [])
+            logout_user()
+
+    def test_manager_can_create_user_without_email(self):
+        """Email is optional for school-manager-created users."""
+        from app.blueprints.admin import create_user
+
+        ids = self.created
+        username = f'no_email_{self.suffix}'
+
+        with self.app.test_request_context(
+            '/admin/users/create',
+            method='POST',
+            data={
+                'username': username,
+                'email': '',
+                'full_name': f'No Email {self.suffix}',
+                'password': 'Password123',
+                'role_id': str(ids['teacher_role_id']),
+            },
+        ):
+            manager = db.session.get(
+                User, ids['manager_id'],
+                execution_options={'bypass_tenant_scope': True},
+            )
+            login_user(manager)
+            self._run_before_request()
+
+            response = create_user()
+            self.assertEqual(response.status_code, 302)
+
+            created_user = (User.query
+                            .execution_options(bypass_tenant_scope=True)
+                            .filter_by(username=username)
+                            .one())
+            self.assertIsNone(created_user.email)
+            self.assertEqual(created_user.school_id, ids['school_a_id'])
+            logout_user()
+
+    def test_duplicate_email_still_rejected_when_provided(self):
+        """Provided email values still participate in duplicate validation."""
+        from app.blueprints.admin import create_user
+
+        ids = self.created
+        username = f'dupe_email_{self.suffix}'
+
+        with self.app.test_request_context(
+            '/admin/users/create',
+            method='POST',
+            data={
+                'username': username,
+                'email': f'user_b_{self.suffix}@example.test',
+                'full_name': f'Dupe Email {self.suffix}',
+                'password': 'Password123',
+                'role_id': str(ids['teacher_role_id']),
+            },
+        ):
+            manager = db.session.get(
+                User, ids['manager_id'],
+                execution_options={'bypass_tenant_scope': True},
+            )
+            login_user(manager)
+            self._run_before_request()
+
+            response = create_user()
+            self.assertEqual(response.status_code, 302)
+
+            created_user = (User.query
+                            .execution_options(bypass_tenant_scope=True)
+                            .filter_by(username=username)
+                            .first())
+            self.assertIsNone(created_user)
+            db.session.rollback()
+            logout_user()
+
+    def test_manager_create_form_scopes_searchable_student_and_subject_options(self):
+        """Searchable parent/teacher selectors show only current-school options."""
+        from app.blueprints.admin import create_user
+
+        ids = self.created
+        with self.app.test_request_context('/admin/users/create', method='GET'):
+            manager = db.session.get(
+                User, ids['manager_id'],
+                execution_options={'bypass_tenant_scope': True},
+            )
+            login_user(manager)
+            self._run_before_request()
+
+            html = create_user()
+            self.assertIn('data-filter-target="studentOptions"', html)
+            self.assertIn('data-filter-target="subjectOptions"', html)
+            self.assertIn(f'Student A {self.suffix}', html)
+            self.assertIn(f'Arabic Math {self.suffix}', html)
+            self.assertNotIn(f'Student B {self.suffix}', html)
+            self.assertNotIn(f'Other Subject {self.suffix}', html)
             logout_user()
 
     # ── Test 2 ──────────────────────────────────────────────────────────────
@@ -640,6 +771,59 @@ class SchoolManagerUsersTest(unittest.TestCase):
             )
             self.assertEqual(section.teacher_id, emp.id,
                              'Section teacher_id should point to the new Employee')
+            logout_user()
+
+    def test_manager_can_create_teacher_linked_to_subject(self):
+        """Selected teacher subject IDs create scoped teacher_subjects links."""
+        from app.blueprints.admin import create_user
+        from sqlalchemy import select as sa_select
+
+        ids = self.created
+        username = f'teacher_subject_{self.suffix}'
+
+        with self.app.test_request_context(
+            '/admin/users/create',
+            method='POST',
+            data={
+                'username': username,
+                'email': '',
+                'full_name': f'Teacher Subject {self.suffix}',
+                'password': 'Password123',
+                'role_id': str(ids['teacher_role_id']),
+                'teacher_section_ids': str(ids['section_a_id']),
+                'teacher_subject_ids': [
+                    str(ids['subject_a_id']),
+                    str(ids['subject_a_id']),
+                    str(ids['subject_b_id']),
+                ],
+            },
+        ):
+            manager = db.session.get(
+                User, ids['manager_id'],
+                execution_options={'bypass_tenant_scope': True},
+            )
+            login_user(manager)
+            self._run_before_request()
+
+            response = create_user()
+            self.assertEqual(response.status_code, 302)
+
+            created_user = (User.query
+                            .execution_options(bypass_tenant_scope=True)
+                            .filter_by(username=username).first())
+            self.assertIsNotNone(created_user)
+
+            emp = (Employee.query
+                   .execution_options(bypass_tenant_scope=True)
+                   .filter_by(user_id=created_user.id).one())
+            rows = db.session.execute(
+                sa_select(teacher_subjects).where(
+                    teacher_subjects.c.employee_id == emp.id
+                )
+            ).fetchall()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].subject_id, ids['subject_a_id'])
+            self.assertEqual(rows[0].section_id, ids['section_a_id'])
             logout_user()
 
 

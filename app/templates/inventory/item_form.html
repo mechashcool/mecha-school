@@ -1,0 +1,70 @@
+{% extends "shared/base.html" %}
+{% block title %}{{ 'تعديل مادة' if item else 'إضافة مادة' }}{% endblock %}
+{% block page_title %}{{ 'تعديل مادة' if item else 'إضافة مادة' }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">{{ 'تعديل مادة' if item else 'إضافة مادة' }}</h1></div>
+  <a href="{{ url_for('inventory.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST" class="row g-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+      <div class="col-md-6">
+        <label class="form-label">اسم المادة <span class="text-danger">*</span></label>
+        <input type="text" name="name" class="form-control" value="{{ item.name if item else '' }}" required>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">التصنيف <span class="text-danger">*</span></label>
+        <select name="category_id" class="form-select" required>
+          {% for category in categories %}
+          <option value="{{ category.id }}" {% if item and item.category_id == category.id %}selected{% endif %}>{{ category.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">رمز المادة</label>
+        <input type="text" name="item_code" class="form-control" value="{{ item.item_code if item else '' }}">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">وحدة القياس <span class="text-danger">*</span></label>
+        <input type="text" name="unit" class="form-control" value="{{ item.unit if item else 'قطعة' }}" required>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">سعر الشراء</label>
+        <input type="number" name="purchase_price" class="form-control" step="0.01" min="0" value="{{ item.purchase_price if item and item.purchase_price is not none else '' }}">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">الكمية الحالية</label>
+        <input type="number" name="current_quantity" class="form-control" step="0.01" min="0" value="{{ item.current_quantity if item else 0 }}">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">حد التنبيه الأدنى</label>
+        <input type="number" name="minimum_quantity" class="form-control" step="0.01" min="0" value="{{ item.minimum_quantity if item else 0 }}">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">المورد</label>
+        <input type="text" name="supplier" class="form-control" value="{{ item.supplier if item else '' }}">
+      </div>
+      <div class="col-md-6 d-flex align-items-end">
+        <label class="form-check">
+          <input type="checkbox" name="is_active" value="1" class="form-check-input" {% if not item or item.is_active %}checked{% endif %}>
+          <span class="form-check-label">مادة فعالة</span>
+        </label>
+      </div>
+      <div class="col-12">
+        <label class="form-label">ملاحظات</label>
+        <textarea name="notes" class="form-control" rows="3">{{ item.notes if item else '' }}</textarea>
+      </div>
+      <div class="col-12 d-flex gap-2">
+        <button class="btn btn-primary"><i class="bi bi-check2-circle me-1"></i>حفظ</button>
+        <a href="{{ url_for('inventory.index') }}" class="btn btn-outline-secondary">إلغاء</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

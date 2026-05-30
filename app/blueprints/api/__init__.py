@@ -13,6 +13,7 @@ Auth model (Phase 3):
 All responses are JSON. 401 when anonymous, 403 when not a parent,
 404 when the child is not linked to the caller.
 """
+import re
 from datetime import date, timedelta
 from functools import wraps
 
@@ -25,6 +26,7 @@ from app.models import (db, Student, FeeRecord, FeeInstallment,
                          Notification, User, SchoolSettings,
                          parent_students)
 from app.utils.notification_visibility import notification_visible_to
+from app.services.attendance_service import process_student_scan
 
 api_bp = Blueprint('api', __name__)
 
@@ -55,6 +57,27 @@ def _assert_parent_of(student_id: int) -> Student:
     if not link:
         abort(404)
     return Student.query.get_or_404(student_id)
+
+
+# ─── Device source → Arabic display helpers ───────────────────────────────────
+
+_SOURCE_LABELS = {
+    'hikvision': 'جهاز الحضور',
+    'rfid':      'جهاز الحضور',
+    'face_id':   'بصمة الوجه',
+}
+
+
+def _friendly_source(src):
+    return _SOURCE_LABELS.get(src or '', src)
+
+
+def _friendly_notes(notes, src):
+    """Strip internal hik:sn=... dedup tags; replace with Arabic label for device sources."""
+    cleaned = re.sub(r'hik:sn=\S+', '', notes or '').strip()
+    if not cleaned and src in _SOURCE_LABELS:
+        return 'تم التسجيل عبر جهاز الحضور'
+    return cleaned or None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -159,8 +182,8 @@ def child_attendance(student_id):
                 'status':   r.status,
                 'check_in':  r.check_in.strftime('%H:%M')  if r.check_in  else None,
                 'check_out': r.check_out.strftime('%H:%M') if r.check_out else None,
-                'source':   r.source,
-                'notes':    r.notes,
+                'source':   _friendly_source(r.source),
+                'notes':    _friendly_notes(r.notes, r.source),
             }
             for r in rows
         ],
@@ -271,103 +294,15 @@ def notifications_feed():
     })
 
 
-from app.models import Student, StudentAttendance, StudentSuspension, Device, db
-from app.utils.attendance_helpers import get_local_now, determine_check_in_status
+# ─────────────────────────────────────────────────────────────────────────────
+#  Attendance — device API endpoint
+# ─────────────────────────────────────────────────────────────────────────────
 
 @api_bp.route('/v1/attendance/student', methods=['POST'])
 def api_record_attendance():
-
     data = request.get_json(silent=True) or {}
-
-    student_id = data.get('student_id')
-    device_sn  = data.get('device_sn')
-
-    # Validate device
-    device = Device.query.filter_by(device_id=device_sn).first()
-    if not device:
-        return jsonify({"ok": False, "error": "invalid device"}), 403
-
-    # Validate student
-    student = Student.query.filter_by(student_id=student_id).first()
-    if not student:
-        return jsonify({"ok": False, "error": "student not found"}), 404
-
-    # Local time in school timezone
-    settings = device.school
-    local_now = get_local_now(settings)
-    today     = local_now.date()
-    now_time  = local_now.time().replace(microsecond=0)
-
-    # Check suspension
-    suspended = StudentSuspension.query.filter(
-        StudentSuspension.student_id == student.id,
-        StudentSuspension.start_date <= today,
-        StudentSuspension.end_date   >= today
-    ).first()
-    if suspended:
-        return jsonify({"ok": False, "error": "student suspended"}), 403
-
-    # Look for today's record
-    existing = StudentAttendance.query.filter_by(
-        student_id=student.id,
-        date=today
-    ).first()
-
-    def _fmt(t):
-        return t.strftime('%H:%M') if t else None
-
-    if existing:
-        # ── Check-out path ─────────────────────────────────────────────────
-        departure = getattr(settings, 'att_departure_time', None)
-        if departure and now_time >= departure:
-            if existing.check_out is None:
-                existing.check_out = now_time
-                db.session.commit()
-            return jsonify({
-                "ok":           True,
-                "action":       "check_out",
-                "student_name": student.full_name,
-                "student_id":   student.student_id,
-                "date":         today.isoformat(),
-                "check_in":     _fmt(existing.check_in),
-                "check_out":    _fmt(existing.check_out),
-                "status":       existing.status,
-            })
-        # Re-scan before departure time — ignore
-        return jsonify({
-            "ok":           True,
-            "action":       "already_checked_in",
-            "student_name": student.full_name,
-            "student_id":   student.student_id,
-            "date":         today.isoformat(),
-            "check_in":     _fmt(existing.check_in),
-            "check_out":    _fmt(existing.check_out),
-            "status":       existing.status,
-        })
-
-    # ── Check-in path ──────────────────────────────────────────────────────
-    status = determine_check_in_status(now_time, settings)
-
-    # Do not copy academic_year_id from the student (that is enrollment year).
-    # _inherit_scope will derive the correct year from the attendance date.
-    attendance = StudentAttendance(
-        student_id = student.id,
-        school_id  = student.school_id,
-        date       = today,
-        status     = status,
-        check_in   = now_time,
-        source     = 'api',
+    result, status_code = process_student_scan(
+        data.get('student_id'),
+        data.get('device_sn'),
     )
-    db.session.add(attendance)
-    db.session.commit()
-
-    return jsonify({
-        "ok":           True,
-        "action":       "check_in",
-        "student_name": student.full_name,
-        "student_id":   student.student_id,
-        "date":         today.isoformat(),
-        "check_in":     now_time.strftime('%H:%M'),
-        "check_out":    None,
-        "status":       status,
-    })
+    return jsonify(result), status_code

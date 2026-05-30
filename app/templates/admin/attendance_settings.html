@@ -121,6 +121,59 @@
       </div>
       {% endif %}
 
+      {# ── Employee absence limit ──────────────────────────────────────────── #}
+      <div class="card mb-4">
+        <div class="card-header">
+          <i class="bi bi-person-x text-danger"></i> حد غياب الموظفين (HR)
+        </div>
+        <div class="card-body">
+          <p class="text-muted mb-3" style="font-size:13px">
+            عند تجاوز الموظف الحد المسموح، يظهر تحذير في تقرير حضور الموظفين.
+          </p>
+          <div class="row g-3">
+            <div class="col-md-3">
+              <label class="form-label fw-600">
+                <i class="bi bi-123 text-danger me-1"></i>الحد المسموح (أيام)
+              </label>
+              <input type="number" name="emp_absence_limit" min="1" max="365"
+                     class="form-control"
+                     value="{{ settings.emp_absence_limit if settings.emp_absence_limit else '' }}"
+                     placeholder="مثال: 5">
+              <small class="text-muted">اتركه فارغاً لتعطيل التحذير</small>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-600">
+                <i class="bi bi-calendar-range text-warning me-1"></i>نوع الفترة
+              </label>
+              <select name="emp_absence_period" class="form-select">
+                <option value="monthly"
+                  {{ 'selected' if not settings.emp_absence_period or settings.emp_absence_period == 'monthly' }}>
+                  شهرياً
+                </option>
+                <option value="yearly"
+                  {{ 'selected' if settings.emp_absence_period == 'yearly' }}>
+                  سنوياً
+                </option>
+                <option value="range"
+                  {{ 'selected' if settings.emp_absence_period == 'range' }}>
+                  في الفترة المحددة في التقرير
+                </option>
+              </select>
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+              <div class="form-check form-switch mt-2">
+                <input class="form-check-input" type="checkbox" role="switch"
+                       name="emp_absence_alert_enabled" id="empAlertSwitch"
+                       {{ 'checked' if settings.emp_absence_alert_enabled is not defined or settings.emp_absence_alert_enabled }}>
+                <label class="form-check-label fw-600" for="empAlertSwitch">
+                  تفعيل تحذيرات الغياب
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <button type="submit" class="btn btn-primary btn-lg px-5">
         <i class="bi bi-check-circle-fill me-2"></i>حفظ الإعدادات
       </button>

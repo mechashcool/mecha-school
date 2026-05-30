@@ -1,0 +1,240 @@
+{% extends "shared/base.html" %}
+{% block title %}تقرير حضور — {{ emp.full_name }}{% endblock %}
+{% block page_title %}تقرير تفصيلي{% endblock %}
+
+{% block content %}
+
+{# ── Header ───────────────────────────────────────────────────────────────── #}
+<div class="page-header d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="page-title mb-0">{{ emp.full_name }}</h1>
+    <p class="page-subtitle mb-0">
+      {% if emp.job_title %}{{ emp.job_title }}{% endif %}
+      {% if emp.department %} — {{ emp.department }}{% endif %}
+      &nbsp;|&nbsp; {{ date_from }} إلى {{ date_to }}
+    </p>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    {% if school_cfg.action_enabled('employee_attendance', 'employee_excel') %}
+    <a href="{{ url_for('employees.attendance_report_employee_excel', emp_id=emp.id, date_from=date_from, date_to=date_to) }}"
+       class="btn btn-sm btn-outline-success">
+      <i class="bi bi-file-earmark-excel me-1"></i>تصدير Excel
+    </a>
+    {% endif %}
+    {% if school_cfg.action_enabled('employee_attendance', 'employee_pdf') %}
+    <a href="{{ url_for('employees.attendance_report_employee_pdf', emp_id=emp.id, date_from=date_from, date_to=date_to) }}"
+       class="btn btn-sm btn-outline-danger">
+      <i class="bi bi-file-earmark-pdf me-1"></i>تصدير PDF
+    </a>
+    {% endif %}
+    <a href="{{ url_for('employees.attendance_report', date_from=date_from, date_to=date_to) }}"
+       class="btn btn-sm btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>العودة
+    </a>
+  </div>
+</div>
+
+{# ── Employee info card ───────────────────────────────────────────────────── #}
+<div class="row g-3 mb-3">
+  <div class="col-md-4">
+    <div class="card h-100">
+      <div class="card-body">
+        <div class="d-flex align-items-center gap-3">
+          {% if emp.photo %}
+          <img src="{{ emp.photo }}" class="rounded-circle" width="56" height="56"
+               style="object-fit:cover" alt="{{ emp.full_name }}">
+          {% else %}
+          <div class="rounded-circle bg-primary d-flex align-items-center justify-content-center text-white fw-bold"
+               style="width:56px;height:56px;font-size:1.4rem">
+            {{ (emp.full_name or '?')[0] }}
+          </div>
+          {% endif %}
+          <div>
+            <div class="fw-bold">{{ emp.full_name }}</div>
+            <div class="text-muted small">{{ emp.employee_id or '—' }}</div>
+            {% if emp.job_title %}
+            <div class="text-muted small">{{ emp.job_title }}</div>
+            {% endif %}
+          </div>
+        </div>
+        <hr class="my-2">
+        <div class="row g-1 small text-muted">
+          {% if emp.department %}
+          <div class="col-6"><i class="bi bi-building me-1"></i>{{ emp.department }}</div>
+          {% endif %}
+          {% if emp.hire_date %}
+          <div class="col-6"><i class="bi bi-calendar3 me-1"></i>{{ emp.hire_date.strftime('%Y-%m-%d') }}</div>
+          {% endif %}
+          {% if emp.phone %}
+          <div class="col-6"><i class="bi bi-telephone me-1"></i>{{ emp.phone }}</div>
+          {% endif %}
+          <div class="col-6">
+            <span class="badge {{ 'bg-success' if emp.status == 'active' else 'bg-secondary' }}">
+              {{ 'نشط' if emp.status == 'active' else emp.status or '—' }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Summary cards (right side) ───────────────────────────────────────── #}
+  <div class="col-md-8">
+    <div class="row g-3 h-100">
+      <div class="col-6 col-md-4">
+        <div class="card text-center h-100">
+          <div class="card-body py-3">
+            <div style="font-size:2rem;font-weight:800;color:#1e2b3a">{{ stats.working_days }}</div>
+            <div class="text-muted small">أيام العمل</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-md-4">
+        <div class="card text-center h-100 border-success">
+          <div class="card-body py-3">
+            <div style="font-size:2rem;font-weight:800;color:#198754">{{ stats.present }}</div>
+            <div class="text-muted small">حاضر في الوقت</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-md-4">
+        <div class="card text-center h-100 border-warning">
+          <div class="card-body py-3">
+            <div style="font-size:2rem;font-weight:800;color:#e8a020">{{ stats.late }}</div>
+            <div class="text-muted small">متأخر</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-md-4">
+        <div class="card text-center h-100 border-danger">
+          <div class="card-body py-3">
+            <div style="font-size:2rem;font-weight:800;color:#dc3545">{{ stats.absent }}</div>
+            <div class="text-muted small">غائب (فعلي + افتراضي)</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-md-4">
+        <div class="card text-center h-100 border-info">
+          <div class="card-body py-3">
+            <div style="font-size:2rem;font-weight:800;color:#0dcaf0">{{ stats.checked_out }}</div>
+            <div class="text-muted small">سُجِّل انصرافه</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-md-4">
+        <div class="card text-center h-100
+          {% if stats.rate >= 90 %}border-success
+          {% elif stats.rate >= 75 %}border-warning
+          {% else %}border-danger{% endif %}">
+          <div class="card-body py-3">
+            <div style="font-size:2rem;font-weight:800;color:
+              {% if stats.rate >= 90 %}#198754
+              {% elif stats.rate >= 75 %}#e8a020
+              {% else %}#dc3545{% endif %}">
+              {{ stats.rate }}%
+            </div>
+            <div class="text-muted small">نسبة الحضور</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Daily breakdown table ────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="card-header fw-bold d-flex justify-content-between align-items-center py-2">
+    <span><i class="bi bi-calendar3 me-1"></i>سجل الحضور اليومي</span>
+    <div class="d-flex gap-2 align-items-center">
+      <span class="badge bg-success">حاضر: {{ stats.present }}</span>
+      <span class="badge bg-warning text-dark">متأخر: {{ stats.late }}</span>
+      <span class="badge bg-danger">غائب: {{ stats.absent }}</span>
+    </div>
+  </div>
+
+  {% if stats.daily %}
+  <div class="table-responsive">
+    <table class="table table-hover table-sm mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>#</th>
+          <th>التاريخ</th>
+          <th>اليوم</th>
+          <th>الحالة</th>
+          <th>وقت الحضور</th>
+          <th>وقت الانصراف</th>
+          <th>المصدر</th>
+          <th>الجهاز</th>
+          <th>ملاحظات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% set days_ar = ['الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت','الأحد'] %}
+        {% for day in stats.daily %}
+        <tr class="
+          {% if day.status == 'absent' %}table-danger{% elif day.status == 'late' %}table-warning{% endif %}
+          {{ 'opacity-75' if day.is_virtual }}">
+          <td class="text-muted small">{{ loop.index }}</td>
+          <td class="small">{{ day.date.strftime('%Y-%m-%d') }}</td>
+          <td class="text-muted small">{{ days_ar[day.date.weekday()] }}</td>
+          <td>
+            {% if day.status == 'present' %}
+              <span class="badge bg-success">حاضر</span>
+            {% elif day.status == 'late' %}
+              <span class="badge bg-warning text-dark">متأخر</span>
+            {% elif day.status == 'absent' %}
+              <span class="badge bg-danger">
+                غائب{% if day.is_virtual %} <i class="bi bi-cloud" title="افتراضي"></i>{% endif %}
+              </span>
+            {% else %}
+              <span class="badge bg-secondary">{{ day.status }}</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if day.check_in %}
+            <span class="text-success fw-bold">{{ day.check_in.strftime('%H:%M') }}</span>
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if day.check_out %}
+            <span class="text-info fw-bold">{{ day.check_out.strftime('%H:%M') }}</span>
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td class="text-muted small">
+            {% if day.source == 'aiface' %}
+            <i class="bi bi-camera-video-fill text-primary me-1"></i>AI Face
+            {% elif day.source == 'manual' %}
+            <i class="bi bi-pencil-fill text-secondary me-1"></i>يدوي
+            {% elif day.source %}
+            {{ day.source }}
+            {% elif day.is_virtual %}
+            <span class="text-muted fst-italic">—</span>
+            {% else %}
+            —
+            {% endif %}
+          </td>
+          <td class="text-muted small">
+            {% if day.device %}{{ day.device.name }}{% else %}—{% endif %}
+          </td>
+          <td class="text-muted small">{{ day.notes or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card-footer text-muted small py-2">
+    <i class="bi bi-info-circle me-1"></i>
+    الغياب مع أيقونة <i class="bi bi-cloud"></i> هو <b>غياب افتراضي</b>: يوم عمل بدون سجل حضور في قاعدة البيانات.
+  </div>
+  {% else %}
+  <div class="card-body text-center text-muted py-5">
+    <i class="bi bi-calendar-x" style="font-size:3rem"></i>
+    <p class="mt-3 mb-0">لا توجد أيام عمل في هذه الفترة.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

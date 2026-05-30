@@ -1,0 +1,589 @@
+{% extends "shared/base.html" %}
+
+{% set scope_label = {
+  'students':  'ربط الطلاب بالجهاز',
+  'employees': 'ربط الموظفين بالجهاز',
+  'mixed':     'ربط الطلاب والموظفين بالجهاز',
+} %}
+
+{% block title %}{{ scope_label.get(scope, 'ربط الأشخاص') }} — {{ device.name }}{% endblock %}
+{% block page_title %}{{ scope_label.get(scope, 'ربط الأشخاص') }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ scope_label.get(scope, 'ربط الأشخاص') }}</h1>
+    <p class="page-subtitle">
+      {{ device.name }} — <code>{{ device.ip_address }}</code>
+      <span class="badge ms-2
+        {% if scope == 'students' %}bg-info
+        {% elif scope == 'employees' %}bg-warning text-dark
+        {% else %}bg-secondary{% endif %}">
+        {% if scope == 'students' %}الطلاب
+        {% elif scope == 'employees' %}الموظفون
+        {% else %}مختلط{% endif %}
+      </span>
+    </p>
+  </div>
+  <div class="d-flex align-items-center gap-2 flex-wrap">
+    {% if device_online %}
+    <span class="badge bg-success"><i class="bi bi-wifi me-1"></i>متصل</span>
+    {% else %}
+    <span class="badge bg-secondary"><i class="bi bi-wifi-off me-1"></i>غير متصل</span>
+    {% endif %}
+    <button type="button" class="btn btn-sm btn-outline-info" id="statusCheckBtn"
+            data-device-id="{{ device.id }}" title="فحص حالة الاتصال بالجهاز">
+      <i class="bi bi-radar me-1"></i>فحص الاتصال
+    </button>
+    <a href="{{ url_for('attendance_devices.index') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>العودة
+    </a>
+  </div>
+</div>
+
+{# Status check result panel (hidden until button clicked) #}
+<div id="statusPanel" class="alert alert-info alert-dismissible d-none mb-3" role="alert">
+  <div id="statusPanelBody"></div>
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }} alert-dismissible fade show">{{ msg }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+{% endwith %}
+
+
+{# ═══════════════════════════════════════════════════════════════════════════
+   STUDENTS section
+   ═══════════════════════════════════════════════════════════════════════════ #}
+{% if scope in ('students', 'mixed') and school_cfg.section_visible('attendance_devices', 'student_mappings') %}
+
+{% if scope == 'mixed' %}
+<h5 class="fw-bold text-info mb-3"><i class="bi bi-mortarboard-fill me-1"></i>الطلاب</h5>
+{% endif %}
+
+<div class="row g-4 mb-4">
+
+  {# Add student mapping #}
+  <div class="col-lg-5">
+    <div class="card h-100">
+      <div class="card-header fw-bold">
+        <i class="bi bi-plus-circle me-1"></i>إضافة ربط طالب
+      </div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('attendance_devices.add_mapping', device_id=device.id) }}">
+          <div class="mb-3">
+            <label class="form-label">رقم التسجيل على الجهاز <span class="text-danger">*</span></label>
+            <input type="text" name="employee_no_string" class="form-control"
+                   pattern="[0-9]+" required placeholder="مثال: 1 أو 42" title="أرقام فقط">
+            <div class="form-text">الرقم الذي برمجته على الجهاز لهذا الطالب.</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">الطالب <span class="text-danger">*</span></label>
+            <input type="text" id="studentSearch" class="form-control mb-1"
+                   placeholder="بحث عن طالب…" autocomplete="off">
+            <select name="student_id" class="form-select" id="studentSelect" required>
+              <option value="">— اختر طالباً —</option>
+              {% for stu in students %}
+              <option value="{{ stu.id }}">{{ stu.full_name }} ({{ stu.student_id }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          <button type="submit" class="btn btn-info w-100 text-white">
+            <i class="bi bi-link-45deg me-1"></i>حفظ ربط الطالب
+          </button>
+        </form>
+
+        {% if other_devices %}
+        <hr>
+        <div class="mb-2 fw-bold text-muted small">
+          <i class="bi bi-box-arrow-in-down me-1"></i>استيراد الربطات من جهاز آخر
+        </div>
+        <form method="POST" action="{{ url_for('attendance_devices.copy_mappings', device_id=device.id) }}"
+              onsubmit="return confirm('سيتم نسخ جميع ربطات الطلاب من الجهاز المحدد إلى هذا الجهاز.')">
+          <div class="input-group mb-1">
+            <select name="source_device_id" class="form-select" required>
+              <option value="">— جهاز المصدر —</option>
+              {% for od in other_devices %}
+              <option value="{{ od.id }}">{{ od.name }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-outline-secondary">استيراد</button>
+          </div>
+        </form>
+        <form method="POST" action="{{ url_for('attendance_devices.copy_mappings_to', device_id=device.id) }}"
+              onsubmit="return confirm('سيتم نسخ جميع ربطات الطلاب من هذا الجهاز إلى الجهاز المحدد.')">
+          <div class="input-group mb-1">
+            <select name="target_device_id" class="form-select" required>
+              <option value="">— جهاز الهدف —</option>
+              {% for od in other_devices %}
+              <option value="{{ od.id }}">{{ od.name }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-outline-primary">نسخ إليه</button>
+          </div>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# Student mapping table #}
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-list-ul me-1"></i>ربطات الطلاب الحالية</span>
+        <div class="d-flex align-items-center gap-2">
+          <span class="badge bg-primary">{{ student_mappings|length }}</span>
+          {% if student_mappings %}
+          <button type="button" class="btn btn-sm btn-outline-success"
+                  id="syncAllStudentsBtn" data-device-id="{{ device.id }}"
+                  title="إرسال جميع الطلاب للجهاز">
+            <i class="bi bi-cloud-upload me-1"></i>إرسال الكل للجهاز
+          </button>
+          {% endif %}
+        </div>
+      </div>
+      {% if student_mappings %}
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>رقم الجهاز</th>
+              <th>الطالب</th>
+              <th>رمز الطالب</th>
+              <th>الحالة</th>
+              <th>إرسال</th>
+              <th>حذف من الجهاز</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for m in student_mappings %}
+            <tr id="stu-row-{{ m.id }}">
+              <td><code>{{ m.employee_no_string }}</code></td>
+              <td>{{ m.student.full_name if m.student else '—' }}</td>
+              <td class="text-muted small">{{ m.student.student_id if m.student else '—' }}</td>
+              <td>
+                <span class="badge {{ 'bg-success' if m.is_active else 'bg-secondary' }}">
+                  {{ 'نشط' if m.is_active else 'معطّل' }}
+                </span>
+              </td>
+              <td>
+                <div class="d-flex gap-1 align-items-center">
+                  <button type="button" class="btn btn-sm btn-outline-primary stu-sync-btn"
+                          data-mapping-id="{{ m.id }}" data-device-id="{{ device.id }}"
+                          title="إرسال بيانات الطالب للجهاز">
+                    <i class="bi bi-cloud-upload"></i>
+                  </button>
+                  <span class="stu-sync-status-{{ m.id }}"></span>
+                </div>
+              </td>
+              <td>
+                <button type="button" class="btn btn-sm btn-outline-danger delete-device-btn"
+                        data-mapping-id="{{ m.id }}" data-mapping-type="student"
+                        data-device-id="{{ device.id }}"
+                        data-entity="{{ m.student.full_name if m.student else m.employee_no_string }}"
+                        data-enrollid="{{ m.employee_no_string }}"
+                        data-row-id="stu-row-{{ m.id }}"
+                        title="حذف الطالب من الجهاز وإزالة الربط">
+                  <i class="bi bi-person-x"></i>
+                </button>
+                <span class="stu-del-status-{{ m.id }}"></span>
+              </td>
+              <td>
+                <form method="POST"
+                      action="{{ url_for('attendance_devices.delete_mapping', mapping_id=m.id) }}"
+                      onsubmit="return confirm('حذف الربط من قاعدة البيانات فقط؟')">
+                  <button type="submit" class="btn btn-sm btn-outline-secondary"
+                          title="حذف من قاعدة البيانات فقط">
+                    <i class="bi bi-trash"></i>
+                  </button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="card-body text-center text-muted py-4">
+        <i class="bi bi-person-x" style="font-size:2rem"></i>
+        <p class="mt-2">لا توجد ربطات طلاب بعد.</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+</div>{# /row students #}
+{% endif %}{# /scope students or mixed #}
+
+
+{# ═══════════════════════════════════════════════════════════════════════════
+   EMPLOYEES section
+   ═══════════════════════════════════════════════════════════════════════════ #}
+{% if scope in ('employees', 'mixed') %}
+
+{% if scope == 'mixed' %}
+<hr>
+<h5 class="fw-bold text-warning mb-3"><i class="bi bi-person-badge-fill me-1"></i>الموظفون</h5>
+{% endif %}
+
+<div class="row g-4">
+
+  {# Add employee mapping #}
+  <div class="col-lg-5">
+    <div class="card h-100">
+      <div class="card-header fw-bold">
+        <i class="bi bi-plus-circle me-1"></i>إضافة ربط موظف
+      </div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('attendance_devices.add_mapping', device_id=device.id) }}">
+          <div class="mb-3">
+            <label class="form-label">رقم التسجيل على الجهاز <span class="text-danger">*</span></label>
+            <input type="text" name="employee_no_string" class="form-control"
+                   pattern="[0-9]+" required placeholder="مثال: 1001" title="أرقام فقط">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">الموظف <span class="text-danger">*</span></label>
+            <input type="text" id="employeeSearch" class="form-control mb-1"
+                   placeholder="بحث عن موظف…" autocomplete="off">
+            <select name="employee_id" class="form-select" id="employeeSelect" required>
+              <option value="">— اختر موظفاً —</option>
+              {% for emp in employees %}
+              <option value="{{ emp.id }}">
+                {{ emp.full_name }}
+                {% if emp.job_title %} — {{ emp.job_title }}{% endif %}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          <button type="submit" class="btn btn-warning w-100">
+            <i class="bi bi-link-45deg me-1"></i>حفظ ربط الموظف
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  {# Employee mapping table #}
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-list-ul me-1"></i>ربطات الموظفين الحالية</span>
+        <div class="d-flex align-items-center gap-2">
+          <span class="badge bg-primary">{{ employee_mappings|length }}</span>
+          {% if employee_mappings %}
+          <button type="button" class="btn btn-sm btn-outline-success"
+                  id="syncAllEmployeesBtn" data-device-id="{{ device.id }}"
+                  title="إرسال جميع الموظفين للجهاز">
+            <i class="bi bi-cloud-upload me-1"></i>إرسال الكل للجهاز
+          </button>
+          {% endif %}
+        </div>
+      </div>
+      {% if employee_mappings %}
+      <div class="table-responsive">
+        <table class="table table-hover mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>رقم الجهاز</th>
+              <th>الموظف</th>
+              <th>المسمى الوظيفي</th>
+              <th>القسم</th>
+              <th>الحالة</th>
+              <th>إرسال</th>
+              <th>حذف من الجهاز</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for m in employee_mappings %}
+            <tr id="emp-row-{{ m.id }}">
+              <td><code>{{ m.enrollment_no }}</code></td>
+              <td>{{ m.employee.full_name if m.employee else '—' }}</td>
+              <td class="text-muted small">{{ m.employee.job_title if m.employee else '—' }}</td>
+              <td class="text-muted small">{{ m.employee.department if m.employee else '—' }}</td>
+              <td>
+                <span class="badge {{ 'bg-success' if m.is_active else 'bg-secondary' }}">
+                  {{ 'نشط' if m.is_active else 'معطّل' }}
+                </span>
+              </td>
+              <td>
+                <div class="d-flex gap-1 align-items-center">
+                  <button type="button" class="btn btn-sm btn-outline-warning emp-sync-btn"
+                          data-mapping-id="{{ m.id }}" data-device-id="{{ device.id }}"
+                          title="إرسال بيانات الموظف للجهاز">
+                    <i class="bi bi-cloud-upload"></i>
+                  </button>
+                  <span class="emp-sync-status-{{ m.id }}"></span>
+                </div>
+              </td>
+              <td>
+                <button type="button" class="btn btn-sm btn-outline-danger delete-device-btn"
+                        data-mapping-id="{{ m.id }}" data-mapping-type="employee"
+                        data-device-id="{{ device.id }}"
+                        data-entity="{{ m.employee.full_name if m.employee else m.enrollment_no }}"
+                        data-enrollid="{{ m.enrollment_no }}"
+                        data-row-id="emp-row-{{ m.id }}"
+                        title="حذف الموظف من الجهاز وإزالة الربط">
+                  <i class="bi bi-person-x"></i>
+                </button>
+                <span class="emp-del-status-{{ m.id }}"></span>
+              </td>
+              <td>
+                <form method="POST"
+                      action="{{ url_for('attendance_devices.delete_emp_mapping', mapping_id=m.id) }}"
+                      onsubmit="return confirm('حذف ربط الموظف من قاعدة البيانات فقط؟')">
+                  <button type="submit" class="btn btn-sm btn-outline-secondary"
+                          title="حذف من قاعدة البيانات فقط">
+                    <i class="bi bi-trash"></i>
+                  </button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="card-body text-center text-muted py-4">
+        <i class="bi bi-person-badge" style="font-size:2rem"></i>
+        <p class="mt-2">لا توجد ربطات موظفين بعد.</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+</div>{# /row employees #}
+{% endif %}{# /scope employees or mixed #}
+
+
+{# Toast #}
+<div class="position-fixed bottom-0 start-0 p-3" style="z-index:1100">
+  <div id="syncToast" class="toast align-items-center text-white border-0" role="alert">
+    <div class="d-flex">
+      <div class="toast-body" id="syncToastBody"></div>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto"
+              data-bs-dismiss="toast"></button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  /* ── Toast helper ────────────────────────────────────────────────────────── */
+  const toastEl   = document.getElementById('syncToast');
+  const toastBody = document.getElementById('syncToastBody');
+  const bsToast   = toastEl ? new bootstrap.Toast(toastEl, {delay: 4000}) : null;
+
+  function showToast(msg, ok) {
+    if (!bsToast) return;
+    toastEl.className = 'toast align-items-center text-white border-0 '
+                      + (ok ? 'bg-success' : 'bg-danger');
+    toastBody.textContent = msg;
+    bsToast.show();
+  }
+
+  /* ── Live search for dropdowns ───────────────────────────────────────────── */
+  function attachLiveSearch(searchId, selectId) {
+    const inp = document.getElementById(searchId);
+    const sel = document.getElementById(selectId);
+    if (!inp || !sel) return;
+    const opts = Array.from(sel.options);
+    inp.addEventListener('input', function () {
+      const q = this.value.toLowerCase();
+      sel.innerHTML = '';
+      opts.forEach(function (o) {
+        if (!q || o.text.toLowerCase().includes(q)) sel.appendChild(o.cloneNode(true));
+      });
+    });
+  }
+  attachLiveSearch('studentSearch',  'studentSelect');
+  attachLiveSearch('employeeSearch', 'employeeSelect');
+
+  /* ── Row status helpers ──────────────────────────────────────────────────── */
+  function setStatus(cls, state) {
+    const span = document.querySelector('.' + cls);
+    if (!span) return;
+    const icons = {loading: '<span class="spinner-border spinner-border-sm"></span>',
+                   ok:      '<i class="bi bi-check-circle-fill text-success"></i>',
+                   error:   '<i class="bi bi-x-circle-fill text-danger"></i>',
+                   queued:  '<i class="bi bi-clock-history text-warning"></i>'};
+    span.innerHTML = icons[state] || '';
+  }
+
+  /* ── Sync one person ─────────────────────────────────────────────────────── */
+  async function syncOne(deviceId, mappingId, entityType) {
+    const statusCls = (entityType === 'employee' ? 'emp' : 'stu') + '-sync-status-' + mappingId;
+    const endpoint  = entityType === 'employee'
+      ? '/attendance-devices/' + deviceId + '/aiface-sync-employee'
+      : '/attendance-devices/' + deviceId + '/aiface-sync-student';
+
+    setStatus(statusCls, 'loading');
+    try {
+      const resp = await fetch(endpoint, {
+        method:  'POST',
+        headers: {'Content-Type': 'application/json'},
+        body:    JSON.stringify({mapping_id: mappingId}),
+      });
+      let data = {};
+      try { data = await resp.json(); } catch (_) {}
+      setStatus(statusCls, data.ok ? 'ok' : 'error');
+      // Prefer Arabic error message if available
+      const msg = data.error_message_ar || data.message || (data.ok ? 'تم الإرسال بنجاح' : 'فشل الإرسال');
+      showToast(msg, data.ok);
+      if (!data.ok) {
+        console.warn('[aiface sync] failed:', data);
+      }
+    } catch (err) {
+      setStatus(statusCls, 'error');
+      showToast('خطأ في الاتصال بالخادم: ' + err.message, false);
+    }
+  }
+
+  /* ── Device status check ─────────────────────────────────────────────────── */
+  const statusCheckBtn = document.getElementById('statusCheckBtn');
+  const statusPanel    = document.getElementById('statusPanel');
+  const statusPanelBody = document.getElementById('statusPanelBody');
+
+  if (statusCheckBtn) {
+    statusCheckBtn.addEventListener('click', async function () {
+      const deviceId = this.dataset.deviceId;
+      statusCheckBtn.disabled = true;
+      statusCheckBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+      if (statusPanel) statusPanel.classList.add('d-none');
+
+      try {
+        const resp = await fetch('/attendance-devices/' + deviceId + '/status-check', {
+          method: 'POST', headers: {'Content-Type': 'application/json'}
+        });
+        const data = await resp.json();
+
+        let cls  = data.badge === 'success' ? 'success' : (data.badge === 'warning' ? 'warning' : 'danger');
+        let html = '<strong>حالة الجهاز:</strong> ' + (data.status || '—') + '<br>'
+                 + '<strong>SN في قاعدة البيانات:</strong> <code>' + (data.device_sn || '—') + '</code><br>'
+                 + '<strong>نوع الجهاز:</strong> ' + (data.device_scope || '—') + '<br>'
+                 + '<strong>آخر مزامنة:</strong> ' + (data.last_sync_at || 'لم تتم بعد') + '<br>'
+                 + '<strong>الأجهزة المتصلة الآن:</strong> ' + (data.connected_sns && data.connected_sns.length ? data.connected_sns.join(', ') : 'لا يوجد');
+        if (!data.is_connected && data.connected_sns && data.connected_sns.length) {
+          html += '<br><span class="text-danger"><i class="bi bi-exclamation-triangle-fill me-1"></i>'
+               + 'الرقم التسلسلي في قاعدة البيانات لا يطابق أي جهاز متصل — '
+               + 'تأكد من إدخال SN الصحيح في إعدادات الجهاز.</span>';
+        }
+
+        if (statusPanel) {
+          statusPanel.className = 'alert alert-' + cls + ' alert-dismissible mb-3';
+          statusPanelBody.innerHTML = html;
+          statusPanel.classList.remove('d-none');
+        }
+      } catch (err) {
+        if (statusPanel) {
+          statusPanel.className = 'alert alert-danger alert-dismissible mb-3';
+          statusPanelBody.textContent = 'خطأ في الاتصال بالخادم: ' + err.message;
+          statusPanel.classList.remove('d-none');
+        }
+      } finally {
+        statusCheckBtn.disabled = false;
+        statusCheckBtn.innerHTML = '<i class="bi bi-radar me-1"></i>فحص الاتصال';
+      }
+    });
+  }
+
+  /* Student sync buttons */
+  document.querySelectorAll('.stu-sync-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      syncOne(this.dataset.deviceId, parseInt(this.dataset.mappingId), 'student');
+    });
+  });
+
+  /* Employee sync buttons */
+  document.querySelectorAll('.emp-sync-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      syncOne(this.dataset.deviceId, parseInt(this.dataset.mappingId), 'employee');
+    });
+  });
+
+  /* ── Delete from device ──────────────────────────────────────────────────── */
+  document.querySelectorAll('.delete-device-btn').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      const deviceId   = this.dataset.deviceId;
+      const mappingId  = parseInt(this.dataset.mappingId);
+      const mappingType = this.dataset.mappingType;   // 'student' | 'employee'
+      const entity     = this.dataset.entity;
+      const enrollid   = this.dataset.enrollid;
+      const rowId      = this.dataset.rowId;
+
+      if (!confirm(`حذف "${entity}" (رقم ${enrollid}) من الجهاز وإزالة الربط؟\nهذه العملية لا يمكن التراجع عنها.`)) return;
+
+      const prefix    = mappingType === 'employee' ? 'emp' : 'stu';
+      const statusCls = prefix + '-del-status-' + mappingId;
+      setStatus(statusCls, 'loading');
+      this.disabled = true;
+
+      try {
+        const resp = await fetch(
+          '/attendance-devices/' + deviceId + '/aiface-delete-from-device',
+          {
+            method:  'POST',
+            headers: {'Content-Type': 'application/json'},
+            body:    JSON.stringify({mapping_id: mappingId, mapping_type: mappingType}),
+          }
+        );
+        const data = await resp.json();
+
+        if (data.ok) {
+          showToast(data.message || 'تم الحذف بنجاح', true);
+          const row = document.getElementById(rowId);
+          if (row) row.remove();
+        } else if (data.queued) {
+          showToast(data.message || 'الجهاز غير متصل — الأمر في قائمة الانتظار', false);
+          setStatus(statusCls, 'queued');
+          this.disabled = false;
+        } else {
+          showToast(data.message || 'فشل الحذف', false);
+          setStatus(statusCls, 'error');
+          this.disabled = false;
+        }
+      } catch (err) {
+        showToast('خطأ في الاتصال بالخادم', false);
+        setStatus(statusCls, '');
+        this.disabled = false;
+      }
+    });
+  });
+
+  /* ── Sync all ────────────────────────────────────────────────────────────── */
+  async function syncAll(btn, deviceId) {
+    btn.disabled = true;
+    const original = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> جاري الإرسال…';
+    try {
+      const resp = await fetch(
+        '/attendance-devices/' + deviceId + '/aiface-sync-all',
+        {method: 'POST', headers: {'Content-Type': 'application/json'}}
+      );
+      const data = await resp.json();
+      showToast(data.message || (data.ok ? 'تم إرسال الكل' : 'فشل الإرسال'), data.ok);
+    } catch (err) {
+      showToast('خطأ في الاتصال بالخادم', false);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = original;
+    }
+  }
+
+  const syncAllStudents   = document.getElementById('syncAllStudentsBtn');
+  const syncAllEmployees  = document.getElementById('syncAllEmployeesBtn');
+  if (syncAllStudents)  syncAllStudents.addEventListener('click',  function () { syncAll(this, this.dataset.deviceId); });
+  if (syncAllEmployees) syncAllEmployees.addEventListener('click', function () { syncAll(this, this.dataset.deviceId); });
+
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,264 @@
+{% extends "shared/base.html" %}
+{% block title %}إعدادات نموذج الطالب — {{ school.school_name }}{% endblock %}
+{% block page_title %}إعدادات نموذج الطالب{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">إعدادات نموذج الطالب</h1>
+    <p class="page-subtitle">
+      <a href="{{ url_for('schools.detail', school_id=school.id) }}">{{ school.school_name }}</a>
+      — تحكم في الحقول والأقسام الظاهرة في نموذج إضافة/تعديل الطالب
+    </p>
+  </div>
+  <a href="{{ url_for('schools.detail', school_id=school.id) }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع للمدرسة
+  </a>
+</div>
+
+{# ── Info alert ──────────────────────────────────────────────────────────── #}
+<div class="alert alert-info d-flex gap-2 mb-4 py-2" style="font-size:13px">
+  <i class="bi bi-info-circle-fill flex-shrink-0 mt-1"></i>
+  <div>
+    <strong>ملاحظات مهمة:</strong>
+    <ul class="mb-0 mt-1 ps-3">
+      <li>الحقول المخفية <b>لن تظهر</b> للمسؤول أو مدير المدرسة عند إضافة أو تعديل الطالب.</li>
+      <li>إخفاء حقل لا يحذف القيمة الموجودة مسبقاً — البيانات السابقة تُحفظ كما هي.</li>
+      <li>لا يمكن جعل حقل مخفي مطلوباً في نفس الوقت (يُتجاهل).</li>
+      <li>اسم الطالب الكامل دائماً مطلوب ولا يمكن إخفاؤه.</li>
+    </ul>
+  </div>
+</div>
+
+<form method="POST">
+  <div class="row g-4">
+
+    {# ── Left column: Sections + Fields ───────────────────────────────────── #}
+    <div class="col-lg-8">
+
+      {# ── SECTIONS ──────────────────────────────────────────────────────── #}
+      <div class="card mb-4">
+        <div class="card-header fw-bold">
+          <i class="bi bi-layout-sidebar-reverse text-accent me-1"></i>
+          أقسام النموذج (Cards)
+          <small class="text-muted fw-normal ms-2">— إظهار أو إخفاء قسم كامل</small>
+        </div>
+        <div class="card-body p-0">
+          <table class="table table-hover mb-0" style="font-size:14px">
+            <thead class="table-light">
+              <tr>
+                <th style="width:40%">القسم</th>
+                <th class="text-center" style="width:30%">
+                  <i class="bi bi-eye text-success me-1"></i>إظهار
+                </th>
+                <th class="text-center" style="width:30%">
+                  <span class="text-muted small">مفتاح</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for sec in all_sections %}
+              <tr>
+                <td class="fw-600">{{ section_labels[sec] }}</td>
+                <td class="text-center">
+                  <div class="form-check form-switch d-flex justify-content-center">
+                    <input class="form-check-input" type="checkbox"
+                           name="section_{{ sec }}"
+                           id="sec_{{ sec }}"
+                           {{ 'checked' if sec not in hidden_sections }}>
+                  </div>
+                </td>
+                <td class="text-muted small font-monospace">{{ sec }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {# ── FIELDS ────────────────────────────────────────────────────────── #}
+      <div class="card mb-4">
+        <div class="card-header fw-bold">
+          <i class="bi bi-input-cursor-text text-accent me-1"></i>
+          الحقول الفردية
+          <small class="text-muted fw-normal ms-2">— إظهار/إخفاء وتحديد الإلزامية</small>
+        </div>
+        <div class="card-body p-0">
+          <table class="table table-hover mb-0" style="font-size:14px">
+            <thead class="table-light">
+              <tr>
+                <th style="width:35%">الحقل</th>
+                <th class="text-center" style="width:20%">
+                  <i class="bi bi-eye text-success me-1"></i>إظهار
+                </th>
+                <th class="text-center" style="width:20%">
+                  <i class="bi bi-asterisk text-danger me-1"></i>مطلوب
+                </th>
+                <th class="text-center" style="width:25%">
+                  <span class="text-muted small">مفتاح</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for fld in all_fields %}
+              <tr>
+                <td class="fw-600">{{ field_labels[fld] }}</td>
+                <td class="text-center">
+                  <div class="form-check form-switch d-flex justify-content-center">
+                    <input class="form-check-input field-visible-cb" type="checkbox"
+                           name="field_{{ fld }}"
+                           id="fvis_{{ fld }}"
+                           data-field="{{ fld }}"
+                           {{ 'checked' if fld not in hidden_fields }}>
+                  </div>
+                </td>
+                <td class="text-center">
+                  <div class="form-check form-switch d-flex justify-content-center">
+                    <input class="form-check-input field-required-cb" type="checkbox"
+                           name="required_{{ fld }}"
+                           id="freq_{{ fld }}"
+                           data-field="{{ fld }}"
+                           {{ 'checked' if fld in required_fields }}
+                           {{ 'disabled' if fld in hidden_fields }}>
+                  </div>
+                </td>
+                <td class="text-center text-muted small font-monospace">{{ fld }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="card-footer text-muted py-2" style="font-size:12px">
+          <i class="bi bi-info-circle me-1"></i>
+          تعطيل "إظهار" يُبطل "مطلوب" تلقائياً — لا يمكن طلب حقل مخفي.
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary btn-lg px-5">
+        <i class="bi bi-check-circle-fill me-2"></i>حفظ الإعدادات
+      </button>
+    </div>
+
+    {# ── Right column: Guide ───────────────────────────────────────────────── #}
+    <div class="col-lg-4">
+      <div class="card mb-4">
+        <div class="card-header"><i class="bi bi-question-circle text-accent"></i>دليل الإعدادات</div>
+        <div class="card-body" style="font-size:13px;line-height:1.8">
+          <p><b>الإعداد الافتراضي:</b></p>
+          <p class="text-muted">
+            عند عدم تغيير أي إعداد، تظهر جميع الحقول والأقسام كما هي حالياً.
+            الأقسام والحقول المفعّلة هي الوضع الافتراضي لكل المدارس.
+          </p>
+          <hr>
+          <p><b>أقسام النموذج:</b></p>
+          <ul class="text-muted ps-3 small">
+            <li><b>قسم بيانات ولي الأمر</b> — اسم/هاتف/بريد/صلة القرابة</li>
+            <li><b>ربط بولي أمر موجود</b> — ربط حساب parent موجود بالطالب</li>
+            <li><b>إنشاء حساب ولي أمر</b> — إنشاء حساب تسجيل دخول جديد</li>
+            <li><b>بيانات جهاز الحضور</b> — رقم الجهاز وتحديد الجهاز</li>
+            <li><b>صورة الطالب</b> — رفع صورة الطالب</li>
+            <li><b>الملاحظات</b> — حقل الملاحظات الحرة</li>
+            <li><b>تعيين الصف/الشعبة</b> — مرحلة، صف، شعبة</li>
+          </ul>
+          <hr>
+          <p><b>الحقول الفردية:</b></p>
+          <p class="text-muted small">
+            الحقول ضمن البطاقات يمكن إخفاؤها بشكل مستقل.
+            مثلاً: إخفاء "الجنسية" مع إبقاء باقي البيانات الشخصية.
+          </p>
+          <hr>
+          <p class="text-muted small mb-0">
+            <i class="bi bi-shield-lock me-1"></i>
+            هذه الإعدادات لا تُحذف البيانات الموجودة.
+            المدرسة: <b>{{ school.school_name }}</b>
+          </p>
+        </div>
+      </div>
+
+      {# Current config summary #}
+      <div class="card">
+        <div class="card-header"><i class="bi bi-clipboard-check text-accent"></i>الحالة الحالية</div>
+        <div class="card-body" style="font-size:13px">
+          {% set hidden_s_count = hidden_sections|length %}
+          {% set hidden_f_count = hidden_fields|length %}
+          {% set required_f_count = required_fields|length %}
+          <div class="d-flex gap-3 flex-wrap">
+            <div class="text-center px-3 py-2 rounded" style="background:#f0fff4;border:1px solid #b2f2c9">
+              <div style="font-size:20px;font-weight:800;color:#198754">
+                {{ all_sections|length - hidden_s_count }}
+              </div>
+              <div class="text-muted small">قسم ظاهر</div>
+            </div>
+            <div class="text-center px-3 py-2 rounded" style="background:#fff8f0;border:1px solid #ffd6a5">
+              <div style="font-size:20px;font-weight:800;color:#e8a020">{{ hidden_s_count }}</div>
+              <div class="text-muted small">قسم مخفي</div>
+            </div>
+            <div class="text-center px-3 py-2 rounded" style="background:#fff0f0;border:1px solid #f0b0b0">
+              <div style="font-size:20px;font-weight:800;color:#e03e3e">{{ hidden_f_count }}</div>
+              <div class="text-muted small">حقل مخفي</div>
+            </div>
+            <div class="text-center px-3 py-2 rounded" style="background:#f0f0ff;border:1px solid #b0b0f0">
+              <div style="font-size:20px;font-weight:800;color:#4040c0">{{ required_f_count }}</div>
+              <div class="text-muted small">حقل مطلوب</div>
+            </div>
+          </div>
+          {% if hidden_sections %}
+          <div class="mt-3">
+            <p class="mb-1 fw-600 small text-danger">أقسام مخفية:</p>
+            {% for s in hidden_sections %}
+            <span class="badge bg-danger me-1 mb-1">{{ section_labels.get(s, s) }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% if hidden_fields %}
+          <div class="mt-2">
+            <p class="mb-1 fw-600 small text-warning">حقول مخفية:</p>
+            {% for f in hidden_fields %}
+            <span class="badge bg-warning text-dark me-1 mb-1">{{ field_labels.get(f, f) }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% if required_fields %}
+          <div class="mt-2">
+            <p class="mb-1 fw-600 small" style="color:#4040c0">حقول مطلوبة إضافية:</p>
+            {% for f in required_fields %}
+            <span class="badge me-1 mb-1" style="background:#e8eaff;color:#3030a0;border:1px solid #b0b8f0">
+              {{ field_labels.get(f, f) }}
+            </span>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% if not hidden_sections and not hidden_fields and not required_fields %}
+          <p class="text-muted small mt-3 mb-0">
+            <i class="bi bi-check-circle text-success me-1"></i>
+            جميع الحقول والأقسام ظاهرة — لا إعدادات مخصصة.
+          </p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  // When a "visible" toggle is turned off → disable and uncheck the matching "required" toggle
+  document.querySelectorAll('.field-visible-cb').forEach(function (visEl) {
+    const field = visEl.dataset.field;
+    const reqEl = document.getElementById('freq_' + field);
+    if (!reqEl) return;
+
+    visEl.addEventListener('change', function () {
+      if (!this.checked) {
+        reqEl.checked  = false;
+        reqEl.disabled = true;
+      } else {
+        reqEl.disabled = false;
+      }
+    });
+  });
+})();
+</script>
+{% endblock %}

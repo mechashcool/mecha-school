@@ -1,0 +1,367 @@
+{% extends "shared/base.html" %}
+{% block title %}تقرير حضور الموظفين{% endblock %}
+{% block page_title %}حضور الموظفين{% endblock %}
+
+{% block content %}
+<div class="page-header d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3">
+  <div>
+    <h1 class="page-title mb-0">تقرير حضور الموظفين</h1>
+    <p class="page-subtitle mb-0">ملخص الحضور والغياب مع احتساب الأيام الافتراضية</p>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <a href="{{ url_for('admin.attendance_settings') }}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-gear me-1"></i>إعدادات الحضور
+    </a>
+    <a href="{{ url_for('employees.index') }}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-people me-1"></i>الموظفون
+    </a>
+  </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }} alert-dismissible fade show">{{ msg }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+{% endwith %}
+
+{# ── Filters ──────────────────────────────────────────────────────────────── #}
+<div class="card mb-3">
+  <div class="card-body py-3">
+    <form method="GET" id="filterForm" class="row g-2 align-items-end">
+      <div class="col-6 col-md-2">
+        <label class="form-label small fw-600 mb-1">من تاريخ</label>
+        <input type="date" name="date_from" class="form-control form-control-sm" value="{{ date_from }}">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small fw-600 mb-1">إلى تاريخ</label>
+        <input type="date" name="date_to" class="form-control form-control-sm" value="{{ date_to }}">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small fw-600 mb-1">الموظف</label>
+        <select name="employee_id" class="form-select form-select-sm">
+          <option value="">— جميع الموظفين —</option>
+          {% for emp in all_employees %}
+          <option value="{{ emp.id }}" {{ 'selected' if employee_id == emp.id }}>{{ emp.full_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small fw-600 mb-1">القسم</label>
+        <select name="department" class="form-select form-select-sm">
+          <option value="">— جميع الأقسام —</option>
+          {% for dept in departments %}
+          <option value="{{ dept }}" {{ 'selected' if department == dept }}>{{ dept }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small fw-600 mb-1">الحالة</label>
+        <select name="status" class="form-select form-select-sm">
+          <option value="">— جميع الحالات —</option>
+          <option value="present" {{ 'selected' if status_filter == 'present' }}>لديه أيام حضور</option>
+          <option value="late"    {{ 'selected' if status_filter == 'late' }}>لديه أيام تأخر</option>
+          <option value="absent"  {{ 'selected' if status_filter == 'absent' }}>لديه أيام غياب</option>
+        </select>
+      </div>
+      <div class="col-md-2 d-flex gap-1">
+        <button type="submit" class="btn btn-primary btn-sm flex-grow-1">
+          <i class="bi bi-search me-1"></i>تطبيق
+        </button>
+        <a href="{{ url_for('employees.attendance_report') }}" class="btn btn-outline-secondary btn-sm" title="إعادة تعيين">
+          <i class="bi bi-x-circle"></i>
+        </a>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ── Summary cards ────────────────────────────────────────────────────────── #}
+<div class="row g-3 mb-3">
+  <div class="col-6 col-md-2">
+    <div class="card text-center h-100">
+      <div class="card-body py-3">
+        <div style="font-size:1.8rem;font-weight:800;color:#1e2b3a">{{ rows|length }}</div>
+        <div class="text-muted small">موظف</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card text-center h-100" style="border-color:#6c757d">
+      <div class="card-body py-3">
+        <div style="font-size:1.8rem;font-weight:800;color:#6c757d">{{ working_days_count }}</div>
+        <div class="text-muted small">أيام عمل</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card text-center h-100 border-success">
+      <div class="card-body py-3">
+        <div style="font-size:1.8rem;font-weight:800;color:#198754">{{ total_present }}</div>
+        <div class="text-muted small">إجمالي أيام الحضور</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card text-center h-100 border-warning">
+      <div class="card-body py-3">
+        <div style="font-size:1.8rem;font-weight:800;color:#e8a020">{{ total_late }}</div>
+        <div class="text-muted small">إجمالي أيام التأخر</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card text-center h-100 border-danger">
+      <div class="card-body py-3">
+        <div style="font-size:1.8rem;font-weight:800;color:#dc3545">{{ total_absent }}</div>
+        <div class="text-muted small">إجمالي أيام الغياب</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-2">
+    <div class="card text-center h-100 {% if alerts %}border-danger bg-danger bg-opacity-10{% else %}border-secondary{% endif %}">
+      <div class="card-body py-3">
+        <div style="font-size:1.8rem;font-weight:800;color:{{ '#dc3545' if alerts else '#6c757d' }}">{{ alerts|length }}</div>
+        <div class="text-muted small">تجاوزوا حد الغياب</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Absence alerts ───────────────────────────────────────────────────────── #}
+{% if alerts %}
+<div class="card mb-3 border-danger">
+  <div class="card-header bg-danger text-white fw-bold d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-exclamation-triangle-fill me-2"></i>موظفون تجاوزوا حد الغياب المسموح</span>
+    <span class="badge bg-white text-danger">{{ alerts|length }} موظف</span>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm mb-0">
+      <thead class="table-danger">
+        <tr>
+          <th>الموظف</th>
+          <th>القسم</th>
+          <th>عدد الغيابات</th>
+          <th>الحد المسموح</th>
+          <th>الزيادة</th>
+          <th>الفترة</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in alerts %}
+        <tr>
+          <td class="fw-bold">{{ a.employee.full_name }}</td>
+          <td class="text-muted small">{{ a.employee.department or '—' }}</td>
+          <td><span class="badge bg-danger">{{ a.absent }} يوم</span></td>
+          <td><span class="badge bg-secondary">{{ a.limit }} يوم</span></td>
+          <td><span class="badge bg-warning text-dark">+{{ a.over_by }}</span></td>
+          <td class="text-muted small">{{ a.period_label }}</td>
+          <td>
+            <a href="{{ url_for('employees.attendance_report_detail', emp_id=a.employee.id, date_from=date_from, date_to=date_to) }}"
+               class="btn btn-sm btn-outline-danger">تفاصيل</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{# ── Records table ────────────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="card-header d-flex flex-wrap gap-2 justify-content-between align-items-center py-2">
+    <div class="d-flex align-items-center gap-2">
+      <i class="bi bi-table me-1"></i>
+      <span class="fw-bold">سجلات الحضور</span>
+      <span class="badge bg-secondary">{{ rows|length }} موظف</span>
+      <span class="text-muted small">| أيام العمل: <b>{{ working_days_count }}</b></span>
+    </div>
+    <div class="d-flex gap-2 align-items-center flex-wrap">
+      {# Quick name search (client-side) #}
+      <input type="text" id="nameSearch" class="form-control form-control-sm"
+             placeholder="بحث باسم الموظف..." style="width:180px"
+             value="{{ name_search }}">
+      {# Export buttons #}
+      {% set can_excel = school_cfg.action_enabled('employee_attendance', 'export_excel') %}
+      {% set can_pdf   = school_cfg.action_enabled('employee_attendance', 'export_pdf') %}
+      {% if can_excel or can_pdf %}
+      <div class="dropdown">
+        <button class="btn btn-sm btn-outline-success dropdown-toggle" type="button" data-bs-toggle="dropdown">
+          <i class="bi bi-download me-1"></i>تصدير
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end">
+          {% if can_excel %}
+          <li>
+            <a class="dropdown-item" href="{{ url_for('employees.attendance_report_export_excel', date_from=date_from, date_to=date_to, employee_id=employee_id or '', department=department, status=status_filter, q=name_search) }}">
+              <i class="bi bi-file-earmark-excel text-success me-2"></i>تصدير Excel
+            </a>
+          </li>
+          {% endif %}
+          {% if can_pdf %}
+          <li>
+            <a class="dropdown-item" href="{{ url_for('employees.attendance_report_export_pdf', date_from=date_from, date_to=date_to, employee_id=employee_id or '', department=department, status=status_filter, q=name_search) }}">
+              <i class="bi bi-file-earmark-pdf text-danger me-2"></i>تصدير PDF
+            </a>
+          </li>
+          {% endif %}
+        </ul>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if rows %}
+  <div class="table-responsive">
+    <table class="table table-hover table-sm mb-0" id="attendanceTable">
+      <thead class="table-light">
+        <tr>
+          <th>#</th>
+          <th>الموظف</th>
+          <th>القسم</th>
+          <th>المسمى الوظيفي</th>
+          <th class="text-center">أيام العمل</th>
+          <th class="text-center text-success">حاضر</th>
+          <th class="text-center text-warning">متأخر</th>
+          <th class="text-center text-danger">غائب</th>
+          <th class="text-center text-info">انصراف</th>
+          <th class="text-center">نسبة الحضور</th>
+          <th class="text-center">إجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        {% set emp = row.employee %}
+        {% set is_alert = alerts and alerts|selectattr('employee.id', 'equalto', emp.id)|list|length > 0 %}
+        <tr class="emp-row {{ 'table-danger' if is_alert }}" data-name="{{ emp.full_name|lower }}">
+          <td class="text-muted small">{{ loop.index }}</td>
+          <td>
+            <a href="{{ url_for('employees.view', emp_id=emp.id) }}" class="fw-bold text-decoration-none">
+              {{ emp.full_name }}
+            </a>
+            {% if is_alert %}
+            <span class="badge bg-danger ms-1" title="تجاوز حد الغياب">⚠</span>
+            {% endif %}
+          </td>
+          <td class="text-muted small">{{ emp.department or '—' }}</td>
+          <td class="text-muted small">{{ emp.job_title or '—' }}</td>
+          <td class="text-center">{{ row.working_days }}</td>
+          <td class="text-center">
+            <span class="fw-bold text-success">{{ row.present }}</span>
+          </td>
+          <td class="text-center">
+            {% if row.late > 0 %}
+            <span class="fw-bold" style="color:#e8a020">{{ row.late }}</span>
+            {% else %}
+            <span class="text-muted">0</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            {% if row.absent > 0 %}
+            <span class="fw-bold text-danger">{{ row.absent }}</span>
+            {% else %}
+            <span class="text-muted">0</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            <span class="text-info">{{ row.checked_out }}</span>
+          </td>
+          <td class="text-center">
+            {% set rate = row.rate %}
+            {% if rate >= 90 %}
+              <span class="badge bg-success">{{ rate }}%</span>
+            {% elif rate >= 75 %}
+              <span class="badge bg-warning text-dark">{{ rate }}%</span>
+            {% else %}
+              <span class="badge bg-danger">{{ rate }}%</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            <div class="d-flex gap-1 justify-content-center">
+              {% if school_cfg.action_enabled('employee_attendance', 'view_detail') %}
+              <a href="{{ url_for('employees.attendance_report_detail', emp_id=emp.id, date_from=date_from, date_to=date_to) }}"
+                 class="btn btn-sm btn-outline-primary" title="تقرير تفصيلي">
+                <i class="bi bi-calendar3"></i>
+              </a>
+              {% endif %}
+              {% set can_emp_excel = school_cfg.action_enabled('employee_attendance', 'employee_excel') %}
+              {% set can_emp_pdf   = school_cfg.action_enabled('employee_attendance', 'employee_pdf') %}
+              {% if can_emp_excel or can_emp_pdf %}
+              <div class="dropdown">
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button"
+                        data-bs-toggle="dropdown" title="تصدير">
+                  <i class="bi bi-download"></i>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                  {% if can_emp_excel %}
+                  <li>
+                    <a class="dropdown-item small"
+                       href="{{ url_for('employees.attendance_report_employee_excel', emp_id=emp.id, date_from=date_from, date_to=date_to) }}">
+                      <i class="bi bi-file-earmark-excel text-success me-2"></i>Excel
+                    </a>
+                  </li>
+                  {% endif %}
+                  {% if can_emp_pdf %}
+                  <li>
+                    <a class="dropdown-item small"
+                       href="{{ url_for('employees.attendance_report_employee_pdf', emp_id=emp.id, date_from=date_from, date_to=date_to) }}">
+                      <i class="bi bi-file-earmark-pdf text-danger me-2"></i>PDF
+                    </a>
+                  </li>
+                  {% endif %}
+                </ul>
+              </div>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div id="noResults" class="text-center text-muted py-4 d-none">
+    <i class="bi bi-search" style="font-size:2rem"></i>
+    <p class="mt-2">لا يوجد موظف يطابق البحث.</p>
+  </div>
+  {% else %}
+  <div class="card-body text-center text-muted py-5">
+    <i class="bi bi-calendar-x" style="font-size:3rem"></i>
+    <p class="mt-3 mb-1">لا توجد بيانات للفترة والفلاتر المحددة.</p>
+    <small>
+      {% if not school.weekly_off_days %}
+      تلميح: لم يتم تحديد أيام العطلة الأسبوعية —
+      <a href="{{ url_for('admin.school_settings') }}">إعدادات المدرسة</a>
+      {% endif %}
+    </small>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+(function () {
+  const input = document.getElementById('nameSearch');
+  const rows  = document.querySelectorAll('#attendanceTable .emp-row');
+  const noRes = document.getElementById('noResults');
+
+  function filterTable() {
+    const term = input.value.trim().toLowerCase();
+    let visible = 0;
+    rows.forEach(tr => {
+      const name = tr.dataset.name || '';
+      const show = !term || name.includes(term);
+      tr.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    if (noRes) noRes.classList.toggle('d-none', visible > 0 || rows.length === 0);
+  }
+
+  if (input) {
+    input.addEventListener('input', filterTable);
+    // Run on load if pre-filled
+    if (input.value.trim()) filterTable();
+  }
+})();
+</script>
+{% endblock %}
