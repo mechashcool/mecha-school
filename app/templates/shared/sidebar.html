@@ -105,26 +105,34 @@
         <i class="bi bi-grid-1x2-fill"></i> لوحتي
       </a>
     </li>
+    {% set _complaints_url = safe_url_for('parent.complaints') %}
+    {% if _complaints_url != '#' %}
     <li class="nav-item">
-      <a href="{{ url_for('parent.complaints') }}"
+      <a href="{{ _complaints_url }}"
          class="{{ 'active' if request.endpoint and request.endpoint.startswith('parent.complaint') }}">
         <i class="bi bi-chat-left-text-fill"></i> &#1575;&#1604;&#1588;&#1603;&#1575;&#1608;&#1609;
       </a>
     </li>
+    {% endif %}
+    {% set _leave_url = safe_url_for('parent.leave_requests') %}
+    {% if _leave_url != '#' %}
     <li class="nav-item">
-      <a href="{{ url_for('parent.leave_requests') }}"
+      <a href="{{ _leave_url }}"
          class="{{ 'active' if request.endpoint and request.endpoint.startswith('parent.leave_request') }}">
         <i class="bi bi-calendar2-check-fill"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;
       </a>
     </li>
+    {% endif %}
     {% if 'chat' in enabled_modules %}
+    {% set _chat_url = safe_url_for('chat.user_index') %}
+    {% if _chat_url != '#' %}
     <li class="nav-item">
-      <a href="{{ url_for('chat.user_index') }}"
+      <a href="{{ _chat_url }}"
          class="{{ 'active' if request.endpoint and request.endpoint.startswith('chat.user') }}">
         <i class="bi bi-chat-dots-fill"></i> المراسلات
-        {# unread badge for chat — fetched inline to avoid extra context processor hit #}
       </a>
     </li>
+    {% endif %}
     {% endif %}
     <li class="nav-item">
       <a href="{{ url_for('notifications.index') }}"
@@ -182,13 +190,16 @@
     {% endif %}
 
     {% if 'chat' in enabled_modules %}
+    {% set _teacher_chat_url = safe_url_for('chat.user_index') %}
+    {% if _teacher_chat_url != '#' %}
     <li class="nav-section-label">المراسلات</li>
     <li class="nav-item">
-      <a href="{{ url_for('chat.user_index') }}"
+      <a href="{{ _teacher_chat_url }}"
          class="{{ 'active' if request.endpoint and request.endpoint.startswith('chat.user') }}">
         <i class="bi bi-chat-dots-fill"></i> المراسلات
       </a>
     </li>
+    {% endif %}
     {% endif %}
 
     <li class="nav-section-label">النظام</li>

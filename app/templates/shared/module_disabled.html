@@ -16,8 +16,24 @@
   <p class="text-muted mb-4">
     يرجى التواصل مع مسؤول النظام لتفعيل هذه الميزة.
   </p>
-  <a href="{{ url_for('admin.dashboard') }}" class="btn btn-primary">
-    <i class="bi bi-grid-1x2-fill me-1"></i>العودة إلى لوحة التحكم
+  {% if current_user.is_authenticated and current_user.role %}
+    {% if current_user.role.name == 'parent' %}
+    <a href="{{ safe_url_for('parent.dashboard') or url_for('auth.login') }}" class="btn btn-primary">
+      <i class="bi bi-grid-1x2-fill me-1"></i>العودة إلى لوحتي
+    </a>
+    {% elif current_user.role.name == 'teacher' %}
+    <a href="{{ safe_url_for('teacher.dashboard') or url_for('auth.login') }}" class="btn btn-primary">
+      <i class="bi bi-grid-1x2-fill me-1"></i>العودة إلى لوحتي
+    </a>
+    {% else %}
+    <a href="{{ url_for('admin.dashboard') }}" class="btn btn-primary">
+      <i class="bi bi-grid-1x2-fill me-1"></i>العودة إلى لوحة التحكم
+    </a>
+    {% endif %}
+  {% else %}
+  <a href="{{ url_for('auth.login') }}" class="btn btn-primary">
+    <i class="bi bi-box-arrow-in-right me-1"></i>تسجيل الدخول
   </a>
+  {% endif %}
 </div>
 {% endblock %}

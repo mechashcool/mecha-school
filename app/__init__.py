@@ -118,8 +118,18 @@ def create_app(config_name=None):
 
     # ── Jinja2 globals ────────────────────────────────────────────────────────
     from app.utils.helpers import resolve_photo_url
+    from werkzeug.routing import BuildError as _BuildError
+
+    def _safe_url_for(endpoint, **values):
+        from flask import url_for as _url_for
+        try:
+            return _url_for(endpoint, **values)
+        except (_BuildError, Exception):
+            return '#'
+
     app.jinja_env.globals.update(enumerate=enumerate, zip=zip, len=len,
-                                 resolve_photo_url=resolve_photo_url)
+                                 resolve_photo_url=resolve_photo_url,
+                                 safe_url_for=_safe_url_for)
 
     # ── Jinja2 filters ────────────────────────────────────────────────────────
     from datetime import timezone as _tz, timedelta as _td
@@ -268,11 +278,14 @@ def create_app(config_name=None):
 
         # True when a school user is viewing a historical (non-current) year.
         # Injected into all templates so they can hide write-action buttons.
-        is_historical_year = (
-            active_year is not None
-            and real_active_year is not None
-            and active_year.id != real_active_year.id
-        )
+        try:
+            is_historical_year = (
+                active_year is not None
+                and real_active_year is not None
+                and active_year.id != real_active_year.id
+            )
+        except Exception:
+            is_historical_year = False
 
         from flask import session as _session
         return dict(
