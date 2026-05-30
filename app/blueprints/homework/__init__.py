@@ -148,6 +148,7 @@ def _notify_section_parents(hw: Homework, school_id: int) -> None:
         ).fetchall()
     }
 
+    fcm_targets = []
     for uid in parent_user_ids:
         existing = Notification.query.filter_by(
             school_id=school_id,
@@ -164,6 +165,22 @@ def _notify_section_parents(hw: Homework, school_id: int) -> None:
                 target_user_id=uid,
                 created_by=current_user.id,
             ))
+            fcm_targets.append(uid)
+
+    # FCM push fires after the session flush in the calling route.
+    # send_push_to_user reads already-committed device tokens, so DB commit
+    # of the Notification row is not required before sending.
+    try:
+        from app.services.fcm_service import is_enabled, send_push_to_user
+        if is_enabled() and fcm_targets:
+            data = {'type': 'homework', 'school_id': str(school_id),
+                    'homework_id': str(hw.id)}
+            current_app.logger.info(
+                '[homework] FCM push → %d parent(s) title=%r', len(fcm_targets), title)
+            for uid in fcm_targets:
+                send_push_to_user(uid, title, body, data)
+    except Exception:
+        current_app.logger.exception('[homework] FCM dispatch failed hw_id=%s', hw.id)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

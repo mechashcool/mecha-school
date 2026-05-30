@@ -100,6 +100,16 @@ def _notify_parent(parent_id, school_id, title, body):
         target_user_id=parent_id,
         created_by=current_user.id,
     ))
+    # FCM push — fires immediately; DB commit for the in-app row happens in the caller.
+    try:
+        from app.services.fcm_service import is_enabled, send_push_to_user
+        if is_enabled():
+            send_push_to_user(
+                parent_id, title, body,
+                {'type': 'parent_request', 'school_id': str(school_id)},
+            )
+    except Exception:
+        pass
 
 
 def _valid_email(email):
@@ -1256,3 +1266,49 @@ def attendance_settings():
         return redirect(url_for('admin.attendance_settings'))
 
     return render_template('admin/attendance_settings.html', settings=settings_row)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PUSH NOTIFICATION TEST (admin / super_admin only)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@admin_bp.route('/notifications/test-push', methods=['POST'])
+@login_required
+def test_push_notification():
+    """
+    Send a test FCM push to a specific user.
+
+    Request JSON:
+      { "user_id": 123, "title": "...", "body": "..." }
+
+    Returns:
+      { "ok": true, "fcm_enabled": true, "success_count": N, "fail_count": N }
+    """
+    role = _role_name(current_user.role)
+    if role not in (SUPER_ADMIN_ROLE, SCHOOL_ADMIN_ROLE, LEGACY_ADMIN_ROLE):
+        return jsonify({'ok': False, 'error': 'forbidden'}), 403
+
+    payload = request.get_json(silent=True) or {}
+    user_id = payload.get('user_id')
+    title   = (payload.get('title') or 'اختبار الإشعار').strip()
+    body    = (payload.get('body')  or 'هذا إشعار تجريبي من Mecha School').strip()
+
+    if not user_id:
+        return jsonify({'ok': False, 'error': 'user_id is required'}), 400
+
+    from app.services.fcm_service import is_enabled, send_push_to_user
+
+    if not is_enabled():
+        return jsonify({
+            'ok':          False,
+            'fcm_enabled': False,
+            'error':       'FCM is not configured — set FIREBASE_SERVICE_ACCOUNT_JSON or GOOGLE_APPLICATION_CREDENTIALS',
+        }), 503
+
+    success, fail = send_push_to_user(int(user_id), title, body, {'type': 'test'})
+    return jsonify({
+        'ok':           True,
+        'fcm_enabled':  True,
+        'success_count': success,
+        'fail_count':    fail,
+    })

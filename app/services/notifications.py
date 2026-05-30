@@ -101,9 +101,14 @@ class FCMBackend(_Backend):
 
 class _NotificationService:
     def __init__(self):
+        # If fcm_service has claimed Firebase, use DevLogBackend here to avoid
+        # duplicate FCM sends — fcm_service handles all active device tokens.
+        from app.services.fcm_service import is_enabled as _fcm_svc_enabled
         sa_path = os.environ.get('FCM_SERVICE_ACCOUNT_JSON')
-        if sa_path and os.path.isfile(sa_path):
-            self.backend: _Backend = FCMBackend(sa_path)
+        if _fcm_svc_enabled():
+            self.backend: _Backend = DevLogBackend()
+        elif sa_path and os.path.isfile(sa_path):
+            self.backend = FCMBackend(sa_path)
         else:
             self.backend = DevLogBackend()
         log.info('NotificationService initialised with %s backend', self.backend.name)
@@ -142,12 +147,23 @@ class _NotificationService:
         row = self._persist(user_id, title, body, ntype, data, result,
                             school_id=user.school_id)
         db.session.commit()
+
+        # Multi-device FCM push to all active device tokens (additional; does not
+        # replace the in-app notification row above).
+        try:
+            from app.services.fcm_service import is_enabled, send_push_to_user
+            if is_enabled():
+                send_push_to_user(user_id, title, body, data)
+        except Exception:
+            log.exception('[FCM] multi-device push failed for user_id=%s', user_id)
+
         return [row]
 
     def send_to_users(self, user_ids: Iterable[int], title: str, body: str,
                       ntype: str = 'general', data: dict | None = None):
         rows = []
-        for uid in set(user_ids):
+        unique_ids = set(user_ids)
+        for uid in unique_ids:
             user = User.query.get(uid)
             if not user:
                 continue
@@ -159,6 +175,16 @@ class _NotificationService:
             rows.append(self._persist(uid, title, body, ntype, data, result,
                                       school_id=user.school_id))
         db.session.commit()
+
+        # Multi-device FCM push for each user in the batch.
+        try:
+            from app.services.fcm_service import is_enabled, send_push_to_user
+            if is_enabled():
+                for uid in unique_ids:
+                    send_push_to_user(uid, title, body, data)
+        except Exception:
+            log.exception('[FCM] multi-device push failed for batch user_ids=%s', unique_ids)
+
         return rows
 
     # ── high-level helpers used by routes ─────────────────────────────────────

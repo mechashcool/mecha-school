@@ -1,4 +1,6 @@
 """Mecha-School – Notifications Blueprint"""
+import logging
+
 from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify
 from flask_login import login_required, current_user
 from app.models import db, Notification, NotificationRead, User, Role
@@ -7,8 +9,46 @@ from app.utils.notification_visibility import (
     notification_is_addressed_to, notification_visible_to,
 )
 
+_log = logging.getLogger('mecha.notifications_bp')
+
 notifications_bp = Blueprint('notifications', __name__,
                               template_folder='../../templates/notifications')
+
+
+def _dispatch_fcm_push(title: str, body: str, ntype: str,
+                       target_user_id: int | None,
+                       target_role: str | None,
+                       school_id: int) -> None:
+    """
+    Fire FCM push for a just-committed Notification row.
+    Runs after DB commit so the in-app row is already saved regardless of FCM outcome.
+    """
+    try:
+        from app.services.fcm_service import is_enabled, send_push_to_user
+        if not is_enabled():
+            _log.debug('[notifications] FCM disabled — skipping push for title=%r', title)
+            return
+
+        data = {'type': ntype, 'school_id': str(school_id)}
+
+        if target_user_id:
+            _log.info('[notifications] FCM push → user_id=%s title=%r', target_user_id, title)
+            send_push_to_user(target_user_id, title, body, data)
+
+        elif target_role:
+            role_obj = Role.query.filter_by(name=target_role).first()
+            if not role_obj:
+                return
+            users = (User.query
+                     .filter_by(role_id=role_obj.id, school_id=school_id, is_active=True)
+                     .all())
+            _log.info('[notifications] FCM broadcast → role=%s users=%d title=%r',
+                      target_role, len(users), title)
+            for u in users:
+                send_push_to_user(u.id, title, body, data)
+
+    except Exception:
+        _log.exception('[notifications] FCM dispatch failed title=%r', title)
 
 
 @notifications_bp.route('/')
@@ -135,17 +175,32 @@ def create():
             flash('نص الإشعار مطلوب.', 'danger')
             return form_response(400)
 
+        title = request.form.get('title', '').strip()
+        body  = request.form.get('body', '').strip()
+        ntype = request.form.get('ntype', 'announcement')
+
         n = Notification(
             school_id      = school_id,
-            title          = request.form.get('title', '').strip(),
-            body           = request.form.get('body', '').strip(),
-            ntype          = request.form.get('ntype', 'announcement'),
+            title          = title,
+            body           = body,
+            ntype          = ntype,
             target_role    = target_role,
             target_user_id = target_user_id,
             created_by     = current_user.id,
         )
         db.session.add(n)
         db.session.commit()
+
+        # FCM push — additional on top of in-app notification row
+        _dispatch_fcm_push(
+            title=title,
+            body=body,
+            ntype=ntype,
+            target_user_id=target_user_id,
+            target_role=target_role,
+            school_id=school_id,
+        )
+
         flash('تم إرسال الإشعار بنجاح.', 'success')
         return redirect(url_for('notifications.index'))
 
