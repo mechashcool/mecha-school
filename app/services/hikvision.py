@@ -489,4 +489,11 @@ def _sync_loop(app, interval: int) -> None:
                     db.session.rollback()
                 except Exception:
                     pass
+            finally:
+                # Return connection to pool between ticks — long-lived app_context()
+                # doesn't fire teardown handlers, so we remove the session manually.
+                try:
+                    db.session.remove()
+                except Exception:
+                    pass
             time.sleep(interval)

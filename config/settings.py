@@ -39,24 +39,36 @@ class ProductionConfig(Config):
     """Production configuration."""
     DEBUG = False
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL')
+    # Pool math (per Gunicorn worker process):
+    #   web threads:       WEB_CONCURRENCY(2) × GUNICORN_THREADS(2) = 4
+    #   scheduler threads: fee_reminder + auto_attendance + hikvision = up to 3
+    #   headroom:          max_overflow covers transient bursts
+    # Supabase free tier: 60 direct connections, so 5 × 2 workers = 10 base is safe.
     SQLALCHEMY_ENGINE_OPTIONS = {
         'pool_pre_ping': True,
-        'pool_recycle': int(os.environ.get('SQLALCHEMY_POOL_RECYCLE', 300)),
-        'pool_size': int(os.environ.get('SQLALCHEMY_POOL_SIZE', 2)),
-        'max_overflow': int(os.environ.get('SQLALCHEMY_MAX_OVERFLOW', 0)),
-        'pool_timeout': int(os.environ.get('SQLALCHEMY_POOL_TIMEOUT', 10)),
+        'pool_recycle':  int(os.environ.get('SQLALCHEMY_POOL_RECYCLE',  1800)),
+        'pool_size':     int(os.environ.get('SQLALCHEMY_POOL_SIZE',     5)),
+        'max_overflow':  int(os.environ.get('SQLALCHEMY_MAX_OVERFLOW',  10)),
+        'pool_timeout':  int(os.environ.get('SQLALCHEMY_POOL_TIMEOUT',  30)),
         'connect_args': {
             'connect_timeout': int(os.environ.get('SQLALCHEMY_CONNECT_TIMEOUT', 10)),
-            'keepalives': 1,
-            'keepalives_idle': 30,
+            'keepalives':          1,
+            'keepalives_idle':    30,
             'keepalives_interval': 10,
-            'keepalives_count': 5,
+            'keepalives_count':    5,
         },
     }
 
     @classmethod
     def init_app(cls, app):
         Config.init_app(app)
+        import logging
+        opts = cls.SQLALCHEMY_ENGINE_OPTIONS
+        logging.getLogger('mecha').warning(
+            '[DB] pool_size=%s  max_overflow=%s  pool_timeout=%s  pool_recycle=%s',
+            opts.get('pool_size'), opts.get('max_overflow'),
+            opts.get('pool_timeout'), opts.get('pool_recycle'),
+        )
 
 
 class TestingConfig(Config):

@@ -65,6 +65,16 @@ def _scheduler_loop(app, interval: int) -> None:
                     db.session.rollback()
                 except Exception:
                     pass
+            finally:
+                # Return the DB connection to the pool between ticks.
+                # The long-lived app_context() doesn't trigger teardown_appcontext
+                # handlers until it exits, so we must remove the scoped session
+                # manually to avoid holding a connection during time.sleep().
+                try:
+                    from app.models import db
+                    db.session.remove()
+                except Exception:
+                    pass
             time.sleep(interval)
 
 
