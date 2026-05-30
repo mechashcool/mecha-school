@@ -1,0 +1,154 @@
+{% extends "shared/base.html" %}
+{% block title %}المراسلات{% endblock %}
+{% block page_title %}المراسلات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">المراسلات</h1>
+    <p class="page-subtitle">إدارة محادثات المدرسة بين أولياء الأمور والمعلمين والإدارة</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('chat.settings') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-gear-fill me-1"></i>الإعدادات
+    </a>
+    <a href="{{ url_for('chat.create_room') }}" class="btn btn-primary">
+      <i class="bi bi-plus-circle-fill me-1"></i>مجموعة جديدة
+    </a>
+  </div>
+</div>
+
+{# ── Filters ── #}
+<div class="card mb-4">
+  <div class="card-body py-2">
+    <form method="GET" class="d-flex flex-wrap gap-3 align-items-center">
+      <div>
+        <label class="form-label mb-0 small">النوع</label>
+        <select name="type" class="form-select form-select-sm" onchange="this.form.submit()">
+          <option value="">الكل</option>
+          <option value="group"        {{ 'selected' if type_filter == 'group' }}>مجموعة</option>
+          <option value="announcement" {{ 'selected' if type_filter == 'announcement' }}>إعلانات</option>
+          <option value="private"      {{ 'selected' if type_filter == 'private' }}>خاصة</option>
+        </select>
+      </div>
+      <div>
+        <label class="form-label mb-0 small">الحالة</label>
+        <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+          <option value="">الكل</option>
+          <option value="open"   {{ 'selected' if status_filter == 'open' }}>مفتوحة</option>
+          <option value="closed" {{ 'selected' if status_filter == 'closed' }}>مغلقة</option>
+        </select>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if room_stats %}
+<div class="table-responsive">
+  <table class="table table-hover align-middle">
+    <thead class="table-light">
+      <tr>
+        <th>اسم المحادثة</th>
+        <th>النوع</th>
+        <th>النطاق</th>
+        <th>الأعضاء</th>
+        <th>الرسائل</th>
+        <th>آخر رسالة</th>
+        <th>الحالة</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for stat in room_stats %}
+      {% set room = stat.room %}
+      <tr>
+        <td>
+          <a href="{{ url_for('chat.room_detail', room_id=room.id) }}" class="fw-semibold text-decoration-none">
+            {{ room.name }}
+          </a>
+          {% if room.is_announcement_only %}
+          <span class="badge bg-info ms-1">إعلانات فقط</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if room.type == 'group' %}<span class="badge bg-primary">مجموعة</span>
+          {% elif room.type == 'announcement' %}<span class="badge bg-info">إعلانات</span>
+          {% else %}<span class="badge bg-secondary">خاصة</span>{% endif %}
+        </td>
+        <td>
+          {% if room.scope == 'school' %}المدرسة
+          {% elif room.scope == 'stage' %}المرحلة: {{ room.stage or '–' }}
+          {% elif room.scope == 'grade' %}{{ room.grade.name if room.grade else '–' }}
+          {% elif room.scope == 'section' %}{{ room.section.name if room.section else '–' }}
+          {% elif room.scope == 'subject' %}{{ room.subject.name if room.subject else '–' }}
+          {% elif room.scope == 'announcement' %}المدرسة كاملاً
+          {% else %}مخصص{% endif %}
+        </td>
+        <td><span class="badge bg-light text-dark">{{ stat.member_count }}</span></td>
+        <td><span class="badge bg-light text-dark">{{ stat.message_count }}</span></td>
+        <td class="text-muted small">
+          {% if stat.last_message %}
+            {{ stat.last_message.created_at | to_baghdad }}
+            <br><span class="text-truncate d-inline-block" style="max-width:120px">
+              {{ stat.last_message.body or '[مرفق]' }}
+            </span>
+          {% else %}—{% endif %}
+        </td>
+        <td>
+          {% if not room.is_active %}<span class="badge bg-secondary">معطل</span>
+          {% elif room.is_closed %}<span class="badge bg-danger">مغلقة</span>
+          {% else %}<span class="badge bg-success">مفتوحة</span>{% endif %}
+        </td>
+        <td class="text-end">
+          <div class="dropdown">
+            <button class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">
+              إجراء
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end">
+              <li>
+                <a class="dropdown-item" href="{{ url_for('chat.room_detail', room_id=room.id) }}">
+                  <i class="bi bi-eye me-1"></i>عرض الرسائل
+                </a>
+              </li>
+              <li>
+                <a class="dropdown-item" href="{{ url_for('chat.edit_room', room_id=room.id) }}">
+                  <i class="bi bi-pencil me-1"></i>تعديل
+                </a>
+              </li>
+              <li>
+                <a class="dropdown-item" href="{{ url_for('chat.room_schedule', room_id=room.id) }}">
+                  <i class="bi bi-clock me-1"></i>أوقات التواصل
+                </a>
+              </li>
+              <li><hr class="dropdown-divider"></li>
+              {% if room.is_closed %}
+              <li>
+                <form method="POST" action="{{ url_for('chat.reopen_room', room_id=room.id) }}">
+                  <button class="dropdown-item text-success"><i class="bi bi-unlock me-1"></i>فتح المحادثة</button>
+                </form>
+              </li>
+              {% else %}
+              <li>
+                <form method="POST" action="{{ url_for('chat.close_room', room_id=room.id) }}">
+                  <button class="dropdown-item text-warning"><i class="bi bi-lock me-1"></i>إغلاق المحادثة</button>
+                </form>
+              </li>
+              {% endif %}
+            </ul>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="text-center py-5 text-muted">
+  <i class="bi bi-chat-dots" style="font-size:3rem"></i>
+  <p class="mt-3">لا توجد محادثات حتى الآن.</p>
+  <a href="{{ url_for('chat.create_room') }}" class="btn btn-primary mt-2">
+    <i class="bi bi-plus-circle me-1"></i>إنشاء أول مجموعة
+  </a>
+</div>
+{% endif %}
+{% endblock %}

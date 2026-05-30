@@ -84,6 +84,7 @@ def create_app(config_name=None):
     from app.blueprints.attendance_devices import attendance_devices_bp
     from app.blueprints.school_calendar   import school_calendar_bp
     from app.blueprints.homework          import homework_bp
+    from app.blueprints.chat              import chat_bp
 
     app.register_blueprint(auth_bp,          url_prefix='/auth')
     app.register_blueprint(admin_bp,         url_prefix='/admin')
@@ -113,6 +114,7 @@ def create_app(config_name=None):
     app.register_blueprint(attendance_devices_bp,  url_prefix='/attendance-devices')
     app.register_blueprint(school_calendar_bp,     url_prefix='/school-calendar')
     app.register_blueprint(homework_bp,            url_prefix='/homework')
+    app.register_blueprint(chat_bp,                url_prefix='/chat')
 
     # ── Jinja2 globals ────────────────────────────────────────────────────────
     from app.utils.helpers import resolve_photo_url
@@ -337,16 +339,25 @@ def create_app(config_name=None):
     uploads_dir = os.path.join(app.root_path, 'static', 'uploads')
     os.makedirs(uploads_dir, exist_ok=True)
 
-    # ── Hikvision auto-sync (opt-in via HIKVISION_AUTO_SYNC=true) ─────────────
-    from app.services.hikvision import start_auto_sync
-    start_auto_sync(app)
+    # ── Background services (web server only — skipped during CLI commands) ────
+    # Flask CLI commands like `flask db upgrade`, `flask shell`, and `flask routes`
+    # must not start background threads: they hold DB connections, interfere with
+    # migrations, and fail when the schema is incomplete.
+    import sys as _sys
+    _cli_cmd = _sys.argv[1] if len(_sys.argv) >= 2 else ''
+    _skip_schedulers = _cli_cmd in ('db', 'shell', 'routes', 'digest', 'collect')
 
-    # ── AI Face 11 WebSocket receiver (always-on; AIFACE_WS_ENABLED=false to disable) ──
-    from app.services.ai_face_ws import start_ai_face_ws_server
-    start_ai_face_ws_server(app)
+    if not _skip_schedulers:
+        from app.services.hikvision import start_auto_sync
+        start_auto_sync(app)
 
-    # ── Auto-attendance scheduler (always-on; ATTENDANCE_SCHEDULER_DISABLED=true to opt out) ──
-    from app.services.auto_attendance import start_auto_attendance_scheduler
-    start_auto_attendance_scheduler(app)
+        from app.services.ai_face_ws import start_ai_face_ws_server
+        start_ai_face_ws_server(app)
+
+        from app.services.auto_attendance import start_auto_attendance_scheduler
+        start_auto_attendance_scheduler(app)
+
+        from app.services.fee_reminder import start_fee_reminder_scheduler
+        start_fee_reminder_scheduler(app)
 
     return app

@@ -1178,6 +1178,17 @@ def school_settings():
         school.locale          = request.form.get('locale',  'ar').strip() or 'ar'
         school.receipt_footer  = request.form.get('receipt_footer', '').strip() or None
 
+        # Fee reminder settings
+        school.fee_reminder_enabled = bool(request.form.get('fee_reminder_enabled'))
+        raw_val = request.form.get('fee_reminder_before_value', '3').strip()
+        try:
+            parsed_val = int(raw_val)
+        except (ValueError, TypeError):
+            parsed_val = 3
+        school.fee_reminder_before_value = max(1, parsed_val) if parsed_val > 0 else 3
+        fee_unit = request.form.get('fee_reminder_before_unit', 'days')
+        school.fee_reminder_before_unit = fee_unit if fee_unit in ('days', 'hours') else 'days'
+
         logo_file = request.files.get('logo')
         if logo_file and logo_file.filename:
             fname = secure_filename(

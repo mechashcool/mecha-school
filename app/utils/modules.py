@@ -106,6 +106,11 @@ MODULES: dict[str, dict] = {
         "icon":        "bi-book-fill",
         "description": "إدارة المواد الدراسية وتنظيمها بحسب المراحل والصفوف",
     },
+    "chat": {
+        "label":       "المراسلات",
+        "icon":        "bi-chat-dots-fill",
+        "description": "نظام المراسلات المدرسية المحكومة بين أولياء الأمور والمعلمين والإدارة",
+    },
 }
 
 # Maps Flask blueprint name → module key.
@@ -128,6 +133,7 @@ BLUEPRINT_MODULE: dict[str, str] = {
     "notifications":      "notifications",
     "reports":            "reports",
     "homework":           "homework",
+    "chat":               "chat",
 }
 
 # Package presets — quick-select buttons shown in the school creation form.

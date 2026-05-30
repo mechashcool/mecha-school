@@ -132,6 +132,20 @@ FEATURES: dict[str, dict] = {
     "reports.attendance":        {"label": "تقارير الحضور",          "module": "reports"},
     "reports.salaries":          {"label": "تقارير الرواتب",         "module": "reports"},
     "reports.export_excel":      {"label": "تصدير Excel",            "module": "reports"},
+
+    # ── Chat / Messaging ──────────────────────────────────────────────────────
+    "chat.view":            {"label": "عرض المراسلات",             "module": "chat"},
+    "chat.create_group":    {"label": "إنشاء مجموعة محادثة",       "module": "chat"},
+    "chat.edit_group":      {"label": "تعديل مجموعة محادثة",       "module": "chat"},
+    "chat.delete_group":    {"label": "حذف مجموعة محادثة",         "module": "chat"},
+    "chat.send_message":    {"label": "إرسال رسائل",               "module": "chat"},
+    "chat.close_chat":      {"label": "إغلاق محادثة",              "module": "chat"},
+    "chat.reopen_chat":     {"label": "إعادة فتح محادثة",          "module": "chat"},
+    "chat.assign_admin":    {"label": "تعيين مشرف مجموعة",         "module": "chat"},
+    "chat.block_member":    {"label": "حظر عضو من المحادثة",       "module": "chat"},
+    "chat.view_all_chats":  {"label": "عرض جميع المحادثات",        "module": "chat"},
+    "chat.manage_schedule": {"label": "إدارة جدول أوقات الإرسال",  "module": "chat"},
+    "chat.api_access":      {"label": "الوصول من تطبيق الجوال",   "module": "chat"},
 }
 
 
@@ -156,6 +170,14 @@ FEATURE_PRESETS: dict[str, dict] = {
     "full": {
         "label": "الباقة الكاملة",
         "features": list(FEATURES.keys()),
+    },
+    "chat_basic": {
+        "label": "باقة المراسلات الأساسية",
+        "features": [
+            "chat.view", "chat.create_group", "chat.edit_group",
+            "chat.send_message", "chat.close_chat", "chat.reopen_chat",
+            "chat.view_all_chats", "chat.api_access",
+        ],
     },
 }
 

@@ -1,0 +1,91 @@
+{% extends "shared/base.html" %}
+{% block title %}تعديل: {{ room.name }}{% endblock %}
+{% block page_title %}تعديل المجموعة{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">تعديل: {{ room.name }}</h1>
+  </div>
+  <a href="{{ url_for('chat.room_detail', room_id=room.id) }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<form method="POST">
+  <div class="row g-4">
+    <div class="col-md-8">
+      <div class="card mb-4">
+        <div class="card-header"><i class="bi bi-pencil-fill text-accent"></i>المعلومات الأساسية</div>
+        <div class="card-body">
+          <div class="mb-3">
+            <label class="form-label">اسم المجموعة</label>
+            <input type="text" name="name" class="form-control" value="{{ room.name }}" required>
+          </div>
+          <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" id="isAnn"
+                   name="is_announcement_only" value="1"
+                   {{ 'checked' if room.is_announcement_only }}>
+            <label class="form-check-label" for="isAnn">إعلانات فقط</label>
+          </div>
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="noReplies"
+                   name="no_replies" value="1"
+                   {{ 'checked' if not room.allow_replies }}>
+            <label class="form-check-label" for="noReplies">تعطيل الردود</label>
+          </div>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary">
+        <i class="bi bi-check-circle me-1"></i>حفظ التغييرات
+      </button>
+    </div>
+
+    <div class="col-md-4">
+      <div class="card">
+        <div class="card-header"><i class="bi bi-people-fill text-accent"></i>الأعضاء ({{ members|length }})</div>
+        <div class="card-body p-0">
+          <div style="max-height:400px;overflow-y:auto">
+            <table class="table table-sm mb-0">
+              <tbody>
+                {% for mem in members %}
+                <tr>
+                  <td style="font-size:13px">
+                    {{ mem.user.full_name if mem.user else '—' }}
+                    {% if mem.role == 'owner' %}<span class="badge bg-primary ms-1">المنشئ</span>
+                    {% elif mem.role == 'admin' %}<span class="badge bg-info ms-1">مشرف</span>{% endif %}
+                    {% if mem.is_blocked %}<span class="badge bg-danger ms-1">محظور</span>{% endif %}
+                  </td>
+                  <td class="text-end">
+                    {% if mem.role not in ('owner',) %}
+                      {% if mem.role == 'member' %}
+                      <form method="POST" action="{{ url_for('chat.make_room_admin', room_id=room.id, user_id=mem.user_id) }}" class="d-inline">
+                        <button class="btn btn-xs btn-outline-primary" title="تعيين مشرف">مشرف</button>
+                      </form>
+                      {% elif mem.role == 'admin' %}
+                      <form method="POST" action="{{ url_for('chat.remove_room_admin', room_id=room.id, user_id=mem.user_id) }}" class="d-inline">
+                        <button class="btn btn-xs btn-outline-secondary" title="إزالة">عضو</button>
+                      </form>
+                      {% endif %}
+                      {% if mem.is_blocked %}
+                      <form method="POST" action="{{ url_for('chat.unblock_member', room_id=room.id, user_id=mem.user_id) }}" class="d-inline">
+                        <button class="btn btn-xs btn-outline-success">إلغاء حظر</button>
+                      </form>
+                      {% else %}
+                      <form method="POST" action="{{ url_for('chat.block_member', room_id=room.id, user_id=mem.user_id) }}" class="d-inline">
+                        <button class="btn btn-xs btn-outline-danger">حظر</button>
+                      </form>
+                      {% endif %}
+                    {% endif %}
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</form>
+{% endblock %}

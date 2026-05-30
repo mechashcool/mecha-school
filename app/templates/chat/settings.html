@@ -1,0 +1,94 @@
+{% extends "shared/base.html" %}
+{% block title %}إعدادات المراسلات{% endblock %}
+{% block page_title %}إعدادات المراسلات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">إعدادات المراسلات</h1>
+    <p class="page-subtitle">تحكم في ميزات المراسلات المتاحة لمدرستك</p>
+  </div>
+  <a href="{{ url_for('chat.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع للمراسلات
+  </a>
+</div>
+
+<form method="POST">
+  <div class="row g-4">
+    <div class="col-md-8">
+
+      <div class="card mb-4">
+        <div class="card-header"><i class="bi bi-toggle-on text-accent"></i>أنواع المحادثات المسموحة</div>
+        <div class="card-body">
+          {% set hf = cfg.get('hidden_fields', []) %}
+          {% macro switch(field, label, desc='') %}
+          <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" id="{{ field }}" name="{{ field }}" value="1"
+                   {{ 'checked' if field not in hf }}>
+            <label class="form-check-label fw-semibold" for="{{ field }}">{{ label }}</label>
+            {% if desc %}<div class="text-muted" style="font-size:12px">{{ desc }}</div>{% endif %}
+          </div>
+          {% endmacro %}
+
+          {{ switch('allow_private_chats', 'السماح بالمحادثات الخاصة', 'محادثة 1:1 بين ولي أمر ومعلم أو إدارة') }}
+          {{ switch('allow_group_chats', 'السماح بمجموعات المحادثة', 'مجموعات بحسب الشعبة / الصف / المدرسة') }}
+          {{ switch('allow_school_announcement_group', 'السماح بمجموعة الإعلانات المدرسية') }}
+          {{ switch('allow_parent_teacher_private_chat', 'محادثة خاصة: ولي الأمر ↔ المعلم') }}
+          {{ switch('allow_parent_admin_private_chat', 'محادثة خاصة: ولي الأمر ↔ الإدارة') }}
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header"><i class="bi bi-paperclip text-accent"></i>المرفقات</div>
+        <div class="card-body">
+          {{ switch('allow_file_attachments', 'السماح بالمرفقات بشكل عام') }}
+          {{ switch('allow_images', 'السماح بإرسال الصور') }}
+          {{ switch('allow_pdf', 'السماح بإرسال ملفات PDF') }}
+          <div class="row g-3 mt-1">
+            <div class="col-md-4">
+              <label class="form-label small">الحد الأقصى لحجم المرفق (MB)</label>
+              <input type="number" name="max_attachment_size_mb" class="form-control form-control-sm"
+                     value="{{ cfg.get('extra', {}).get('max_attachment_size_mb', 10) }}" min="1" max="50">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header"><i class="bi bi-shield-check text-accent"></i>الإدارة والتحكم</div>
+        <div class="card-body">
+          {{ switch('allow_message_delete', 'السماح بحذف الرسائل') }}
+          {{ switch('allow_read_receipts', 'تفعيل إشعارات القراءة') }}
+          {{ switch('allow_admin_monitoring', 'السماح للإدارة بمراقبة جميع المحادثات') }}
+          {{ switch('allow_chat_schedule', 'تفعيل جدول أوقات الإرسال') }}
+          {{ switch('allow_member_blocking', 'السماح بحظر الأعضاء') }}
+          {{ switch('allow_group_admins', 'السماح بتعيين مشرفين للمجموعات') }}
+          <div class="row g-3 mt-1">
+            <div class="col-md-4">
+              <label class="form-label small">الحد الأقصى لطول الرسالة (حرف)</label>
+              <input type="number" name="message_max_length" class="form-control form-control-sm"
+                     value="{{ cfg.get('extra', {}).get('message_max_length', 2000) }}" min="50" max="10000">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary btn-lg">
+        <i class="bi bi-check-circle-fill me-1"></i>حفظ الإعدادات
+      </button>
+    </div>
+
+    <div class="col-md-4">
+      <div class="card">
+        <div class="card-header"><i class="bi bi-info-circle text-accent"></i>ملاحظة</div>
+        <div class="card-body" style="font-size:13px">
+          هذه الإعدادات تتحكم في ما هو مسموح لمدرستك بشكل عام.
+          يمكنك أيضاً تحكم بكل محادثة على حدة من صفحة تعديل المجموعة.
+          <br><br>
+          بعض الإعدادات قد تكون معطلة بقرار من المشرف العام — في هذه الحالة لن يظهر لك خيار تفعيلها.
+        </div>
+      </div>
+    </div>
+  </div>
+</form>
+{% endblock %}

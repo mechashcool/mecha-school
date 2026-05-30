@@ -1,0 +1,153 @@
+{% extends "shared/base.html" %}
+{% block title %}إنشاء مجموعة محادثة{% endblock %}
+{% block page_title %}إنشاء مجموعة محادثة{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">مجموعة جديدة</h1>
+    <p class="page-subtitle">إنشاء غرفة محادثة جديدة وتحديد أعضائها</p>
+  </div>
+  <a href="{{ url_for('chat.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<form method="POST">
+  <div class="row g-4">
+
+    <div class="col-md-8">
+      <div class="card mb-4">
+        <div class="card-header"><i class="bi bi-chat-dots-fill text-accent"></i>معلومات المجموعة</div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-12">
+              <label class="form-label">اسم المجموعة <span class="text-danger">*</span></label>
+              <input type="text" name="name" class="form-control" required
+                     placeholder="مثال: أولياء أمور الصف الأول — شعبة A">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">نوع المحادثة</label>
+              <select name="type" id="typeSelect" class="form-select">
+                <option value="group">مجموعة</option>
+                <option value="announcement">إعلانات (إدارة فقط)</option>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">نطاق الأعضاء</label>
+              <select name="scope" id="scopeSelect" class="form-select" onchange="updateScopeFields()">
+                <option value="section">شعبة محددة</option>
+                <option value="grade">صف كامل</option>
+                <option value="stage">مرحلة دراسية</option>
+                <option value="school">المدرسة كاملاً</option>
+                <option value="subject">مادة دراسية</option>
+                <option value="announcement">المدرسة كاملاً (إعلاني)</option>
+                <option value="custom">اختيار يدوي</option>
+              </select>
+            </div>
+
+            <div id="sectionField" class="col-md-6 scope-field">
+              <label class="form-label">الشعبة</label>
+              <select name="section_id" class="form-select">
+                <option value="">— اختر —</option>
+                {% for sec in sections %}
+                <option value="{{ sec.id }}">
+                  {{ sec.grade.name if sec.grade else '' }} — {{ sec.name }}
+                </option>
+                {% endfor %}
+              </select>
+            </div>
+
+            <div id="gradeField" class="col-md-6 scope-field d-none">
+              <label class="form-label">الصف</label>
+              <select name="grade_id" class="form-select">
+                <option value="">— اختر —</option>
+                {% for g in grades %}
+                <option value="{{ g.id }}">{{ g.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+
+            <div id="stageField" class="col-md-6 scope-field d-none">
+              <label class="form-label">المرحلة الدراسية</label>
+              <input type="text" name="stage" class="form-control"
+                     placeholder="مثال: primary / middle / high">
+            </div>
+
+            <div id="subjectField" class="col-md-6 scope-field d-none">
+              <label class="form-label">المادة الدراسية</label>
+              <select name="subject_id" class="form-select">
+                <option value="">— اختر —</option>
+                {% for subj in subjects %}
+                <option value="{{ subj.id }}">{{ subj.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header"><i class="bi bi-gear-fill text-accent"></i>خيارات المجموعة</div>
+        <div class="card-body">
+          <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" id="isAnn" name="is_announcement_only" value="1">
+            <label class="form-check-label" for="isAnn">
+              إعلانات فقط — يرسل الإدارة/المشرف فقط؛ الأعضاء يقرؤون فقط
+            </label>
+          </div>
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="noReplies" name="no_replies" value="1">
+            <label class="form-check-label" for="noReplies">
+              تعطيل الردود (لا أحد يستطيع الرد حتى المشرفون)
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-4">
+      <div class="card mb-4">
+        <div class="card-header"><i class="bi bi-info-circle text-accent"></i>كيف يعمل النطاق</div>
+        <div class="card-body" style="font-size:13px">
+          <ul class="mb-0 ps-3">
+            <li><b>شعبة:</b> أولياء أمور الطلاب + معلمو الشعبة</li>
+            <li><b>صف:</b> كل شعب الصف + معلموها + أولياء أمورها</li>
+            <li><b>مرحلة:</b> كل صفوف المرحلة وشعبها</li>
+            <li><b>مادة:</b> معلمو المادة + أولياء أمور طلابهم</li>
+            <li><b>المدرسة:</b> جميع المستخدمين النشطين</li>
+            <li><b>اختيار يدوي:</b> حدد الأعضاء بنفسك</li>
+          </ul>
+          <div class="alert alert-info mt-3 mb-0 py-2" style="font-size:12px">
+            الإدارة تُضاف تلقائياً لجميع الأنواع.
+          </div>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary w-100 btn-lg">
+        <i class="bi bi-check-circle-fill me-1"></i>إنشاء المجموعة
+      </button>
+    </div>
+
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function updateScopeFields() {
+  const scope = document.getElementById('scopeSelect').value;
+  document.querySelectorAll('.scope-field').forEach(el => el.classList.add('d-none'));
+  if (scope === 'section') {
+    document.getElementById('sectionField').classList.remove('d-none');
+  } else if (scope === 'grade') {
+    document.getElementById('gradeField').classList.remove('d-none');
+  } else if (scope === 'stage') {
+    document.getElementById('stageField').classList.remove('d-none');
+  } else if (scope === 'subject') {
+    document.getElementById('subjectField').classList.remove('d-none');
+  }
+}
+updateScopeFields();
+</script>
+{% endblock %}

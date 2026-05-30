@@ -1,0 +1,192 @@
+{% extends "shared/base.html" %}
+{% block title %}{{ room.name }}{% endblock %}
+{% block page_title %}{{ room.name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ room.name }}</h1>
+    <p class="page-subtitle">
+      {% if room.type == 'group' %}مجموعة
+      {% elif room.type == 'announcement' %}إعلانات
+      {% else %}محادثة خاصة{% endif %}
+      —
+      {% if room.is_closed %}<span class="text-danger">مغلقة</span>
+      {% else %}<span class="text-success">مفتوحة</span>{% endif %}
+      — {{ room.members.count() }} عضو
+    </p>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <a href="{{ url_for('chat.index') }}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-arrow-right me-1"></i>رجوع
+    </a>
+    <a href="{{ url_for('chat.edit_room', room_id=room.id) }}" class="btn btn-outline-primary btn-sm">
+      <i class="bi bi-pencil me-1"></i>تعديل
+    </a>
+    <a href="{{ url_for('chat.room_schedule', room_id=room.id) }}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-clock me-1"></i>الأوقات
+    </a>
+    {% if room.is_closed %}
+    <form method="POST" action="{{ url_for('chat.reopen_room', room_id=room.id) }}" class="d-inline">
+      <button class="btn btn-success btn-sm"><i class="bi bi-unlock me-1"></i>فتح</button>
+    </form>
+    {% else %}
+    <form method="POST" action="{{ url_for('chat.close_room', room_id=room.id) }}" class="d-inline">
+      <button class="btn btn-warning btn-sm"><i class="bi bi-lock me-1"></i>إغلاق</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="row g-4">
+
+  {# ── Messages panel ── #}
+  <div class="col-md-8">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-chat-left-text-fill text-accent"></i>الرسائل ({{ messages|length }})</span>
+        <small class="text-muted">أحدث {{ messages|length }} رسالة</small>
+      </div>
+      <div class="card-body p-0">
+        {% if messages %}
+        <div style="max-height:560px;overflow-y:auto;padding:16px" id="msgBox">
+          {% for msg in messages %}
+          <div class="d-flex mb-3 align-items-start gap-2
+            {{ 'flex-row-reverse' if msg.sender and msg.sender.id == current_user.id }}">
+            <div class="rounded-circle bg-secondary text-white d-flex align-items-center justify-content-center flex-shrink-0"
+                 style="width:34px;height:34px;font-size:13px">
+              {{ (msg.sender.full_name[0] if msg.sender and msg.sender.full_name else '؟') }}
+            </div>
+            <div style="max-width:70%">
+              <div class="d-flex gap-2 align-items-center mb-1
+                {{ 'flex-row-reverse' if msg.sender and msg.sender.id == current_user.id }}">
+                <span class="fw-semibold" style="font-size:13px">
+                  {{ msg.sender.full_name if msg.sender else 'محذوف' }}
+                </span>
+                <span class="text-muted" style="font-size:11px">
+                  {{ msg.created_at | to_baghdad }}
+                </span>
+              </div>
+              {% if msg.is_deleted %}
+              <div class="bg-light border rounded p-2 text-muted fst-italic" style="font-size:13px">
+                تم حذف هذه الرسالة
+              </div>
+              {% else %}
+              <div class="bg-white border rounded p-2 shadow-sm" style="font-size:14px">
+                {{ msg.body or '[مرفق]' }}
+              </div>
+              <div class="mt-1
+                {{ 'text-end' if msg.sender and msg.sender.id != current_user.id }}">
+                <form method="POST"
+                      action="{{ url_for('chat.delete_message', room_id=room.id, msg_id=msg.id) }}"
+                      class="d-inline"
+                      onsubmit="return confirm('هل تريد حذف هذه الرسالة؟')">
+                  <button class="btn btn-link btn-sm text-danger p-0" style="font-size:11px">
+                    <i class="bi bi-trash"></i> حذف
+                  </button>
+                </form>
+              </div>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-center py-4 text-muted">لا توجد رسائل بعد.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# ── Members panel ── #}
+  <div class="col-md-4">
+    <div class="card mb-4">
+      <div class="card-header"><i class="bi bi-people-fill text-accent"></i>الأعضاء ({{ members|length }})</div>
+      <div class="card-body p-0">
+        <div style="max-height:300px;overflow-y:auto">
+          <ul class="list-group list-group-flush">
+            {% for mem in members %}
+            <li class="list-group-item d-flex justify-content-between align-items-center py-2">
+              <div>
+                <span class="fw-semibold" style="font-size:13px">
+                  {{ mem.user.full_name if mem.user else '—' }}
+                </span>
+                <br>
+                <small class="text-muted">
+                  {% if mem.role == 'owner' %}<span class="badge bg-primary">المنشئ</span>
+                  {% elif mem.role == 'admin' %}<span class="badge bg-info">مشرف</span>
+                  {% else %}<span class="badge bg-light text-dark">عضو</span>{% endif %}
+                  {% if mem.is_blocked %}<span class="badge bg-danger ms-1">محظور</span>{% endif %}
+                </small>
+              </div>
+              <div class="d-flex gap-1">
+                {% if mem.role not in ('owner',) %}
+                  {% if mem.is_blocked %}
+                  <form method="POST"
+                        action="{{ url_for('chat.unblock_member', room_id=room.id, user_id=mem.user_id) }}">
+                    <button class="btn btn-xs btn-outline-success" title="إلغاء الحظر">
+                      <i class="bi bi-unlock" style="font-size:11px"></i>
+                    </button>
+                  </form>
+                  {% else %}
+                  <form method="POST"
+                        action="{{ url_for('chat.block_member', room_id=room.id, user_id=mem.user_id) }}">
+                    <button class="btn btn-xs btn-outline-danger" title="حظر">
+                      <i class="bi bi-slash-circle" style="font-size:11px"></i>
+                    </button>
+                  </form>
+                  {% endif %}
+                  {% if mem.role == 'member' %}
+                  <form method="POST"
+                        action="{{ url_for('chat.make_room_admin', room_id=room.id, user_id=mem.user_id) }}">
+                    <button class="btn btn-xs btn-outline-primary" title="تعيين مشرف">
+                      <i class="bi bi-person-check" style="font-size:11px"></i>
+                    </button>
+                  </form>
+                  {% elif mem.role == 'admin' %}
+                  <form method="POST"
+                        action="{{ url_for('chat.remove_room_admin', room_id=room.id, user_id=mem.user_id) }}">
+                    <button class="btn btn-xs btn-outline-secondary" title="إزالة الإشراف">
+                      <i class="bi bi-person-dash" style="font-size:11px"></i>
+                    </button>
+                  </form>
+                  {% endif %}
+                {% endif %}
+              </div>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    {% if schedules %}
+    <div class="card">
+      <div class="card-header"><i class="bi bi-clock-fill text-accent"></i>أوقات الإرسال</div>
+      <div class="card-body p-0">
+        <ul class="list-group list-group-flush">
+          {% set day_names = {0:'الأحد',1:'الاثنين',2:'الثلاثاء',3:'الأربعاء',4:'الخميس',5:'الجمعة',6:'السبت'} %}
+          {% for sch in schedules %}
+          <li class="list-group-item py-1" style="font-size:13px">
+            {{ day_names[sch.day_of_week] }}:
+            {% if sch.is_enabled %}
+              {{ sch.open_time.strftime('%H:%M') }} – {{ sch.close_time.strftime('%H:%M') }}
+            {% else %}
+              <span class="text-muted">معطل</span>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const box = document.getElementById('msgBox');
+if (box) box.scrollTop = box.scrollHeight;
+</script>
+{% endblock %}

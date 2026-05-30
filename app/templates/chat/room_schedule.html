@@ -1,0 +1,63 @@
+{% extends "shared/base.html" %}
+{% block title %}أوقات التواصل — {{ room.name }}{% endblock %}
+{% block page_title %}أوقات التواصل{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">أوقات التواصل</h1>
+    <p class="page-subtitle">{{ room.name }} — حدد الأيام والأوقات المسموح فيها بالإرسال</p>
+  </div>
+  <a href="{{ url_for('chat.room_detail', room_id=room.id) }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="card">
+  <div class="card-header"><i class="bi bi-clock-fill text-accent"></i>جدول أوقات الإرسال</div>
+  <div class="card-body">
+    <div class="alert alert-info mb-4">
+      إذا لم تُحدد أي وقت ليوم ما، يُسمح بالإرسال طوال اليوم في ذلك اليوم.<br>
+      إذا أضفت سجلاً لليوم وعطّلته — لن يُسمح بالإرسال في ذلك اليوم أبداً.
+    </div>
+    <form method="POST">
+      <table class="table table-bordered">
+        <thead class="table-light">
+          <tr>
+            <th>اليوم</th>
+            <th>مفعّل</th>
+            <th>وقت الفتح</th>
+            <th>وقت الإغلاق</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for dow in range7 %}
+          {% set sch = schedules.get(dow) %}
+          <tr>
+            <td class="fw-semibold">{{ day_names[dow] }}</td>
+            <td>
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox"
+                       name="enabled_{{ dow }}" value="1"
+                       {{ 'checked' if sch and sch.is_enabled }}>
+              </div>
+            </td>
+            <td>
+              <input type="time" name="open_{{ dow }}" class="form-control form-control-sm"
+                     value="{{ sch.open_time.strftime('%H:%M') if sch else '' }}">
+            </td>
+            <td>
+              <input type="time" name="close_{{ dow }}" class="form-control form-control-sm"
+                     value="{{ sch.close_time.strftime('%H:%M') if sch else '' }}">
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <button type="submit" class="btn btn-primary">
+        <i class="bi bi-check-circle me-1"></i>حفظ الجدول
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}

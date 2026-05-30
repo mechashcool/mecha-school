@@ -81,6 +81,11 @@ class School(db.Model):
     emp_absence_period        = db.Column(db.String(20), nullable=True, default='monthly')
     emp_absence_alert_enabled = db.Column(db.Boolean,   default=True)
 
+    # Fee installment reminder notifications
+    fee_reminder_enabled      = db.Column(db.Boolean,    default=False)
+    fee_reminder_before_value = db.Column(db.Integer,    default=3)
+    fee_reminder_before_unit  = db.Column(db.String(10), default='days')  # 'days' | 'hours'
+
     # Last applied feature package (nullable — no package = defaults apply)
     package_id  = db.Column(db.Integer, db.ForeignKey('feature_packages.id', ondelete='SET NULL'),
                             nullable=True)
@@ -934,6 +939,38 @@ class FeeInstallment(db.Model):
             self.paid_date = self.paid_date or date.today()
         else:
             self.status = 'partial'
+
+
+class FeeReminderLog(db.Model):
+    """
+    Tracks which reminders have already been sent to prevent duplicates.
+    Unique on (installment_id, parent_user_id, reminder_value, reminder_unit)
+    — one reminder per parent per installment per configured window.
+    """
+    __tablename__ = 'fee_reminder_logs'
+
+    id               = db.Column(db.Integer, primary_key=True)
+    school_id        = db.Column(db.Integer, db.ForeignKey('schools.id'),
+                                 nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'),
+                                 nullable=True)
+    student_id       = db.Column(db.Integer, db.ForeignKey('students.id'),
+                                 nullable=False, index=True)
+    installment_id   = db.Column(db.Integer, db.ForeignKey('fee_installments.id'),
+                                 nullable=False, index=True)
+    parent_user_id   = db.Column(db.Integer, db.ForeignKey('users.id'),
+                                 nullable=False)
+    reminder_value   = db.Column(db.Integer,    nullable=False)
+    reminder_unit    = db.Column(db.String(10), nullable=False)
+    due_date         = db.Column(db.Date,       nullable=False)
+    sent_at          = db.Column(db.DateTime,   default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'installment_id', 'parent_user_id', 'reminder_value', 'reminder_unit',
+            name='uq_fee_reminder_log',
+        ),
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2059,3 +2096,157 @@ class Homework(db.Model):
 
     def __repr__(self):
         return f'<Homework {self.id} — {self.title}>'
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Chat / Messaging Module
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class ChatRoom(db.Model):
+    """
+    A chat room (private, group, or announcement).
+    type:  'private' | 'group' | 'announcement'
+    scope: 'school' | 'stage' | 'grade' | 'section' | 'subject' | 'custom' | 'private'
+    """
+    __tablename__ = 'chat_rooms'
+    __school_scoped__ = True
+
+    id                  = db.Column(db.Integer, primary_key=True)
+    school_id           = db.Column(db.Integer, db.ForeignKey('schools.id', ondelete='CASCADE'),
+                                    nullable=False, index=True)
+    academic_year_id    = db.Column(db.Integer, db.ForeignKey('academic_years.id', ondelete='SET NULL'),
+                                    nullable=True)
+    name                = db.Column(db.String(200), nullable=False)
+    type                = db.Column(db.String(20),  nullable=False, default='group')
+    scope               = db.Column(db.String(20),  nullable=False, default='custom')
+    stage               = db.Column(db.String(50),  nullable=True)
+    grade_id            = db.Column(db.Integer, db.ForeignKey('grades.id', ondelete='SET NULL'),
+                                    nullable=True)
+    section_id          = db.Column(db.Integer, db.ForeignKey('sections.id', ondelete='SET NULL'),
+                                    nullable=True)
+    subject_id          = db.Column(db.Integer, db.ForeignKey('subjects.id', ondelete='SET NULL'),
+                                    nullable=True)
+    created_by_user_id  = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
+                                    nullable=True)
+    is_active           = db.Column(db.Boolean, nullable=False, default=True)
+    is_closed           = db.Column(db.Boolean, nullable=False, default=False)
+    is_announcement_only = db.Column(db.Boolean, nullable=False, default=False)
+    allow_replies       = db.Column(db.Boolean, nullable=False, default=True)
+    created_at          = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at          = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    school        = db.relationship('School',        foreign_keys=[school_id],
+                                    backref=db.backref('chat_rooms', lazy='dynamic',
+                                                       cascade='all, delete-orphan'))
+    academic_year = db.relationship('AcademicYear',  foreign_keys=[academic_year_id])
+    grade         = db.relationship('Grade',         foreign_keys=[grade_id])
+    section       = db.relationship('Section',       foreign_keys=[section_id])
+    subject       = db.relationship('Subject',       foreign_keys=[subject_id])
+    created_by    = db.relationship('User',          foreign_keys=[created_by_user_id])
+    members       = db.relationship('ChatRoomMember',
+                                    backref='room', lazy='dynamic',
+                                    cascade='all, delete-orphan')
+    messages      = db.relationship('ChatMessage',
+                                    backref='room', lazy='dynamic',
+                                    cascade='all, delete-orphan')
+    schedules     = db.relationship('ChatRoomSchedule',
+                                    backref='room', lazy='dynamic',
+                                    cascade='all, delete-orphan')
+
+    def __repr__(self):
+        return f'<ChatRoom {self.id} {self.name!r}>'
+
+
+class ChatRoomMember(db.Model):
+    """Membership of a user in a chat room with role and block status."""
+    __tablename__ = 'chat_room_members'
+
+    id                = db.Column(db.Integer, primary_key=True)
+    room_id           = db.Column(db.Integer, db.ForeignKey('chat_rooms.id', ondelete='CASCADE'),
+                                  nullable=False, index=True)
+    user_id           = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'),
+                                  nullable=False, index=True)
+    role              = db.Column(db.String(20), nullable=False, default='member')
+    is_muted          = db.Column(db.Boolean, nullable=False, default=False)
+    is_blocked        = db.Column(db.Boolean, nullable=False, default=False)
+    joined_at         = db.Column(db.DateTime, default=datetime.utcnow)
+    blocked_at        = db.Column(db.DateTime, nullable=True)
+    blocked_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
+                                   nullable=True)
+
+    user       = db.relationship('User', foreign_keys=[user_id])
+    blocked_by = db.relationship('User', foreign_keys=[blocked_by_user_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('room_id', 'user_id', name='uq_chat_room_member'),
+    )
+
+    def __repr__(self):
+        return f'<ChatRoomMember room={self.room_id} user={self.user_id} role={self.role}>'
+
+
+class ChatMessage(db.Model):
+    """A message inside a chat room. Soft-deletable."""
+    __tablename__ = 'chat_messages'
+
+    id                = db.Column(db.Integer, primary_key=True)
+    room_id           = db.Column(db.Integer, db.ForeignKey('chat_rooms.id', ondelete='CASCADE'),
+                                  nullable=False, index=True)
+    sender_user_id    = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
+                                  nullable=True, index=True)
+    body              = db.Column(db.Text, nullable=True)
+    message_type      = db.Column(db.String(20), nullable=False, default='text')
+    attachment_url    = db.Column(db.String(500), nullable=True)
+    attachment_name   = db.Column(db.String(200), nullable=True)
+    attachment_mime   = db.Column(db.String(100), nullable=True)
+    attachment_size   = db.Column(db.Integer,     nullable=True)
+    is_deleted        = db.Column(db.Boolean, nullable=False, default=False)
+    deleted_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
+                                   nullable=True)
+    deleted_at        = db.Column(db.DateTime, nullable=True)
+    created_at        = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    updated_at        = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    sender     = db.relationship('User', foreign_keys=[sender_user_id])
+    deleted_by = db.relationship('User', foreign_keys=[deleted_by_user_id])
+    reads      = db.relationship('ChatMessageRead',
+                                 backref='message', lazy='dynamic',
+                                 cascade='all, delete-orphan')
+
+    def __repr__(self):
+        return f'<ChatMessage {self.id} room={self.room_id}>'
+
+
+class ChatMessageRead(db.Model):
+    """Read receipt — one row per (message, user)."""
+    __tablename__ = 'chat_message_reads'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    message_id = db.Column(db.Integer, db.ForeignKey('chat_messages.id', ondelete='CASCADE'),
+                           nullable=False, index=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'),
+                           nullable=False, index=True)
+    read_at    = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('message_id', 'user_id', name='uq_chat_message_read'),
+    )
+
+    def __repr__(self):
+        return f'<ChatMessageRead msg={self.message_id} user={self.user_id}>'
+
+
+class ChatRoomSchedule(db.Model):
+    """Allowed sending-time window for a chat room (per day of week)."""
+    __tablename__ = 'chat_room_schedules'
+
+    id           = db.Column(db.Integer, primary_key=True)
+    room_id      = db.Column(db.Integer, db.ForeignKey('chat_rooms.id', ondelete='CASCADE'),
+                             nullable=False, index=True)
+    day_of_week  = db.Column(db.Integer, nullable=False)  # 0=Sunday … 6=Saturday
+    open_time    = db.Column(db.Time, nullable=False)
+    close_time   = db.Column(db.Time, nullable=False)
+    is_enabled   = db.Column(db.Boolean, nullable=False, default=True)
+
+    def __repr__(self):
+        return f'<ChatRoomSchedule room={self.room_id} day={self.day_of_week}>'

@@ -172,6 +172,16 @@
     </li>
     {% endif %}
 
+    {% if 'chat' in enabled_modules %}
+    <li class="nav-section-label">المراسلات</li>
+    <li class="nav-item">
+      <a href="{{ url_for('chat.index') }}"
+         class="{{ 'active' if request.blueprint == 'chat' }}">
+        <i class="bi bi-chat-dots-fill"></i> المراسلات
+      </a>
+    </li>
+    {% endif %}
+
     <li class="nav-section-label">النظام</li>
     {% if 'notifications' in enabled_modules %}
     <li class="nav-item">
@@ -327,6 +337,16 @@
       <a href="{{ url_for('homework.index') }}"
          class="{{ 'active' if request.blueprint == 'homework' }}">
         <i class="bi bi-journal-text"></i> الواجبات
+      </a>
+    </li>
+    {% endif %}
+
+    {# ── Chat / Messaging ─────────────────────────────────────────────────── #}
+    {% if 'chat' in enabled_modules and current_user.is_admin_user %}
+    <li class="nav-item">
+      <a href="{{ url_for('chat.index') }}"
+         class="{{ 'active' if request.blueprint == 'chat' }}">
+        <i class="bi bi-chat-dots-fill"></i> المراسلات
       </a>
     </li>
     {% endif %}
