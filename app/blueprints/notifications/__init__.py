@@ -26,13 +26,13 @@ def _dispatch_fcm_push(title: str, body: str, ntype: str,
     try:
         from app.services.fcm_service import is_enabled, send_push_to_user
         if not is_enabled():
-            _log.debug('[notifications] FCM disabled — skipping push for title=%r', title)
+            _log.warning('[notifications] FCM disabled — skipping push for title=%r', title)
             return
 
         data = {'type': ntype, 'school_id': str(school_id)}
 
         if target_user_id:
-            _log.info('[notifications] FCM push → user_id=%s title=%r', target_user_id, title)
+            _log.warning('[notifications] FCM push → user_id=%s title=%r', target_user_id, title)
             send_push_to_user(target_user_id, title, body, data)
 
         elif target_role:
@@ -42,8 +42,8 @@ def _dispatch_fcm_push(title: str, body: str, ntype: str,
             users = (User.query
                      .filter_by(role_id=role_obj.id, school_id=school_id, is_active=True)
                      .all())
-            _log.info('[notifications] FCM broadcast → role=%s users=%d title=%r',
-                      target_role, len(users), title)
+            _log.warning('[notifications] FCM broadcast → role=%s users=%d title=%r',
+                         target_role, len(users), title)
             for u in users:
                 send_push_to_user(u.id, title, body, data)
 
@@ -190,8 +190,12 @@ def create():
         )
         db.session.add(n)
         db.session.commit()
+        _log.warning('[notifications] committed notification_id=%s target_user_id=%s '
+                     'target_role=%s title=%r', n.id, target_user_id, target_role, title)
 
         # FCM push — additional on top of in-app notification row
+        _log.warning('[notifications] dispatching FCM target_user_id=%s target_role=%s title=%r',
+                     target_user_id, target_role, title)
         _dispatch_fcm_push(
             title=title,
             body=body,

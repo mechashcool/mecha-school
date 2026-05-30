@@ -50,7 +50,7 @@ def _init_firebase() -> None:
         # Already initialized by the legacy FCMBackend in notifications.py; reuse it.
         _messaging   = fb_messaging
         _fcm_enabled = True
-        log.info('[FCM] attaching to already-initialized Firebase app')
+        log.warning('[FCM] attaching to already-initialized Firebase app')
         return
 
     try:
@@ -74,7 +74,7 @@ def _init_firebase() -> None:
         firebase_admin.initialize_app(cred)
         _messaging   = fb_messaging
         _fcm_enabled = True
-        log.info('[FCM] ENABLED — initialized from %s', source)
+        log.warning('[FCM] ENABLED — initialized from %s', source)
     except Exception as exc:
         log.error('[FCM] initialization failed (%s): %s', type(exc).__name__, exc)
 
@@ -159,10 +159,10 @@ def send_push_to_user(user_id: int, title: str, body: str,
         return 0, 0
 
     if not tokens:
-        log.debug('[FCM] no active device tokens for user_id=%s', user_id)
+        log.warning('[FCM] no active device tokens for user_id=%s — push skipped', user_id)
         return 0, 0
 
-    log.info('[FCM] pushing to user_id=%s — %d active token(s)', user_id, len(tokens))
+    log.warning('[FCM] pushing to user_id=%s — %d active token(s)', user_id, len(tokens))
     success_count = fail_count = deactivated = 0
 
     for dt in tokens:
@@ -186,6 +186,6 @@ def send_push_to_user(user_id: int, title: str, body: str,
             log.error('[FCM] failed to persist token deactivations: %s', exc)
             db.session.rollback()
 
-    log.info('[FCM] user_id=%s — sent=%d  failed=%d  deactivated=%d',
-             user_id, success_count, fail_count, deactivated)
+    log.warning('[FCM] user_id=%s — sent=%d  failed=%d  deactivated=%d',
+               user_id, success_count, fail_count, deactivated)
     return success_count, fail_count
