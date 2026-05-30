@@ -46,6 +46,7 @@
               </select>
             </div>
 
+            {# ── Section picker ── #}
             <div id="sectionField" class="col-md-6 scope-field">
               <label class="form-label">الشعبة</label>
               <select name="section_id" class="form-select">
@@ -58,6 +59,7 @@
               </select>
             </div>
 
+            {# ── Grade picker ── #}
             <div id="gradeField" class="col-md-6 scope-field d-none">
               <label class="form-label">الصف</label>
               <select name="grade_id" class="form-select">
@@ -68,12 +70,14 @@
               </select>
             </div>
 
+            {# ── Stage input ── #}
             <div id="stageField" class="col-md-6 scope-field d-none">
               <label class="form-label">المرحلة الدراسية</label>
               <input type="text" name="stage" class="form-control"
                      placeholder="مثال: primary / middle / high">
             </div>
 
+            {# ── Subject picker ── #}
             <div id="subjectField" class="col-md-6 scope-field d-none">
               <label class="form-label">المادة الدراسية</label>
               <select name="subject_id" class="form-select">
@@ -82,6 +86,50 @@
                 <option value="{{ subj.id }}">{{ subj.name }}</option>
                 {% endfor %}
               </select>
+            </div>
+
+            {# ── Custom member picker ── #}
+            <div id="customField" class="col-12 scope-field d-none">
+              <label class="form-label fw-semibold">اختيار الأعضاء</label>
+              <div class="mb-2">
+                <input type="text" id="memberSearch" class="form-control form-control-sm"
+                       placeholder="بحث بالاسم أو الدور..." oninput="filterMembers()">
+              </div>
+              <div style="max-height:320px;overflow-y:auto;border:1px solid #dee2e6;border-radius:6px;padding:8px"
+                   id="memberList">
+                {% if school_users %}
+                  {% set ns = namespace(last_role='') %}
+                  {% for u in school_users %}
+                    {% set role_label = u.role.label if u.role else '—' %}
+                    {% if role_label != ns.last_role %}
+                      {% set ns.last_role = role_label %}
+                      <div class="text-muted fw-semibold border-bottom mb-1 mt-2"
+                           style="font-size:11px;letter-spacing:.05em">{{ role_label }}</div>
+                    {% endif %}
+                    <div class="form-check member-item" data-name="{{ u.full_name|lower }}"
+                         data-role="{{ role_label|lower }}">
+                      <input class="form-check-input" type="checkbox"
+                             name="member_ids" value="{{ u.id }}"
+                             id="mu{{ u.id }}">
+                      <label class="form-check-label" for="mu{{ u.id }}" style="font-size:13px">
+                        {{ u.full_name }}
+                        <span class="text-muted">({{ u.username }})</span>
+                      </label>
+                    </div>
+                  {% endfor %}
+                {% else %}
+                  <p class="text-muted text-center py-3 mb-0">لا يوجد مستخدمون نشطون في هذه المدرسة.</p>
+                {% endif %}
+              </div>
+              <div class="mt-1 d-flex gap-2">
+                <button type="button" class="btn btn-xs btn-outline-secondary"
+                        onclick="toggleAll(true)">تحديد الكل</button>
+                <button type="button" class="btn btn-xs btn-outline-secondary"
+                        onclick="toggleAll(false)">إلغاء التحديد</button>
+              </div>
+              <small class="text-muted mt-1 d-block">
+                المنشئ يُضاف تلقائياً كمالك للمجموعة بغض النظر عن التحديد.
+              </small>
             </div>
 
           </div>
@@ -105,6 +153,10 @@
           </div>
         </div>
       </div>
+
+      <button type="submit" class="btn btn-primary btn-lg">
+        <i class="bi bi-check-circle-fill me-1"></i>إنشاء المجموعة
+      </button>
     </div>
 
     <div class="col-md-4">
@@ -120,13 +172,11 @@
             <li><b>اختيار يدوي:</b> حدد الأعضاء بنفسك</li>
           </ul>
           <div class="alert alert-info mt-3 mb-0 py-2" style="font-size:12px">
-            الإدارة تُضاف تلقائياً لجميع الأنواع.
+            الإدارة وأصحاب الأدوار الإدارية تُضاف تلقائياً لجميع الأنواع.
+            المنشئ يُضاف دائماً كمالك.
           </div>
         </div>
       </div>
-      <button type="submit" class="btn btn-primary w-100 btn-lg">
-        <i class="bi bi-check-circle-fill me-1"></i>إنشاء المجموعة
-      </button>
     </div>
 
   </div>
@@ -146,8 +196,28 @@ function updateScopeFields() {
     document.getElementById('stageField').classList.remove('d-none');
   } else if (scope === 'subject') {
     document.getElementById('subjectField').classList.remove('d-none');
+  } else if (scope === 'custom') {
+    document.getElementById('customField').classList.remove('d-none');
   }
 }
+
+function filterMembers() {
+  const q = document.getElementById('memberSearch').value.toLowerCase();
+  document.querySelectorAll('.member-item').forEach(function(item) {
+    const name = item.dataset.name || '';
+    const role = item.dataset.role || '';
+    item.style.display = (name.includes(q) || role.includes(q)) ? '' : 'none';
+  });
+}
+
+function toggleAll(checked) {
+  document.querySelectorAll('#memberList input[type="checkbox"]').forEach(function(cb) {
+    if (cb.closest('.member-item').style.display !== 'none') {
+      cb.checked = checked;
+    }
+  });
+}
+
 updateScopeFields();
 </script>
 {% endblock %}

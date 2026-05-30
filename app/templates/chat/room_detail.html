@@ -26,6 +26,14 @@
     <a href="{{ url_for('chat.room_schedule', room_id=room.id) }}" class="btn btn-outline-secondary btn-sm">
       <i class="bi bi-clock me-1"></i>الأوقات
     </a>
+    {% if room.scope != 'custom' %}
+    <form method="POST" action="{{ url_for('chat.rebuild_members', room_id=room.id) }}" class="d-inline"
+          onsubmit="return confirm('هل تريد إعادة توليد الأعضاء تلقائياً بناءً على نطاق المجموعة؟')">
+      <button class="btn btn-outline-info btn-sm">
+        <i class="bi bi-arrow-repeat me-1"></i>إعادة توليد الأعضاء
+      </button>
+    </form>
+    {% endif %}
     {% if room.is_closed %}
     <form method="POST" action="{{ url_for('chat.reopen_room', room_id=room.id) }}" class="d-inline">
       <button class="btn btn-success btn-sm"><i class="bi bi-unlock me-1"></i>فتح</button>

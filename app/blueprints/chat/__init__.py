@@ -3,22 +3,28 @@ Chat / Messaging module — school admin web interface
 =====================================================
 Routes (all require login + chat module enabled):
 
-GET  /chat/                                 – room list
-GET  /chat/rooms/create                     – create room form
-POST /chat/rooms/create                     – submit new room
-GET  /chat/rooms/<id>                       – room messages viewer
-GET  /chat/rooms/<id>/edit                  – edit room form
-POST /chat/rooms/<id>/edit                  – update room
-POST /chat/rooms/<id>/close                 – close room
-POST /chat/rooms/<id>/reopen               – reopen room
-POST /chat/rooms/<id>/members/<uid>/block  – block member
-POST /chat/rooms/<id>/members/<uid>/unblock– unblock member
-POST /chat/rooms/<id>/messages/<mid>/delete– soft-delete message
-GET  /chat/settings                         – school chat settings page
-POST /chat/settings                         – save school chat settings
+GET  /chat/                                        – room list
+GET  /chat/rooms/create                            – create room form
+POST /chat/rooms/create                            – submit new room
+GET  /chat/rooms/<id>                              – room messages viewer
+GET  /chat/rooms/<id>/edit                         – edit room form
+POST /chat/rooms/<id>/edit                         – update room
+POST /chat/rooms/<id>/close                        – close room
+POST /chat/rooms/<id>/reopen                       – reopen room
+POST /chat/rooms/<id>/members/<uid>/block          – block member
+POST /chat/rooms/<id>/members/<uid>/unblock        – unblock member
+POST /chat/rooms/<id>/members/<uid>/make-admin     – promote to admin
+POST /chat/rooms/<id>/members/<uid>/remove-admin   – demote to member
+POST /chat/rooms/<id>/messages/<mid>/delete        – soft-delete message
+POST /chat/rooms/<id>/rebuild-members              – rebuild auto-members
+GET  /chat/rooms/<id>/schedule                     – send-schedule form
+POST /chat/rooms/<id>/schedule                     – save schedule
+GET  /chat/settings                                – school chat settings page
+POST /chat/settings                                – save school chat settings
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from flask import (
@@ -28,21 +34,22 @@ from flask import (
 from flask_login import current_user, login_required
 
 from app.models import (
-    db, ChatRoom, ChatRoomMember, ChatMessage,
+    db, ChatRoom, ChatRoomMember, ChatMessage, ChatMessageRead,
     ChatRoomSchedule, Section, Grade, Subject,
-    User, Employee, Student, parent_students,
-    teacher_subjects,
+    User, Employee, Student, Role,
+    parent_students, teacher_subjects,
 )
 from app.utils.decorators import admin_required, get_current_school, get_active_year
 from app.utils.modules import is_module_enabled
 
+_log = logging.getLogger('mecha.chat')
+
 chat_bp = Blueprint('chat', __name__, template_folder='../../templates/chat')
 
 
-# ─── Module guard helper ──────────────────────────────────────────────────────
+# ─── Module guard ─────────────────────────────────────────────────────────────
 
 def _require_chat_module():
-    """Return 403 if chat module is disabled for current school."""
     school_id = getattr(current_user, 'school_id', None)
     if not current_user.is_super_admin and not is_module_enabled(school_id, 'chat'):
         abort(403)
@@ -50,160 +57,234 @@ def _require_chat_module():
 
 # ─── Member auto-generation ───────────────────────────────────────────────────
 
-def _collect_user_ids(school_id: int, scope: str, section_id=None,
-                      grade_id=None, subject_id=None, stage=None) -> set[int]:
+def _collect_user_ids(
+    school_id: int,
+    scope: str,
+    section_id=None,
+    grade_id=None,
+    subject_id=None,
+    stage=None,
+) -> tuple[set[int], dict]:
     """
-    Compute the set of user_ids that should be auto-added to a room
-    based on its scope. Always includes all school admins.
+    Compute which user_ids should be auto-added to a room based on scope.
+    Returns (user_ids, stats) where stats contains counts for flash messages.
+
+    Always includes all school admins (Role.is_admin == True).
+    All DB lookups use bypass_tenant_scope + bypass_year_scope so they work
+    regardless of the request's active-year context.
     """
     user_ids: set[int] = set()
+    stats = {'admins': 0, 'teachers': 0, 'parents': 0}
 
-    # All admin/staff users of the school
-    admins = (User.query
-              .execution_options(bypass_tenant_scope=True)
-              .filter_by(school_id=school_id, is_active=True)
-              .join(User.role)
-              .filter(db.text("roles.name IN ('admin', 'school_manager', 'staff')"))
-              .all())
-    for u in admins:
-        user_ids.add(u.id)
+    # ── Always include all school-level admin users ───────────────────────────
+    try:
+        admins = (
+            User.query
+            .execution_options(bypass_tenant_scope=True)
+            .join(User.role)
+            .filter(
+                User.school_id == school_id,
+                User.is_active == True,
+                Role.is_admin == True,
+            )
+            .all()
+        )
+        for u in admins:
+            user_ids.add(u.id)
+        stats['admins'] = len(admins)
+        _log.info('[chat] scope=%s school=%s admins_found=%d',
+                  scope, school_id, len(admins))
+    except Exception as exc:
+        _log.error('[chat] admin query failed school=%s: %s', school_id, exc)
 
-    if scope == 'school' or scope == 'announcement':
-        # All active parents + all active teachers/staff
-        all_users = (User.query
-                     .execution_options(bypass_tenant_scope=True)
-                     .filter_by(school_id=school_id, is_active=True)
-                     .all())
+    # ── Scope-specific members ────────────────────────────────────────────────
+
+    if scope in ('school', 'announcement'):
+        all_users = (
+            User.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter(User.school_id == school_id, User.is_active == True)
+            .all()
+        )
         for u in all_users:
             user_ids.add(u.id)
 
     elif scope == 'section' and section_id:
-        section = db.session.get(Section, section_id)
-        if section:
-            # Teachers of this section (homeroom + subject)
-            if section.teacher_id:
-                emp = db.session.get(Employee, section.teacher_id)
-                if emp and emp.user_id:
-                    user_ids.add(emp.user_id)
-            subj_emps = (db.session.query(teacher_subjects.c.employee_id)
-                         .filter(teacher_subjects.c.section_id == section_id)
-                         .all())
-            for (eid,) in subj_emps:
-                emp = db.session.get(Employee, eid)
-                if emp and emp.user_id:
-                    user_ids.add(emp.user_id)
-            # Parents of students in this section
-            student_ids = [s.id for s in section.students.filter_by(status='active').all()]
-            if student_ids:
-                parent_rows = (db.session.query(parent_students.c.user_id)
-                               .filter(parent_students.c.student_id.in_(student_ids))
-                               .all())
-                for (uid,) in parent_rows:
-                    user_ids.add(uid)
+        _add_section_members(school_id, int(section_id), user_ids, stats)
 
     elif scope == 'grade' and grade_id:
-        grade = db.session.get(Grade, grade_id)
+        grade = (
+            Grade.query
+            .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+            .filter_by(id=int(grade_id), school_id=school_id)
+            .first()
+        )
         if grade:
-            for section in grade.sections.all():
-                # Homeroom teacher
-                if section.teacher_id:
-                    emp = db.session.get(Employee, section.teacher_id)
-                    if emp and emp.user_id:
-                        user_ids.add(emp.user_id)
-                # Subject teachers
-                subj_emps = (db.session.query(teacher_subjects.c.employee_id)
-                             .filter(teacher_subjects.c.section_id == section.id)
-                             .all())
-                for (eid,) in subj_emps:
-                    emp = db.session.get(Employee, eid)
-                    if emp and emp.user_id:
-                        user_ids.add(emp.user_id)
-                # Parents
-                student_ids = [s.id for s in section.students.filter_by(status='active').all()]
-                if student_ids:
-                    parent_rows = (db.session.query(parent_students.c.user_id)
-                                   .filter(parent_students.c.student_id.in_(student_ids))
-                                   .all())
-                    for (uid,) in parent_rows:
-                        user_ids.add(uid)
+            sections = (
+                Section.query
+                .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+                .filter_by(grade_id=grade.id, school_id=school_id)
+                .all()
+            )
+            for sec in sections:
+                _add_section_members(school_id, sec.id, user_ids, stats)
+        else:
+            _log.warning('[chat] grade_id=%s not found for school=%s', grade_id, school_id)
 
     elif scope == 'stage' and stage:
-        grades = (Grade.query
-                  .execution_options(bypass_tenant_scope=True)
-                  .filter_by(school_id=school_id, stage=stage)
-                  .all())
+        grades = (
+            Grade.query
+            .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+            .filter_by(school_id=school_id, stage=stage)
+            .all()
+        )
+        _log.info('[chat] stage=%r grades_found=%d', stage, len(grades))
         for grade in grades:
-            for section in grade.sections.all():
-                if section.teacher_id:
-                    emp = db.session.get(Employee, section.teacher_id)
-                    if emp and emp.user_id:
-                        user_ids.add(emp.user_id)
-                subj_emps = (db.session.query(teacher_subjects.c.employee_id)
-                             .filter(teacher_subjects.c.section_id == section.id)
-                             .all())
-                for (eid,) in subj_emps:
-                    emp = db.session.get(Employee, eid)
-                    if emp and emp.user_id:
-                        user_ids.add(emp.user_id)
-                student_ids = [s.id for s in section.students.filter_by(status='active').all()]
-                if student_ids:
-                    parent_rows = (db.session.query(parent_students.c.user_id)
-                                   .filter(parent_students.c.student_id.in_(student_ids))
-                                   .all())
-                    for (uid,) in parent_rows:
-                        user_ids.add(uid)
+            sections = (
+                Section.query
+                .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+                .filter_by(grade_id=grade.id, school_id=school_id)
+                .all()
+            )
+            for sec in sections:
+                _add_section_members(school_id, sec.id, user_ids, stats)
 
     elif scope == 'subject' and subject_id:
-        section_rows = (db.session.query(teacher_subjects.c.section_id,
-                                         teacher_subjects.c.employee_id)
-                        .filter(teacher_subjects.c.subject_id == subject_id)
-                        .all())
-        for sec_id, emp_id in section_rows:
-            emp = db.session.get(Employee, emp_id)
+        rows = (
+            db.session.query(
+                teacher_subjects.c.section_id,
+                teacher_subjects.c.employee_id,
+            )
+            .filter(teacher_subjects.c.subject_id == int(subject_id))
+            .all()
+        )
+        _log.info('[chat] subject_id=%s teacher_subject_rows=%d', subject_id, len(rows))
+        for sec_id, emp_id in rows:
+            emp = (
+                Employee.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter_by(id=emp_id, school_id=school_id)
+                .first()
+            )
             if emp and emp.user_id:
                 user_ids.add(emp.user_id)
-            section = db.session.get(Section, sec_id)
-            if section:
-                student_ids = [s.id for s in section.students.filter_by(status='active').all()]
-                if student_ids:
-                    parent_rows = (db.session.query(parent_students.c.user_id)
-                                   .filter(parent_students.c.student_id.in_(student_ids))
-                                   .all())
-                    for (uid,) in parent_rows:
-                        user_ids.add(uid)
+                stats['teachers'] += 1
+            _add_section_members(school_id, sec_id, user_ids, stats,
+                                 include_teachers=False)
 
-    # Filter: only active users belonging to this school
-    if user_ids:
-        valid = {
-            u.id for u in
-            User.query
-            .execution_options(bypass_tenant_scope=True)
-            .filter(User.id.in_(user_ids), User.school_id == school_id,
-                    User.is_active == True)
+    _log.info('[chat] _collect_user_ids scope=%s total=%d stats=%s',
+              scope, len(user_ids), stats)
+    return user_ids, stats
+
+
+def _add_section_members(
+    school_id: int,
+    section_id: int,
+    user_ids: set[int],
+    stats: dict,
+    include_teachers: bool = True,
+) -> None:
+    """
+    Add teachers and parents for a single section into user_ids (mutates in place).
+    Uses bypass options so year-scope doesn't block the queries.
+    """
+    # Homeroom teacher
+    if include_teachers:
+        section = (
+            Section.query
+            .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+            .filter_by(id=section_id, school_id=school_id)
+            .first()
+        )
+        if not section:
+            _log.warning('[chat] section_id=%s not found for school=%s',
+                         section_id, school_id)
+            return
+
+        if section.teacher_id:
+            emp = (
+                Employee.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter_by(id=section.teacher_id, school_id=school_id)
+                .first()
+            )
+            if emp and emp.user_id:
+                user_ids.add(emp.user_id)
+                stats['teachers'] += 1
+
+        # Subject teachers for this section
+        subj_rows = (
+            db.session.query(teacher_subjects.c.employee_id)
+            .filter(teacher_subjects.c.section_id == section_id)
             .all()
-        }
-        return valid
-    return user_ids
+        )
+        for (eid,) in subj_rows:
+            emp = (
+                Employee.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter_by(id=eid, school_id=school_id)
+                .first()
+            )
+            if emp and emp.user_id:
+                user_ids.add(emp.user_id)
+                stats['teachers'] += 1
+
+    # Parents of active students in this section
+    student_ids = [
+        s.id for s in
+        Student.query
+        .execution_options(bypass_tenant_scope=True)
+        .filter_by(section_id=section_id, school_id=school_id, status='active')
+        .all()
+    ]
+    _log.info('[chat] section=%s active_students=%d', section_id, len(student_ids))
+
+    if student_ids:
+        parent_rows = (
+            db.session.query(parent_students.c.user_id)
+            .filter(parent_students.c.student_id.in_(student_ids))
+            .all()
+        )
+        for (uid,) in parent_rows:
+            user_ids.add(uid)
+            stats['parents'] += 1
+        _log.info('[chat] section=%s parents_found=%d', section_id, len(parent_rows))
 
 
-def _sync_members(room: ChatRoom, user_ids: set[int], creator_id: int) -> None:
-    """Add missing members to room; do not remove existing ones."""
-    existing = {m.user_id for m in room.members.all()}
+def _sync_members(room: ChatRoom, user_ids: set[int], creator_id: int) -> int:
+    """
+    Add missing members to room; do not remove existing ones.
+    If the creator is already a member, upgrades their role to 'owner'.
+    Returns the count of newly added members.
+    """
+    existing = {m.user_id: m for m in room.members.all()}
+    added = 0
+
+    # Ensure creator is owner
+    if creator_id in existing:
+        if existing[creator_id].role != 'owner':
+            existing[creator_id].role = 'owner'
+    else:
+        db.session.add(ChatRoomMember(
+            room_id=room.id, user_id=creator_id, role='owner',
+        ))
+        added += 1
+
     for uid in user_ids:
+        if uid == creator_id:
+            continue
         if uid not in existing:
-            role = 'owner' if uid == creator_id else 'member'
             db.session.add(ChatRoomMember(
-                room_id=room.id, user_id=uid, role=role,
+                room_id=room.id, user_id=uid, role='member',
             ))
+            added += 1
+
+    return added
 
 
 # ─── Schedule helpers ─────────────────────────────────────────────────────────
 
 def _can_send_now(room: ChatRoom, school) -> tuple[bool, str]:
-    """
-    Check if current local time is within an allowed schedule window.
-    Returns (can_send, reason_if_not).
-    """
     schedules = room.schedules.filter_by(is_enabled=True).all()
     if not schedules:
         return True, ''
@@ -214,9 +295,8 @@ def _can_send_now(room: ChatRoom, school) -> tuple[bool, str]:
     except Exception:
         local_now = datetime.utcnow()
 
-    today_dow = local_now.weekday()
-    # Python weekday: Mon=0..Sun=6; convert to our Sunday=0 scheme
-    dow = (today_dow + 1) % 7
+    # Python weekday: Mon=0..Sun=6  →  our Sunday=0 scheme
+    dow = (local_now.weekday() + 1) % 7
     now_time = local_now.time()
 
     for sch in schedules:
@@ -224,11 +304,11 @@ def _can_send_now(room: ChatRoom, school) -> tuple[bool, str]:
             if sch.open_time <= now_time <= sch.close_time:
                 return True, ''
             return (False,
-                    'المراسلات غير متاحة حالياً، يمكنكم الإرسال ضمن أوقات التواصل '
-                    'المحددة من المدرسة.')
+                    'المراسلات غير متاحة حالياً، يمكنكم الإرسال ضمن '
+                    'أوقات التواصل المحددة من المدرسة.')
     return (False,
-            'المراسلات غير متاحة حالياً، يمكنكم الإرسال ضمن أوقات التواصل '
-            'المحددة من المدرسة.')
+            'المراسلات غير متاحة حالياً، يمكنكم الإرسال ضمن '
+            'أوقات التواصل المحددة من المدرسة.')
 
 
 # ─── Room list ────────────────────────────────────────────────────────────────
@@ -247,7 +327,7 @@ def index():
          .filter_by(school_id=school.id)
          .order_by(ChatRoom.created_at.desc()))
 
-    type_filter = request.args.get('type', '')
+    type_filter   = request.args.get('type', '')
     status_filter = request.args.get('status', '')
     if type_filter:
         q = q.filter_by(type=type_filter)
@@ -286,29 +366,39 @@ def index():
 def create_room():
     _require_chat_module()
     school = get_current_school()
-    year   = get_active_year(school.id) if school else None
     if not school:
         abort(404)
+    year = get_active_year(school.id)
 
     grades   = (Grade.query
-                .execution_options(bypass_tenant_scope=True)
+                .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
                 .filter_by(school_id=school.id)
-                .order_by(Grade.name).all()) if year else []
+                .order_by(Grade.name).all())
     sections = (Section.query
-                .execution_options(bypass_tenant_scope=True)
+                .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
                 .filter_by(school_id=school.id)
-                .order_by(Section.name).all()) if year else []
+                .order_by(Section.name).all())
     subjects = (Subject.query
-                .execution_options(bypass_tenant_scope=True)
+                .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
                 .filter_by(school_id=school.id)
-                .order_by(Subject.name).all()) if year else []
+                .order_by(Subject.name).all())
+
+    # All active school users for the custom-scope member picker
+    school_users = (
+        User.query
+        .execution_options(bypass_tenant_scope=True)
+        .filter(User.school_id == school.id, User.is_active == True)
+        .join(User.role)
+        .order_by(Role.name, User.full_name)
+        .all()
+    )
 
     if request.method == 'POST':
-        name     = request.form.get('name', '').strip()
-        rtype    = request.form.get('type', 'group')
-        scope    = request.form.get('scope', 'custom')
-        is_ann   = bool(request.form.get('is_announcement_only'))
-        allow_rep = not bool(request.form.get('no_replies'))
+        name       = request.form.get('name', '').strip()
+        rtype      = request.form.get('type', 'group')
+        scope      = request.form.get('scope', 'custom')
+        is_ann     = bool(request.form.get('is_announcement_only'))
+        allow_rep  = not bool(request.form.get('no_replies'))
         section_id = request.form.get('section_id') or None
         grade_id   = request.form.get('grade_id')   or None
         subject_id = request.form.get('subject_id') or None
@@ -317,51 +407,70 @@ def create_room():
         if not name:
             flash('اسم المحادثة مطلوب.', 'danger')
             return render_template('chat/create_room.html',
-                                   grades=grades, sections=sections, subjects=subjects)
+                                   grades=grades, sections=sections,
+                                   subjects=subjects, school_users=school_users)
+
+        _log.info('[chat] create_room scope=%s section=%s grade=%s stage=%r subject=%s',
+                  scope, section_id, grade_id, stage, subject_id)
 
         room = ChatRoom(
-            school_id=school.id,
-            academic_year_id=year.id if year else None,
-            name=name,
-            type=rtype,
-            scope=scope,
-            stage=stage,
-            grade_id=int(grade_id) if grade_id else None,
-            section_id=int(section_id) if section_id else None,
-            subject_id=int(subject_id) if subject_id else None,
-            created_by_user_id=current_user.id,
-            is_announcement_only=is_ann,
-            allow_replies=allow_rep,
+            school_id            = school.id,
+            academic_year_id     = year.id if year else None,
+            name                 = name,
+            type                 = rtype,
+            scope                = scope,
+            stage                = stage,
+            grade_id             = int(grade_id)   if grade_id   else None,
+            section_id           = int(section_id) if section_id else None,
+            subject_id           = int(subject_id) if subject_id else None,
+            created_by_user_id   = current_user.id,
+            is_announcement_only = is_ann,
+            allow_replies        = allow_rep,
         )
         db.session.add(room)
-        db.session.flush()  # get room.id
+        db.session.flush()  # get room.id before adding members
 
-        # Auto-add members based on scope
-        if scope != 'custom':
-            uid_set = _collect_user_ids(
-                school.id, scope,
-                section_id=int(section_id) if section_id else None,
-                grade_id=int(grade_id) if grade_id else None,
-                subject_id=int(subject_id) if subject_id else None,
-                stage=stage,
-            )
-        else:
+        if scope == 'custom':
             uid_set = set()
-            custom_ids = request.form.getlist('member_ids')
-            for cid in custom_ids:
+            for cid in request.form.getlist('member_ids'):
                 try:
                     uid_set.add(int(cid))
                 except (ValueError, TypeError):
                     pass
-            uid_set.add(current_user.id)
+            stats = {'admins': 0, 'teachers': 0, 'parents': len(uid_set)}
+        else:
+            uid_set, stats = _collect_user_ids(
+                school.id, scope,
+                section_id = int(section_id) if section_id else None,
+                grade_id   = int(grade_id)   if grade_id   else None,
+                subject_id = int(subject_id) if subject_id else None,
+                stage      = stage,
+            )
 
-        _sync_members(room, uid_set, current_user.id)
+        # Creator is always owner — add explicitly so even an empty uid_set
+        # still produces at least one member row.
+        uid_set.add(current_user.id)
+
+        added = _sync_members(room, uid_set, current_user.id)
         db.session.commit()
-        flash(f'تم إنشاء المحادثة "{name}" بنجاح وتمت إضافة {len(uid_set)} عضو.', 'success')
-        return redirect(url_for('chat.index'))
+
+        _log.info('[chat] room %d created — uid_set=%d added=%d stats=%s',
+                  room.id, len(uid_set), added, stats)
+
+        flash(f'تم إنشاء المحادثة "{name}" بنجاح. '
+              f'الأعضاء المضافون: {added} '
+              f'(مشرفون: {stats["admins"]} — معلمون: {stats["teachers"]} — '
+              f'أولياء أمور: {stats["parents"]}).', 'success')
+
+        if stats['parents'] == 0 and scope not in ('custom', 'school', 'announcement'):
+            flash('تنبيه: لم يتم العثور على أولياء أمور مرتبطين بالنطاق المحدد. '
+                  'تحقق من ربط أولياء الأمور بطلابهم في النظام.', 'warning')
+
+        return redirect(url_for('chat.room_detail', room_id=room.id))
 
     return render_template('chat/create_room.html',
-                           grades=grades, sections=sections, subjects=subjects)
+                           grades=grades, sections=sections,
+                           subjects=subjects, school_users=school_users)
 
 
 # ─── Room detail (messages viewer) ───────────────────────────────────────────
@@ -377,16 +486,16 @@ def room_detail(room_id):
             .filter_by(id=room_id, school_id=school.id if school else 0)
             .first_or_404())
 
-    limit = min(int(request.args.get('limit', 100)), 500)
+    limit    = min(int(request.args.get('limit', 100)), 500)
     messages = (ChatMessage.query
                 .filter_by(room_id=room.id)
                 .order_by(ChatMessage.created_at.asc())
                 .limit(limit).all())
 
-    members = (ChatRoomMember.query
-               .filter_by(room_id=room.id)
-               .order_by(ChatRoomMember.role)
-               .all())
+    members   = (ChatRoomMember.query
+                 .filter_by(room_id=room.id)
+                 .order_by(ChatRoomMember.role)
+                 .all())
 
     schedules = room.schedules.order_by(ChatRoomSchedule.day_of_week).all()
 
@@ -409,10 +518,11 @@ def edit_room(room_id):
             .first_or_404())
 
     if request.method == 'POST':
-        room.name = request.form.get('name', room.name).strip() or room.name
+        room.name                = (request.form.get('name', room.name).strip()
+                                    or room.name)
         room.is_announcement_only = bool(request.form.get('is_announcement_only'))
-        room.allow_replies = not bool(request.form.get('no_replies'))
-        room.updated_at = datetime.utcnow()
+        room.allow_replies        = not bool(request.form.get('no_replies'))
+        room.updated_at           = datetime.utcnow()
         db.session.commit()
         flash('تم تحديث المحادثة بنجاح.', 'success')
         return redirect(url_for('chat.room_detail', room_id=room.id))
@@ -435,7 +545,7 @@ def close_room(room_id):
             .execution_options(bypass_tenant_scope=True)
             .filter_by(id=room_id, school_id=school.id if school else 0)
             .first_or_404())
-    room.is_closed = True
+    room.is_closed  = True
     room.updated_at = datetime.utcnow()
     db.session.commit()
     flash('تم إغلاق المحادثة.', 'warning')
@@ -452,10 +562,52 @@ def reopen_room(room_id):
             .execution_options(bypass_tenant_scope=True)
             .filter_by(id=room_id, school_id=school.id if school else 0)
             .first_or_404())
-    room.is_closed = False
+    room.is_closed  = False
     room.updated_at = datetime.utcnow()
     db.session.commit()
     flash('تم فتح المحادثة.', 'success')
+    return redirect(url_for('chat.room_detail', room_id=room.id))
+
+
+# ─── Rebuild members ──────────────────────────────────────────────────────────
+
+@chat_bp.route('/rooms/<int:room_id>/rebuild-members', methods=['POST'])
+@login_required
+@admin_required
+def rebuild_members(room_id):
+    """Re-derive auto-members from room scope without removing existing members."""
+    _require_chat_module()
+    school = get_current_school()
+    room = (ChatRoom.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(id=room_id, school_id=school.id if school else 0)
+            .first_or_404())
+
+    if room.scope == 'custom':
+        flash('لا يمكن إعادة توليد أعضاء غرفة مخصصة تلقائياً.', 'info')
+        return redirect(url_for('chat.room_detail', room_id=room.id))
+
+    uid_set, stats = _collect_user_ids(
+        school.id, room.scope,
+        section_id = room.section_id,
+        grade_id   = room.grade_id,
+        subject_id = room.subject_id,
+        stage      = room.stage,
+    )
+    uid_set.add(room.created_by_user_id or current_user.id)
+    uid_set.add(current_user.id)
+
+    added = _sync_members(room, uid_set,
+                          room.created_by_user_id or current_user.id)
+    db.session.commit()
+
+    flash(f'تم إعادة توليد الأعضاء. أُضيف {added} عضو جديد. '
+          f'(مشرفون: {stats["admins"]} — معلمون: {stats["teachers"]} — '
+          f'أولياء أمور: {stats["parents"]}).', 'success')
+
+    if stats['parents'] == 0 and room.scope not in ('school', 'announcement'):
+        flash('تنبيه: لم يتم العثور على أولياء أمور مرتبطين بهذه الشعبة.', 'warning')
+
     return redirect(url_for('chat.room_detail', room_id=room.id))
 
 
@@ -472,8 +624,8 @@ def block_member(room_id, user_id):
             .filter_by(id=room_id, school_id=school.id if school else 0)
             .first_or_404())
     member = ChatRoomMember.query.filter_by(room_id=room.id, user_id=user_id).first_or_404()
-    member.is_blocked        = True
-    member.blocked_at        = datetime.utcnow()
+    member.is_blocked         = True
+    member.blocked_at         = datetime.utcnow()
     member.blocked_by_user_id = current_user.id
     db.session.commit()
     flash('تم حظر العضو من هذه المحادثة.', 'warning')
@@ -550,9 +702,9 @@ def delete_message(room_id, msg_id):
             .filter_by(id=room_id, school_id=school.id if school else 0)
             .first_or_404())
     msg = ChatMessage.query.filter_by(id=msg_id, room_id=room.id).first_or_404()
-    msg.is_deleted        = True
+    msg.is_deleted         = True
     msg.deleted_by_user_id = current_user.id
-    msg.deleted_at        = datetime.utcnow()
+    msg.deleted_at         = datetime.utcnow()
     db.session.commit()
     flash('تم حذف الرسالة.', 'info')
     return redirect(url_for('chat.room_detail', room_id=room.id))
@@ -578,7 +730,6 @@ def room_schedule(room_id):
             .first_or_404())
 
     if request.method == 'POST':
-        # Delete all existing schedules and rebuild
         ChatRoomSchedule.query.filter_by(room_id=room.id).delete()
         for dow in range(7):
             open_s  = request.form.get(f'open_{dow}', '').strip()
@@ -632,17 +783,7 @@ def settings():
             'allow_admin_monitoring', 'allow_chat_schedule',
             'allow_member_blocking', 'allow_group_admins',
         ]
-        int_fields = {
-            'max_attachment_size_mb': 10,
-            'message_max_length':     2000,
-        }
-        # Store as field-level config (we encode "disabled" as hidden_fields)
-        # Instead use a simple JSON config stored via save_module_config
-        hidden_fields = []
-        for f in bool_fields:
-            if not request.form.get(f):
-                hidden_fields.append(f)
-
+        hidden_fields = [f for f in bool_fields if not request.form.get(f)]
         max_attach = int(request.form.get('max_attachment_size_mb') or 10)
         max_len    = int(request.form.get('message_max_length') or 2000)
 
@@ -662,6 +803,207 @@ def settings():
         return redirect(url_for('chat.settings'))
 
     raw_cfg = cfg.as_dict('chat')
-    return render_template('chat/settings.html',
-                           school=school,
-                           cfg=raw_cfg)
+    return render_template('chat/settings.html', school=school, cfg=raw_cfg)
+
+
+# ─── FCM push helper (shared with user routes) ───────────────────────────────
+
+def _push_chat_message(room: ChatRoom, msg: ChatMessage) -> None:
+    """Push FCM notification to all non-blocked, non-sender members."""
+    try:
+        from app.services.fcm_service import is_enabled, send_push_to_user
+        if not is_enabled():
+            return
+        members = (ChatRoomMember.query
+                   .filter_by(room_id=room.id, is_blocked=False)
+                   .all())
+        ntype      = 'school_announcement' if room.is_announcement_only else 'chat_message'
+        sender_name = current_user.full_name or 'مستخدم'
+        title = (f'رسالة جديدة في {room.name}'
+                 if room.type in ('group', 'announcement')
+                 else f'رسالة جديدة من {sender_name}')
+        body_text = (msg.body or '[مرفق]')[:150]
+        data = {
+            'type':       ntype,
+            'room_id':    str(room.id),
+            'message_id': str(msg.id),
+            'screen':     'chat',
+        }
+        for mem in members:
+            if mem.user_id == msg.sender_user_id:
+                continue
+            try:
+                send_push_to_user(mem.user_id, title, body_text, data)
+            except Exception as exc:
+                _log.warning('[chat] FCM push failed user_id=%s: %s', mem.user_id, exc)
+    except Exception as exc:
+        _log.error('[chat] _push_chat_message error: %s', exc)
+
+
+# ─── User-facing routes (parent / teacher) ───────────────────────────────────
+
+@chat_bp.route('/my-rooms')
+@login_required
+def user_index():
+    """Room list for parent/teacher — shows only rooms where user is a member."""
+    _require_chat_module()
+    school_id = getattr(current_user, 'school_id', None)
+    if not school_id:
+        abort(403)
+
+    memberships = ChatRoomMember.query.filter_by(user_id=current_user.id).all()
+    if not memberships:
+        return render_template('chat/user_index.html', rooms=[])
+
+    mem_map  = {m.room_id: m for m in memberships}
+    room_ids = list(mem_map.keys())
+
+    db_rooms = (ChatRoom.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter(ChatRoom.id.in_(room_ids),
+                        ChatRoom.school_id == school_id,
+                        ChatRoom.is_active == True)
+                .order_by(ChatRoom.updated_at.desc())
+                .all())
+
+    read_ids_sub = (db.session.query(ChatMessageRead.message_id)
+                    .filter_by(user_id=current_user.id)
+                    .subquery())
+
+    rooms = []
+    for room in db_rooms:
+        mem      = mem_map.get(room.id)
+        last_msg = (ChatMessage.query
+                    .filter_by(room_id=room.id, is_deleted=False)
+                    .order_by(ChatMessage.created_at.desc())
+                    .first())
+        unread = (ChatMessage.query
+                  .filter_by(room_id=room.id, is_deleted=False)
+                  .filter(ChatMessage.sender_user_id != current_user.id,
+                          ChatMessage.id.notin_(read_ids_sub))
+                  .count())
+        can_send_quick = (
+            mem and not mem.is_blocked and not room.is_closed and
+            room.allow_replies and
+            (not room.is_announcement_only or mem.role in ('owner', 'admin'))
+        )
+        rooms.append({
+            'room':         room,
+            'membership':   mem,
+            'last_message': last_msg,
+            'unread_count': unread,
+            'can_send':     can_send_quick,
+        })
+
+    return render_template('chat/user_index.html', rooms=rooms)
+
+
+@chat_bp.route('/my-rooms/<int:room_id>', methods=['GET', 'POST'])
+@login_required
+def user_room(room_id):
+    """Room view for parent/teacher: read messages + send if permitted."""
+    _require_chat_module()
+    school_id = getattr(current_user, 'school_id', None)
+    if not school_id:
+        abort(403)
+
+    room = (ChatRoom.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(id=room_id, school_id=school_id, is_active=True)
+            .first_or_404())
+
+    membership = ChatRoomMember.query.filter_by(
+        room_id=room.id, user_id=current_user.id
+    ).first()
+    if not membership:
+        abort(403)
+
+    school = get_current_school()
+
+    # ── Determine send permission ─────────────────────────────────────────────
+    can_send = True
+    send_blocked_reason = ''
+
+    if room.is_closed:
+        can_send = False
+        send_blocked_reason = 'هذه المحادثة مغلقة حالياً.'
+    elif membership.is_blocked:
+        can_send = False
+        send_blocked_reason = ('تم تقييدك من إرسال الرسائل في هذه المحادثة. '
+                               'يرجى مراجعة إدارة المدرسة.')
+    elif room.is_announcement_only and membership.role not in ('owner', 'admin'):
+        can_send = False
+        send_blocked_reason = 'هذه المحادثة للإعلانات فقط. لا يمكنك الإرسال.'
+    elif not room.allow_replies:
+        can_send = False
+        send_blocked_reason = 'لا يمكنك إرسال رسالة في هذه المحادثة حالياً.'
+    else:
+        ok_send, reason = _can_send_now(room, school)
+        if not ok_send:
+            can_send = False
+            send_blocked_reason = reason
+
+    # ── POST: send message ────────────────────────────────────────────────────
+    if request.method == 'POST':
+        if not can_send:
+            flash(send_blocked_reason or 'لا يمكنك الإرسال حالياً.', 'warning')
+            return redirect(url_for('chat.user_room', room_id=room.id))
+
+        body = request.form.get('body', '').strip()
+        if not body:
+            flash('الرسالة لا يمكن أن تكون فارغة.', 'warning')
+            return redirect(url_for('chat.user_room', room_id=room.id))
+
+        if len(body) > 2000:
+            body = body[:2000]
+
+        msg = ChatMessage(
+            room_id        = room.id,
+            sender_user_id = current_user.id,
+            body           = body,
+            message_type   = 'text',
+        )
+        db.session.add(msg)
+        db.session.flush()
+
+        db.session.add(ChatMessageRead(message_id=msg.id, user_id=current_user.id))
+        room.updated_at = datetime.utcnow()
+        db.session.commit()
+
+        _push_chat_message(room, msg)
+
+        return redirect(url_for('chat.user_room', room_id=room.id))
+
+    # ── GET: load messages + mark unread as read ──────────────────────────────
+    messages = (ChatMessage.query
+                .filter_by(room_id=room.id)
+                .order_by(ChatMessage.created_at.asc())
+                .limit(100).all())
+
+    already_read = {
+        r.message_id for r in
+        ChatMessageRead.query.filter_by(user_id=current_user.id).all()
+    }
+    new_reads = [
+        ChatMessageRead(message_id=m.id, user_id=current_user.id)
+        for m in messages
+        if not m.is_deleted
+        and m.id not in already_read
+        and m.sender_user_id != current_user.id
+    ]
+    if new_reads:
+        db.session.add_all(new_reads)
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+    schedules = room.schedules.order_by(ChatRoomSchedule.day_of_week).all()
+
+    return render_template('chat/user_room.html',
+                           room=room,
+                           messages=messages,
+                           membership=membership,
+                           can_send=can_send,
+                           send_blocked_reason=send_blocked_reason,
+                           schedules=schedules)

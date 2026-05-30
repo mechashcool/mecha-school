@@ -117,6 +117,15 @@
         <i class="bi bi-calendar2-check-fill"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;
       </a>
     </li>
+    {% if 'chat' in enabled_modules %}
+    <li class="nav-item">
+      <a href="{{ url_for('chat.user_index') }}"
+         class="{{ 'active' if request.endpoint and request.endpoint.startswith('chat.user') }}">
+        <i class="bi bi-chat-dots-fill"></i> المراسلات
+        {# unread badge for chat — fetched inline to avoid extra context processor hit #}
+      </a>
+    </li>
+    {% endif %}
     <li class="nav-item">
       <a href="{{ url_for('notifications.index') }}"
          class="{{ 'active' if request.blueprint == 'notifications' }}">
@@ -175,8 +184,8 @@
     {% if 'chat' in enabled_modules %}
     <li class="nav-section-label">المراسلات</li>
     <li class="nav-item">
-      <a href="{{ url_for('chat.index') }}"
-         class="{{ 'active' if request.blueprint == 'chat' }}">
+      <a href="{{ url_for('chat.user_index') }}"
+         class="{{ 'active' if request.endpoint and request.endpoint.startswith('chat.user') }}">
         <i class="bi bi-chat-dots-fill"></i> المراسلات
       </a>
     </li>

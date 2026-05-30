@@ -1,0 +1,127 @@
+{% extends "shared/base.html" %}
+{% block title %}المراسلات{% endblock %}
+{% block page_title %}المراسلات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">المراسلات</h1>
+    <p class="page-subtitle">غرف المحادثة الخاصة بك</p>
+  </div>
+</div>
+
+{% if rooms %}
+<div class="row g-3">
+  {% for item in rooms %}
+  {% set room = item.room %}
+  {% set mem  = item.membership %}
+  <div class="col-12 col-md-6 col-lg-4">
+    <a href="{{ url_for('chat.user_room', room_id=room.id) }}"
+       class="text-decoration-none">
+      <div class="card h-100 room-card {{ 'border-secondary' if room.is_closed }}"
+           style="transition:box-shadow .15s;cursor:pointer">
+        <div class="card-body">
+
+          {# Room name + unread badge #}
+          <div class="d-flex justify-content-between align-items-start mb-2">
+            <h6 class="card-title mb-0 fw-semibold text-dark" style="font-size:15px">
+              {{ room.name }}
+            </h6>
+            {% if item.unread_count > 0 %}
+            <span class="badge bg-danger rounded-pill ms-2 flex-shrink-0">
+              {{ item.unread_count }}
+            </span>
+            {% endif %}
+          </div>
+
+          {# Type + status badges #}
+          <div class="mb-2 d-flex gap-1 flex-wrap">
+            {% if room.type == 'group' %}
+            <span class="badge bg-light text-secondary border" style="font-size:11px">
+              <i class="bi bi-people-fill me-1"></i>مجموعة
+            </span>
+            {% elif room.type == 'announcement' %}
+            <span class="badge bg-light text-secondary border" style="font-size:11px">
+              <i class="bi bi-megaphone-fill me-1"></i>إعلانات
+            </span>
+            {% else %}
+            <span class="badge bg-light text-secondary border" style="font-size:11px">
+              <i class="bi bi-person-fill me-1"></i>خاصة
+            </span>
+            {% endif %}
+
+            {% if room.is_closed %}
+            <span class="badge bg-danger" style="font-size:11px">مغلقة</span>
+            {% else %}
+            <span class="badge bg-success" style="font-size:11px">مفتوحة</span>
+            {% endif %}
+
+            {% if room.is_announcement_only %}
+            <span class="badge bg-warning text-dark" style="font-size:11px">للقراءة</span>
+            {% endif %}
+
+            {% if mem and mem.role == 'owner' %}
+            <span class="badge bg-primary" style="font-size:11px">المنشئ</span>
+            {% elif mem and mem.role == 'admin' %}
+            <span class="badge bg-info" style="font-size:11px">مشرف</span>
+            {% endif %}
+          </div>
+
+          {# Last message preview #}
+          {% if item.last_message %}
+          <p class="text-muted mb-1" style="font-size:12px;line-height:1.4;overflow:hidden;
+             display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">
+            <span class="fw-semibold">
+              {{ item.last_message.sender.full_name if item.last_message.sender else 'مجهول' }}:
+            </span>
+            {% if item.last_message.is_deleted %}
+            <span class="fst-italic">تم حذف هذه الرسالة</span>
+            {% else %}
+            {{ item.last_message.body or '[مرفق]' }}
+            {% endif %}
+          </p>
+          <small class="text-muted" style="font-size:11px">
+            {{ item.last_message.created_at | to_baghdad }}
+          </small>
+          {% else %}
+          <p class="text-muted mb-0" style="font-size:12px">لا توجد رسائل بعد.</p>
+          {% endif %}
+
+        </div>
+        <div class="card-footer bg-transparent d-flex justify-content-between align-items-center py-2">
+          <small class="text-muted" style="font-size:11px">
+            <i class="bi bi-people me-1"></i>{{ room.members.count() }} عضو
+          </small>
+          {% if item.can_send %}
+          <small class="text-success" style="font-size:11px">
+            <i class="bi bi-send-fill me-1"></i>يمكنك الإرسال
+          </small>
+          {% else %}
+          <small class="text-muted" style="font-size:11px">
+            <i class="bi bi-eye-fill me-1"></i>قراءة فقط
+          </small>
+          {% endif %}
+        </div>
+      </div>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+
+{% else %}
+<div class="text-center py-5">
+  <i class="bi bi-chat-dots" style="font-size:3rem;color:#ccc"></i>
+  <p class="text-muted mt-3">لا توجد محادثات حالياً.</p>
+  <p class="text-muted" style="font-size:13px">
+    ستظهر هنا المحادثات التي تمت إضافتك إليها من قبل إدارة المدرسة.
+  </p>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<style>
+.room-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.12); }
+</style>
+{% endblock %}
