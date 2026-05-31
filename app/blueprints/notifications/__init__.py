@@ -22,6 +22,10 @@ def _dispatch_fcm_push(title: str, body: str, ntype: str,
     """
     Fire FCM push for a just-committed Notification row.
     Runs after DB commit so the in-app row is already saved regardless of FCM outcome.
+    Handles three target modes:
+      - target_user_id set → push to one user
+      - target_role set → push to all active users with that role in the school
+      - both None → push to all active users in the school
     """
     try:
         from app.services.fcm_service import is_enabled, send_push_to_user
@@ -29,7 +33,7 @@ def _dispatch_fcm_push(title: str, body: str, ntype: str,
             _log.warning('[notifications] FCM disabled — skipping push for title=%r', title)
             return
 
-        data = {'type': ntype, 'school_id': str(school_id)}
+        data = {'type': 'message', 'screen': 'notifications', 'school_id': str(school_id)}
 
         if target_user_id:
             _log.warning('[notifications] FCM push → user_id=%s title=%r', target_user_id, title)
@@ -38,6 +42,7 @@ def _dispatch_fcm_push(title: str, body: str, ntype: str,
         elif target_role:
             role_obj = Role.query.filter_by(name=target_role).first()
             if not role_obj:
+                _log.warning('[notifications] FCM broadcast skipped — unknown role=%r', target_role)
                 return
             users = (User.query
                      .filter_by(role_id=role_obj.id, school_id=school_id, is_active=True)
@@ -45,6 +50,18 @@ def _dispatch_fcm_push(title: str, body: str, ntype: str,
             _log.warning('[notifications] FCM broadcast → role=%s users=%d title=%r',
                          target_role, len(users), title)
             for u in users:
+                _log.warning('[notifications] dispatching FCM user_id=%s title=%r', u.id, title)
+                send_push_to_user(u.id, title, body, data)
+
+        else:
+            # Broadcast to all active users in the school
+            users = (User.query
+                     .filter_by(school_id=school_id, is_active=True)
+                     .all())
+            _log.warning('[notifications] FCM broadcast → all_school_users=%d title=%r',
+                         len(users), title)
+            for u in users:
+                _log.warning('[notifications] dispatching FCM user_id=%s title=%r', u.id, title)
                 send_push_to_user(u.id, title, body, data)
 
     except Exception:
@@ -179,6 +196,9 @@ def create():
         body  = request.form.get('body', '').strip()
         ntype = request.form.get('ntype', 'announcement')
 
+        _log.warning('[notifications] target_mode=%r target_user_id=%s target_role=%s',
+                     target_mode, target_user_id, target_role)
+
         n = Notification(
             school_id      = school_id,
             title          = title,
@@ -190,10 +210,10 @@ def create():
         )
         db.session.add(n)
         db.session.commit()
-        _log.warning('[notifications] committed notification_id=%s target_user_id=%s '
+        _log.warning('[notifications] created notification_id=%s target_user_id=%s '
                      'target_role=%s title=%r', n.id, target_user_id, target_role, title)
 
-        # FCM push — additional on top of in-app notification row
+        # FCM push — after DB commit so in-app row is saved regardless of push outcome
         _log.warning('[notifications] dispatching FCM target_user_id=%s target_role=%s title=%r',
                      target_user_id, target_role, title)
         _dispatch_fcm_push(

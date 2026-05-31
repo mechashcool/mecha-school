@@ -2,7 +2,7 @@
 from flask import Blueprint, render_template, redirect, url_for, flash, request
 from flask_login import login_required, current_user
 from datetime import datetime as dt, date as date_type
-from app.models import db, StudentAttendance, Student, Section, SchoolSettings, Grade, StudentSuspension
+from app.models import db, StudentAttendance, Student, Section, SchoolSettings, Grade, StudentSuspension, Notification, parent_students
 from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    admin_required, get_current_school, get_active_year, get_view_year,
                                    historical_guard)
@@ -16,6 +16,72 @@ _log = logging.getLogger(__name__)
 
 attendance_bp = Blueprint('attendance', __name__,
                            template_folder='../../templates/attendance')
+
+
+def _notify_absent_parents(student, school_id, today_str, source='manual'):
+    """
+    Create in-app Notification row + send FCM push to all parents of an absent student.
+    Always persists the Notification row first; FCM failure is logged but does not raise.
+    """
+    if not school_id:
+        return
+
+    title = 'تنبيه غياب'
+    body  = f'تم تسجيل الطالب {student.full_name} غائباً بتاريخ {today_str}.'
+    data  = {
+        'type':       'absent',
+        'student_id': str(student.id),
+        'date':       today_str,
+        'screen':     'attendance',
+    }
+
+    parent_ids = [
+        row[0] for row in
+        db.session.query(parent_students.c.user_id)
+        .filter(parent_students.c.student_id == student.id)
+        .all()
+    ]
+
+    _log.info(
+        '[attendance-notify] absence source=%s student_id=%s name=%s date=%s parent_targets=%d',
+        source, student.id, student.full_name, today_str, len(parent_ids),
+    )
+
+    if not parent_ids:
+        return
+
+    for parent_id in parent_ids:
+        try:
+            db.session.add(Notification(
+                school_id      = school_id,
+                title          = title,
+                body           = body,
+                ntype          = 'attendance',
+                target_user_id = parent_id,
+                created_by     = None,
+            ))
+            _log.info('[attendance-notify] absent notification student_id=%s parent_user_id=%s',
+                      student.id, parent_id)
+        except Exception:
+            _log.exception('[attendance-notify] failed to queue Notification '
+                           'student_id=%s parent_user_id=%s', student.id, parent_id)
+
+    try:
+        db.session.commit()
+    except Exception:
+        _log.exception('[attendance-notify] commit failed student_id=%s', student.id)
+        db.session.rollback()
+        return
+
+    try:
+        from app.services.fcm_service import is_enabled, send_push_to_user
+        if not is_enabled():
+            return
+        for parent_id in parent_ids:
+            _log.info('[attendance-notify] dispatching absent push parent_user_id=%s', parent_id)
+            send_push_to_user(parent_id, title, body, data)
+    except Exception:
+        _log.exception('[attendance-notify] FCM push failed student_id=%s', student.id)
 
 
 def _is_teacher():
@@ -125,18 +191,10 @@ def _run_auto_absent(school, year, settings, recorded_by_id=None):
     notified = 0
     for student in unmarked:
         try:
-            NotificationService.send_to_parents_of_student(
-                student.id,
-                'غياب الطالب عن المدرسة',
-                f'طالبك {student.full_name} غاب عن المدرسة اليوم.',
-                ntype='attendance',
-                data={'action': 'absent', 'source': 'automatic', 'date': today.isoformat()}
-            )
+            _notify_absent_parents(student, school_id, today.isoformat(), source='automatic')
             notified += 1
-            _log.info('[attendance] absent notification sent student_id=%s name=%s date=%s',
-                      student.id, student.full_name, today)
         except Exception:
-            _log.exception('[attendance] notification failed student_id=%s', student.id)
+            _log.exception('[attendance-notify] notification failed student_id=%s', student.id)
 
     _log.info(
         '[attendance] school_id=%s date=%s — absent_created=%d notifications_sent=%d',
@@ -327,6 +385,7 @@ def take(section_id):
         )
         newly_checked_in   = []   # list of (student, status)
         newly_checked_out  = []   # list of student
+        newly_absent       = []   # list of student (new absent records only)
         already_marked_count = 0
 
         for student in students:
@@ -384,6 +443,8 @@ def take(section_id):
                 ))
                 if actual_status in ('present', 'late'):
                     newly_checked_in.append((student, actual_status))
+                elif actual_status == 'absent':
+                    newly_absent.append(student)
 
         db.session.commit()
 
@@ -421,6 +482,15 @@ def take(section_id):
                       'at': now_time.isoformat(), 'source': 'manual',
                       'date': att_date.isoformat()}
             )
+
+        # Absent push notifications (new absent records only)
+        for student in newly_absent:
+            try:
+                _notify_absent_parents(student, school.id if school else None,
+                                       att_date.isoformat(), source='manual')
+            except Exception:
+                _log.exception('[attendance-notify] absent notification failed student_id=%s',
+                               student.id)
 
         if newly_checked_out:
             flash(f'تم تسجيل انصراف {len(newly_checked_out)} طالب الساعة {departure_str}.', 'success')
