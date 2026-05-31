@@ -81,17 +81,23 @@ def _scheduler_loop(app, interval: int) -> None:
 def _run_check() -> None:
     from app.models import School
 
-    _log.warning('[fees-reminder] scheduler started — scanning active schools')
+    _log.warning('[fees-reminder] scheduler tick — loading all schools')
 
-    schools = (
+    all_schools = (
         School.query
         .execution_options(bypass_tenant_scope=True)
-        .filter_by(is_active=True)
         .all()
     )
 
+    _log.warning('[fees-reminder] total schools in db: %d', len(all_schools))
+    for s in all_schools:
+        _log.warning(
+            '[fees-reminder] school id=%s name=%r is_active=%s fee_reminder_enabled=%s',
+            s.id, s.school_name, s.is_active, getattr(s, 'fee_reminder_enabled', None),
+        )
+
     total_sent = total_skipped = 0
-    for school in schools:
+    for school in all_schools:
         try:
             sent, skipped = _check_school(school)
             total_sent    += sent

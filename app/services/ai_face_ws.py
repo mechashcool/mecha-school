@@ -250,6 +250,9 @@ def _process_record_list(sn: str, device, school, records: list,
         inout    = rec.get("inout", 0)
         mode     = rec.get("mode", 0)
 
+        log.warning("[aiface-log] raw record enrollid=%s name=%r time=%r sn=%s source=%s",
+                    enrollid, rec.get("name"), time_str, sn, source_cmd)
+
         if rec.get("image"):
             log.debug("  [snapshot] enrollid=%s image %d chars — not stored",
                       enrollid, len(rec["image"]))
@@ -268,6 +271,9 @@ def _process_record_list(sn: str, device, school, records: list,
             continue
 
         dedup_tag = f"AI Face {time_str}"
+
+        log.warning("[aiface-log] lookup device_id=%d device_sn=%s enrollid=%s scope=%s",
+                    device.id, sn, enrollid, scope)
 
         # ── Employee path ─────────────────────────────────────────────────────
         if scope == 'employees':
@@ -290,6 +296,22 @@ def _process_record_list(sn: str, device, school, records: list,
                               employee_no_string=str(enrollid),
                               is_active=True)
                    .first())
+
+        # Log student mapping result
+        _all_stu = (DeviceStudentMapping.query
+                    .execution_options(bypass_tenant_scope=True)
+                    .filter_by(device_id=device.id,
+                               employee_no_string=str(enrollid))
+                    .all())
+        log.warning("[aiface-log] student mapping candidates count=%d (any is_active) "
+                    "device_id=%d enrollid=%s",
+                    len(_all_stu), device.id, enrollid)
+        if mapping:
+            log.warning("[aiface-log] student mapping found id=%d student_id=%d",
+                        mapping.id, mapping.student_id)
+        else:
+            log.warning("[aiface-log] no student mapping device_id=%d enrollid=%s",
+                        device.id, enrollid)
 
         if not mapping:
             if scope == 'mixed':
@@ -435,14 +457,37 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
     from app.models import DeviceEmployeeMapping, EmployeeAttendance, Employee, db
     from app.utils.decorators import get_active_year
 
+    log.warning("[aiface-log] employee mapping lookup device_id=%d enrollid=%s is_active=True",
+                device.id, enrollid)
+
     emp_mapping = (DeviceEmployeeMapping.query
                    .execution_options(bypass_tenant_scope=True)
                    .filter_by(device_id=device.id,
                               enrollment_no=str(enrollid),
                               is_active=True)
                    .first())
+
     if not emp_mapping:
+        # Dump every employee mapping row for this device so we can diagnose
+        # whether enrollment_no format or is_active flag is the mismatch.
+        _all = (DeviceEmployeeMapping.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter_by(device_id=device.id)
+                .all())
+        log.warning("[aiface-log] employee mapping NOT found — "
+                    "all rows for device_id=%d: count=%d",
+                    device.id, len(_all))
+        for _m in _all:
+            log.warning("[aiface-log]   row id=%d device_id=%d enrollment_no=%r "
+                        "is_active=%s employee_id=%d",
+                        _m.id, _m.device_id, _m.enrollment_no,
+                        _m.is_active, _m.employee_id)
+        log.warning("[aiface-log] no employee mapping found enrollid=%s device_id=%d device_sn=%s",
+                    enrollid, device.id, sn)
         return 'unmatched'
+
+    log.warning("[aiface-log] employee mapping found id=%d employee_id=%d enrollment_no=%r",
+                emp_mapping.id, emp_mapping.employee_id, emp_mapping.enrollment_no)
 
     employee = (Employee.query
                 .execution_options(bypass_tenant_scope=True)

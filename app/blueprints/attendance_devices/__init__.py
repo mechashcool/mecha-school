@@ -208,7 +208,6 @@ def ajax_aiface_pull_logs(device_id):
       process : true | false                 (default: true — create attendance records)
     """
     from app.services.ai_face_ws import send_command_to_device, DeviceOfflineError
-    from app.services.ai_face_ws import _handle_getnewlog_records
 
     school = _school_or_abort()
     dev    = _get_device_or_404(device_id, school)
@@ -261,14 +260,33 @@ def ajax_aiface_pull_logs(device_id):
     }
 
     if records and process:
-        p, sk, um, er = _handle_getnewlog_records(dev.device_sn, records)
+        # Call _process_record_list directly so we use the already-validated
+        # device object (device_id is certain) and the caller's DB session.
+        # _handle_getnewlog_records creates a nested app_context + re-does an
+        # SN→device lookup which can resolve to a different row and cause the
+        # employee/student mapping filter_by(device_id=...) to miss.
+        from app.services.ai_face_ws import _process_record_list
+        from app.models import School as _School
+        _school_obj = (
+            _School.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(id=dev.school_id)
+            .first()
+        )
+        if _school_obj:
+            p, sk, um, er = _process_record_list(
+                dev.device_sn, dev, _school_obj, records, source_cmd=cmd)
+        else:
+            current_app.logger.error('[aiface] no school for device_id=%d school_id=%s',
+                                     dev.id, dev.school_id)
+            p, sk, um, er = 0, 0, len(records), 0
         result['processing'] = {
             'processed': p, 'skipped': sk, 'unmatched': um, 'errors': er,
         }
-        current_app.logger.info(
-            '[aiface] manual pull result: device_id=%d count=%d '
+        current_app.logger.warning(
+            '[aiface] manual pull result: device_id=%d device_sn=%s count=%d '
             'processed=%d skipped=%d unmatched=%d errors=%d',
-            dev.id, count, p, sk, um, er)
+            dev.id, dev.device_sn, count, p, sk, um, er)
     elif not records:
         result['processing'] = None
         result['hint'] = (
