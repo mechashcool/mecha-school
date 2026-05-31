@@ -25,15 +25,50 @@
 
 <!-- ── Fee Reminder Settings (admin-only) ─────────────────────────────── -->
 {% if current_user.is_school_admin or current_user.is_super_admin %}
-<div class="card mb-4">
+{% set _reminder_school = school if school and school.__class__.__name__ == 'School' else none %}
+<div class="card mb-4" id="feeReminderCard">
   <div class="card-header d-flex align-items-center justify-content-between"
        style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#feeReminderCollapse"
        aria-expanded="false" aria-controls="feeReminderCollapse">
-    <span><i class="bi bi-bell-fill text-accent me-1"></i>إعدادات تذكير الأقساط</span>
+    <span>
+      <i class="bi bi-bell-fill text-accent me-1"></i>إعدادات تذكير الأقساط
+      {% if _reminder_school %}
+        {% if _reminder_school.fee_reminder_enabled %}
+        <span class="badge bg-success ms-2" style="font-size:11px">مفعّل</span>
+        {% else %}
+        <span class="badge bg-secondary ms-2" style="font-size:11px">معطّل</span>
+        {% endif %}
+      {% endif %}
+    </span>
     <i class="bi bi-chevron-down" style="font-size:13px"></i>
   </div>
   <div class="collapse" id="feeReminderCollapse">
     <div class="card-body">
+
+      {% if _reminder_school %}
+      <!-- Current saved state -->
+      <div class="alert alert-light border mb-3 py-2" style="font-size:13px">
+        <strong>الحالة المحفوظة حالياً:</strong>
+        {% if _reminder_school.fee_reminder_enabled %}
+          <span class="text-success fw-semibold">مفعّل</span> —
+          إرسال التذكير قبل
+          <strong>{{ _reminder_school.fee_reminder_before_value or 3 }}</strong>
+          {% if _reminder_school.fee_reminder_before_unit == 'hours' %}ساعات
+          {% elif _reminder_school.fee_reminder_before_unit == 'minutes' %}دقائق
+          {% else %}أيام{% endif %}
+          من موعد القسط
+          <span class="text-muted">(school_id={{ _reminder_school.id }})</span>
+        {% else %}
+          <span class="text-secondary">غير مفعّل</span>
+          <span class="text-muted">(school_id={{ _reminder_school.id }})</span>
+        {% endif %}
+      </div>
+      {% else %}
+      <div class="alert alert-warning py-2 mb-3" style="font-size:13px">
+        تعذّر تحميل إعدادات المدرسة. تأكد من اختيار مدرسة نشطة.
+      </div>
+      {% endif %}
+
       <form method="POST" action="{{ url_for('fees.reminder_settings') }}" id="feeReminderForm">
         <div class="row g-3 align-items-end">
 
@@ -42,7 +77,7 @@
               <input class="form-check-input" type="checkbox" role="switch"
                      id="fee_reminder_enabled" name="fee_reminder_enabled"
                      value="1"
-                     {% if school and school.fee_reminder_enabled %}checked{% endif %}>
+                     {% if _reminder_school and _reminder_school.fee_reminder_enabled %}checked{% endif %}>
               <label class="form-check-label fw-semibold" for="fee_reminder_enabled">
                 تفعيل تذكير الأقساط
               </label>
@@ -56,7 +91,7 @@
             <label class="form-label" for="fee_reminder_before_value">إرسال التذكير قبل</label>
             <input type="number" id="fee_reminder_before_value"
                    name="fee_reminder_before_value"
-                   value="{{ (school.fee_reminder_before_value if school and school.fee_reminder_before_value) or 3 }}"
+                   value="{{ (_reminder_school.fee_reminder_before_value if _reminder_school and _reminder_school.fee_reminder_before_value) or 3 }}"
                    min="1"
                    class="form-control"
                    placeholder="3">
@@ -68,15 +103,15 @@
             <select id="fee_reminder_before_unit" name="fee_reminder_before_unit"
                     class="form-select">
               <option value="days"
-                {% if not (school and school.fee_reminder_before_unit) or school.fee_reminder_before_unit == 'days' %}selected{% endif %}>
+                {% if not (_reminder_school and _reminder_school.fee_reminder_before_unit) or (_reminder_school and _reminder_school.fee_reminder_before_unit == 'days') %}selected{% endif %}>
                 أيام
               </option>
               <option value="hours"
-                {% if school and school.fee_reminder_before_unit == 'hours' %}selected{% endif %}>
+                {% if _reminder_school and _reminder_school.fee_reminder_before_unit == 'hours' %}selected{% endif %}>
                 ساعات
               </option>
               <option value="minutes"
-                {% if school and school.fee_reminder_before_unit == 'minutes' %}selected{% endif %}>
+                {% if _reminder_school and _reminder_school.fee_reminder_before_unit == 'minutes' %}selected{% endif %}>
                 دقائق
               </option>
             </select>
@@ -323,6 +358,23 @@
 
 {% block extra_js %}
 <script>
+// ── Auto-expand reminder card on save success ─────────────────────────────────
+(function () {
+  var flashEls = document.querySelectorAll('.alert');
+  var hasReminderFlash = false;
+  flashEls.forEach(function (el) {
+    if (el.textContent.indexOf('تذكير الأقساط') !== -1) hasReminderFlash = true;
+  });
+  if (hasReminderFlash) {
+    var collapseEl = document.getElementById('feeReminderCollapse');
+    if (collapseEl && window.bootstrap) {
+      new bootstrap.Collapse(collapseEl, { toggle: false }).show();
+    } else if (collapseEl) {
+      collapseEl.classList.add('show');
+    }
+  }
+})();
+
 // ── Fee reminder validation ───────────────────────────────────────────────────
 (function () {
   var valEl  = document.getElementById('fee_reminder_before_value');

@@ -1,7 +1,8 @@
 """Mecha-School – Fees Blueprint"""
+import logging
 from decimal import Decimal, InvalidOperation
 
-from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify
+from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify, session as flask_session
 from flask_login import login_required, current_user
 from datetime import date, datetime as dt
 from sqlalchemy import func
@@ -15,6 +16,7 @@ from app.utils.helpers import generate_receipt_no
 from app.utils.audit import log_action
 
 fees_bp = Blueprint('fees', __name__, template_folder='../../templates/fees')
+_log = logging.getLogger('mecha.fees')
 
 
 def _active_fee_student_query(school, year):
@@ -431,14 +433,35 @@ def fee_types():
 @login_required
 @admin_required
 def reminder_settings():
-    from app.utils.audit import log_action
+    # Resolve school_id explicitly — do NOT rely on get_current_school() because
+    # it can return a SchoolSettings fallback object for super_admin without an
+    # active school in session, which is not a School row and cannot be saved.
+    if current_user.is_super_admin:
+        school_id = flask_session.get('active_school_id')
+    else:
+        school_id = current_user.school_id
 
-    school = get_current_school()
-    if not school or not isinstance(school, School):
+    _log.warning(
+        '[fees-reminder-settings] called user_id=%s is_super_admin=%s school_id=%s form=%s',
+        current_user.id, current_user.is_super_admin, school_id, dict(request.form),
+    )
+
+    if not school_id:
         flash('الرجاء اختيار مدرسة أولاً.', 'warning')
         return redirect(url_for('fees.index'))
 
-    school.fee_reminder_enabled = bool(request.form.get('fee_reminder_enabled'))
+    school = (
+        School.query
+        .execution_options(bypass_tenant_scope=True)
+        .filter_by(id=school_id)
+        .first()
+    )
+    if not school:
+        flash('المدرسة غير موجودة.', 'warning')
+        return redirect(url_for('fees.index'))
+
+    # Checkbox: sends '1' when checked, absent when unchecked
+    enabled = request.form.get('fee_reminder_enabled') == '1'
 
     raw_val = request.form.get('fee_reminder_before_value', '3').strip()
     try:
@@ -450,7 +473,6 @@ def reminder_settings():
     if fee_unit not in ('days', 'hours', 'minutes'):
         fee_unit = 'days'
 
-    # Per-unit validation
     if fee_unit == 'minutes':
         parsed_val = max(5, min(parsed_val, 1440))
     elif fee_unit == 'hours':
@@ -458,10 +480,22 @@ def reminder_settings():
     else:
         parsed_val = max(1, min(parsed_val, 30))
 
+    school.fee_reminder_enabled      = enabled
     school.fee_reminder_before_value = parsed_val
     school.fee_reminder_before_unit  = fee_unit
 
+    _log.warning(
+        '[fees-reminder-settings] saving school_id=%s enabled=%s value=%s unit=%s',
+        school.id, enabled, parsed_val, fee_unit,
+    )
+
     db.session.commit()
+
+    _log.warning(
+        '[fees-reminder-settings] saved school_id=%s enabled=%s value=%s unit=%s',
+        school.id, enabled, parsed_val, fee_unit,
+    )
+
     log_action('edit', 'school', school.id, details='fee reminder settings updated')
     flash('تم حفظ إعدادات تذكير الأقساط بنجاح.', 'success')
     return redirect(url_for('fees.index'))
