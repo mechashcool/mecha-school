@@ -29,6 +29,7 @@ from sqlalchemy import select
 
 from app.models import (
     db,
+    AcademicYear,
     FeeRecord,
     Exam,
     ExamResult,
@@ -475,7 +476,7 @@ def parent_notifications():
 def parent_child_homework(student_id):
     """
     Homework assigned to the child's current section.
-    Only returns active homework for the active academic year.
+    Returns active, published homework for the active academic year only.
 
     Blocked if the school's homework module is disabled (api_access action).
     """
@@ -490,10 +491,22 @@ def parent_child_homework(student_id):
     if not s.section_id:
         return ok(student_id=s.id, count=0, homework=[])
 
-    rows = (Homework.query
-            .filter_by(section_id=s.section_id, is_active=True)
-            .order_by(Homework.publish_date.desc(), Homework.id.desc())
-            .all())
+    # Resolve the school's active academic year (bypass ORM scoping — mobile
+    # requests run before jwt_required sets current_user, so tenant scope is None)
+    year = (AcademicYear.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(school_id=user.school_id, is_current=True)
+            .first())
+
+    today = date.today()
+    q = (Homework.query
+         .execution_options(bypass_tenant_scope=True)
+         .filter_by(section_id=s.section_id, is_active=True, school_id=user.school_id))
+    if year:
+        q = q.filter_by(academic_year_id=year.id)
+    # Only show homework that has been published (publish_date <= today)
+    q = q.filter(Homework.publish_date <= today)
+    rows = q.order_by(Homework.publish_date.desc(), Homework.id.desc()).all()
 
     def _hw_url(hw):
         if not hw.attachment_path:

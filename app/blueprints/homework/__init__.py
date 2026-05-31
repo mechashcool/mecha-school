@@ -122,37 +122,61 @@ def _get_school_and_year():
 
 
 def _notify_section_parents(hw: Homework, school_id: int) -> None:
-    """Create one in-app notification per parent of every student in hw's section."""
+    """Create in-app Notification rows + FCM push for all parents of students in hw's section.
+
+    Commits Notification rows first; FCM fires after so in-app rows are saved even
+    if FCM fails.  One push per parent even if the parent has multiple children in
+    the same section (deduplication via parent_to_student dict).
+    """
     if not hw.section_id:
         return
-    from app.models import Student, parent_students, User
+
+    import logging
+    _hw_log = logging.getLogger('mecha.homework')
+
+    from app.models import Student, parent_students
     from sqlalchemy import select as _sel
 
-    subject_name = hw.subject.name if hw.subject else 'مادة'
-    title = f'واجب جديد — {subject_name}'
-    body  = f'تم إضافة واجب "{hw.title}" في مادة {subject_name}. تاريخ التسليم: {hw.due_date}'
+    subject_name = hw.subject.name if hw.subject else 'غير محدد'
+    title = 'واجب جديد'
+    body  = f'تم إضافة واجب جديد في مادة {subject_name}: {hw.title}'
+
+    _hw_log.info('[homework-notify] homework_id=%s section_id=%s title=%r',
+                 hw.id, hw.section_id, hw.title)
 
     student_ids = [
         s.id for s in
         Student.query.filter_by(section_id=hw.section_id, status='active').all()
     ]
     if not student_ids:
+        _hw_log.info('[homework-notify] no active students in section_id=%s', hw.section_id)
         return
 
-    parent_user_ids = {
-        row.user_id
-        for row in db.session.execute(
-            _sel(parent_students.c.user_id).where(
-                parent_students.c.student_id.in_(student_ids)
-            )
-        ).fetchall()
-    }
+    # Build parent_user_id → first student_id mapping (deduplicate parents with
+    # multiple children in the same section; one notification + one FCM per parent)
+    parent_to_student: dict[int, int] = {}
+    for row in db.session.execute(
+        _sel(parent_students.c.user_id, parent_students.c.student_id).where(
+            parent_students.c.student_id.in_(student_ids)
+        )
+    ).fetchall():
+        uid, sid = row.user_id, row.student_id
+        if uid not in parent_to_student:
+            parent_to_student[uid] = sid
 
-    fcm_targets = []
-    for uid in parent_user_ids:
+    _hw_log.info('[homework-notify] parent_targets=%d homework_id=%s',
+                 len(parent_to_student), hw.id)
+
+    if not parent_to_student:
+        return
+
+    # Create in-app Notification rows; skip if one already exists (idempotent re-runs)
+    fcm_targets: list[tuple[int, int]] = []  # (parent_user_id, student_id)
+    for uid, sid in parent_to_student.items():
         existing = Notification.query.filter_by(
             school_id=school_id,
             target_user_id=uid,
+            ntype='homework',
             title=title,
             body=body,
         ).first()
@@ -163,24 +187,41 @@ def _notify_section_parents(hw: Homework, school_id: int) -> None:
                 body=body,
                 ntype='homework',
                 target_user_id=uid,
-                created_by=current_user.id,
+                created_by=current_user.id if current_user.is_authenticated else None,
             ))
-            fcm_targets.append(uid)
+            fcm_targets.append((uid, sid))
+            _hw_log.info('[homework-notify] notification created parent_user_id=%s', uid)
 
-    # FCM push fires after the session flush in the calling route.
-    # send_push_to_user reads already-committed device tokens, so DB commit
-    # of the Notification row is not required before sending.
+    if not fcm_targets:
+        _hw_log.info('[homework-notify] all notifications already exist, skipping — homework_id=%s',
+                     hw.id)
+        return
+
+    try:
+        db.session.commit()
+    except Exception:
+        _hw_log.exception('[homework-notify] commit failed homework_id=%s', hw.id)
+        db.session.rollback()
+        return
+
+    # FCM push — after commit so in-app rows are saved regardless of push outcome
     try:
         from app.services.fcm_service import is_enabled, send_push_to_user
-        if is_enabled() and fcm_targets:
-            data = {'type': 'homework', 'school_id': str(school_id),
-                    'homework_id': str(hw.id)}
-            current_app.logger.info(
-                '[homework] FCM push → %d parent(s) title=%r', len(fcm_targets), title)
-            for uid in fcm_targets:
-                send_push_to_user(uid, title, body, data)
+        if not is_enabled():
+            _hw_log.info('[homework-notify] FCM disabled, skipping push homework_id=%s', hw.id)
+            return
+        for uid, sid in fcm_targets:
+            data = {
+                'type':        'homework',
+                'homework_id': str(hw.id),
+                'section_id':  str(hw.section_id),
+                'student_id':  str(sid),
+                'screen':      'homework',
+            }
+            _hw_log.info('[homework-notify] dispatching FCM parent_user_id=%s', uid)
+            send_push_to_user(uid, title, body, data)
     except Exception:
-        current_app.logger.exception('[homework] FCM dispatch failed hw_id=%s', hw.id)
+        _hw_log.exception('[homework-notify] FCM dispatch failed homework_id=%s', hw.id)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -334,15 +375,13 @@ def create():
             is_active=True,
         )
         db.session.add(hw)
-        db.session.flush()
+        db.session.commit()  # commit homework first so hw.id is stable before notifying
 
-        # Optional: notify parents
         try:
             _notify_section_parents(hw, school.id)
         except Exception as exc:
-            current_app.logger.warning(f'Homework notification failed: {exc}')
+            current_app.logger.warning('[homework] notification failed hw_id=%s: %s', hw.id, exc)
 
-        db.session.commit()
         flash('تم إضافة الواجب بنجاح.', 'success')
         return redirect(url_for('homework.index'))
 
