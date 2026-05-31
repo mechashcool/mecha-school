@@ -7,9 +7,10 @@ from datetime import date, datetime as dt
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
-from app.models import (db, FeeRecord, FeeInstallment, FeeType, Student, AcademicYear, SchoolSettings, Revenue, RevenueCategory, Section)
+from app.models import (db, FeeRecord, FeeInstallment, FeeType, Student, AcademicYear, SchoolSettings, Revenue, RevenueCategory, Section, School)
 from app.utils.decorators import (permission_required, get_current_school,
-                                   get_active_year, get_view_year, historical_guard)
+                                   get_active_year, get_view_year, historical_guard,
+                                   admin_required)
 from app.utils.helpers import generate_receipt_no
 from app.utils.audit import log_action
 
@@ -424,3 +425,43 @@ def fee_types():
         return redirect(url_for('fees.fee_types'))
     types = FeeType.query.all()
     return render_template('fees/fee_types.html', types=types)
+
+
+@fees_bp.route('/reminder-settings', methods=['POST'])
+@login_required
+@admin_required
+def reminder_settings():
+    from app.utils.audit import log_action
+
+    school = get_current_school()
+    if not school or not isinstance(school, School):
+        flash('الرجاء اختيار مدرسة أولاً.', 'warning')
+        return redirect(url_for('fees.index'))
+
+    school.fee_reminder_enabled = bool(request.form.get('fee_reminder_enabled'))
+
+    raw_val = request.form.get('fee_reminder_before_value', '3').strip()
+    try:
+        parsed_val = int(raw_val)
+    except (ValueError, TypeError):
+        parsed_val = 3
+
+    fee_unit = request.form.get('fee_reminder_before_unit', 'days')
+    if fee_unit not in ('days', 'hours', 'minutes'):
+        fee_unit = 'days'
+
+    # Per-unit validation
+    if fee_unit == 'minutes':
+        parsed_val = max(5, min(parsed_val, 1440))
+    elif fee_unit == 'hours':
+        parsed_val = max(1, min(parsed_val, 72))
+    else:
+        parsed_val = max(1, min(parsed_val, 30))
+
+    school.fee_reminder_before_value = parsed_val
+    school.fee_reminder_before_unit  = fee_unit
+
+    db.session.commit()
+    log_action('edit', 'school', school.id, details='fee reminder settings updated')
+    flash('تم حفظ إعدادات تذكير الأقساط بنجاح.', 'success')
+    return redirect(url_for('fees.index'))

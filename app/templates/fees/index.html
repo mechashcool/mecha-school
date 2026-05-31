@@ -23,6 +23,84 @@
   </div>
 </div>
 
+<!-- ── Fee Reminder Settings (admin-only) ─────────────────────────────── -->
+{% if current_user.is_school_admin or current_user.is_super_admin %}
+<div class="card mb-4">
+  <div class="card-header d-flex align-items-center justify-content-between"
+       style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#feeReminderCollapse"
+       aria-expanded="false" aria-controls="feeReminderCollapse">
+    <span><i class="bi bi-bell-fill text-accent me-1"></i>إعدادات تذكير الأقساط</span>
+    <i class="bi bi-chevron-down" style="font-size:13px"></i>
+  </div>
+  <div class="collapse" id="feeReminderCollapse">
+    <div class="card-body">
+      <form method="POST" action="{{ url_for('fees.reminder_settings') }}" id="feeReminderForm">
+        <div class="row g-3 align-items-end">
+
+          <div class="col-12">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" role="switch"
+                     id="fee_reminder_enabled" name="fee_reminder_enabled"
+                     value="1"
+                     {% if school and school.fee_reminder_enabled %}checked{% endif %}>
+              <label class="form-check-label fw-semibold" for="fee_reminder_enabled">
+                تفعيل تذكير الأقساط
+              </label>
+            </div>
+            <small class="text-muted">
+              عند التفعيل، يُرسل النظام تلقائياً إشعاراً لأولياء الأمور قبل موعد القسط.
+            </small>
+          </div>
+
+          <div class="col-md-3">
+            <label class="form-label" for="fee_reminder_before_value">إرسال التذكير قبل</label>
+            <input type="number" id="fee_reminder_before_value"
+                   name="fee_reminder_before_value"
+                   value="{{ (school.fee_reminder_before_value if school and school.fee_reminder_before_value) or 3 }}"
+                   min="1"
+                   class="form-control"
+                   placeholder="3">
+            <div class="invalid-feedback" id="reminderValErr"></div>
+          </div>
+
+          <div class="col-md-3">
+            <label class="form-label" for="fee_reminder_before_unit">نوع الفترة</label>
+            <select id="fee_reminder_before_unit" name="fee_reminder_before_unit"
+                    class="form-select">
+              <option value="days"
+                {% if not (school and school.fee_reminder_before_unit) or school.fee_reminder_before_unit == 'days' %}selected{% endif %}>
+                أيام
+              </option>
+              <option value="hours"
+                {% if school and school.fee_reminder_before_unit == 'hours' %}selected{% endif %}>
+                ساعات
+              </option>
+              <option value="minutes"
+                {% if school and school.fee_reminder_before_unit == 'minutes' %}selected{% endif %}>
+                دقائق
+              </option>
+            </select>
+          </div>
+
+          <div class="col-md-3 d-flex align-items-end">
+            <div class="text-muted" style="font-size:13px;padding-bottom:6px" id="reminderExample">
+              مثال: إرسال التذكير قبل 3 أيام من موعد القسط.
+            </div>
+          </div>
+
+          <div class="col-md-3 d-flex align-items-end">
+            <button type="submit" class="btn btn-primary w-100">
+              <i class="bi bi-check-circle-fill me-1"></i>حفظ الإعدادات
+            </button>
+          </div>
+
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <!-- Search -->
 <div class="card mb-4">
   <div class="card-body py-3">
@@ -245,6 +323,58 @@
 
 {% block extra_js %}
 <script>
+// ── Fee reminder validation ───────────────────────────────────────────────────
+(function () {
+  var valEl  = document.getElementById('fee_reminder_before_value');
+  var unitEl = document.getElementById('fee_reminder_before_unit');
+  var errEl  = document.getElementById('reminderValErr');
+  var exEl   = document.getElementById('reminderExample');
+  var form   = document.getElementById('feeReminderForm');
+
+  var limits = { days: [1, 30], hours: [1, 72], minutes: [5, 1440] };
+  var labels = { days: 'أيام', hours: 'ساعات', minutes: 'دقائق' };
+  var msgTpl = { days: 'مثال: إرسال التذكير قبل {v} أيام من موعد القسط.',
+                 hours: 'مثال: إرسال التذكير قبل {v} ساعة من موعد القسط.',
+                 minutes: 'مثال: إرسال التذكير قبل {v} دقيقة من موعد القسط.' };
+
+  function updateExample() {
+    if (!exEl || !valEl || !unitEl) return;
+    var u = unitEl.value, v = valEl.value || '3';
+    exEl.textContent = (msgTpl[u] || '').replace('{v}', v);
+  }
+
+  function validate() {
+    if (!valEl || !unitEl) return true;
+    var u = unitEl.value;
+    var v = parseInt(valEl.value, 10);
+    var range = limits[u] || [1, 30];
+    if (isNaN(v) || v < range[0] || v > range[1]) {
+      valEl.classList.add('is-invalid');
+      if (errEl) errEl.textContent =
+        'يجب أن تكون القيمة بين ' + range[0] + ' و ' + range[1] + ' ' + (labels[u] || '') + '.';
+      return false;
+    }
+    valEl.classList.remove('is-invalid');
+    if (errEl) errEl.textContent = '';
+    return true;
+  }
+
+  if (unitEl) {
+    unitEl.addEventListener('change', function () {
+      var range = limits[this.value] || [1, 30];
+      valEl.min = range[0];
+      valEl.max = range[1];
+      validate();
+      updateExample();
+    });
+  }
+  if (valEl) valEl.addEventListener('input', function () { validate(); updateExample(); });
+  if (form) form.addEventListener('submit', function (e) {
+    if (!validate()) { e.preventDefault(); valEl && valEl.focus(); }
+  });
+  updateExample();
+})();
+
 function toggleInstallments(id) {
   const row = document.getElementById('inst_' + id);
   row.style.display = row.style.display === 'none' ? 'table-row' : 'none';

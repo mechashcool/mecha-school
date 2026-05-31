@@ -40,7 +40,7 @@ def start_fee_reminder_scheduler(app) -> None:
     if _scheduler_thread and _scheduler_thread.is_alive():
         return
 
-    interval = max(300, int(os.environ.get('FEE_REMINDER_CHECK_INTERVAL', '3600')))
+    interval = max(300, int(os.environ.get('FEE_REMINDER_CHECK_INTERVAL', '300')))
     _scheduler_thread = threading.Thread(
         target=_scheduler_loop,
         args=(app, interval),
@@ -129,8 +129,10 @@ def _check_school(school) -> tuple[int, int]:
     local_now = get_local_now(school)
     if unit == 'days':
         target_date = (local_now + timedelta(days=value)).date()
-    else:
+    elif unit == 'hours':
         target_date = (local_now + timedelta(hours=value)).date()
+    else:  # minutes
+        target_date = (local_now + timedelta(minutes=value)).date()
 
     _log.warning('[fees-reminder] school_id=%s target_window=%s', school.id, target_date)
 
@@ -207,10 +209,15 @@ def _check_school(school) -> tuple[int, int]:
                     f'نود تذكيركم بأن موعد تسديد القسط للطالب {student.full_name} '
                     f'سيكون بعد {value} {unit_word} بتاريخ {due_str}.'
                 )
-            else:
+            elif unit == 'hours':
                 body = (
                     f'نود تذكيركم بأن موعد تسديد القسط للطالب {student.full_name} '
                     f'سيكون بعد {value} ساعة بتاريخ {due_str}.'
+                )
+            else:  # minutes
+                body = (
+                    f'نود تذكيركم بأن موعد تسديد القسط للطالب {student.full_name} '
+                    f'سيكون بعد {value} دقيقة بتاريخ {due_str}.'
                 )
 
             data = {

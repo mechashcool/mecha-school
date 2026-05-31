@@ -1178,17 +1178,6 @@ def school_settings():
         school.locale          = request.form.get('locale',  'ar').strip() or 'ar'
         school.receipt_footer  = request.form.get('receipt_footer', '').strip() or None
 
-        # Fee reminder settings
-        school.fee_reminder_enabled = bool(request.form.get('fee_reminder_enabled'))
-        raw_val = request.form.get('fee_reminder_before_value', '3').strip()
-        try:
-            parsed_val = int(raw_val)
-        except (ValueError, TypeError):
-            parsed_val = 3
-        school.fee_reminder_before_value = max(1, parsed_val) if parsed_val > 0 else 3
-        fee_unit = request.form.get('fee_reminder_before_unit', 'days')
-        school.fee_reminder_before_unit = fee_unit if fee_unit in ('days', 'hours') else 'days'
-
         logo_file = request.files.get('logo')
         if logo_file and logo_file.filename:
             fname = secure_filename(
@@ -1198,16 +1187,6 @@ def school_settings():
             os.makedirs(uploads_dir, exist_ok=True)
             logo_file.save(os.path.join(uploads_dir, fname))
             school.logo_path = fname
-
-        fav_file = request.files.get('favicon')
-        if fav_file and fav_file.filename:
-            fname = secure_filename(
-                f"school_{school.id}_fav_{int(datetime.utcnow().timestamp())}_{fav_file.filename}"
-            )
-            uploads_dir = os.path.join(current_app.root_path, 'static', 'uploads')
-            os.makedirs(uploads_dir, exist_ok=True)
-            fav_file.save(os.path.join(uploads_dir, fname))
-            school.favicon_path = fname
 
         db.session.commit()
         log_action('edit', 'school', school.id, details='white-label identity updated')

@@ -59,12 +59,12 @@
             <div class="col-md-12">
               <label class="form-label">العنوان</label>
               <textarea name="address" class="form-control" rows="2"
-                        placeholder="الرياض — حي النخيل">{{ settings.address or '' }}</textarea>
+                        placeholder="العراق - الكرادة">{{ settings.address or '' }}</textarea>
             </div>
             <div class="col-md-4">
               <label class="form-label">الهاتف</label>
               <input type="text" name="phone" value="{{ settings.phone or '' }}"
-                     class="form-control" placeholder="+966 11 123 4567">
+                     class="form-control" placeholder="07712345678">
             </div>
             <div class="col-md-4">
               <label class="form-label">البريد الإلكتروني</label>
@@ -89,20 +89,20 @@
             <div class="col-md-4">
               <label class="form-label">رمز العملة</label>
               <input type="text" name="currency_code" maxlength="10"
-                     value="{{ settings.currency_code or 'SAR' }}"
-                     class="form-control" placeholder="SAR">
+                     value="{{ settings.currency_code or 'IQD' }}"
+                     class="form-control" placeholder="IQD">
             </div>
             <div class="col-md-4">
               <label class="form-label">رمز العرض</label>
               <input type="text" name="currency_symbol" maxlength="10"
-                     value="{{ settings.currency_symbol or '﷼' }}"
-                     class="form-control" placeholder="﷼">
+                     value="{{ settings.currency_symbol or 'د.ع' }}"
+                     class="form-control" placeholder="د.ع">
             </div>
             <div class="col-md-4">
               <label class="form-label">المنطقة الزمنية</label>
               <input type="text" name="timezone" maxlength="50"
-                     value="{{ settings.timezone or 'Asia/Riyadh' }}"
-                     class="form-control" placeholder="Asia/Riyadh">
+                     value="{{ settings.timezone or 'Asia/Baghdad' }}"
+                     class="form-control" placeholder="Asia/Baghdad">
             </div>
           </div>
         </div>
@@ -114,7 +114,7 @@
         </div>
         <div class="card-body">
           <textarea name="receipt_footer" class="form-control" rows="3"
-                    placeholder="مثال: شكراً لتعاملكم معنا — للاستفسار: 0112345678">{{ settings.receipt_footer or '' }}</textarea>
+                    placeholder="شكراً لتعاملكم معنا — للاستفسار: 07712345678">{{ settings.receipt_footer or '' }}</textarea>
           <small class="text-muted">يظهر في أسفل الإيصالات وكشوف الرواتب.</small>
         </div>
       </div>
@@ -134,64 +134,6 @@
           <a href="{{ url_for('admin.attendance_settings') }}" class="btn btn-outline-primary btn-sm text-nowrap">
             <i class="bi bi-clock-history me-1"></i>إعدادات الحضور
           </a>
-        </div>
-      </div>
-
-      <div class="card mb-4">
-        <div class="card-header">
-          <i class="bi bi-bell-fill text-accent"></i>إعدادات تذكير الأقساط
-        </div>
-        <div class="card-body">
-          <div class="row g-3">
-
-            <div class="col-12">
-              <div class="form-check form-switch">
-                <input class="form-check-input" type="checkbox" role="switch"
-                       id="fee_reminder_enabled" name="fee_reminder_enabled"
-                       value="1"
-                       {% if settings.fee_reminder_enabled %}checked{% endif %}>
-                <label class="form-check-label fw-semibold" for="fee_reminder_enabled">
-                  تفعيل تذكير الأقساط
-                </label>
-              </div>
-              <small class="text-muted">
-                عند التفعيل، يُرسل النظام تلقائياً إشعاراً لأولياء الأمور قبل موعد القسط.
-              </small>
-            </div>
-
-            <div class="col-md-4">
-              <label class="form-label" for="fee_reminder_before_value">إرسال التذكير قبل</label>
-              <input type="number" id="fee_reminder_before_value"
-                     name="fee_reminder_before_value"
-                     value="{{ settings.fee_reminder_before_value or 3 }}"
-                     min="1" max="72"
-                     class="form-control"
-                     placeholder="3">
-              <div class="invalid-feedback">يجب أن تكون القيمة بين 1 و 72.</div>
-            </div>
-
-            <div class="col-md-4">
-              <label class="form-label" for="fee_reminder_before_unit">نوع الفترة</label>
-              <select id="fee_reminder_before_unit" name="fee_reminder_before_unit"
-                      class="form-select">
-                <option value="days"
-                  {% if not settings.fee_reminder_before_unit or settings.fee_reminder_before_unit == 'days' %}selected{% endif %}>
-                  أيام
-                </option>
-                <option value="hours"
-                  {% if settings.fee_reminder_before_unit == 'hours' %}selected{% endif %}>
-                  ساعات
-                </option>
-              </select>
-            </div>
-
-            <div class="col-md-4 d-flex align-items-end">
-              <div class="text-muted" style="font-size:13px;padding-bottom:6px">
-                مثال: إرسال التذكير قبل 3 أيام من موعد القسط.
-              </div>
-            </div>
-
-          </div>
         </div>
       </div>
 
@@ -225,22 +167,8 @@
             <input type="file" name="logo" class="form-control" accept="image/*">
             <small class="text-muted">PNG / JPG / SVG — الحد الأقصى 2MB</small>
           </div>
-        </div>
-      </div>
-
-      <div class="card mb-4">
-        <div class="card-header">
-          <i class="bi bi-star-fill text-accent"></i>أيقونة التبويب (Favicon)
-        </div>
-        <div class="card-body text-center">
-          {% if settings.favicon_path %}
-          <img src="{{ url_for('static', filename='uploads/' + settings.favicon_path) }}"
-               alt="Favicon" style="width:48px;height:48px;border-radius:8px;
-                                     border:1px solid #dde3ec;padding:4px;background:#fff">
-          {% endif %}
-          <div class="mt-3">
-            <input type="file" name="favicon" class="form-control" accept="image/*">
-            <small class="text-muted">صورة صغيرة مربعة (32×32 أو 64×64)</small>
+          <div class="mt-2 text-muted" style="font-size:12px">
+            <i class="bi bi-info-circle me-1"></i>يُستخدم الشعار تلقائياً كأيقونة التبويب (Favicon)
           </div>
         </div>
       </div>
@@ -252,39 +180,4 @@
 
   </div>
 </form>
-{% endblock %}
-
-{% block scripts %}
-<script>
-(function () {
-  var valEl  = document.getElementById('fee_reminder_before_value');
-  var unitEl = document.getElementById('fee_reminder_before_unit');
-  var errEl  = valEl ? valEl.nextElementSibling : null;
-  var form   = document.querySelector('form[method="POST"]');
-
-  function validate() {
-    if (!valEl || !unitEl) return true;
-    var v   = parseInt(valEl.value, 10);
-    var max = unitEl.value === 'hours' ? 72 : 30;
-    if (isNaN(v) || v < 1 || v > max) {
-      valEl.classList.add('is-invalid');
-      if (errEl) errEl.textContent = unitEl.value === 'hours'
-        ? 'يجب أن تكون قيمة الساعات بين 1 و 72.'
-        : 'يجب أن تكون قيمة الأيام بين 1 و 30.';
-      return false;
-    }
-    valEl.classList.remove('is-invalid');
-    return true;
-  }
-
-  if (unitEl) unitEl.addEventListener('change', function () {
-    valEl.max = this.value === 'hours' ? 72 : 30;
-    validate();
-  });
-
-  if (form) form.addEventListener('submit', function (e) {
-    if (!validate()) { e.preventDefault(); valEl && valEl.focus(); }
-  });
-})();
-</script>
 {% endblock %}
