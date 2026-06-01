@@ -773,7 +773,7 @@ def delete_user(user_id):
 @admin_required
 def complaints_list():
     school_id = _admin_scope_id()
-    query = Complaint.query
+    query = Complaint.query.execution_options(include_all_years=True)
     if school_id:
         query = query.filter_by(school_id=school_id)
     complaints = query.order_by(Complaint.created_at.desc()).all()
@@ -788,7 +788,7 @@ def complaints_list():
 @admin_required
 def complaint_detail(complaint_id):
     school_id = _admin_scope_id()
-    query = Complaint.query.filter_by(id=complaint_id)
+    query = Complaint.query.execution_options(include_all_years=True).filter_by(id=complaint_id)
     if school_id:
         query = query.filter_by(school_id=school_id)
     complaint = query.first_or_404()
@@ -837,7 +837,7 @@ def complaint_detail(complaint_id):
 @admin_required
 def leave_requests_list():
     school_id = _admin_scope_id()
-    query = LeaveRequest.query
+    query = LeaveRequest.query.execution_options(include_all_years=True)
     if school_id:
         query = query.filter_by(school_id=school_id)
     requests = query.order_by(LeaveRequest.created_at.desc()).all()
@@ -852,7 +852,7 @@ def leave_requests_list():
 @admin_required
 def leave_request_detail(request_id):
     school_id = _admin_scope_id()
-    query = LeaveRequest.query.filter_by(id=request_id)
+    query = LeaveRequest.query.execution_options(include_all_years=True).filter_by(id=request_id)
     if school_id:
         query = query.filter_by(school_id=school_id)
     leave_request = query.first_or_404()

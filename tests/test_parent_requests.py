@@ -489,6 +489,112 @@ class ParentRequestsTest(unittest.TestCase):
                          token_a)
         self.assertEqual(resp.status_code, 404)
 
+    def test_mobile_complaint_visible_in_admin_list_across_years(self):
+        """A complaint filed under an older (non-current) academic year must still
+        appear in the admin list when the school's current year is different.
+        Regression guard for the year-scoped ORM filter on Complaint."""
+        from app.blueprints.admin import complaints_list
+
+        ids = self.created
+        # Create an extra NON-current year and a complaint filed under it.
+        # self.created only has year_a (current); old_year is extra.
+        with self.app.app_context():
+            old_year = AcademicYear(
+                school_id=ids['school_a_id'],
+                name=f'Old Complaint Year {self.suffix}',
+                start_date=date(2024, 8, 1),
+                end_date=date(2025, 6, 30),
+                is_current=False,        # NOT the current year
+            )
+            db.session.add(old_year)
+            db.session.flush()
+            complaint = Complaint(
+                parent_id=ids['parent_id'],
+                student_id=ids['student_a_id'],
+                school_id=ids['school_a_id'],
+                academic_year_id=old_year.id,   # old year, not the session view year
+                title=f'Cross-year Complaint {self.suffix}',
+                complaint_type='academic',
+                details='filed under old year',
+                status='new',
+            )
+            db.session.add(complaint)
+            db.session.commit()
+            old_year_id = old_year.id
+            complaint_id = complaint.id
+
+        # Admin opens the complaints list.  _run_before_request sets the view year
+        # to year_a (is_current=True).  Without include_all_years the ORM filter
+        # would restrict to year_a and hide this complaint; with it, it must appear.
+        with self.app.test_request_context('/admin/complaints'):
+            manager = db.session.get(User, ids['manager_a_id'],
+                                     execution_options={'bypass_tenant_scope': True})
+            login_user(manager)
+            self._run_before_request()   # g.tenant_scope_view_year_id = year_a (current)
+            html = complaints_list()
+            self.assertIn(f'Cross-year Complaint {self.suffix}', html,
+                          'Complaint from old academic year must appear in admin list')
+            logout_user()
+
+        # Clean up the extra records this test created.
+        with self.app.app_context():
+            for cls, pk in [(Complaint, complaint_id), (AcademicYear, old_year_id)]:
+                obj = db.session.get(cls, pk,
+                                     execution_options={'bypass_tenant_scope': True})
+                if obj is not None:
+                    db.session.delete(obj)
+            db.session.commit()
+
+    def test_mobile_leave_request_visible_in_admin_list_across_years(self):
+        """Same cross-year visibility test for leave requests."""
+        from app.blueprints.admin import leave_requests_list
+
+        ids = self.created
+        with self.app.app_context():
+            old_year = AcademicYear(
+                school_id=ids['school_a_id'],
+                name=f'Old LR Year {self.suffix}',
+                start_date=date(2024, 8, 1),
+                end_date=date(2025, 6, 30),
+                is_current=False,
+            )
+            db.session.add(old_year)
+            db.session.flush()
+            leave = LeaveRequest(
+                parent_id=ids['parent_id'],
+                student_id=ids['student_a_id'],
+                school_id=ids['school_a_id'],
+                academic_year_id=old_year.id,
+                leave_type='sick',
+                from_date=date(2025, 1, 10),
+                to_date=date(2025, 1, 12),
+                notes=f'Cross-year leave note {self.suffix}',
+                status='pending',
+            )
+            db.session.add(leave)
+            db.session.commit()
+            old_year_id = old_year.id
+            leave_id = leave.id
+
+        with self.app.test_request_context('/admin/leave-requests'):
+            manager = db.session.get(User, ids['manager_a_id'],
+                                     execution_options={'bypass_tenant_scope': True})
+            login_user(manager)
+            self._run_before_request()
+            html = leave_requests_list()
+            # student name is present in the rendered list row for the leave request
+            self.assertIn(f'Own Student {self.suffix}', html,
+                          'Leave request from old academic year must appear in admin list')
+            logout_user()
+
+        with self.app.app_context():
+            for cls, pk in [(LeaveRequest, leave_id), (AcademicYear, old_year_id)]:
+                obj = db.session.get(cls, pk,
+                                     execution_options={'bypass_tenant_scope': True})
+                if obj is not None:
+                    db.session.delete(obj)
+            db.session.commit()
+
     def test_mobile_no_auth_returns_401(self):
         ids  = self.created
         resp = self.app.test_client().get(
