@@ -564,6 +564,9 @@ def room_detail(room_id):
         if len(body) > 2000:
             body = body[:2000]
 
+        import time
+        send_start = time.time() * 1000
+
         _log.info(
             '[chat] manager override send user_id=%s room_id=%s school_id=%s',
             current_user.id, room.id, room.school_id,
@@ -579,6 +582,10 @@ def room_detail(room_id):
         db.session.add(ChatMessageRead(message_id=msg.id, user_id=current_user.id))
         room.updated_at = datetime.utcnow()
         db.session.commit()
+
+        save_elapsed = time.time() * 1000 - send_start
+        _log.info('[chat-send] saved message_id=%s elapsed_ms=%.1f', msg.id, save_elapsed)
+
         _push_chat_message(room, msg)
         return redirect(url_for('chat.room_detail', room_id=room.id))
 
@@ -906,14 +913,62 @@ def settings():
 # ─── FCM push helper (shared with user routes) ───────────────────────────────
 
 def _push_chat_message(room: ChatRoom, msg: ChatMessage) -> None:
-    """Push FCM notification to all non-blocked, non-sender members."""
+    """
+    Push FCM notification to non-blocked, non-sender members with active device tokens.
+
+    Optimizations:
+    - Batch-queries active tokens upfront (not per-user)
+    - Only sends to users with active tokens
+    - Aggregates logging instead of per-user warnings
+    - Defers non-critical FCM work; never fails message send
+    """
+    import time
+    from app.models import MobileDeviceToken
+    from app.services.fcm_service import is_enabled, send_push_to_user
+
+    start_ms = time.time() * 1000
     try:
-        from app.services.fcm_service import is_enabled, send_push_to_user
         if not is_enabled():
             return
+
+        # ── Query members and active tokens in batch ────────────────────────
         members = (ChatRoomMember.query
                    .filter_by(room_id=room.id, is_blocked=False)
                    .all())
+        if not members:
+            return
+
+        # Batch-query active tokens for all room members
+        member_ids = {m.user_id for m in members if m.user_id != msg.sender_user_id}
+        if not member_ids:
+            return
+
+        token_query_start = time.time() * 1000
+        try:
+            tokens = (MobileDeviceToken.query
+                      .filter(MobileDeviceToken.user_id.in_(member_ids),
+                              MobileDeviceToken.is_active == True)
+                      .all())
+            users_with_tokens = {t.user_id for t in tokens}
+        except Exception as exc:
+            _log.error('[chat-fcm] failed to query device tokens room_id=%s: %s',
+                      room.id, exc)
+            return
+
+        token_query_elapsed = time.time() * 1000 - token_query_start
+        users_without_tokens = member_ids - users_with_tokens
+
+        # ── Aggregate token statistics ─────────────────────────────────────
+        _log.info(
+            '[chat-fcm] room_id=%s recipients=%d with_tokens=%d without_tokens=%d query_ms=%.1f',
+            room.id, len(member_ids), len(users_with_tokens), len(users_without_tokens),
+            token_query_elapsed,
+        )
+
+        if not users_with_tokens:
+            return
+
+        # ── Send FCM to users with active tokens only ──────────────────────
         ntype      = 'school_announcement' if room.is_announcement_only else 'chat_message'
         sender_name = current_user.full_name or 'مستخدم'
         title = (f'رسالة جديدة في {room.name}'
@@ -926,15 +981,29 @@ def _push_chat_message(room: ChatRoom, msg: ChatMessage) -> None:
             'message_id': str(msg.id),
             'screen':     'chat',
         }
-        for mem in members:
-            if mem.user_id == msg.sender_user_id:
-                continue
+
+        fcm_start = time.time() * 1000
+        fcm_sent = fcm_failed = 0
+        for user_id in users_with_tokens:
             try:
-                send_push_to_user(mem.user_id, title, body_text, data)
+                sent, failed = send_push_to_user(user_id, title, body_text, data)
+                fcm_sent += sent
+                fcm_failed += failed
             except Exception as exc:
-                _log.warning('[chat] FCM push failed user_id=%s: %s', mem.user_id, exc)
+                _log.warning('[chat-fcm] push failed user_id=%s room_id=%s: %s',
+                            user_id, room.id, exc)
+                fcm_failed += 1
+
+        fcm_elapsed = time.time() * 1000 - fcm_start
+        total_elapsed = time.time() * 1000 - start_ms
+
+        _log.info(
+            '[chat-fcm] room_id=%s fcm_sent=%d fcm_failed=%d fcm_ms=%.1f total_ms=%.1f',
+            room.id, fcm_sent, fcm_failed, fcm_elapsed, total_elapsed,
+        )
+
     except Exception as exc:
-        _log.error('[chat] _push_chat_message error: %s', exc)
+        _log.error('[chat-fcm] _push_chat_message error room_id=%s: %s', room.id, exc)
 
 
 # ─── User-facing routes (parent / teacher) ───────────────────────────────────
@@ -1088,6 +1157,9 @@ def user_room(room_id):
         if len(body) > 2000:
             body = body[:2000]
 
+        import time
+        send_start = time.time() * 1000
+
         msg = ChatMessage(
             room_id        = room.id,
             sender_user_id = current_user.id,
@@ -1100,6 +1172,9 @@ def user_room(room_id):
         db.session.add(ChatMessageRead(message_id=msg.id, user_id=current_user.id))
         room.updated_at = datetime.utcnow()
         db.session.commit()
+
+        save_elapsed = time.time() * 1000 - send_start
+        _log.info('[chat-send] saved message_id=%s elapsed_ms=%.1f', msg.id, save_elapsed)
 
         _push_chat_message(room, msg)
 

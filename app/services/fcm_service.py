@@ -159,10 +159,10 @@ def send_push_to_user(user_id: int, title: str, body: str,
         return 0, 0
 
     if not tokens:
-        log.warning('[FCM] no active device tokens for user_id=%s — push skipped', user_id)
+        log.debug('[FCM] no active device tokens for user_id=%s — push skipped', user_id)
         return 0, 0
 
-    log.warning('[FCM] pushing to user_id=%s — %d active token(s)', user_id, len(tokens))
+    log.debug('[FCM] pushing to user_id=%s — %d active token(s)', user_id, len(tokens))
     success_count = fail_count = deactivated = 0
 
     for dt in tokens:
