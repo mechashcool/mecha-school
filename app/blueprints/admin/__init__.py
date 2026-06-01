@@ -1346,12 +1346,50 @@ def _parse_dt(value):
     return None
 
 
+# ── Debug route (temporary — remove after root cause is confirmed) ─────────────
+
+@admin_bp.route('/debug/school-board')
+@login_required
+@admin_required
+def debug_school_board():
+    from flask import session as _sess
+    try:
+        scope_id = _admin_scope_id()
+    except Exception as e:
+        scope_id = f'ERROR: {e}'
+
+    ann_count = vid_count = 'error'
+    try:
+        ann_count = SchoolAnnouncement.query.execution_options(
+            bypass_tenant_scope=True).count()
+        vid_count = SchoolVideo.query.execution_options(
+            bypass_tenant_scope=True).count()
+    except Exception as e:
+        ann_count = vid_count = str(e)
+
+    return jsonify({
+        'user_id':          current_user.id,
+        'role':             current_user.role.name if current_user.role else None,
+        'school_id':        current_user.school_id,
+        'is_school_admin':  current_user.is_school_admin,
+        'is_super_admin':   current_user.is_super_admin,
+        'active_school_id': _sess.get('active_school_id'),
+        '_admin_scope_id':  scope_id,
+        'announcements_count': ann_count,
+        'videos_count':     vid_count,
+    })
+
+
 # ── School Videos ─────────────────────────────────────────────────────────────
 
 @admin_bp.route('/school-board/videos')
 @login_required
 @admin_required
 def school_board_videos():
+    _sb_log.info('school_board_videos | user=%s role=%s school_id=%s',
+                 current_user.id,
+                 current_user.role.name if current_user.role else None,
+                 current_user.school_id)
     school_id = _admin_scope_id()
     try:
         query = SchoolVideo.query.execution_options(bypass_tenant_scope=True)
@@ -1376,6 +1414,10 @@ def school_board_videos():
 @login_required
 @admin_required
 def school_board_video_create():
+    _sb_log.info('school_board_video_create | user=%s role=%s school_id=%s method=%s',
+                 current_user.id,
+                 current_user.role.name if current_user.role else None,
+                 current_user.school_id, request.method)
     school_id = _admin_scope_id()
     if not school_id:
         flash('لا يمكن إنشاء فيديو بدون مدرسة محددة.', 'danger')
@@ -1543,6 +1585,10 @@ def school_board_video_delete(video_id):
 @login_required
 @admin_required
 def school_board_announcements():
+    _sb_log.info('school_board_announcements | user=%s role=%s school_id=%s',
+                 current_user.id,
+                 current_user.role.name if current_user.role else None,
+                 current_user.school_id)
     school_id = _admin_scope_id()
     try:
         query = SchoolAnnouncement.query.execution_options(bypass_tenant_scope=True)
@@ -1567,6 +1613,10 @@ def school_board_announcements():
 @login_required
 @admin_required
 def school_board_announcement_create():
+    _sb_log.info('school_board_announcement_create | user=%s role=%s school_id=%s method=%s',
+                 current_user.id,
+                 current_user.role.name if current_user.role else None,
+                 current_user.school_id, request.method)
     school_id = _admin_scope_id()
     if not school_id:
         flash('لا يمكن إنشاء إعلان بدون مدرسة محددة.', 'danger')

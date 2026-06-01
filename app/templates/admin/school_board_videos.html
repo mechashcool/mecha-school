@@ -83,7 +83,7 @@
             <form method="POST"
                   action="{{ url_for('admin.school_board_video_toggle', video_id=video.id) }}"
                   style="display:inline">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
               <button type="submit" class="btn btn-sm btn-outline-secondary"
                       title="{{ 'تعطيل' if video.is_active else 'تفعيل' }}">
                 <i class="bi bi-toggle-{{ 'on' if video.is_active else 'off' }}"></i>
@@ -93,7 +93,7 @@
                   action="{{ url_for('admin.school_board_video_delete', video_id=video.id) }}"
                   style="display:inline"
                   onsubmit="return confirm('هل أنت متأكد من حذف هذا الفيديو؟')">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
               <button type="submit" class="btn btn-sm btn-outline-danger" title="حذف">
                 <i class="bi bi-trash"></i>
               </button>

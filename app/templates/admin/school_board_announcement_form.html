@@ -27,7 +27,7 @@
 <div class="card" style="max-width:680px">
   <div class="card-body p-4">
     <form method="POST">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
 
       <div class="mb-3">
         <label class="form-label">العنوان <span class="text-danger">*</span></label>
