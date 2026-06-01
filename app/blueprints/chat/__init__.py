@@ -311,6 +311,56 @@ def _can_send_now(room: ChatRoom, school) -> tuple[bool, str]:
             'أوقات التواصل المحددة من المدرسة.')
 
 
+# ─── Admin permission helpers ─────────────────────────────────────────────────
+
+def _is_room_admin(room: ChatRoom) -> bool:
+    """
+    True if current_user is the school-level admin/manager for this room's school.
+    For super_admin: requires get_current_school() to resolve to the room's school
+    so we never grant cross-school access.
+    """
+    if not current_user.is_authenticated:
+        return False
+    if current_user.is_super_admin:
+        s = get_current_school()
+        return s is not None and s.id == room.school_id
+    return (
+        current_user.is_school_admin
+        and current_user.school_id == room.school_id
+    )
+
+
+def _ensure_admin_member(room: ChatRoom) -> ChatRoomMember:
+    """
+    Idempotently guarantee current_user has a ChatRoomMember row for this room.
+    • Creates with role='admin' if absent.
+    • Upgrades role to 'admin' if currently 'member'.
+    • Leaves 'owner'/'admin' rows untouched.
+    Flushes but does NOT commit — caller must commit.
+    """
+    mem = ChatRoomMember.query.filter_by(
+        room_id=room.id, user_id=current_user.id
+    ).first()
+    if mem is None:
+        mem = ChatRoomMember(room_id=room.id, user_id=current_user.id, role='admin')
+        db.session.add(mem)
+        db.session.flush()
+        _log.info(
+            '[chat] manager override: auto-added admin member '
+            'user_id=%s room_id=%s school_id=%s',
+            current_user.id, room.id, room.school_id,
+        )
+    elif mem.role == 'member':
+        mem.role = 'admin'
+        db.session.flush()
+        _log.info(
+            '[chat] manager override: upgraded member→admin '
+            'user_id=%s room_id=%s',
+            current_user.id, room.id,
+        )
+    return mem
+
+
 # ─── Room list ────────────────────────────────────────────────────────────────
 
 @chat_bp.route('/')
@@ -475,7 +525,7 @@ def create_room():
 
 # ─── Room detail (messages viewer) ───────────────────────────────────────────
 
-@chat_bp.route('/rooms/<int:room_id>')
+@chat_bp.route('/rooms/<int:room_id>', methods=['GET', 'POST'])
 @login_required
 @admin_required
 def room_detail(room_id):
@@ -486,22 +536,69 @@ def room_detail(room_id):
             .filter_by(id=room_id, school_id=school.id if school else 0)
             .first_or_404())
 
+    # Auto-ensure admin is a ChatRoomMember (idempotent — no-op if already present).
+    membership = _ensure_admin_member(room)
+    db.session.commit()
+
+    # Admin send permission: only hard-blocked by is_closed.
+    # Announcement-only, allow_replies=False, and schedules do NOT apply to admin.
+    can_send = not room.is_closed
+    send_blocked_reason = (
+        'هذه المحادثة مغلقة. يمكنك إعادة فتحها أولاً لإرسال الرسائل.'
+        if room.is_closed else ''
+    )
+
+    if request.method == 'POST':
+        if not can_send:
+            _log.info(
+                '[chat] send denied user_id=%s role=%s room_id=%s reason=room_closed',
+                current_user.id, getattr(current_user.role, 'name', None), room.id,
+            )
+            flash(send_blocked_reason, 'warning')
+            return redirect(url_for('chat.room_detail', room_id=room.id))
+
+        body = request.form.get('body', '').strip()
+        if not body:
+            flash('الرسالة لا يمكن أن تكون فارغة.', 'warning')
+            return redirect(url_for('chat.room_detail', room_id=room.id))
+        if len(body) > 2000:
+            body = body[:2000]
+
+        _log.info(
+            '[chat] manager override send user_id=%s room_id=%s school_id=%s',
+            current_user.id, room.id, room.school_id,
+        )
+        msg = ChatMessage(
+            room_id=room.id,
+            sender_user_id=current_user.id,
+            body=body,
+            message_type='text',
+        )
+        db.session.add(msg)
+        db.session.flush()
+        db.session.add(ChatMessageRead(message_id=msg.id, user_id=current_user.id))
+        room.updated_at = datetime.utcnow()
+        db.session.commit()
+        _push_chat_message(room, msg)
+        return redirect(url_for('chat.room_detail', room_id=room.id))
+
     limit    = min(int(request.args.get('limit', 100)), 500)
     messages = (ChatMessage.query
                 .filter_by(room_id=room.id)
                 .order_by(ChatMessage.created_at.asc())
                 .limit(limit).all())
-
-    members   = (ChatRoomMember.query
-                 .filter_by(room_id=room.id)
-                 .order_by(ChatRoomMember.role)
-                 .all())
-
+    members  = (ChatRoomMember.query
+                .filter_by(room_id=room.id)
+                .order_by(ChatRoomMember.role)
+                .all())
     schedules = room.schedules.order_by(ChatRoomSchedule.day_of_week).all()
 
     return render_template('chat/room_detail.html',
                            room=room, messages=messages,
-                           members=members, schedules=schedules)
+                           members=members, schedules=schedules,
+                           can_send=can_send,
+                           send_blocked_reason=send_blocked_reason,
+                           membership=membership)
 
 
 # ─── Edit room ────────────────────────────────────────────────────────────────
@@ -916,38 +1013,72 @@ def user_room(room_id):
         room_id=room.id, user_id=current_user.id
     ).first()
     if not membership:
-        abort(403)
+        if _is_room_admin(room):
+            # Auto-add admin as ChatRoomMember so they can send and appear in FCM.
+            membership = _ensure_admin_member(room)
+            db.session.commit()
+        else:
+            _log.info(
+                '[chat] send denied user_id=%s role=%s room_id=%s reason=not_member',
+                current_user.id, getattr(current_user.role, 'name', None), room.id,
+            )
+            abort(403)
 
     school = get_current_school()
 
     # ── Determine send permission ─────────────────────────────────────────────
+    is_admin = _is_room_admin(room)
     can_send = True
     send_blocked_reason = ''
 
     if room.is_closed:
+        # Hard block — even admin cannot send into a closed room.
         can_send = False
         send_blocked_reason = 'هذه المحادثة مغلقة حالياً.'
     elif membership.is_blocked:
+        # Admins should never be blocked; if they are, log a warning.
         can_send = False
         send_blocked_reason = ('تم تقييدك من إرسال الرسائل في هذه المحادثة. '
                                'يرجى مراجعة إدارة المدرسة.')
-    elif room.is_announcement_only and membership.role not in ('owner', 'admin'):
+        _log.warning(
+            '[chat] send denied user_id=%s role=%s room_id=%s reason=blocked',
+            current_user.id, getattr(current_user.role, 'name', None), room.id,
+        )
+    elif room.is_announcement_only and membership.role not in ('owner', 'admin') and not is_admin:
         can_send = False
         send_blocked_reason = 'هذه المحادثة للإعلانات فقط. لا يمكنك الإرسال.'
-    elif not room.allow_replies:
+        _log.info(
+            '[chat] send denied user_id=%s role=%s room_id=%s reason=announcement_only',
+            current_user.id, getattr(current_user.role, 'name', None), room.id,
+        )
+    elif not room.allow_replies and not is_admin:
         can_send = False
-        send_blocked_reason = 'لا يمكنك إرسال رسالة في هذه المحادثة حالياً.'
-    else:
+        send_blocked_reason = 'لا تملك صلاحية الإرسال في هذه المحادثة.'
+        _log.info(
+            '[chat] send denied user_id=%s role=%s room_id=%s reason=no_replies',
+            current_user.id, getattr(current_user.role, 'name', None), room.id,
+        )
+    elif not is_admin:
         ok_send, reason = _can_send_now(room, school)
         if not ok_send:
             can_send = False
             send_blocked_reason = reason
+            _log.info(
+                '[chat] send denied user_id=%s role=%s room_id=%s reason=schedule',
+                current_user.id, getattr(current_user.role, 'name', None), room.id,
+            )
 
     # ── POST: send message ────────────────────────────────────────────────────
     if request.method == 'POST':
         if not can_send:
             flash(send_blocked_reason or 'لا يمكنك الإرسال حالياً.', 'warning')
             return redirect(url_for('chat.user_room', room_id=room.id))
+
+        if is_admin:
+            _log.info(
+                '[chat] manager override send user_id=%s room_id=%s school_id=%s',
+                current_user.id, room.id, room.school_id,
+            )
 
         body = request.form.get('body', '').strip()
         if not body:
@@ -1007,3 +1138,90 @@ def user_room(room_id):
                            can_send=can_send,
                            send_blocked_reason=send_blocked_reason,
                            schedules=schedules)
+
+
+# ─── Admin direct messaging ───────────────────────────────────────────────────
+
+@chat_bp.route('/direct/<int:target_user_id>')
+@login_required
+@admin_required
+def direct_chat(target_user_id):
+    """
+    Find or create a private 1-to-1 room between the admin and a school user.
+
+    Security: target_user must belong to the same school as the admin.
+    If a private room between the two already exists, redirect to it.
+    Otherwise create a new one and redirect.
+    """
+    _require_chat_module()
+    school = get_current_school()
+    if not school:
+        abort(404)
+
+    # Strict same-school check — never allow cross-school access.
+    target = (
+        User.query
+        .execution_options(bypass_tenant_scope=True)
+        .filter_by(id=target_user_id, school_id=school.id, is_active=True)
+        .first_or_404()
+    )
+
+    if target.id == current_user.id:
+        flash('لا يمكنك مراسلة نفسك.', 'warning')
+        return redirect(url_for('chat.index'))
+
+    # Look for an existing private room shared by both users.
+    admin_room_ids  = {m.room_id for m in
+                       ChatRoomMember.query.filter_by(user_id=current_user.id).all()}
+    target_room_ids = {m.room_id for m in
+                       ChatRoomMember.query.filter_by(user_id=target.id).all()}
+    shared = admin_room_ids & target_room_ids
+
+    existing = None
+    if shared:
+        existing = (
+            ChatRoom.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter(
+                ChatRoom.id.in_(shared),
+                ChatRoom.school_id == school.id,
+                ChatRoom.type == 'private',
+                ChatRoom.is_active == True,
+            )
+            .order_by(ChatRoom.updated_at.desc())
+            .first()
+        )
+
+    if existing:
+        _log.info(
+            '[chat] direct_chat: reusing room_id=%s admin=%s target=%s',
+            existing.id, current_user.id, target.id,
+        )
+        return redirect(url_for('chat.room_detail', room_id=existing.id))
+
+    # Create a new private room.
+    year = get_active_year(school.id)
+    room_name = f'{current_user.full_name} ↔ {target.full_name}'
+    room = ChatRoom(
+        school_id            = school.id,
+        academic_year_id     = year.id if year else None,
+        name                 = room_name,
+        type                 = 'private',
+        scope                = 'custom',
+        created_by_user_id   = current_user.id,
+        is_announcement_only = False,
+        allow_replies        = True,
+    )
+    db.session.add(room)
+    db.session.flush()
+
+    db.session.add(ChatRoomMember(room_id=room.id, user_id=current_user.id, role='owner'))
+    db.session.add(ChatRoomMember(room_id=room.id, user_id=target.id, role='member'))
+    db.session.commit()
+
+    _log.info(
+        '[chat] direct_chat: created room_id=%s admin=%s target=%s school=%s',
+        room.id, current_user.id, target.id, school.id,
+    )
+    flash(f'تم إنشاء محادثة مباشرة مع {target.full_name}.', 'success')
+    return redirect(url_for('chat.room_detail', room_id=room.id))

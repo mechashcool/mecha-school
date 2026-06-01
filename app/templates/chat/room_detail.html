@@ -103,6 +103,38 @@
         <div class="text-center py-4 text-muted">لا توجد رسائل بعد.</div>
         {% endif %}
       </div>
+
+      {# ── Send form (school admin) ── #}
+      <div class="card-footer p-3">
+        {% if can_send is defined and can_send %}
+        <form method="POST" action="{{ url_for('chat.room_detail', room_id=room.id) }}"
+              id="sendForm">
+          <input type="hidden" name="csrf_token"
+                 value="{{ csrf_token() if csrf_token is defined else '' }}">
+          <div class="d-flex gap-2 align-items-end">
+            <textarea name="body" id="msgBody" rows="2"
+                      class="form-control"
+                      placeholder="اكتب رسالتك هنا..."
+                      style="resize:none;font-size:14px"
+                      maxlength="2000"
+                      required></textarea>
+            <button type="submit" class="btn btn-primary px-3">
+              <i class="bi bi-send-fill"></i>
+            </button>
+          </div>
+          <small class="text-muted mt-1 d-block">
+            Ctrl+Enter للإرسال
+            {% if room.is_announcement_only %}
+            · <span class="badge bg-warning text-dark">إعلان رسمي</span>
+            {% endif %}
+          </small>
+        </form>
+        {% elif send_blocked_reason is defined and send_blocked_reason %}
+        <div class="alert alert-warning mb-0 py-2" style="font-size:13px">
+          <i class="bi bi-lock-fill me-1"></i>{{ send_blocked_reason }}
+        </div>
+        {% endif %}
+      </div>
     </div>
   </div>
 
@@ -196,5 +228,15 @@
 <script>
 const box = document.getElementById('msgBox');
 if (box) box.scrollTop = box.scrollHeight;
+
+const textarea = document.getElementById('msgBody');
+if (textarea) {
+  textarea.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && e.ctrlKey) {
+      e.preventDefault();
+      document.getElementById('sendForm').submit();
+    }
+  });
+}
 </script>
 {% endblock %}
