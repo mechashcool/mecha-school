@@ -559,8 +559,22 @@ def register_commands(app):
         are reported but never auto-deleted.
         """
         from sqlalchemy import or_
-        from app.utils.school_cleanup import cleanup_school_cascade, linked_school_counts
-        from app.models import ChatRoom
+        from app.utils.school_cleanup import cleanup_school_cascade
+        from app.models import (
+            ChatRoom, User, Student, Employee, AcademicYear,
+            FeeRecord, StudentAttendance, EmployeeAttendance,
+        )
+
+        _REAL_MODELS = [
+            ('Users',               User),
+            ('Students',            Student),
+            ('Employees',           Employee),
+            ('Academic years',      AcademicYear),
+            ('Fee records',         FeeRecord),
+            ('Student attendance',  StudentAttendance),
+            ('Employee attendance', EmployeeAttendance),
+        ]
+        _REAL_KEYS = {label for label, _ in _REAL_MODELS}
 
         schools = (
             School.query
@@ -581,19 +595,21 @@ def register_commands(app):
 
         click.echo(f'\nFound {len(schools)} matched school(s):\n')
 
-        _REAL_DATA_LABELS = {
-            'الطلاب', 'الأعوام الدراسية', 'المراحل', 'الشُعب', 'المواد',
-            'الموظفون/التدريسيون', 'سجلات الرسوم', 'أقساط الرسوم',
-            'الإيرادات', 'المصروفات', 'الرواتب',
-            'حضور الطلاب', 'حضور الموظفين',
-            'الاختبارات', 'نتائج الاختبارات',
-        }
-
         safe = []
         unsafe = []
 
         for school in schools:
-            counts = linked_school_counts(school.id)
+            counts = {}
+            for label, model in _REAL_MODELS:
+                n = (
+                    model.query
+                    .execution_options(bypass_tenant_scope=True)
+                    .filter_by(school_id=school.id)
+                    .count()
+                )
+                if n:
+                    counts[label] = n
+
             chat_rooms = (
                 ChatRoom.query
                 .execution_options(bypass_tenant_scope=True)
@@ -602,20 +618,22 @@ def register_commands(app):
             )
 
             click.echo(f'  School ID  : {school.id}')
-            click.echo(f'  Name       : {school.school_name!r}')
+            click.echo(f'  Name       : {school.school_name}')
             click.echo(f'  Created    : {school.created_at or "unknown"}')
             click.echo(f'  Chat rooms : {chat_rooms}')
             if counts:
-                click.echo(f'  Linked data: {", ".join(f"{k}: {v}" for k, v in counts.items())}')
+                click.echo(f'  Linked     : {", ".join(f"{k}: {v}" for k, v in counts.items())}')
             else:
-                click.echo(f'  Linked data: none')
+                click.echo(f'  Linked     : none')
 
-            has_real = bool(_REAL_DATA_LABELS & set(counts.keys()))
+            real_keys = {'Students', 'Employees', 'Fee records',
+                         'Student attendance', 'Employee attendance'}
+            has_real = bool(real_keys & set(counts.keys()))
             if has_real:
-                click.echo(f'  Status     : UNSAFE — real data present, will NOT be deleted\n')
+                click.echo(f'  Status     : UNSAFE - real data present, will NOT be deleted\n')
                 unsafe.append(school)
             else:
-                click.echo(f'  Status     : SAFE — only test/chat records\n')
+                click.echo(f'  Status     : SAFE - only test/chat records\n')
                 safe.append(school)
 
         click.echo(f'Matched  : {len(schools)}')
