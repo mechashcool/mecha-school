@@ -1,0 +1,119 @@
+{% extends "shared/base.html" %}
+{% set is_edit = announcement is not none %}
+{% block title %}{{ 'تعديل إعلان' if is_edit else 'إضافة إعلان' }}{% endblock %}
+{% block page_title %}{{ 'تعديل إعلان' if is_edit else 'إضافة إعلان' }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ 'تعديل إعلان' if is_edit else 'إضافة إعلان جديد' }}</h1>
+    <p class="page-subtitle">
+      <a href="{{ url_for('admin.school_board_announcements') }}">إعلانات لوحة المدرسة</a>
+    </p>
+  </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% if messages %}
+{% for cat, msg in messages %}
+<div class="alert alert-{{ 'danger' if cat == 'danger' else 'success' }} alert-dismissible fade show" role="alert">
+  {{ msg }}
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endfor %}
+{% endif %}
+{% endwith %}
+
+<div class="card" style="max-width:680px">
+  <div class="card-body p-4">
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="mb-3">
+        <label class="form-label">العنوان <span class="text-danger">*</span></label>
+        <input type="text" name="title" class="form-control" required
+               value="{{ form_data.get('title', announcement.title if is_edit else '') }}">
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">نص الإعلان <span class="text-danger">*</span></label>
+        <textarea name="body" class="form-control" rows="4" required>{{ form_data.get('body', announcement.body if is_edit else '') }}</textarea>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">نوع الوسائط</label>
+        <select name="media_type" class="form-select" id="mediaTypeSelect">
+          {% set sel_mt = form_data.get('media_type', announcement.media_type if is_edit else 'none') %}
+          {% for val, label in media_types.items() %}
+          <option value="{{ val }}" {{ 'selected' if sel_mt == val }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">رابط الوسائط (صورة)</label>
+        <input type="url" name="media_url" class="form-control"
+               placeholder="https://..."
+               value="{{ form_data.get('media_url', announcement.media_url if is_edit else '') }}">
+        <div class="form-text">اتركه فارغاً إذا لم تكن هناك صورة مرفقة.</div>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">رابط الصورة المصغرة</label>
+        <input type="url" name="thumbnail_url" class="form-control"
+               placeholder="https://..."
+               value="{{ form_data.get('thumbnail_url', announcement.thumbnail_url if is_edit else '') }}">
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">الجمهور المستهدف</label>
+        <select name="audience" class="form-select">
+          {% set sel_audience = form_data.get('audience', announcement.audience if is_edit else 'all') %}
+          {% for val, label in audience_labels.items() %}
+          <option value="{{ val }}" {{ 'selected' if sel_audience == val }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-md-6">
+          <label class="form-label">تاريخ النشر</label>
+          <input type="datetime-local" name="publish_at" class="form-control"
+                 value="{{ form_data.get('publish_at',
+                           (announcement.publish_at.strftime('%Y-%m-%dT%H:%M') if is_edit and announcement.publish_at else '')) }}">
+          <div class="form-text">اتركه فارغاً للنشر فوراً.</div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">تاريخ انتهاء الصلاحية</label>
+          <input type="datetime-local" name="expires_at" class="form-control"
+                 value="{{ form_data.get('expires_at',
+                           (announcement.expires_at.strftime('%Y-%m-%dT%H:%M') if is_edit and announcement.expires_at else '')) }}">
+          <div class="form-text">اتركه فارغاً للعرض بلا حد زمني.</div>
+        </div>
+      </div>
+
+      <div class="mb-4 d-flex gap-4">
+        <div class="form-check">
+          <input type="checkbox" name="is_featured" class="form-check-input" id="is_featured"
+                 {{ 'checked' if is_edit and announcement.is_featured }}>
+          <label class="form-check-label" for="is_featured">
+            <i class="bi bi-star-fill text-warning"></i> مميز (Featured)
+          </label>
+        </div>
+        <div class="form-check">
+          <input type="checkbox" name="is_active" class="form-check-input" id="is_active"
+                 {{ 'checked' if (not is_edit) or announcement.is_active }}>
+          <label class="form-check-label" for="is_active">نشط</label>
+        </div>
+      </div>
+
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-primary">
+          {{ 'حفظ التعديلات' if is_edit else 'إنشاء الإعلان' }}
+        </button>
+        <a href="{{ url_for('admin.school_board_announcements') }}" class="btn btn-outline-secondary">إلغاء</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

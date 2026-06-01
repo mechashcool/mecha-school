@@ -7,7 +7,13 @@
       "Bash(python -)",
       "Bash(python -c ' *)",
       "Bash(python -m pytest tests/test_parent_requests.py -v)",
-      "Bash(python -m pytest tests/test_parent_requests.py -v --timeout=120)"
+      "Bash(python -m pytest tests/test_parent_requests.py -v --timeout=120)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\" -Recurse -Directory -Depth 2)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(.venv/Scripts/python.exe -m flask db upgrade)",
+      "Bash(.venv/Scripts/python.exe -m flask db heads)",
+      "Bash(.venv/Scripts/python.exe -m flask db history)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_school_board.py -v)"
     ]
   }
 }

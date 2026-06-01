@@ -22,4 +22,4 @@ from flask import Blueprint
 mobile_api_bp = Blueprint('mobile_api', __name__)
 
 # Import route modules after creating the blueprint to avoid circular imports.
-from . import auth, common, parent, teacher, chat  # noqa: E402, F401
+from . import auth, common, parent, teacher, chat, school_board  # noqa: E402, F401

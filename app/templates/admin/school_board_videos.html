@@ -1,0 +1,117 @@
+{% extends "shared/base.html" %}
+{% block title %}فيديوهات لوحة المدرسة{% endblock %}
+{% block page_title %}فيديوهات لوحة المدرسة{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">فيديوهات لوحة المدرسة</h1>
+    <p class="page-subtitle">إدارة الفيديوهات المعروضة في تطبيق الجوال للأهالي والمعلمين</p>
+  </div>
+  <div>
+    <a href="{{ url_for('admin.school_board_announcements') }}" class="btn btn-outline-secondary me-2">
+      <i class="bi bi-megaphone-fill"></i> الإعلانات
+    </a>
+    <a href="{{ url_for('admin.school_board_video_create') }}" class="btn btn-primary">
+      <i class="bi bi-plus-lg"></i> إضافة فيديو
+    </a>
+  </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% if messages %}
+{% for cat, msg in messages %}
+<div class="alert alert-{{ 'danger' if cat == 'danger' else 'success' }} alert-dismissible fade show" role="alert">
+  {{ msg }}
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endfor %}
+{% endif %}
+{% endwith %}
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>العنوان</th>
+          <th>الجمهور</th>
+          <th>مميز</th>
+          <th>الحالة</th>
+          <th>تاريخ النشر</th>
+          <th>تاريخ الانتهاء</th>
+          <th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for video in videos %}
+        <tr>
+          <td>
+            <div class="fw-600">{{ video.title }}</div>
+            {% if video.description %}
+            <div class="text-muted" style="font-size:.8rem">
+              {{ video.description[:80] }}{% if video.description|length > 80 %}…{% endif %}
+            </div>
+            {% endif %}
+          </td>
+          <td>{{ audience_labels.get(video.audience, video.audience) }}</td>
+          <td>
+            {% if video.is_featured %}
+            <span class="badge-status badge-active"><i class="bi bi-star-fill"></i> مميز</span>
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if video.is_active %}
+            <span class="badge-status badge-active">نشط</span>
+            {% else %}
+            <span class="badge-status badge-inactive">معطّل</span>
+            {% endif %}
+          </td>
+          <td class="text-muted" style="font-size:.85rem">
+            {{ video.publish_at.strftime('%Y-%m-%d %H:%M') if video.publish_at else 'فوري' }}
+          </td>
+          <td class="text-muted" style="font-size:.85rem">
+            {{ video.expires_at.strftime('%Y-%m-%d %H:%M') if video.expires_at else '—' }}
+          </td>
+          <td>
+            <a href="{{ url_for('admin.school_board_video_edit', video_id=video.id) }}"
+               class="btn btn-sm btn-outline-primary" title="تعديل">
+              <i class="bi bi-pencil"></i>
+            </a>
+            <form method="POST"
+                  action="{{ url_for('admin.school_board_video_toggle', video_id=video.id) }}"
+                  style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn btn-sm btn-outline-secondary"
+                      title="{{ 'تعطيل' if video.is_active else 'تفعيل' }}">
+                <i class="bi bi-toggle-{{ 'on' if video.is_active else 'off' }}"></i>
+              </button>
+            </form>
+            <form method="POST"
+                  action="{{ url_for('admin.school_board_video_delete', video_id=video.id) }}"
+                  style="display:inline"
+                  onsubmit="return confirm('هل أنت متأكد من حذف هذا الفيديو؟')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn btn-sm btn-outline-danger" title="حذف">
+                <i class="bi bi-trash"></i>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7" class="text-center text-muted py-5">
+            <i class="bi bi-play-circle"
+               style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا توجد فيديوهات بعد.
+            <a href="{{ url_for('admin.school_board_video_create') }}">أضف أول فيديو</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

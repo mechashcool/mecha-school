@@ -2250,3 +2250,81 @@ class ChatRoomSchedule(db.Model):
 
     def __repr__(self):
         return f'<ChatRoomSchedule room={self.room_id} day={self.day_of_week}>'
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  SCHOOL BOARD — Videos, Announcements, and Read Tracking
+# ═════════════════════════════════════════════════════════════════════════════
+
+class SchoolVideo(db.Model):
+    __tablename__ = 'school_videos'
+    __school_scoped__ = True
+
+    id            = db.Column(db.Integer, primary_key=True)
+    school_id     = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False, index=True)
+    title         = db.Column(db.String(200), nullable=False)
+    description   = db.Column(db.Text, nullable=True)
+    video_url     = db.Column(db.String(500), nullable=False)
+    thumbnail_url = db.Column(db.String(500), nullable=True)
+    audience      = db.Column(db.String(20), nullable=False, default='all')
+    is_featured   = db.Column(db.Boolean, nullable=False, default=False)
+    is_active     = db.Column(db.Boolean, nullable=False, default=True)
+    publish_at    = db.Column(db.DateTime, nullable=True)
+    expires_at    = db.Column(db.DateTime, nullable=True)
+    created_by    = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    created_at    = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    updated_at    = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    creator = db.relationship('User', foreign_keys=[created_by])
+    school  = db.relationship('School', foreign_keys=[school_id])
+
+    def __repr__(self):
+        return f'<SchoolVideo {self.id} — {self.title}>'
+
+
+class SchoolAnnouncement(db.Model):
+    __tablename__ = 'school_announcements'
+    __school_scoped__ = True
+
+    id            = db.Column(db.Integer, primary_key=True)
+    school_id     = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False, index=True)
+    title         = db.Column(db.String(200), nullable=False)
+    body          = db.Column(db.Text, nullable=False)
+    media_url     = db.Column(db.String(500), nullable=True)
+    media_type    = db.Column(db.String(20), nullable=False, default='none')
+    thumbnail_url = db.Column(db.String(500), nullable=True)
+    audience      = db.Column(db.String(20), nullable=False, default='all')
+    is_featured   = db.Column(db.Boolean, nullable=False, default=False)
+    is_active     = db.Column(db.Boolean, nullable=False, default=True)
+    publish_at    = db.Column(db.DateTime, nullable=True)
+    expires_at    = db.Column(db.DateTime, nullable=True)
+    created_by    = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    created_at    = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    updated_at    = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    creator = db.relationship('User', foreign_keys=[created_by])
+    school  = db.relationship('School', foreign_keys=[school_id])
+
+    def __repr__(self):
+        return f'<SchoolAnnouncement {self.id} — {self.title}>'
+
+
+class SchoolContentRead(db.Model):
+    """Per-user read receipt for school board videos and announcements."""
+    __tablename__ = 'school_content_reads'
+
+    id           = db.Column(db.Integer, primary_key=True)
+    school_id    = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False, index=True)
+    user_id      = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    content_type = db.Column(db.String(20), nullable=False)  # 'video' or 'announcement'
+    content_id   = db.Column(db.Integer, nullable=False, index=True)
+    read_at      = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at   = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'content_type', 'content_id',
+                            name='uq_school_content_read'),
+    )
+
+    def __repr__(self):
+        return f'<SchoolContentRead {self.content_type}={self.content_id} user={self.user_id}>'

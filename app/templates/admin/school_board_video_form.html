@@ -1,0 +1,109 @@
+{% extends "shared/base.html" %}
+{% set is_edit = video is not none %}
+{% block title %}{{ 'تعديل فيديو' if is_edit else 'إضافة فيديو' }}{% endblock %}
+{% block page_title %}{{ 'تعديل فيديو' if is_edit else 'إضافة فيديو' }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ 'تعديل فيديو' if is_edit else 'إضافة فيديو جديد' }}</h1>
+    <p class="page-subtitle">
+      <a href="{{ url_for('admin.school_board_videos') }}">فيديوهات لوحة المدرسة</a>
+    </p>
+  </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% if messages %}
+{% for cat, msg in messages %}
+<div class="alert alert-{{ 'danger' if cat == 'danger' else 'success' }} alert-dismissible fade show" role="alert">
+  {{ msg }}
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endfor %}
+{% endif %}
+{% endwith %}
+
+<div class="card" style="max-width:680px">
+  <div class="card-body p-4">
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="mb-3">
+        <label class="form-label">العنوان <span class="text-danger">*</span></label>
+        <input type="text" name="title" class="form-control" required
+               value="{{ form_data.get('title', video.title if is_edit else '') }}">
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">وصف الفيديو</label>
+        <textarea name="description" class="form-control" rows="2">{{ form_data.get('description', video.description if is_edit else '') }}</textarea>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">رابط الفيديو <span class="text-danger">*</span></label>
+        <input type="url" name="video_url" class="form-control" required
+               placeholder="https://..."
+               value="{{ form_data.get('video_url', video.video_url if is_edit else '') }}">
+        <div class="form-text">رابط URL كامل لملف الفيديو أو منصة استضافة خارجية.</div>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">رابط الصورة المصغرة</label>
+        <input type="url" name="thumbnail_url" class="form-control"
+               placeholder="https://..."
+               value="{{ form_data.get('thumbnail_url', video.thumbnail_url if is_edit else '') }}">
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">الجمهور المستهدف</label>
+        <select name="audience" class="form-select">
+          {% set sel_audience = form_data.get('audience', video.audience if is_edit else 'all') %}
+          {% for val, label in audience_labels.items() %}
+          <option value="{{ val }}" {{ 'selected' if sel_audience == val }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="row g-3 mb-3">
+        <div class="col-md-6">
+          <label class="form-label">تاريخ النشر</label>
+          <input type="datetime-local" name="publish_at" class="form-control"
+                 value="{{ form_data.get('publish_at',
+                           (video.publish_at.strftime('%Y-%m-%dT%H:%M') if is_edit and video.publish_at else '')) }}">
+          <div class="form-text">اتركه فارغاً للنشر فوراً.</div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">تاريخ انتهاء الصلاحية</label>
+          <input type="datetime-local" name="expires_at" class="form-control"
+                 value="{{ form_data.get('expires_at',
+                           (video.expires_at.strftime('%Y-%m-%dT%H:%M') if is_edit and video.expires_at else '')) }}">
+          <div class="form-text">اتركه فارغاً للعرض بلا حد زمني.</div>
+        </div>
+      </div>
+
+      <div class="mb-4 d-flex gap-4">
+        <div class="form-check">
+          <input type="checkbox" name="is_featured" class="form-check-input" id="is_featured"
+                 {{ 'checked' if is_edit and video.is_featured }}>
+          <label class="form-check-label" for="is_featured">
+            <i class="bi bi-star-fill text-warning"></i> مميز (Featured)
+          </label>
+        </div>
+        <div class="form-check">
+          <input type="checkbox" name="is_active" class="form-check-input" id="is_active"
+                 {{ 'checked' if (not is_edit) or video.is_active }}>
+          <label class="form-check-label" for="is_active">نشط</label>
+        </div>
+      </div>
+
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-primary">
+          {{ 'حفظ التعديلات' if is_edit else 'إنشاء الفيديو' }}
+        </button>
+        <a href="{{ url_for('admin.school_board_videos') }}" class="btn btn-outline-secondary">إلغاء</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

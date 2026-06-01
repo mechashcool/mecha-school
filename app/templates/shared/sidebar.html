@@ -510,6 +510,12 @@
         <i class="bi bi-calendar2-check-fill"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;
       </a>
     </li>
+    <li class="nav-item">
+      <a href="{{ url_for('admin.school_board_videos') }}"
+         class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.school_board') }}">
+        <i class="bi bi-collection-play-fill"></i> لوحة المدرسة
+      </a>
+    </li>
 
     {% if current_user.is_super_admin %}
     <li class="nav-item">

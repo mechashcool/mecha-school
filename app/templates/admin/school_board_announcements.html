@@ -1,0 +1,117 @@
+{% extends "shared/base.html" %}
+{% block title %}إعلانات لوحة المدرسة{% endblock %}
+{% block page_title %}إعلانات لوحة المدرسة{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">إعلانات لوحة المدرسة</h1>
+    <p class="page-subtitle">إدارة الإعلانات المعروضة في تطبيق الجوال للأهالي والمعلمين</p>
+  </div>
+  <div>
+    <a href="{{ url_for('admin.school_board_videos') }}" class="btn btn-outline-secondary me-2">
+      <i class="bi bi-play-circle-fill"></i> الفيديوهات
+    </a>
+    <a href="{{ url_for('admin.school_board_announcement_create') }}" class="btn btn-primary">
+      <i class="bi bi-plus-lg"></i> إضافة إعلان
+    </a>
+  </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% if messages %}
+{% for cat, msg in messages %}
+<div class="alert alert-{{ 'danger' if cat == 'danger' else 'success' }} alert-dismissible fade show" role="alert">
+  {{ msg }}
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endfor %}
+{% endif %}
+{% endwith %}
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>العنوان</th>
+          <th>الجمهور</th>
+          <th>مميز</th>
+          <th>الحالة</th>
+          <th>تاريخ النشر</th>
+          <th>تاريخ الانتهاء</th>
+          <th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ann in announcements %}
+        <tr>
+          <td>
+            <div class="fw-600">{{ ann.title }}</div>
+            {% if ann.body %}
+            <div class="text-muted" style="font-size:.8rem">
+              {{ ann.body[:80] }}{% if ann.body|length > 80 %}…{% endif %}
+            </div>
+            {% endif %}
+          </td>
+          <td>{{ audience_labels.get(ann.audience, ann.audience) }}</td>
+          <td>
+            {% if ann.is_featured %}
+            <span class="badge-status badge-active"><i class="bi bi-star-fill"></i> مميز</span>
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if ann.is_active %}
+            <span class="badge-status badge-active">نشط</span>
+            {% else %}
+            <span class="badge-status badge-inactive">معطّل</span>
+            {% endif %}
+          </td>
+          <td class="text-muted" style="font-size:.85rem">
+            {{ ann.publish_at.strftime('%Y-%m-%d %H:%M') if ann.publish_at else 'فوري' }}
+          </td>
+          <td class="text-muted" style="font-size:.85rem">
+            {{ ann.expires_at.strftime('%Y-%m-%d %H:%M') if ann.expires_at else '—' }}
+          </td>
+          <td>
+            <a href="{{ url_for('admin.school_board_announcement_edit', ann_id=ann.id) }}"
+               class="btn btn-sm btn-outline-primary" title="تعديل">
+              <i class="bi bi-pencil"></i>
+            </a>
+            <form method="POST"
+                  action="{{ url_for('admin.school_board_announcement_toggle', ann_id=ann.id) }}"
+                  style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn btn-sm btn-outline-secondary"
+                      title="{{ 'تعطيل' if ann.is_active else 'تفعيل' }}">
+                <i class="bi bi-toggle-{{ 'on' if ann.is_active else 'off' }}"></i>
+              </button>
+            </form>
+            <form method="POST"
+                  action="{{ url_for('admin.school_board_announcement_delete', ann_id=ann.id) }}"
+                  style="display:inline"
+                  onsubmit="return confirm('هل أنت متأكد من حذف هذا الإعلان؟')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn btn-sm btn-outline-danger" title="حذف">
+                <i class="bi bi-trash"></i>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7" class="text-center text-muted py-5">
+            <i class="bi bi-megaphone"
+               style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا توجد إعلانات بعد.
+            <a href="{{ url_for('admin.school_board_announcement_create') }}">أضف أول إعلان</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

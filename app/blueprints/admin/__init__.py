@@ -12,7 +12,8 @@ from datetime import date, timedelta, datetime
 from app.models import (db, User, Role, Permission, Employee, Student, Subject,
                          FeeInstallment, StudentAttendance, Revenue, Expense,
                          Notification, AcademicYear, School, Section,
-                         teacher_subjects, Complaint, LeaveRequest)
+                         teacher_subjects, Complaint, LeaveRequest,
+                         SchoolVideo, SchoolAnnouncement, SchoolContentRead)
 from app.utils.decorators import (admin_required, staff_required,
                                    get_current_school,
                                    get_active_year, get_view_year, super_admin_required)
@@ -1312,3 +1313,350 @@ def test_push_notification():
         'success_count': success,
         'fail_count':    fail,
     })
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  SCHOOL BOARD — Videos and Announcements
+# ═════════════════════════════════════════════════════════════════════════════
+
+BOARD_AUDIENCES = {
+    'all':      'الجميع',
+    'parents':  'أولياء الأمور فقط',
+    'teachers': 'المعلمون فقط',
+}
+
+MEDIA_TYPES = {
+    'none':  'لا يوجد',
+    'image': 'صورة',
+}
+
+
+def _parse_dt(value):
+    """Parse a datetime-local form field; return datetime or None."""
+    if not value:
+        return None
+    for fmt in ('%Y-%m-%dT%H:%M', '%Y-%m-%d %H:%M', '%Y-%m-%d'):
+        try:
+            return datetime.strptime(value.strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+# ── School Videos ─────────────────────────────────────────────────────────────
+
+@admin_bp.route('/school-board/videos')
+@login_required
+@admin_required
+def school_board_videos():
+    school_id = _admin_scope_id()
+    query = SchoolVideo.query
+    if school_id:
+        query = query.filter_by(school_id=school_id)
+    videos = query.order_by(SchoolVideo.created_at.desc()).all()
+    return render_template('admin/school_board_videos.html',
+                           videos=videos,
+                           audience_labels=BOARD_AUDIENCES)
+
+
+@admin_bp.route('/school-board/videos/create', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def school_board_video_create():
+    school_id = _admin_scope_id()
+    if not school_id:
+        flash('لا يمكن إنشاء فيديو بدون مدرسة محددة.', 'danger')
+        return redirect(url_for('admin.school_board_videos'))
+
+    if request.method == 'POST':
+        title         = request.form.get('title', '').strip()
+        description   = request.form.get('description', '').strip() or None
+        video_url     = request.form.get('video_url', '').strip()
+        thumbnail_url = request.form.get('thumbnail_url', '').strip() or None
+        audience      = request.form.get('audience', 'all').strip()
+        is_featured   = 'is_featured' in request.form
+        is_active     = 'is_active' in request.form
+        publish_at    = _parse_dt(request.form.get('publish_at', ''))
+        expires_at    = _parse_dt(request.form.get('expires_at', ''))
+
+        errors = []
+        if not title:
+            errors.append('العنوان مطلوب.')
+        if not video_url or not video_url.startswith(('http://', 'https://')):
+            errors.append('رابط الفيديو مطلوب ويجب أن يبدأ بـ http:// أو https://.')
+        if audience not in BOARD_AUDIENCES:
+            errors.append('الجمهور المستهدف غير صالح.')
+        if thumbnail_url and not thumbnail_url.startswith(('http://', 'https://')):
+            errors.append('رابط الصورة المصغرة يجب أن يبدأ بـ http:// أو https://.')
+
+        if errors:
+            for e in errors:
+                flash(e, 'danger')
+            return render_template('admin/school_board_video_form.html',
+                                   video=None, audience_labels=BOARD_AUDIENCES,
+                                   form_data=request.form)
+
+        db.session.add(SchoolVideo(
+            school_id=school_id, title=title, description=description,
+            video_url=video_url, thumbnail_url=thumbnail_url,
+            audience=audience, is_featured=is_featured, is_active=is_active,
+            publish_at=publish_at, expires_at=expires_at,
+            created_by=current_user.id,
+        ))
+        db.session.commit()
+        flash('تم إنشاء الفيديو بنجاح.', 'success')
+        return redirect(url_for('admin.school_board_videos'))
+
+    return render_template('admin/school_board_video_form.html',
+                           video=None, audience_labels=BOARD_AUDIENCES, form_data={})
+
+
+@admin_bp.route('/school-board/videos/<int:video_id>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def school_board_video_edit(video_id):
+    school_id = _admin_scope_id()
+    q = SchoolVideo.query.filter_by(id=video_id)
+    if school_id:
+        q = q.filter_by(school_id=school_id)
+    video = q.first_or_404()
+
+    if request.method == 'POST':
+        title         = request.form.get('title', '').strip()
+        description   = request.form.get('description', '').strip() or None
+        video_url     = request.form.get('video_url', '').strip()
+        thumbnail_url = request.form.get('thumbnail_url', '').strip() or None
+        audience      = request.form.get('audience', 'all').strip()
+        is_featured   = 'is_featured' in request.form
+        is_active     = 'is_active' in request.form
+        publish_at    = _parse_dt(request.form.get('publish_at', ''))
+        expires_at    = _parse_dt(request.form.get('expires_at', ''))
+
+        errors = []
+        if not title:
+            errors.append('العنوان مطلوب.')
+        if not video_url or not video_url.startswith(('http://', 'https://')):
+            errors.append('رابط الفيديو مطلوب ويجب أن يبدأ بـ http:// أو https://.')
+        if audience not in BOARD_AUDIENCES:
+            errors.append('الجمهور المستهدف غير صالح.')
+        if thumbnail_url and not thumbnail_url.startswith(('http://', 'https://')):
+            errors.append('رابط الصورة المصغرة يجب أن يبدأ بـ http:// أو https://.')
+
+        if errors:
+            for e in errors:
+                flash(e, 'danger')
+            return render_template('admin/school_board_video_form.html',
+                                   video=video, audience_labels=BOARD_AUDIENCES,
+                                   form_data=request.form)
+
+        video.title         = title
+        video.description   = description
+        video.video_url     = video_url
+        video.thumbnail_url = thumbnail_url
+        video.audience      = audience
+        video.is_featured   = is_featured
+        video.is_active     = is_active
+        video.publish_at    = publish_at
+        video.expires_at    = expires_at
+        db.session.commit()
+        flash('تم تحديث الفيديو بنجاح.', 'success')
+        return redirect(url_for('admin.school_board_videos'))
+
+    return render_template('admin/school_board_video_form.html',
+                           video=video, audience_labels=BOARD_AUDIENCES, form_data={})
+
+
+@admin_bp.route('/school-board/videos/<int:video_id>/toggle', methods=['POST'])
+@login_required
+@admin_required
+def school_board_video_toggle(video_id):
+    school_id = _admin_scope_id()
+    q = SchoolVideo.query.filter_by(id=video_id)
+    if school_id:
+        q = q.filter_by(school_id=school_id)
+    video = q.first_or_404()
+    video.is_active = not video.is_active
+    db.session.commit()
+    flash('تم تغيير حالة الفيديو إلى: {}.'.format('نشط' if video.is_active else 'معطّل'), 'success')
+    return redirect(url_for('admin.school_board_videos'))
+
+
+@admin_bp.route('/school-board/videos/<int:video_id>/delete', methods=['POST'])
+@login_required
+@admin_required
+def school_board_video_delete(video_id):
+    school_id = _admin_scope_id()
+    q = SchoolVideo.query.filter_by(id=video_id)
+    if school_id:
+        q = q.filter_by(school_id=school_id)
+    video = q.first_or_404()
+    db.session.delete(video)
+    db.session.commit()
+    flash('تم حذف الفيديو بنجاح.', 'success')
+    return redirect(url_for('admin.school_board_videos'))
+
+
+# ── School Announcements ───────────────────────────────────────────────────────
+
+@admin_bp.route('/school-board/announcements')
+@login_required
+@admin_required
+def school_board_announcements():
+    school_id = _admin_scope_id()
+    query = SchoolAnnouncement.query
+    if school_id:
+        query = query.filter_by(school_id=school_id)
+    announcements = query.order_by(SchoolAnnouncement.created_at.desc()).all()
+    return render_template('admin/school_board_announcements.html',
+                           announcements=announcements,
+                           audience_labels=BOARD_AUDIENCES)
+
+
+@admin_bp.route('/school-board/announcements/create', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def school_board_announcement_create():
+    school_id = _admin_scope_id()
+    if not school_id:
+        flash('لا يمكن إنشاء إعلان بدون مدرسة محددة.', 'danger')
+        return redirect(url_for('admin.school_board_announcements'))
+
+    if request.method == 'POST':
+        title         = request.form.get('title', '').strip()
+        body          = request.form.get('body', '').strip()
+        media_url     = request.form.get('media_url', '').strip() or None
+        media_type    = request.form.get('media_type', 'none').strip()
+        thumbnail_url = request.form.get('thumbnail_url', '').strip() or None
+        audience      = request.form.get('audience', 'all').strip()
+        is_featured   = 'is_featured' in request.form
+        is_active     = 'is_active' in request.form
+        publish_at    = _parse_dt(request.form.get('publish_at', ''))
+        expires_at    = _parse_dt(request.form.get('expires_at', ''))
+
+        errors = []
+        if not title:
+            errors.append('العنوان مطلوب.')
+        if not body:
+            errors.append('نص الإعلان مطلوب.')
+        if audience not in BOARD_AUDIENCES:
+            errors.append('الجمهور المستهدف غير صالح.')
+        if media_type not in MEDIA_TYPES:
+            errors.append('نوع الوسائط غير صالح.')
+        if media_url and not media_url.startswith(('http://', 'https://')):
+            errors.append('رابط الوسائط يجب أن يبدأ بـ http:// أو https://.')
+        if thumbnail_url and not thumbnail_url.startswith(('http://', 'https://')):
+            errors.append('رابط الصورة المصغرة يجب أن يبدأ بـ http:// أو https://.')
+
+        if errors:
+            for e in errors:
+                flash(e, 'danger')
+            return render_template('admin/school_board_announcement_form.html',
+                                   announcement=None, audience_labels=BOARD_AUDIENCES,
+                                   media_types=MEDIA_TYPES, form_data=request.form)
+
+        db.session.add(SchoolAnnouncement(
+            school_id=school_id, title=title, body=body,
+            media_url=media_url, media_type=media_type, thumbnail_url=thumbnail_url,
+            audience=audience, is_featured=is_featured, is_active=is_active,
+            publish_at=publish_at, expires_at=expires_at,
+            created_by=current_user.id,
+        ))
+        db.session.commit()
+        flash('تم إنشاء الإعلان بنجاح.', 'success')
+        return redirect(url_for('admin.school_board_announcements'))
+
+    return render_template('admin/school_board_announcement_form.html',
+                           announcement=None, audience_labels=BOARD_AUDIENCES,
+                           media_types=MEDIA_TYPES, form_data={})
+
+
+@admin_bp.route('/school-board/announcements/<int:ann_id>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def school_board_announcement_edit(ann_id):
+    school_id = _admin_scope_id()
+    q = SchoolAnnouncement.query.filter_by(id=ann_id)
+    if school_id:
+        q = q.filter_by(school_id=school_id)
+    ann = q.first_or_404()
+
+    if request.method == 'POST':
+        title         = request.form.get('title', '').strip()
+        body          = request.form.get('body', '').strip()
+        media_url     = request.form.get('media_url', '').strip() or None
+        media_type    = request.form.get('media_type', 'none').strip()
+        thumbnail_url = request.form.get('thumbnail_url', '').strip() or None
+        audience      = request.form.get('audience', 'all').strip()
+        is_featured   = 'is_featured' in request.form
+        is_active     = 'is_active' in request.form
+        publish_at    = _parse_dt(request.form.get('publish_at', ''))
+        expires_at    = _parse_dt(request.form.get('expires_at', ''))
+
+        errors = []
+        if not title:
+            errors.append('العنوان مطلوب.')
+        if not body:
+            errors.append('نص الإعلان مطلوب.')
+        if audience not in BOARD_AUDIENCES:
+            errors.append('الجمهور المستهدف غير صالح.')
+        if media_type not in MEDIA_TYPES:
+            errors.append('نوع الوسائط غير صالح.')
+        if media_url and not media_url.startswith(('http://', 'https://')):
+            errors.append('رابط الوسائط يجب أن يبدأ بـ http:// أو https://.')
+        if thumbnail_url and not thumbnail_url.startswith(('http://', 'https://')):
+            errors.append('رابط الصورة المصغرة يجب أن يبدأ بـ http:// أو https://.')
+
+        if errors:
+            for e in errors:
+                flash(e, 'danger')
+            return render_template('admin/school_board_announcement_form.html',
+                                   announcement=ann, audience_labels=BOARD_AUDIENCES,
+                                   media_types=MEDIA_TYPES, form_data=request.form)
+
+        ann.title         = title
+        ann.body          = body
+        ann.media_url     = media_url
+        ann.media_type    = media_type
+        ann.thumbnail_url = thumbnail_url
+        ann.audience      = audience
+        ann.is_featured   = is_featured
+        ann.is_active     = is_active
+        ann.publish_at    = publish_at
+        ann.expires_at    = expires_at
+        db.session.commit()
+        flash('تم تحديث الإعلان بنجاح.', 'success')
+        return redirect(url_for('admin.school_board_announcements'))
+
+    return render_template('admin/school_board_announcement_form.html',
+                           announcement=ann, audience_labels=BOARD_AUDIENCES,
+                           media_types=MEDIA_TYPES, form_data={})
+
+
+@admin_bp.route('/school-board/announcements/<int:ann_id>/toggle', methods=['POST'])
+@login_required
+@admin_required
+def school_board_announcement_toggle(ann_id):
+    school_id = _admin_scope_id()
+    q = SchoolAnnouncement.query.filter_by(id=ann_id)
+    if school_id:
+        q = q.filter_by(school_id=school_id)
+    ann = q.first_or_404()
+    ann.is_active = not ann.is_active
+    db.session.commit()
+    flash('تم تغيير حالة الإعلان إلى: {}.'.format('نشط' if ann.is_active else 'معطّل'), 'success')
+    return redirect(url_for('admin.school_board_announcements'))
+
+
+@admin_bp.route('/school-board/announcements/<int:ann_id>/delete', methods=['POST'])
+@login_required
+@admin_required
+def school_board_announcement_delete(ann_id):
+    school_id = _admin_scope_id()
+    q = SchoolAnnouncement.query.filter_by(id=ann_id)
+    if school_id:
+        q = q.filter_by(school_id=school_id)
+    ann = q.first_or_404()
+    db.session.delete(ann)
+    db.session.commit()
+    flash('تم حذف الإعلان بنجاح.', 'success')
+    return redirect(url_for('admin.school_board_announcements'))
