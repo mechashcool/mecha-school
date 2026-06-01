@@ -28,7 +28,10 @@
       "Bash(python -c \"from app.blueprints.chat import chat_bp; print\\('Chat module imported successfully'\\)\")",
       "Bash(git commit *)",
       "Bash(python -m pytest tests/test_chat_admin.py::ChatAdminTest::test_ajax_send_normal_group -v --tb=short)",
-      "Bash(python -m pytest tests/test_chat_admin.py -v --tb=line)"
+      "Bash(python -m pytest tests/test_chat_admin.py -v --tb=line)",
+      "Bash(python -m flask cleanup-chat-test-schools)",
+      "Bash(git push *)",
+      "Bash(python -m pytest tests/test_parent_requests.py -v --tb=short)"
     ]
   }
 }
