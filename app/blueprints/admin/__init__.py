@@ -8,6 +8,7 @@ from flask import (Blueprint, render_template, redirect, url_for,
 from flask_login import login_required, current_user
 from sqlalchemy import func
 from datetime import date, timedelta, datetime
+import logging
 
 from app.models import (db, User, Role, Permission, Employee, Student, Subject,
                          FeeInstallment, StudentAttendance, Revenue, Expense,
@@ -1319,6 +1320,8 @@ def test_push_notification():
 #  SCHOOL BOARD — Videos and Announcements
 # ═════════════════════════════════════════════════════════════════════════════
 
+_sb_log = logging.getLogger(__name__)
+
 BOARD_AUDIENCES = {
     'all':      'الجميع',
     'parents':  'أولياء الأمور فقط',
@@ -1350,10 +1353,20 @@ def _parse_dt(value):
 @admin_required
 def school_board_videos():
     school_id = _admin_scope_id()
-    query = SchoolVideo.query
-    if school_id:
-        query = query.filter_by(school_id=school_id)
-    videos = query.order_by(SchoolVideo.created_at.desc()).all()
+    try:
+        query = SchoolVideo.query.execution_options(bypass_tenant_scope=True)
+        if school_id:
+            query = query.filter_by(school_id=school_id)
+        videos = query.order_by(SchoolVideo.created_at.desc()).all()
+    except Exception as exc:
+        _sb_log.error('school_board_videos query failed: %s', exc, exc_info=True)
+        db.session.rollback()
+        flash(
+            'تعذّر تحميل الفيديوهات. إذا كان هذا أول ظهور للخاصية، '
+            'تأكّد من تطبيق آخر migration على قاعدة البيانات (flask db upgrade).',
+            'danger',
+        )
+        videos = []
     return render_template('admin/school_board_videos.html',
                            videos=videos,
                            audience_labels=BOARD_AUDIENCES)
@@ -1396,14 +1409,22 @@ def school_board_video_create():
                                    video=None, audience_labels=BOARD_AUDIENCES,
                                    form_data=request.form)
 
-        db.session.add(SchoolVideo(
-            school_id=school_id, title=title, description=description,
-            video_url=video_url, thumbnail_url=thumbnail_url,
-            audience=audience, is_featured=is_featured, is_active=is_active,
-            publish_at=publish_at, expires_at=expires_at,
-            created_by=current_user.id,
-        ))
-        db.session.commit()
+        try:
+            db.session.add(SchoolVideo(
+                school_id=school_id, title=title, description=description,
+                video_url=video_url, thumbnail_url=thumbnail_url,
+                audience=audience, is_featured=is_featured, is_active=is_active,
+                publish_at=publish_at, expires_at=expires_at,
+                created_by=current_user.id,
+            ))
+            db.session.commit()
+        except Exception as exc:
+            _sb_log.error('school_board_video_create commit failed: %s', exc, exc_info=True)
+            db.session.rollback()
+            flash('حدث خطأ أثناء الحفظ — تأكّد من تطبيق migration على قاعدة البيانات.', 'danger')
+            return render_template('admin/school_board_video_form.html',
+                                   video=None, audience_labels=BOARD_AUDIENCES,
+                                   form_data=request.form)
         flash('تم إنشاء الفيديو بنجاح.', 'success')
         return redirect(url_for('admin.school_board_videos'))
 
@@ -1416,7 +1437,7 @@ def school_board_video_create():
 @admin_required
 def school_board_video_edit(video_id):
     school_id = _admin_scope_id()
-    q = SchoolVideo.query.filter_by(id=video_id)
+    q = SchoolVideo.query.execution_options(bypass_tenant_scope=True).filter_by(id=video_id)
     if school_id:
         q = q.filter_by(school_id=school_id)
     video = q.first_or_404()
@@ -1458,7 +1479,15 @@ def school_board_video_edit(video_id):
         video.is_active     = is_active
         video.publish_at    = publish_at
         video.expires_at    = expires_at
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception as exc:
+            _sb_log.error('school_board_video_edit commit failed: %s', exc, exc_info=True)
+            db.session.rollback()
+            flash('حدث خطأ أثناء الحفظ.', 'danger')
+            return render_template('admin/school_board_video_form.html',
+                                   video=video, audience_labels=BOARD_AUDIENCES,
+                                   form_data=request.form)
         flash('تم تحديث الفيديو بنجاح.', 'success')
         return redirect(url_for('admin.school_board_videos'))
 
@@ -1471,12 +1500,18 @@ def school_board_video_edit(video_id):
 @admin_required
 def school_board_video_toggle(video_id):
     school_id = _admin_scope_id()
-    q = SchoolVideo.query.filter_by(id=video_id)
+    q = SchoolVideo.query.execution_options(bypass_tenant_scope=True).filter_by(id=video_id)
     if school_id:
         q = q.filter_by(school_id=school_id)
     video = q.first_or_404()
-    video.is_active = not video.is_active
-    db.session.commit()
+    try:
+        video.is_active = not video.is_active
+        db.session.commit()
+    except Exception as exc:
+        _sb_log.error('school_board_video_toggle failed: %s', exc, exc_info=True)
+        db.session.rollback()
+        flash('حدث خطأ أثناء تغيير الحالة.', 'danger')
+        return redirect(url_for('admin.school_board_videos'))
     flash('تم تغيير حالة الفيديو إلى: {}.'.format('نشط' if video.is_active else 'معطّل'), 'success')
     return redirect(url_for('admin.school_board_videos'))
 
@@ -1486,12 +1521,18 @@ def school_board_video_toggle(video_id):
 @admin_required
 def school_board_video_delete(video_id):
     school_id = _admin_scope_id()
-    q = SchoolVideo.query.filter_by(id=video_id)
+    q = SchoolVideo.query.execution_options(bypass_tenant_scope=True).filter_by(id=video_id)
     if school_id:
         q = q.filter_by(school_id=school_id)
     video = q.first_or_404()
-    db.session.delete(video)
-    db.session.commit()
+    try:
+        db.session.delete(video)
+        db.session.commit()
+    except Exception as exc:
+        _sb_log.error('school_board_video_delete failed: %s', exc, exc_info=True)
+        db.session.rollback()
+        flash('حدث خطأ أثناء الحذف.', 'danger')
+        return redirect(url_for('admin.school_board_videos'))
     flash('تم حذف الفيديو بنجاح.', 'success')
     return redirect(url_for('admin.school_board_videos'))
 
@@ -1503,10 +1544,20 @@ def school_board_video_delete(video_id):
 @admin_required
 def school_board_announcements():
     school_id = _admin_scope_id()
-    query = SchoolAnnouncement.query
-    if school_id:
-        query = query.filter_by(school_id=school_id)
-    announcements = query.order_by(SchoolAnnouncement.created_at.desc()).all()
+    try:
+        query = SchoolAnnouncement.query.execution_options(bypass_tenant_scope=True)
+        if school_id:
+            query = query.filter_by(school_id=school_id)
+        announcements = query.order_by(SchoolAnnouncement.created_at.desc()).all()
+    except Exception as exc:
+        _sb_log.error('school_board_announcements query failed: %s', exc, exc_info=True)
+        db.session.rollback()
+        flash(
+            'تعذّر تحميل الإعلانات. إذا كان هذا أول ظهور للخاصية، '
+            'تأكّد من تطبيق آخر migration على قاعدة البيانات (flask db upgrade).',
+            'danger',
+        )
+        announcements = []
     return render_template('admin/school_board_announcements.html',
                            announcements=announcements,
                            audience_labels=BOARD_AUDIENCES)
@@ -1554,14 +1605,22 @@ def school_board_announcement_create():
                                    announcement=None, audience_labels=BOARD_AUDIENCES,
                                    media_types=MEDIA_TYPES, form_data=request.form)
 
-        db.session.add(SchoolAnnouncement(
-            school_id=school_id, title=title, body=body,
-            media_url=media_url, media_type=media_type, thumbnail_url=thumbnail_url,
-            audience=audience, is_featured=is_featured, is_active=is_active,
-            publish_at=publish_at, expires_at=expires_at,
-            created_by=current_user.id,
-        ))
-        db.session.commit()
+        try:
+            db.session.add(SchoolAnnouncement(
+                school_id=school_id, title=title, body=body,
+                media_url=media_url, media_type=media_type, thumbnail_url=thumbnail_url,
+                audience=audience, is_featured=is_featured, is_active=is_active,
+                publish_at=publish_at, expires_at=expires_at,
+                created_by=current_user.id,
+            ))
+            db.session.commit()
+        except Exception as exc:
+            _sb_log.error('school_board_announcement_create commit failed: %s', exc, exc_info=True)
+            db.session.rollback()
+            flash('حدث خطأ أثناء الحفظ — تأكّد من تطبيق migration على قاعدة البيانات.', 'danger')
+            return render_template('admin/school_board_announcement_form.html',
+                                   announcement=None, audience_labels=BOARD_AUDIENCES,
+                                   media_types=MEDIA_TYPES, form_data=request.form)
         flash('تم إنشاء الإعلان بنجاح.', 'success')
         return redirect(url_for('admin.school_board_announcements'))
 
@@ -1575,7 +1634,7 @@ def school_board_announcement_create():
 @admin_required
 def school_board_announcement_edit(ann_id):
     school_id = _admin_scope_id()
-    q = SchoolAnnouncement.query.filter_by(id=ann_id)
+    q = SchoolAnnouncement.query.execution_options(bypass_tenant_scope=True).filter_by(id=ann_id)
     if school_id:
         q = q.filter_by(school_id=school_id)
     ann = q.first_or_404()
@@ -1623,7 +1682,15 @@ def school_board_announcement_edit(ann_id):
         ann.is_active     = is_active
         ann.publish_at    = publish_at
         ann.expires_at    = expires_at
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception as exc:
+            _sb_log.error('school_board_announcement_edit commit failed: %s', exc, exc_info=True)
+            db.session.rollback()
+            flash('حدث خطأ أثناء الحفظ.', 'danger')
+            return render_template('admin/school_board_announcement_form.html',
+                                   announcement=ann, audience_labels=BOARD_AUDIENCES,
+                                   media_types=MEDIA_TYPES, form_data=request.form)
         flash('تم تحديث الإعلان بنجاح.', 'success')
         return redirect(url_for('admin.school_board_announcements'))
 
@@ -1637,12 +1704,18 @@ def school_board_announcement_edit(ann_id):
 @admin_required
 def school_board_announcement_toggle(ann_id):
     school_id = _admin_scope_id()
-    q = SchoolAnnouncement.query.filter_by(id=ann_id)
+    q = SchoolAnnouncement.query.execution_options(bypass_tenant_scope=True).filter_by(id=ann_id)
     if school_id:
         q = q.filter_by(school_id=school_id)
     ann = q.first_or_404()
-    ann.is_active = not ann.is_active
-    db.session.commit()
+    try:
+        ann.is_active = not ann.is_active
+        db.session.commit()
+    except Exception as exc:
+        _sb_log.error('school_board_announcement_toggle failed: %s', exc, exc_info=True)
+        db.session.rollback()
+        flash('حدث خطأ أثناء تغيير الحالة.', 'danger')
+        return redirect(url_for('admin.school_board_announcements'))
     flash('تم تغيير حالة الإعلان إلى: {}.'.format('نشط' if ann.is_active else 'معطّل'), 'success')
     return redirect(url_for('admin.school_board_announcements'))
 
@@ -1652,11 +1725,17 @@ def school_board_announcement_toggle(ann_id):
 @admin_required
 def school_board_announcement_delete(ann_id):
     school_id = _admin_scope_id()
-    q = SchoolAnnouncement.query.filter_by(id=ann_id)
+    q = SchoolAnnouncement.query.execution_options(bypass_tenant_scope=True).filter_by(id=ann_id)
     if school_id:
         q = q.filter_by(school_id=school_id)
     ann = q.first_or_404()
-    db.session.delete(ann)
-    db.session.commit()
+    try:
+        db.session.delete(ann)
+        db.session.commit()
+    except Exception as exc:
+        _sb_log.error('school_board_announcement_delete failed: %s', exc, exc_info=True)
+        db.session.rollback()
+        flash('حدث خطأ أثناء الحذف.', 'danger')
+        return redirect(url_for('admin.school_board_announcements'))
     flash('تم حذف الإعلان بنجاح.', 'success')
     return redirect(url_for('admin.school_board_announcements'))

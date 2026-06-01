@@ -27,6 +27,7 @@ def _models():
         RevenueCategory, SalaryRecord, Schedule,
         Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
         Subject, User,
+        SchoolVideo, SchoolAnnouncement,
     )
 
     school_scoped = (
@@ -39,6 +40,7 @@ def _models():
         RevenueCategory, SalaryRecord, Schedule,
         Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
         Subject, User,
+        SchoolVideo, SchoolAnnouncement,
     )
     # Student, StudentDocument, StudentSuspension are school-scoped only —
     # they persist across academic years so that a year rollover does not

@@ -13,7 +13,9 @@
       "Bash(.venv/Scripts/python.exe -m flask db upgrade)",
       "Bash(.venv/Scripts/python.exe -m flask db heads)",
       "Bash(.venv/Scripts/python.exe -m flask db history)",
-      "Bash(.venv/Scripts/python.exe -m pytest tests/test_school_board.py -v)"
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_school_board.py -v)",
+      "Bash(python -m pytest tests/test_school_board.py -v --tb=short)",
+      "Bash(python -c \"from app import create_app; app = create_app\\('development'\\); print\\('App created OK'\\)\")"
     ]
   }
 }
