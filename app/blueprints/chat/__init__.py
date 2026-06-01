@@ -181,7 +181,7 @@ def _collect_user_ids(
     regardless of the request's active-year context.
     """
     user_ids: set[int] = set()
-    stats = {'admins': 0, 'teachers': 0, 'parents': 0}
+    stats = {'admins': 0, 'teachers': 0, 'parents': 0, 'no_parent_students': 0}
 
     # ── Always include all school-level admin users ───────────────────────────
     try:
@@ -207,14 +207,45 @@ def _collect_user_ids(
     # ── Scope-specific members ────────────────────────────────────────────────
 
     if scope in ('school', 'announcement'):
-        all_users = (
-            User.query
+        # All active teachers via Employee records
+        emps = (
+            Employee.query
             .execution_options(bypass_tenant_scope=True)
-            .filter(User.school_id == school_id, User.is_active == True)
+            .filter_by(school_id=school_id, status='active')
             .all()
         )
-        for u in all_users:
-            user_ids.add(u.id)
+        for emp in emps:
+            if emp.user_id:
+                user_ids.add(emp.user_id)
+                stats['teachers'] += 1
+
+        # Parents only via their linked active students — not all school users
+        active_student_ids = [
+            s.id for s in
+            Student.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(school_id=school_id, status='active')
+            .all()
+        ]
+        _log.info('[chat] scope=%s active_students=%d', scope, len(active_student_ids))
+        if active_student_ids:
+            parent_rows = (
+                db.session.query(parent_students.c.user_id)
+                .filter(parent_students.c.student_id.in_(active_student_ids))
+                .all()
+            )
+            for (uid,) in parent_rows:
+                user_ids.add(uid)
+                stats['parents'] += 1
+            # Warn about students with no linked parent
+            linked_student_ids = set(
+                row[0] for row in
+                db.session.query(parent_students.c.student_id)
+                .filter(parent_students.c.student_id.in_(active_student_ids))
+                .distinct()
+                .all()
+            )
+            stats['no_parent_students'] += len(active_student_ids) - len(linked_student_ids)
 
     elif scope == 'section' and section_id:
         _add_section_members(school_id, int(section_id), user_ids, stats)
@@ -355,7 +386,18 @@ def _add_section_members(
         for (uid,) in parent_rows:
             user_ids.add(uid)
             stats['parents'] += 1
-        _log.info('[chat] section=%s parents_found=%d', section_id, len(parent_rows))
+
+        linked_student_ids = set(
+            row[0] for row in
+            db.session.query(parent_students.c.student_id)
+            .filter(parent_students.c.student_id.in_(student_ids))
+            .distinct()
+            .all()
+        )
+        no_parent = len(student_ids) - len(linked_student_ids)
+        stats['no_parent_students'] = stats.get('no_parent_students', 0) + no_parent
+        _log.info('[chat] section=%s parents_found=%d no_parent_students=%d',
+                  section_id, len(parent_rows), no_parent)
 
 
 def _sync_members(room: ChatRoom, user_ids: set[int], creator_id: int) -> int:
@@ -619,9 +661,11 @@ def create_room():
               f'(مشرفون: {stats["admins"]} — معلمون: {stats["teachers"]} — '
               f'أولياء أمور: {stats["parents"]}).', 'success')
 
-        if stats['parents'] == 0 and scope not in ('custom', 'school', 'announcement'):
+        if stats['parents'] == 0 and scope != 'custom':
             flash('تنبيه: لم يتم العثور على أولياء أمور مرتبطين بالنطاق المحدد. '
                   'تحقق من ربط أولياء الأمور بطلابهم في النظام.', 'warning')
+        elif stats.get('no_parent_students', 0) > 0:
+            flash(f'تنبيه: {stats["no_parent_students"]} طالب ليس لهم أولياء أمور مرتبطون في النظام.', 'warning')
 
         return redirect(url_for('chat.room_detail', room_id=room.id))
 
@@ -829,8 +873,11 @@ def rebuild_members(room_id):
           f'(مشرفون: {stats["admins"]} — معلمون: {stats["teachers"]} — '
           f'أولياء أمور: {stats["parents"]}).', 'success')
 
-    if stats['parents'] == 0 and room.scope not in ('school', 'announcement'):
-        flash('تنبيه: لم يتم العثور على أولياء أمور مرتبطين بهذه الشعبة.', 'warning')
+    if stats['parents'] == 0 and room.scope != 'custom':
+        flash('تنبيه: لم يتم العثور على أولياء أمور مرتبطين بالنطاق المحدد. '
+              'تحقق من ربط أولياء الأمور بطلابهم في النظام.', 'warning')
+    elif stats.get('no_parent_students', 0) > 0:
+        flash(f'تنبيه: {stats["no_parent_students"]} طالب ليس لهم أولياء أمور مرتبطون في النظام.', 'warning')
 
     return redirect(url_for('chat.room_detail', room_id=room.id))
 
