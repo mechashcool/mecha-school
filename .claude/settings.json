@@ -19,7 +19,10 @@
       "Bash(python -m pytest tests/test_school_board.py -v --tb=short -q)",
       "Bash(xargs grep -l \"schedule\\\\|scheduler\\\\|APScheduler\\\\|cron\")",
       "Bash(admin)",
-      "Bash(super\")"
+      "Bash(super\")",
+      "Bash(python -m pytest tests/test_chat_admin.py -v --tb=short)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
