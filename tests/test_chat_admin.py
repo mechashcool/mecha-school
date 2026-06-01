@@ -407,6 +407,46 @@ class ChatAdminTest(unittest.TestCase):
         self.assertIn(resp.status_code, (403, 404))
         self._logout()
 
+    # ── Test: AJAX send in normal room ────────────────────────────────────
+
+    def test_ajax_send_normal_group(self):
+        """Admin sends via AJAX and gets JSON response."""
+        self._login(self.ids['admin_a_user'])
+        before = self._message_count(self.ids['room_normal_id'])
+
+        resp = self.client.post(
+            f'/chat/rooms/{self.ids["room_normal_id"]}',
+            data={'body': 'AJAX test message'},
+            headers={'X-Requested-With': 'XMLHttpRequest'},
+            follow_redirects=False,
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertTrue(data['ok'])
+        self.assertIn('message', data)
+        self.assertEqual(data['message']['body'], 'AJAX test message')
+        self.assertTrue(data['message']['is_self'])
+
+        after = self._message_count(self.ids['room_normal_id'])
+        self.assertEqual(after, before + 1)
+        self._logout()
+
+    def test_ajax_closed_room_error(self):
+        """AJAX send to closed room returns error JSON."""
+        self._login(self.ids['admin_a_user'])
+
+        resp = self.client.post(
+            f'/chat/rooms/{self.ids["room_closed_id"]}',
+            data={'body': 'Should not send'},
+            headers={'X-Requested-With': 'XMLHttpRequest'},
+            follow_redirects=False,
+        )
+        self.assertEqual(resp.status_code, 400)
+        data = resp.get_json()
+        self.assertFalse(data['ok'])
+        self.assertIn('error', data)
+        self._logout()
+
 
 if __name__ == '__main__':
     unittest.main()

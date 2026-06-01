@@ -28,7 +28,7 @@ import logging
 from datetime import datetime, timezone
 
 from flask import (
-    Blueprint, abort, flash, redirect, render_template,
+    Blueprint, abort, flash, jsonify, redirect, render_template,
     request, url_for,
 )
 from flask_login import current_user, login_required
@@ -45,6 +45,27 @@ from app.utils.modules import is_module_enabled
 _log = logging.getLogger('mecha.chat')
 
 chat_bp = Blueprint('chat', __name__, template_folder='../../templates/chat')
+
+
+# ─── AJAX helpers ─────────────────────────────────────────────────────────────
+
+def _is_ajax_request() -> bool:
+    """Check if request is AJAX (expects JSON response)."""
+    return (
+        request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+        or 'application/json' in request.headers.get('Accept', '')
+    )
+
+
+def _format_message_json(msg: ChatMessage) -> dict:
+    """Format a ChatMessage for JSON response."""
+    return {
+        'id': msg.id,
+        'body': msg.body or '[مرفق]',
+        'sender_name': msg.sender.full_name if msg.sender else 'محذوف',
+        'created_at': msg.created_at.strftime('%Y-%m-%d %H:%M'),
+        'is_self': msg.sender_user_id == current_user.id,
+    }
 
 
 # ─── Module guard ─────────────────────────────────────────────────────────────
@@ -549,17 +570,24 @@ def room_detail(room_id):
     )
 
     if request.method == 'POST':
+        is_ajax = _is_ajax_request()
+
         if not can_send:
             _log.info(
                 '[chat] send denied user_id=%s role=%s room_id=%s reason=room_closed',
                 current_user.id, getattr(current_user.role, 'name', None), room.id,
             )
+            if is_ajax:
+                return jsonify({'ok': False, 'error': send_blocked_reason or 'لا يمكنك الإرسال.'}), 400
             flash(send_blocked_reason, 'warning')
             return redirect(url_for('chat.room_detail', room_id=room.id))
 
         body = request.form.get('body', '').strip()
         if not body:
-            flash('الرسالة لا يمكن أن تكون فارغة.', 'warning')
+            error_msg = 'الرسالة لا يمكن أن تكون فارغة.'
+            if is_ajax:
+                return jsonify({'ok': False, 'error': error_msg}), 400
+            flash(error_msg, 'warning')
             return redirect(url_for('chat.room_detail', room_id=room.id))
         if len(body) > 2000:
             body = body[:2000]
@@ -587,6 +615,9 @@ def room_detail(room_id):
         _log.info('[chat-send] saved message_id=%s elapsed_ms=%.1f', msg.id, save_elapsed)
 
         _push_chat_message(room, msg)
+
+        if is_ajax:
+            return jsonify({'ok': True, 'message': _format_message_json(msg)})
         return redirect(url_for('chat.room_detail', room_id=room.id))
 
     limit    = min(int(request.args.get('limit', 100)), 500)
@@ -1139,8 +1170,13 @@ def user_room(room_id):
 
     # ── POST: send message ────────────────────────────────────────────────────
     if request.method == 'POST':
+        is_ajax = _is_ajax_request()
+
         if not can_send:
-            flash(send_blocked_reason or 'لا يمكنك الإرسال حالياً.', 'warning')
+            error_msg = send_blocked_reason or 'لا يمكنك الإرسال حالياً.'
+            if is_ajax:
+                return jsonify({'ok': False, 'error': error_msg}), 400
+            flash(error_msg, 'warning')
             return redirect(url_for('chat.user_room', room_id=room.id))
 
         if is_admin:
@@ -1151,7 +1187,10 @@ def user_room(room_id):
 
         body = request.form.get('body', '').strip()
         if not body:
-            flash('الرسالة لا يمكن أن تكون فارغة.', 'warning')
+            error_msg = 'الرسالة لا يمكن أن تكون فارغة.'
+            if is_ajax:
+                return jsonify({'ok': False, 'error': error_msg}), 400
+            flash(error_msg, 'warning')
             return redirect(url_for('chat.user_room', room_id=room.id))
 
         if len(body) > 2000:
@@ -1178,6 +1217,8 @@ def user_room(room_id):
 
         _push_chat_message(room, msg)
 
+        if is_ajax:
+            return jsonify({'ok': True, 'message': _format_message_json(msg)})
         return redirect(url_for('chat.user_room', room_id=room.id))
 
     # ── GET: load messages + mark unread as read ──────────────────────────────

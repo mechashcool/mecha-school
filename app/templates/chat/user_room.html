@@ -98,6 +98,8 @@
         {% if can_send %}
         <form method="POST" action="{{ url_for('chat.user_room', room_id=room.id) }}"
               id="sendForm">
+          <input type="hidden" name="csrf_token"
+                 value="{{ csrf_token() if csrf_token is defined else '' }}">
           <div class="d-flex gap-2 align-items-end">
             <textarea name="body" id="msgBody" rows="2"
                       class="form-control"
@@ -105,10 +107,13 @@
                       style="resize:none;font-size:14px"
                       maxlength="2000"
                       required></textarea>
-            <button type="submit" class="btn btn-primary px-3"
+            <button type="submit" id="sendBtn" class="btn btn-primary px-3"
                     style="white-space:nowrap">
               <i class="bi bi-send-fill"></i>
             </button>
+          </div>
+          <div id="sendError" class="alert alert-danger mt-2 py-2 px-2 d-none" style="font-size:13px">
+            <i class="bi bi-exclamation-circle me-1"></i><span id="sendErrorText"></span>
           </div>
         </form>
         {% else %}
@@ -199,13 +204,122 @@
 const box = document.getElementById('msgBox');
 if (box) box.scrollTop = box.scrollHeight;
 
-// Ctrl+Enter submits the form
+const form = document.getElementById('sendForm');
 const textarea = document.getElementById('msgBody');
+const sendBtn = document.getElementById('sendBtn');
+const sendError = document.getElementById('sendError');
+const sendErrorText = document.getElementById('sendErrorText');
+
+function scrollChatToBottom() {
+  const msgBox = document.getElementById('msgBox');
+  if (msgBox) {
+    setTimeout(() => { msgBox.scrollTop = msgBox.scrollHeight; }, 50);
+  }
+}
+
+function appendMessageToDom(msgData) {
+  const msgBox = document.getElementById('msgBox');
+  if (!msgBox) return;
+
+  const senderInitial = (msgData.sender_name || '؟')[0];
+  const isFlexReverse = msgData.is_self ? 'flex-row-reverse' : '';
+  const bgColor = msgData.is_self ? '#e8f4fd' : '#fff';
+  const avatarBg = msgData.is_self ? 'bg-primary' : 'bg-secondary';
+  const msgHtml = `
+    <div class="d-flex mb-3 align-items-start gap-2 ${isFlexReverse}">
+      <div class="rounded-circle d-flex align-items-center justify-content-center flex-shrink-0 ${avatarBg} text-white"
+           style="width:34px;height:34px;font-size:13px">
+        ${senderInitial}
+      </div>
+      <div style="max-width:70%">
+        <div class="d-flex gap-2 align-items-center mb-1 ${isFlexReverse ? 'flex-row-reverse' : ''}">
+          <span class="fw-semibold" style="font-size:13px">${msgData.is_self ? 'أنت' : escapeHtml(msgData.sender_name)}</span>
+          <span class="text-muted" style="font-size:11px">${escapeHtml(msgData.created_at)}</span>
+        </div>
+        <div class="border rounded p-2 shadow-sm" style="font-size:14px;background:${bgColor}">
+          ${escapeHtml(msgData.body)}
+        </div>
+      </div>
+    </div>
+  `;
+  msgBox.innerHTML += msgHtml;
+  scrollChatToBottom();
+}
+
+function escapeHtml(unsafe) {
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function showError(msg) {
+  sendError.classList.remove('d-none');
+  sendErrorText.textContent = msg;
+}
+
+function hideError() {
+  sendError.classList.add('d-none');
+  sendErrorText.textContent = '';
+}
+
+function disableSendBtn() {
+  sendBtn.disabled = true;
+  sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+}
+
+function enableSendBtn() {
+  sendBtn.disabled = false;
+  sendBtn.innerHTML = '<i class="bi bi-send-fill"></i>';
+}
+
+if (form) {
+  form.addEventListener('submit', async function(e) {
+    e.preventDefault();
+
+    const body = textarea.value.trim();
+    if (!body) {
+      showError('الرسالة لا يمكن أن تكون فارغة.');
+      return;
+    }
+
+    hideError();
+    disableSendBtn();
+
+    try {
+      const formData = new FormData(form);
+      const response = await fetch(form.action, {
+        method: 'POST',
+        body: formData,
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+      });
+
+      const data = await response.json();
+
+      if (data.ok) {
+        textarea.value = '';
+        appendMessageToDom(data.message);
+      } else {
+        showError(data.error || 'حدث خطأ أثناء الإرسال.');
+      }
+    } catch (err) {
+      showError('تعذر إرسال الرسالة، حاول مرة أخرى');
+      console.error('Chat send error:', err);
+    } finally {
+      enableSendBtn();
+    }
+  });
+}
+
 if (textarea) {
   textarea.addEventListener('keydown', function(e) {
     if (e.key === 'Enter' && e.ctrlKey) {
       e.preventDefault();
-      document.getElementById('sendForm').submit();
+      form.dispatchEvent(new Event('submit'));
     }
   });
 }
