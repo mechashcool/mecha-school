@@ -24,12 +24,14 @@ POST /chat/settings                                – save school chat settings
 """
 from __future__ import annotations
 
+import json
 import logging
+import time
 from datetime import datetime, timezone
 
 from flask import (
-    Blueprint, abort, flash, jsonify, redirect, render_template,
-    request, url_for,
+    Blueprint, Response, abort, flash, jsonify, redirect, render_template,
+    request, stream_with_context, url_for,
 )
 from flask_login import current_user, login_required
 
@@ -66,6 +68,90 @@ def _format_message_json(msg: ChatMessage) -> dict:
         'created_at': msg.created_at.strftime('%Y-%m-%d %H:%M'),
         'is_self': msg.sender_user_id == current_user.id,
     }
+
+
+# ─── SSE / polling helpers ────────────────────────────────────────────────────
+
+def _sse_generator(room_id: int, user_id: int, after_id: int):
+    """Yield SSE events for new messages; heartbeat when idle."""
+    last_id = after_id
+    _log.info('[chat-sse] connected room_id=%s user_id=%s after_id=%s', room_id, user_id, last_id)
+    try:
+        while True:
+            try:
+                new_msgs = (ChatMessage.query
+                            .filter(
+                                ChatMessage.room_id == room_id,
+                                ChatMessage.id > last_id,
+                                ChatMessage.is_deleted == False,
+                            )
+                            .order_by(ChatMessage.id.asc())
+                            .limit(50)
+                            .all())
+                if new_msgs:
+                    for msg in new_msgs:
+                        payload = json.dumps({
+                            'id':          msg.id,
+                            'body':        msg.body or '[مرفق]',
+                            'sender_name': msg.sender.full_name if msg.sender else 'محذوف',
+                            'created_at':  msg.created_at.strftime('%Y-%m-%d %H:%M'),
+                            'is_self':     msg.sender_user_id == user_id,
+                        }, ensure_ascii=False)
+                        yield f'event: message\nid: {msg.id}\ndata: {payload}\n\n'
+                        last_id = msg.id
+                    _log.info('[chat-sse] sent room_id=%s count=%s', room_id, len(new_msgs))
+                else:
+                    _log.debug('[chat-sse] heartbeat room_id=%s', room_id)
+                    yield ': ping\n\n'
+                db.session.remove()
+            except Exception as exc:
+                _log.warning('[chat-sse] query error room_id=%s: %s', room_id, exc)
+                try:
+                    db.session.remove()
+                except Exception:
+                    pass
+                yield ': error-retry\n\n'
+            time.sleep(1)
+    except GeneratorExit:
+        _log.info('[chat-sse] disconnected room_id=%s user_id=%s', room_id, user_id)
+        try:
+            db.session.remove()
+        except Exception:
+            pass
+
+
+def _make_sse_response(room_id: int, user_id: int, after_id: int) -> Response:
+    return Response(
+        stream_with_context(_sse_generator(room_id, user_id, after_id)),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive',
+        },
+    )
+
+
+def _poll_messages_json(room_id: int, user_id: int, after_id: int):
+    """Return JSON with messages after after_id (polling fallback)."""
+    msgs = (ChatMessage.query
+            .filter(
+                ChatMessage.room_id == room_id,
+                ChatMessage.id > after_id,
+                ChatMessage.is_deleted == False,
+            )
+            .order_by(ChatMessage.id.asc())
+            .limit(50)
+            .all())
+    return jsonify({
+        'messages': [{
+            'id':          m.id,
+            'body':        m.body or '[مرفق]',
+            'sender_name': m.sender.full_name if m.sender else 'محذوف',
+            'created_at':  m.created_at.strftime('%Y-%m-%d %H:%M'),
+            'is_self':     m.sender_user_id == user_id,
+        } for m in msgs]
+    })
 
 
 # ─── Module guard ─────────────────────────────────────────────────────────────
@@ -593,7 +679,6 @@ def room_detail(room_id):
         if len(body) > 2000:
             body = body[:2000]
 
-        import time
         send_start = time.time() * 1000
 
         _log.info(
@@ -638,7 +723,9 @@ def room_detail(room_id):
                            members=members, schedules=schedules,
                            can_send=can_send,
                            send_blocked_reason=send_blocked_reason,
-                           membership=membership)
+                           membership=membership,
+                           sse_url=url_for('chat.room_events', room_id=room.id),
+                           poll_url=url_for('chat.room_poll', room_id=room.id))
 
 
 # ─── Edit room ────────────────────────────────────────────────────────────────
@@ -1199,7 +1286,6 @@ def user_room(room_id):
         if len(body) > 2000:
             body = body[:2000]
 
-        import time
         send_start = time.time() * 1000
 
         msg = ChatMessage(
@@ -1257,7 +1343,87 @@ def user_room(room_id):
                            membership=membership,
                            can_send=can_send,
                            send_blocked_reason=send_blocked_reason,
-                           schedules=schedules)
+                           schedules=schedules,
+                           sse_url=url_for('chat.user_room_events', room_id=room.id),
+                           poll_url=url_for('chat.user_room_poll', room_id=room.id))
+
+
+# ─── SSE & polling endpoints ─────────────────────────────────────────────────
+
+@chat_bp.route('/rooms/<int:room_id>/events')
+@login_required
+@admin_required
+def room_events(room_id: int):
+    """SSE stream of new messages for school-admin room view."""
+    _require_chat_module()
+    school = get_current_school()
+    room = (ChatRoom.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(id=room_id, school_id=school.id if school else 0)
+            .first_or_404())
+    _ensure_admin_member(room)
+    db.session.commit()
+    after_id = max(0, int(request.headers.get('Last-Event-ID',
+                           request.args.get('after_id', 0))))
+    return _make_sse_response(room_id, current_user.id, after_id)
+
+
+@chat_bp.route('/rooms/<int:room_id>/poll')
+@login_required
+@admin_required
+def room_poll(room_id: int):
+    """JSON polling fallback for school-admin room view."""
+    _require_chat_module()
+    school = get_current_school()
+    room = (ChatRoom.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(id=room_id, school_id=school.id if school else 0)
+            .first_or_404())
+    after_id = max(0, int(request.args.get('after_id', 0)))
+    return _poll_messages_json(room_id, current_user.id, after_id)
+
+
+@chat_bp.route('/my-rooms/<int:room_id>/events')
+@login_required
+def user_room_events(room_id: int):
+    """SSE stream of new messages for parent/teacher room view."""
+    _require_chat_module()
+    school_id = getattr(current_user, 'school_id', None)
+    if not school_id:
+        abort(403)
+    room = (ChatRoom.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(id=room_id, school_id=school_id, is_active=True)
+            .first_or_404())
+    membership = ChatRoomMember.query.filter_by(
+        room_id=room.id, user_id=current_user.id
+    ).first()
+    if not membership:
+        abort(403)
+    after_id = max(0, int(request.headers.get('Last-Event-ID',
+                           request.args.get('after_id', 0))))
+    return _make_sse_response(room_id, current_user.id, after_id)
+
+
+@chat_bp.route('/my-rooms/<int:room_id>/poll')
+@login_required
+def user_room_poll(room_id: int):
+    """JSON polling fallback for parent/teacher room view."""
+    _require_chat_module()
+    school_id = getattr(current_user, 'school_id', None)
+    if not school_id:
+        abort(403)
+    room = (ChatRoom.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(id=room_id, school_id=school_id, is_active=True)
+            .first_or_404())
+    membership = ChatRoomMember.query.filter_by(
+        room_id=room.id, user_id=current_user.id
+    ).first()
+    if not membership:
+        abort(403)
+    after_id = max(0, int(request.args.get('after_id', 0)))
+    return _poll_messages_json(room_id, current_user.id, after_id)
 
 
 # ─── Admin direct messaging ───────────────────────────────────────────────────

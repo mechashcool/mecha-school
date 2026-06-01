@@ -42,7 +42,8 @@
         <div style="max-height:500px;overflow-y:auto;padding:16px" id="msgBox">
           {% for msg in messages %}
           <div class="d-flex mb-3 align-items-start gap-2
-            {{ 'flex-row-reverse' if msg.sender and msg.sender.id == current_user.id }}">
+            {{ 'flex-row-reverse' if msg.sender and msg.sender.id == current_user.id }}"
+               data-msg-id="{{ msg.id }}">
 
             {# Avatar #}
             <div class="rounded-circle d-flex align-items-center justify-content-center flex-shrink-0
@@ -202,126 +203,114 @@
 <script>
 console.log('[chat-ajax] handler attached — user_room');
 
-const box = document.getElementById('msgBox');
-if (box) box.scrollTop = box.scrollHeight;
-
-const form        = document.getElementById('sendForm');
-const textarea    = document.getElementById('msgBody');
-const sendBtn     = document.getElementById('sendBtn');
-const sendError   = document.getElementById('sendError');
+// ─── DOM refs ─────────────────────────────────────────────────────────────────
+const form          = document.getElementById('sendForm');
+const textarea      = document.getElementById('msgBody');
+const sendBtn       = document.getElementById('sendBtn');
+const sendError     = document.getElementById('sendError');
 const sendErrorText = document.getElementById('sendErrorText');
 
-function scrollChatToBottom() {
-  const msgBox = document.getElementById('msgBox');
-  if (msgBox) setTimeout(() => { msgBox.scrollTop = msgBox.scrollHeight; }, 50);
+(function() { const b = document.getElementById('msgBox'); if (b) b.scrollTop = b.scrollHeight; })();
+
+// ─── Utility ──────────────────────────────────────────────────────────────────
+function escapeHtml(s) {
+  if (typeof s !== 'string') return '';
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+          .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+}
+
+function isNearBottom(el) {
+  return (el.scrollHeight - el.scrollTop - el.clientHeight) < 120;
 }
 
 function ensureMsgBox() {
-  let msgBox = document.getElementById('msgBox');
-  if (!msgBox) {
-    const cardBody = document.querySelector('.card-body.p-0');
-    if (!cardBody) return null;
-    cardBody.innerHTML = '';
-    msgBox = document.createElement('div');
-    msgBox.id = 'msgBox';
-    msgBox.style.cssText = 'max-height:500px;overflow-y:auto;padding:16px';
-    cardBody.appendChild(msgBox);
+  let b = document.getElementById('msgBox');
+  if (!b) {
+    const cb = document.querySelector('.card-body.p-0');
+    if (!cb) return null;
+    cb.innerHTML = '';
+    b = document.createElement('div');
+    b.id = 'msgBox';
+    b.style.cssText = 'max-height:500px;overflow-y:auto;padding:16px';
+    cb.appendChild(b);
   }
-  return msgBox;
+  return b;
 }
 
 function appendMessageToDom(msgData) {
-  const msgBox = ensureMsgBox();
-  if (!msgBox) return;
+  const b = ensureMsgBox();
+  if (!b) return;
+  if (b.querySelector('[data-msg-id="' + msgData.id + '"]')) return; // dedup
 
-  const senderInitial = (msgData.sender_name || '؟')[0];
-  const isFlexReverse = msgData.is_self ? 'flex-row-reverse' : '';
-  const bgColor  = msgData.is_self ? '#e8f4fd' : '#fff';
-  const avatarBg = msgData.is_self ? 'bg-primary' : 'bg-secondary';
-  const msgHtml = `
-    <div class="d-flex mb-3 align-items-start gap-2 ${isFlexReverse}">
-      <div class="rounded-circle d-flex align-items-center justify-content-center flex-shrink-0 ${avatarBg} text-white"
-           style="width:34px;height:34px;font-size:13px">
-        ${senderInitial}
-      </div>
+  const near    = isNearBottom(b);
+  const rev     = msgData.is_self ? 'flex-row-reverse' : '';
+  const bgColor = msgData.is_self ? '#e8f4fd' : '#fff';
+  const avBg    = msgData.is_self ? 'bg-primary' : 'bg-secondary';
+  const label   = msgData.is_self ? 'أنت' : escapeHtml(msgData.sender_name);
+  b.insertAdjacentHTML('beforeend', `
+    <div class="d-flex mb-3 align-items-start gap-2 ${rev}" data-msg-id="${msgData.id}">
+      <div class="rounded-circle d-flex align-items-center justify-content-center flex-shrink-0 ${avBg} text-white"
+           style="width:34px;height:34px;font-size:13px">${escapeHtml((msgData.sender_name||'؟')[0])}</div>
       <div style="max-width:70%">
-        <div class="d-flex gap-2 align-items-center mb-1 ${isFlexReverse}">
-          <span class="fw-semibold" style="font-size:13px">${msgData.is_self ? 'أنت' : escapeHtml(msgData.sender_name)}</span>
+        <div class="d-flex gap-2 align-items-center mb-1 ${rev}">
+          <span class="fw-semibold" style="font-size:13px">${label}</span>
           <span class="text-muted" style="font-size:11px">${escapeHtml(msgData.created_at)}</span>
         </div>
-        <div class="border rounded p-2 shadow-sm" style="font-size:14px;background:${bgColor}">
-          ${escapeHtml(msgData.body)}
-        </div>
+        <div class="border rounded p-2 shadow-sm" style="font-size:14px;background:${bgColor}">${escapeHtml(msgData.body)}</div>
       </div>
-    </div>
-  `;
-  msgBox.innerHTML += msgHtml;
-  scrollChatToBottom();
-}
-
-function escapeHtml(unsafe) {
-  if (typeof unsafe !== 'string') return '';
-  return unsafe
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+    </div>`);
+  if (near) setTimeout(() => { b.scrollTop = b.scrollHeight; }, 50);
 }
 
 function showError(msg) {
-  if (sendError) { sendError.classList.remove('d-none'); }
-  if (sendErrorText) { sendErrorText.textContent = msg; }
+  if (sendError)     sendError.classList.remove('d-none');
+  if (sendErrorText) sendErrorText.textContent = msg;
 }
-
 function hideError() {
-  if (sendError) { sendError.classList.add('d-none'); }
-  if (sendErrorText) { sendErrorText.textContent = ''; }
+  if (sendError)     sendError.classList.add('d-none');
+  if (sendErrorText) sendErrorText.textContent = '';
 }
-
 function disableSendBtn() {
   if (!sendBtn) return;
   sendBtn.disabled = true;
   sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
 }
-
 function enableSendBtn() {
   if (!sendBtn) return;
   sendBtn.disabled = false;
   sendBtn.innerHTML = '<i class="bi bi-send-fill"></i>';
 }
 
+// ─── Last-message-ID tracking ─────────────────────────────────────────────────
+let lastMsgId = 0;
+document.querySelectorAll('[data-msg-id]').forEach(function(el) {
+  const id = parseInt(el.dataset.msgId, 10);
+  if (id > lastMsgId) lastMsgId = id;
+});
+
+// ─── AJAX send ────────────────────────────────────────────────────────────────
 if (form) {
   form.addEventListener('submit', async function(e) {
     e.preventDefault();
     console.log('[chat-ajax] submitting via fetch');
 
     const body = textarea ? textarea.value.trim() : '';
-    if (!body) {
-      showError('الرسالة لا يمكن أن تكون فارغة.');
-      return;
-    }
+    if (!body) { showError('الرسالة لا يمكن أن تكون فارغة.'); return; }
 
     hideError();
     disableSendBtn();
-
     try {
-      const formData = new FormData(form);
-      const response = await fetch(form.action, {
+      const resp = await fetch(form.action, {
         method: 'POST',
-        body: formData,
-        headers: {
-          'X-Requested-With': 'XMLHttpRequest',
-          'Accept': 'application/json',
-        },
+        body: new FormData(form),
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
       });
-
-      const data = await response.json();
+      const data = await resp.json();
       console.log('[chat-ajax] response:', data);
-
       if (data.ok) {
         if (textarea) textarea.value = '';
         appendMessageToDom(data.message);
+        lastMsgId = Math.max(lastMsgId, data.message.id);
       } else {
         showError(data.error || 'حدث خطأ أثناء الإرسال.');
       }
@@ -336,11 +325,75 @@ if (form) {
 
 if (textarea) {
   textarea.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      if (form) form.requestSubmit();
-    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (form) form.requestSubmit(); }
   });
 }
+
+// ─── SSE real-time updates ────────────────────────────────────────────────────
+const SSE_URL  = '{{ sse_url }}';
+const POLL_URL = '{{ poll_url }}';
+
+let evtSrc      = null;
+let reconnTimer = null;
+let pollTimer   = null;
+
+function connectSSE() {
+  if (reconnTimer) { clearTimeout(reconnTimer); reconnTimer = null; }
+  if (!window.EventSource) { console.warn('[chat-sse] not supported, polling'); startPolling(); return; }
+
+  const url = SSE_URL + '?after_id=' + lastMsgId;
+  console.log('[chat-sse] connecting after_id=' + lastMsgId);
+  evtSrc = new EventSource(url);
+
+  evtSrc.onopen = function() {
+    console.log('[chat-sse] connected');
+    stopPolling();
+  };
+
+  evtSrc.addEventListener('message', function(e) {
+    try {
+      const msg = JSON.parse(e.data);
+      appendMessageToDom(msg);
+      lastMsgId = Math.max(lastMsgId, msg.id);
+    } catch (err) { console.error('[chat-sse] parse error:', err); }
+  });
+
+  evtSrc.onerror = function() {
+    console.warn('[chat-sse] lost, reconnect in 3s');
+    evtSrc.close(); evtSrc = null;
+    if (!pollTimer) startPolling();
+    reconnTimer = setTimeout(connectSSE, 3000);
+  };
+}
+
+async function pollOnce() {
+  try {
+    const resp = await fetch(POLL_URL + '?after_id=' + lastMsgId,
+      { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    (data.messages || []).forEach(function(msg) {
+      appendMessageToDom(msg);
+      lastMsgId = Math.max(lastMsgId, msg.id);
+    });
+  } catch (e) { console.debug('[chat-poll] error:', e); }
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  console.log('[chat-sse] polling fallback active');
+  pollTimer = setInterval(pollOnce, 5000);
+}
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+connectSSE();
+
+window.addEventListener('beforeunload', function() {
+  if (evtSrc) evtSrc.close();
+  clearTimeout(reconnTimer);
+  stopPolling();
+});
 </script>
 {% endblock %}

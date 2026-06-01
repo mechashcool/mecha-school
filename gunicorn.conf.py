@@ -1,10 +1,11 @@
 import os
 
 
-bind = f"0.0.0.0:{os.environ.get('PORT', '5000')}"
-workers = int(os.environ.get('WEB_CONCURRENCY', 2))
-threads = int(os.environ.get('GUNICORN_THREADS', 2))
-timeout = int(os.environ.get('GUNICORN_TIMEOUT', 120))
+bind         = f"0.0.0.0:{os.environ.get('PORT', '5000')}"
+worker_class = 'gthread'           # required for SSE streaming connections
+workers      = int(os.environ.get('WEB_CONCURRENCY', 2))
+threads      = int(os.environ.get('GUNICORN_THREADS', 4))  # each SSE client holds one thread
+timeout      = int(os.environ.get('GUNICORN_TIMEOUT', 120))
 
 accesslog = '-'
 errorlog = '-'
