@@ -4,7 +4,7 @@ import os
 bind         = f"0.0.0.0:{os.environ.get('PORT', '5000')}"
 worker_class = 'gthread'           # required for SSE streaming connections
 workers      = int(os.environ.get('WEB_CONCURRENCY', 2))
-threads      = int(os.environ.get('GUNICORN_THREADS', 4))  # each SSE client holds one thread
+threads      = int(os.environ.get('GUNICORN_THREADS', 8))  # each SSE client holds one thread; SSE_MAX_ITERATIONS limits lifetime to ~55 s
 timeout      = int(os.environ.get('GUNICORN_TIMEOUT', 120))
 
 accesslog = '-'

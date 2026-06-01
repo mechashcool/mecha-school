@@ -292,7 +292,7 @@ document.querySelectorAll('[data-msg-id]').forEach(function(el) {
 if (form) {
   form.addEventListener('submit', async function(e) {
     e.preventDefault();
-    console.log('[chat-ajax] submitting via fetch');
+    console.log('[chat-ajax] send start');
 
     const body = textarea ? textarea.value.trim() : '';
     if (!body) { showError('الرسالة لا يمكن أن تكون فارغة.'); return; }
@@ -305,8 +305,10 @@ if (form) {
         body: new FormData(form),
         headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
       });
+      console.log('[chat-ajax] response status', resp.status);
+      console.log('[chat-ajax] response content-type', resp.headers.get('content-type'));
       const data = await resp.json();
-      console.log('[chat-ajax] response:', data);
+      console.log('[chat-ajax] response json', data);
       if (data.ok) {
         if (textarea) textarea.value = '';
         appendMessageToDom(data.message);
@@ -316,7 +318,7 @@ if (form) {
       }
     } catch (err) {
       showError('تعذر إرسال الرسالة، حاول مرة أخرى');
-      console.error('[chat-ajax] error:', err);
+      console.error('[chat-ajax] send failed', err);
     } finally {
       enableSendBtn();
     }
@@ -356,6 +358,14 @@ function connectSSE() {
       appendMessageToDom(msg);
       lastMsgId = Math.max(lastMsgId, msg.id);
     } catch (err) { console.error('[chat-sse] parse error:', err); }
+  });
+
+  evtSrc.addEventListener('timeout', function() {
+    // Server cycled the stream to free the Gunicorn thread; reconnect immediately.
+    console.log('[chat-sse] server timeout, reconnecting immediately');
+    evtSrc.close(); evtSrc = null;
+    clearTimeout(reconnTimer);
+    connectSSE();
   });
 
   evtSrc.onerror = function() {

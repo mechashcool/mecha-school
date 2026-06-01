@@ -48,6 +48,10 @@ _log = logging.getLogger('mecha.chat')
 
 chat_bp = Blueprint('chat', __name__, template_folder='../../templates/chat')
 
+# SSE streams hold a gthread thread for their lifetime; limit each stream so
+# threads are freed periodically and POST requests are never starved.
+SSE_MAX_ITERATIONS = 55  # ~55 s; client reconnects immediately on timeout
+
 
 # ─── AJAX helpers ─────────────────────────────────────────────────────────────
 
@@ -73,11 +77,23 @@ def _format_message_json(msg: ChatMessage) -> dict:
 # ─── SSE / polling helpers ────────────────────────────────────────────────────
 
 def _sse_generator(room_id: int, user_id: int, after_id: int):
-    """Yield SSE events for new messages; heartbeat when idle."""
+    """
+    Yield SSE events for new messages, then heartbeats.
+
+    Key correctness rules:
+    - Materialize sender.full_name while session is still open.
+    - Call db.session.remove() BEFORE yielding so the DB connection is
+      returned to the pool while the generator is suspended.
+    - Exit after SSE_MAX_ITERATIONS so the Gunicorn gthread is freed and
+      POST requests are never starved.  The client reconnects immediately
+      on receiving the 'timeout' event.
+    """
     last_id = after_id
+    iters   = 0
     _log.info('[chat-sse] connected room_id=%s user_id=%s after_id=%s', room_id, user_id, last_id)
     try:
-        while True:
+        while iters < SSE_MAX_ITERATIONS:
+            iters += 1
             try:
                 new_msgs = (ChatMessage.query
                             .filter(
@@ -88,22 +104,29 @@ def _sse_generator(room_id: int, user_id: int, after_id: int):
                             .order_by(ChatMessage.id.asc())
                             .limit(50)
                             .all())
-                if new_msgs:
-                    for msg in new_msgs:
-                        payload = json.dumps({
-                            'id':          msg.id,
-                            'body':        msg.body or '[مرفق]',
-                            'sender_name': msg.sender.full_name if msg.sender else 'محذوف',
-                            'created_at':  msg.created_at.strftime('%Y-%m-%d %H:%M'),
-                            'is_self':     msg.sender_user_id == user_id,
-                        }, ensure_ascii=False)
-                        yield f'event: message\nid: {msg.id}\ndata: {payload}\n\n'
-                        last_id = msg.id
-                    _log.info('[chat-sse] sent room_id=%s count=%s', room_id, len(new_msgs))
-                else:
-                    _log.debug('[chat-sse] heartbeat room_id=%s', room_id)
-                    yield ': ping\n\n'
+
+                # Build all event strings while session is open (accesses sender relation).
+                events: list[tuple[int, str]] = []
+                for msg in new_msgs:
+                    events.append((msg.id, json.dumps({
+                        'id':          msg.id,
+                        'body':        msg.body or '[مرفق]',
+                        'sender_name': msg.sender.full_name if msg.sender else 'محذوف',
+                        'created_at':  msg.created_at.strftime('%Y-%m-%d %H:%M'),
+                        'is_self':     msg.sender_user_id == user_id,
+                    }, ensure_ascii=False)))
+
+                # Release DB connection BEFORE yielding — never hold it while suspended.
                 db.session.remove()
+
+                if events:
+                    for (msg_id, payload) in events:
+                        yield f'event: message\nid: {msg_id}\ndata: {payload}\n\n'
+                        last_id = msg_id
+                    _log.info('[chat-sse] sent room_id=%s count=%s', room_id, len(events))
+                else:
+                    yield ': ping\n\n'
+
             except Exception as exc:
                 _log.warning('[chat-sse] query error room_id=%s: %s', room_id, exc)
                 try:
@@ -111,7 +134,13 @@ def _sse_generator(room_id: int, user_id: int, after_id: int):
                 except Exception:
                     pass
                 yield ': error-retry\n\n'
+
             time.sleep(1)
+
+        # Stream lifetime limit reached — tell client to reconnect immediately.
+        _log.debug('[chat-sse] timeout room_id=%s after %d iters', room_id, iters)
+        yield 'event: timeout\ndata: reconnect\n\n'
+
     except GeneratorExit:
         _log.info('[chat-sse] disconnected room_id=%s user_id=%s', room_id, user_id)
         try:
@@ -700,8 +729,10 @@ def room_detail(room_id):
     )
 
     if request.method == 'POST':
+        import threading
         is_ajax = _is_ajax_request()
-        _log.info('[chat-ajax] ajax=%s room_id=%s user_id=%s', is_ajax, room.id, current_user.id)
+        _log.info('[chat-send] POST received room_id=%s user_id=%s ajax=%s',
+                  room.id, current_user.id, is_ajax)
 
         if not can_send:
             _log.info(
@@ -723,31 +754,33 @@ def room_detail(room_id):
         if len(body) > 2000:
             body = body[:2000]
 
-        send_start = time.time() * 1000
+        try:
+            msg = ChatMessage(
+                room_id=room.id,
+                sender_user_id=current_user.id,
+                body=body,
+                message_type='text',
+            )
+            db.session.add(msg)
+            db.session.flush()
+            db.session.add(ChatMessageRead(message_id=msg.id, user_id=current_user.id))
+            room.updated_at = datetime.utcnow()
+            db.session.commit()
+            _log.info('[chat-send] committed message_id=%s room_id=%s', msg.id, room.id)
+        except Exception as exc:
+            _log.error('[chat-send] error room_id=%s user_id=%s: %s', room.id, current_user.id, exc,
+                       exc_info=True)
+            db.session.rollback()
+            if is_ajax:
+                return jsonify({'ok': False, 'error': 'حدث خطأ أثناء حفظ الرسالة.'}), 500
+            flash('حدث خطأ أثناء حفظ الرسالة.', 'danger')
+            return redirect(url_for('chat.room_detail', room_id=room.id))
 
-        _log.info(
-            '[chat] manager override send user_id=%s room_id=%s school_id=%s',
-            current_user.id, room.id, room.school_id,
-        )
-        msg = ChatMessage(
-            room_id=room.id,
-            sender_user_id=current_user.id,
-            body=body,
-            message_type='text',
-        )
-        db.session.add(msg)
-        db.session.flush()
-        db.session.add(ChatMessageRead(message_id=msg.id, user_id=current_user.id))
-        room.updated_at = datetime.utcnow()
-        db.session.commit()
-
-        save_elapsed = time.time() * 1000 - send_start
-        _log.info('[chat-send] saved message_id=%s elapsed_ms=%.1f', msg.id, save_elapsed)
-
-        _push_chat_message(room, msg)
+        # FCM push runs in a daemon thread so the AJAX response returns immediately.
+        threading.Thread(target=_push_chat_message, args=(room, msg), daemon=True).start()
 
         if is_ajax:
-            _log.info('[chat-ajax] returning json message_id=%s room_id=%s', msg.id, room.id)
+            _log.info('[chat-send] returning ajax json message_id=%s room_id=%s', msg.id, room.id)
             return jsonify({'ok': True, 'message': _format_message_json(msg)})
         return redirect(url_for('chat.room_detail', room_id=room.id))
 
@@ -1306,8 +1339,10 @@ def user_room(room_id):
 
     # ── POST: send message ────────────────────────────────────────────────────
     if request.method == 'POST':
+        import threading
         is_ajax = _is_ajax_request()
-        _log.info('[chat-ajax] ajax=%s room_id=%s user_id=%s', is_ajax, room.id, current_user.id)
+        _log.info('[chat-send] POST received room_id=%s user_id=%s ajax=%s',
+                  room.id, current_user.id, is_ajax)
 
         if not can_send:
             error_msg = send_blocked_reason or 'لا يمكنك الإرسال حالياً.'
@@ -1333,28 +1368,33 @@ def user_room(room_id):
         if len(body) > 2000:
             body = body[:2000]
 
-        send_start = time.time() * 1000
+        try:
+            msg = ChatMessage(
+                room_id        = room.id,
+                sender_user_id = current_user.id,
+                body           = body,
+                message_type   = 'text',
+            )
+            db.session.add(msg)
+            db.session.flush()
+            db.session.add(ChatMessageRead(message_id=msg.id, user_id=current_user.id))
+            room.updated_at = datetime.utcnow()
+            db.session.commit()
+            _log.info('[chat-send] committed message_id=%s room_id=%s', msg.id, room.id)
+        except Exception as exc:
+            _log.error('[chat-send] error room_id=%s user_id=%s: %s', room.id, current_user.id, exc,
+                       exc_info=True)
+            db.session.rollback()
+            if is_ajax:
+                return jsonify({'ok': False, 'error': 'حدث خطأ أثناء حفظ الرسالة.'}), 500
+            flash('حدث خطأ أثناء حفظ الرسالة.', 'danger')
+            return redirect(url_for('chat.user_room', room_id=room.id))
 
-        msg = ChatMessage(
-            room_id        = room.id,
-            sender_user_id = current_user.id,
-            body           = body,
-            message_type   = 'text',
-        )
-        db.session.add(msg)
-        db.session.flush()
-
-        db.session.add(ChatMessageRead(message_id=msg.id, user_id=current_user.id))
-        room.updated_at = datetime.utcnow()
-        db.session.commit()
-
-        save_elapsed = time.time() * 1000 - send_start
-        _log.info('[chat-send] saved message_id=%s elapsed_ms=%.1f', msg.id, save_elapsed)
-
-        _push_chat_message(room, msg)
+        # FCM push runs in a daemon thread so the AJAX response returns immediately.
+        threading.Thread(target=_push_chat_message, args=(room, msg), daemon=True).start()
 
         if is_ajax:
-            _log.info('[chat-ajax] returning json message_id=%s room_id=%s', msg.id, room.id)
+            _log.info('[chat-send] returning ajax json message_id=%s room_id=%s', msg.id, room.id)
             return jsonify({'ok': True, 'message': _format_message_json(msg)})
         return redirect(url_for('chat.user_room', room_id=room.id))
 
