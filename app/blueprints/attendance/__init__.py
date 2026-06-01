@@ -140,13 +140,15 @@ def _run_auto_absent(school, year, settings, recorded_by_id=None):
 
     # Use bypass_tenant_scope so queries work correctly from background threads
     # (no Flask request context → current_school_id() returns None → no auto-filter).
+    # Students are NOT year-scoped: academic_year_id on the Student row is
+    # the enrollment year and is never updated across years. Filtering by the
+    # current year would exclude all students enrolled in previous years.
+    # The year is correctly stamped on each StudentAttendance record below.
     all_students_q = (Student.query
                       .execution_options(bypass_tenant_scope=True)
                       .filter_by(status='active'))
     if school:
         all_students_q = all_students_q.filter_by(school_id=school_id)
-    if year:
-        all_students_q = all_students_q.filter_by(academic_year_id=year.id)
     all_students = all_students_q.all()
     student_ids  = [s.id for s in all_students]
 
