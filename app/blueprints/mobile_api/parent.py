@@ -30,10 +30,12 @@ from sqlalchemy import select
 from app.models import (
     db,
     AcademicYear,
+    Complaint,
     FeeRecord,
     Exam,
     ExamResult,
     Homework,
+    LeaveRequest,
     Notification,
     NotificationRead,
     Schedule,
@@ -535,3 +537,288 @@ def parent_child_homework(student_id):
             for hw in rows
         ],
     )
+
+
+# ─── Leave Requests & Complaints — labels ─────────────────────────────────────
+
+_LEAVE_TYPES = {
+    'sick':      'إجازة مرضية',
+    'medical':   'موعد طبي',
+    'family':    'ظرف عائلي',
+    'travel':    'سفر',
+    'emergency': 'طارئ',
+    'other':     'أخرى',
+}
+_LEAVE_STATUS = {
+    'pending':  'قيد الانتظار',
+    'approved': 'موافق عليه',
+    'rejected': 'مرفوض',
+}
+_COMPLAINT_TYPES = {
+    'academic':       'أكاديمية',
+    'administrative': 'إدارية',
+    'financial':      'مالية',
+    'transportation': 'النقل',
+    'behavior':       'سلوكية',
+    'other':          'أخرى',
+}
+_COMPLAINT_STATUS = {
+    'new':          'جديدة',
+    'under_review': 'قيد المراجعة',
+    'replied':      'تم الرد',
+    'closed':       'مغلقة',
+}
+
+
+def _leave_dict(r) -> dict:
+    return {
+        'id':               r.id,
+        'student_id':       r.student_id,
+        'student_name':     r.student.full_name if r.student else None,
+        'leave_type':       r.leave_type,
+        'leave_type_label': _LEAVE_TYPES.get(r.leave_type, r.leave_type),
+        'start_date':       r.from_date.isoformat() if r.from_date else None,
+        'end_date':         r.to_date.isoformat() if r.to_date else None,
+        'reason':           r.notes,
+        'status':           r.status,
+        'status_label':     _LEAVE_STATUS.get(r.status, r.status),
+        'admin_note':       r.manager_note,
+        'created_at':       (r.created_at.replace(tzinfo=timezone.utc).isoformat()
+                             if r.created_at else None),
+    }
+
+
+def _complaint_dict(c) -> dict:
+    return {
+        'id':             c.id,
+        'student_id':     c.student_id,
+        'student_name':   c.student.full_name if c.student else None,
+        'category':       c.complaint_type,
+        'category_label': _COMPLAINT_TYPES.get(c.complaint_type, c.complaint_type),
+        'title':          c.title,
+        'body':           c.details,
+        'status':         c.status,
+        'status_label':   _COMPLAINT_STATUS.get(c.status, c.status),
+        'admin_reply':    c.manager_reply,
+        'created_at':     (c.created_at.replace(tzinfo=timezone.utc).isoformat()
+                           if c.created_at else None),
+        'updated_at':     (c.updated_at.replace(tzinfo=timezone.utc).isoformat()
+                           if c.updated_at else None),
+    }
+
+
+def _notify_managers_mobile(user, school_id: int, title: str, body: str) -> None:
+    db.session.add(Notification(
+        school_id=school_id,
+        title=title,
+        body=body,
+        ntype='parent_request',
+        target_role='school_admin',
+        created_by=user.id,
+    ))
+
+
+# ─── Leave Request routes ─────────────────────────────────────────────────────
+
+@mobile_api_bp.route('/parent/children/<int:student_id>/leave-requests', methods=['GET'])
+@jwt_required()
+@role_required('parent')
+def parent_child_leave_requests(student_id):
+    s    = _assert_owns_student(student_id)
+    user = g.mobile_user
+    rows = (LeaveRequest.query
+            .execution_options(bypass_tenant_scope=True, include_all_years=True)
+            .filter_by(parent_id=user.id, student_id=s.id, school_id=user.school_id)
+            .order_by(LeaveRequest.created_at.desc())
+            .all())
+    return ok(count=len(rows), requests=[_leave_dict(r) for r in rows])
+
+
+@mobile_api_bp.route('/parent/children/<int:student_id>/leave-requests', methods=['POST'])
+@jwt_required()
+@role_required('parent')
+def parent_child_create_leave_request(student_id):
+    s    = _assert_owns_student(student_id)
+    user = g.mobile_user
+    data = request.get_json(silent=True) or {}
+
+    leave_type = (data.get('leave_type') or '').strip()
+    start_str  = (data.get('start_date') or '').strip()
+    end_str    = (data.get('end_date')   or '').strip()
+    reason     = (data.get('reason')     or '').strip() or None
+
+    if not leave_type:
+        return err('required_field_missing: leave_type')
+    if leave_type not in _LEAVE_TYPES:
+        return err('invalid_leave_type')
+    if not start_str:
+        return err('required_field_missing: start_date')
+    if not end_str:
+        return err('required_field_missing: end_date')
+
+    try:
+        from_date = _dt.strptime(start_str, '%Y-%m-%d').date()
+    except ValueError:
+        return err('invalid_date_format: start_date')
+    try:
+        to_date = _dt.strptime(end_str, '%Y-%m-%d').date()
+    except ValueError:
+        return err('invalid_date_format: end_date')
+
+    if to_date < from_date:
+        return err('end_date_before_start_date')
+
+    if not s.academic_year_id:
+        return err('no_active_academic_year_for_student')
+
+    leave = LeaveRequest(
+        parent_id=user.id,
+        student_id=s.id,
+        school_id=s.school_id,
+        academic_year_id=s.academic_year_id,
+        leave_type=leave_type,
+        from_date=from_date,
+        to_date=to_date,
+        notes=reason,
+        status='pending',
+    )
+    db.session.add(leave)
+    _notify_managers_mobile(user, s.school_id,
+                            'طلب إجازة جديد',
+                            f'تم تقديم طلب إجازة للطالب {s.full_name}.')
+    db.session.commit()
+    return ok(message='leave_request_created', request=_leave_dict(leave)), 201
+
+
+@mobile_api_bp.route('/parent/children/<int:student_id>/leave-requests/<int:request_id>',
+                     methods=['GET'])
+@jwt_required()
+@role_required('parent')
+def parent_child_leave_request_detail(student_id, request_id):
+    s    = _assert_owns_student(student_id)
+    user = g.mobile_user
+    leave = (LeaveRequest.query
+             .execution_options(bypass_tenant_scope=True, include_all_years=True)
+             .filter_by(id=request_id, parent_id=user.id,
+                        student_id=s.id, school_id=user.school_id)
+             .first())
+    if not leave:
+        return err('leave_request_not_found', 404)
+    return ok(request=_leave_dict(leave))
+
+
+@mobile_api_bp.route('/parent/children/<int:student_id>/leave-requests/<int:request_id>',
+                     methods=['DELETE'])
+@jwt_required()
+@role_required('parent')
+def parent_child_delete_leave_request(student_id, request_id):
+    s    = _assert_owns_student(student_id)
+    user = g.mobile_user
+    leave = (LeaveRequest.query
+             .execution_options(bypass_tenant_scope=True, include_all_years=True)
+             .filter_by(id=request_id, parent_id=user.id,
+                        student_id=s.id, school_id=user.school_id)
+             .first())
+    if not leave:
+        return err('leave_request_not_found', 404)
+    if leave.status != 'pending':
+        return err('cannot_cancel_non_pending_request')
+    db.session.delete(leave)
+    db.session.commit()
+    return ok(message='leave_request_deleted')
+
+
+# ─── Complaint routes ─────────────────────────────────────────────────────────
+
+@mobile_api_bp.route('/parent/children/<int:student_id>/complaints', methods=['GET'])
+@jwt_required()
+@role_required('parent')
+def parent_child_complaints(student_id):
+    s    = _assert_owns_student(student_id)
+    user = g.mobile_user
+    rows = (Complaint.query
+            .execution_options(bypass_tenant_scope=True, include_all_years=True)
+            .filter_by(parent_id=user.id, student_id=s.id, school_id=user.school_id)
+            .order_by(Complaint.created_at.desc())
+            .all())
+    return ok(count=len(rows), complaints=[_complaint_dict(c) for c in rows])
+
+
+@mobile_api_bp.route('/parent/children/<int:student_id>/complaints', methods=['POST'])
+@jwt_required()
+@role_required('parent')
+def parent_child_create_complaint(student_id):
+    s    = _assert_owns_student(student_id)
+    user = g.mobile_user
+    data = request.get_json(silent=True) or {}
+
+    category = (data.get('category') or '').strip()
+    title    = (data.get('title')    or '').strip()
+    body     = (data.get('body')     or '').strip()
+
+    if not category:
+        return err('required_field_missing: category')
+    if category not in _COMPLAINT_TYPES:
+        return err('invalid_category')
+    if not title:
+        return err('required_field_missing: title')
+    if not body:
+        return err('required_field_missing: body')
+
+    if not s.academic_year_id:
+        return err('no_active_academic_year_for_student')
+
+    complaint = Complaint(
+        parent_id=user.id,
+        student_id=s.id,
+        school_id=s.school_id,
+        academic_year_id=s.academic_year_id,
+        title=title,
+        complaint_type=category,
+        details=body,
+        status='new',
+    )
+    db.session.add(complaint)
+    _notify_managers_mobile(user, s.school_id,
+                            'شكوى جديدة',
+                            f'تم تقديم شكوى جديدة خاصة بالطالب {s.full_name}.')
+    db.session.commit()
+    return ok(message='complaint_created', complaint=_complaint_dict(complaint)), 201
+
+
+@mobile_api_bp.route('/parent/children/<int:student_id>/complaints/<int:complaint_id>',
+                     methods=['GET'])
+@jwt_required()
+@role_required('parent')
+def parent_child_complaint_detail(student_id, complaint_id):
+    s    = _assert_owns_student(student_id)
+    user = g.mobile_user
+    complaint = (Complaint.query
+                 .execution_options(bypass_tenant_scope=True, include_all_years=True)
+                 .filter_by(id=complaint_id, parent_id=user.id,
+                             student_id=s.id, school_id=user.school_id)
+                 .first())
+    if not complaint:
+        return err('complaint_not_found', 404)
+    return ok(complaint=_complaint_dict(complaint))
+
+
+@mobile_api_bp.route('/parent/children/<int:student_id>/complaints/<int:complaint_id>',
+                     methods=['DELETE'])
+@jwt_required()
+@role_required('parent')
+def parent_child_delete_complaint(student_id, complaint_id):
+    s    = _assert_owns_student(student_id)
+    user = g.mobile_user
+    complaint = (Complaint.query
+                 .execution_options(bypass_tenant_scope=True, include_all_years=True)
+                 .filter_by(id=complaint_id, parent_id=user.id,
+                             student_id=s.id, school_id=user.school_id)
+                 .first())
+    if not complaint:
+        return err('complaint_not_found', 404)
+    if complaint.status != 'new':
+        return err('cannot_delete_non_new_complaint')
+    db.session.delete(complaint)
+    db.session.commit()
+    return ok(message='complaint_deleted')

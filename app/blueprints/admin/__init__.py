@@ -91,7 +91,7 @@ def _admin_scope_id():
     return school.id if school else None
 
 
-def _notify_parent(parent_id, school_id, title, body):
+def _notify_parent(parent_id, school_id, title, body, fcm_data=None):
     db.session.add(Notification(
         school_id=school_id,
         title=title,
@@ -104,10 +104,8 @@ def _notify_parent(parent_id, school_id, title, body):
     try:
         from app.services.fcm_service import is_enabled, send_push_to_user
         if is_enabled():
-            send_push_to_user(
-                parent_id, title, body,
-                {'type': 'parent_request', 'school_id': str(school_id)},
-            )
+            data = fcm_data or {'type': 'parent_request', 'school_id': str(school_id)}
+            send_push_to_user(parent_id, title, body, data)
     except Exception:
         pass
 
@@ -815,6 +813,12 @@ def complaint_detail(complaint_id):
                 complaint.school_id,
                 '\u062a\u062d\u062f\u064a\u062b \u0627\u0644\u0634\u0643\u0648\u0649',
                 f'\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u0634\u0643\u0648\u0627\u0643 \u0628\u062d\u0627\u0644\u0629: {COMPLAINT_STATUS[new_status]}.',
+                fcm_data={
+                    'type':        'complaint_reply',
+                    'complaint_id': str(complaint.id),
+                    'student_id':  str(complaint.student_id),
+                    'screen':      'complaints',
+                },
             )
         db.session.commit()
         flash('\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u0627\u0644\u0634\u0643\u0648\u0649 \u0628\u0646\u062c\u0627\u062d.', 'success')
@@ -873,6 +877,12 @@ def leave_request_detail(request_id):
                 leave_request.school_id,
                 '\u062a\u062d\u062f\u064a\u062b \u0637\u0644\u0628 \u0627\u0644\u0625\u062c\u0627\u0632\u0629',
                 f'\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u0637\u0644\u0628 \u0627\u0644\u0625\u062c\u0627\u0632\u0629 \u0628\u062d\u0627\u0644\u0629: {LEAVE_STATUS[new_status]}.',
+                fcm_data={
+                    'type':       'leave_request_update',
+                    'request_id': str(leave_request.id),
+                    'student_id': str(leave_request.student_id),
+                    'screen':     'leave_requests',
+                },
             )
         db.session.commit()
         flash('\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u0637\u0644\u0628 \u0627\u0644\u0625\u062c\u0627\u0632\u0629 \u0628\u0646\u062c\u0627\u062d.', 'success')

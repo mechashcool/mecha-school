@@ -290,6 +290,256 @@ class ParentRequestsTest(unittest.TestCase):
         self.assertEqual(leave_request.student_id, ids['student_a_id'])
         self.assertEqual(leave_request.school_id, ids['school_a_id'])
 
+    # ── Mobile API helpers ────────────────────────────────────────────────────
+
+    def _token_for(self, user_id):
+        with self.app.app_context():
+            from app.blueprints.mobile_api.utils import encode_token
+            user = db.session.get(User, user_id, execution_options={'bypass_tenant_scope': True})
+            return encode_token(user)
+
+    def _api(self, method, path, token, **kwargs):
+        client = self.app.test_client()
+        fn = getattr(client, method)
+        return fn(
+            f'/api/mobile/v1{path}',
+            headers={'Authorization': f'Bearer {token}'},
+            content_type='application/json',
+            **kwargs,
+        )
+
+    # ── Mobile Leave Request tests ────────────────────────────────────────────
+
+    def test_mobile_parent_creates_leave_request(self):
+        ids   = self.created
+        token = self._token_for(ids['parent_id'])
+
+        resp = self._api('post',
+                         f'/parent/children/{ids["student_a_id"]}/leave-requests',
+                         token,
+                         json={'leave_type': 'sick', 'start_date': '2026-06-10',
+                               'end_date': '2026-06-12', 'reason': 'مريض'})
+        self.assertEqual(resp.status_code, 201)
+        data = resp.get_json()
+        self.assertTrue(data['ok'])
+        self.assertEqual(data['message'], 'leave_request_created')
+        req = data['request']
+        self.assertEqual(req['leave_type'], 'sick')
+        self.assertEqual(req['status'], 'pending')
+        self.assertEqual(req['student_id'], ids['student_a_id'])
+
+        # Verify persisted
+        req_id = req['id']
+        resp2 = self._api('get',
+                          f'/parent/children/{ids["student_a_id"]}/leave-requests/{req_id}',
+                          token)
+        self.assertEqual(resp2.status_code, 200)
+        self.assertEqual(resp2.get_json()['request']['id'], req_id)
+
+        # List includes the new record
+        resp3 = self._api('get',
+                          f'/parent/children/{ids["student_a_id"]}/leave-requests',
+                          token)
+        self.assertEqual(resp3.status_code, 200)
+        ids_in_list = [r['id'] for r in resp3.get_json()['requests']]
+        self.assertIn(req_id, ids_in_list)
+
+    def test_mobile_parent_cannot_create_leave_request_for_other_child(self):
+        ids   = self.created
+        token = self._token_for(ids['parent_id'])
+        resp  = self._api('post',
+                          f'/parent/children/{ids["student_b_id"]}/leave-requests',
+                          token,
+                          json={'leave_type': 'sick', 'start_date': '2026-06-10',
+                                'end_date': '2026-06-12', 'reason': 'test'})
+        self.assertEqual(resp.status_code, 404)
+
+    def test_mobile_invalid_dates_return_400(self):
+        ids   = self.created
+        token = self._token_for(ids['parent_id'])
+
+        resp = self._api('post',
+                         f'/parent/children/{ids["student_a_id"]}/leave-requests',
+                         token,
+                         json={'leave_type': 'sick', 'start_date': 'bad-date',
+                               'end_date': '2026-06-12'})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('invalid_date_format', resp.get_json()['error'])
+
+        resp2 = self._api('post',
+                          f'/parent/children/{ids["student_a_id"]}/leave-requests',
+                          token,
+                          json={'leave_type': 'sick', 'start_date': '2026-06-12',
+                                'end_date': '2026-06-10'})
+        self.assertEqual(resp2.status_code, 400)
+        self.assertIn('end_date_before_start_date', resp2.get_json()['error'])
+
+    def test_mobile_missing_leave_fields_return_400(self):
+        ids   = self.created
+        token = self._token_for(ids['parent_id'])
+
+        resp = self._api('post',
+                         f'/parent/children/{ids["student_a_id"]}/leave-requests',
+                         token,
+                         json={'start_date': '2026-06-10', 'end_date': '2026-06-12'})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('leave_type', resp.get_json()['error'])
+
+    def test_mobile_parent_cannot_cancel_approved_leave_request(self):
+        ids = self.created
+        with self.app.app_context():
+            leave = LeaveRequest(
+                parent_id=ids['parent_id'],
+                student_id=ids['student_a_id'],
+                school_id=ids['school_a_id'],
+                academic_year_id=ids['year_a_id'],
+                leave_type='sick',
+                from_date=date(2026, 6, 1),
+                to_date=date(2026, 6, 3),
+                status='approved',
+            )
+            db.session.add(leave)
+            db.session.commit()
+            leave_id = leave.id
+
+        token = self._token_for(ids['parent_id'])
+        resp  = self._api('delete',
+                          f'/parent/children/{ids["student_a_id"]}/leave-requests/{leave_id}',
+                          token)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('cannot_cancel', resp.get_json()['error'])
+
+    # ── Mobile Complaint tests ────────────────────────────────────────────────
+
+    def test_mobile_parent_creates_complaint(self):
+        ids   = self.created
+        token = self._token_for(ids['parent_id'])
+
+        resp = self._api('post',
+                         f'/parent/children/{ids["student_a_id"]}/complaints',
+                         token,
+                         json={'category': 'academic',
+                               'title':    'مشكلة في الواجبات',
+                               'body':     'لم تظهر الواجبات بشكل صحيح.'})
+        self.assertEqual(resp.status_code, 201)
+        data = resp.get_json()
+        self.assertTrue(data['ok'])
+        self.assertEqual(data['message'], 'complaint_created')
+        c = data['complaint']
+        self.assertEqual(c['category'], 'academic')
+        self.assertEqual(c['status'], 'new')
+        self.assertEqual(c['student_id'], ids['student_a_id'])
+
+        c_id = c['id']
+        resp2 = self._api('get',
+                          f'/parent/children/{ids["student_a_id"]}/complaints/{c_id}',
+                          token)
+        self.assertEqual(resp2.status_code, 200)
+        self.assertEqual(resp2.get_json()['complaint']['id'], c_id)
+
+        resp3 = self._api('get',
+                          f'/parent/children/{ids["student_a_id"]}/complaints',
+                          token)
+        self.assertEqual(resp3.status_code, 200)
+        self.assertIn(c_id, [x['id'] for x in resp3.get_json()['complaints']])
+
+    def test_mobile_parent_cannot_access_other_childs_complaint(self):
+        ids   = self.created
+        token = self._token_for(ids['parent_id'])
+        resp  = self._api('post',
+                          f'/parent/children/{ids["student_b_id"]}/complaints',
+                          token,
+                          json={'category': 'academic',
+                                'title':    'test', 'body': 'test'})
+        self.assertEqual(resp.status_code, 404)
+
+    def test_mobile_missing_complaint_fields_return_400(self):
+        ids   = self.created
+        token = self._token_for(ids['parent_id'])
+
+        resp = self._api('post',
+                         f'/parent/children/{ids["student_a_id"]}/complaints',
+                         token,
+                         json={'category': 'academic', 'body': 'text only, no title'})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('title', resp.get_json()['error'])
+
+        resp2 = self._api('post',
+                          f'/parent/children/{ids["student_a_id"]}/complaints',
+                          token,
+                          json={'category': 'bad_category', 'title': 'x', 'body': 'y'})
+        self.assertEqual(resp2.status_code, 400)
+        self.assertIn('invalid_category', resp2.get_json()['error'])
+
+    def test_mobile_school_scoping_complaints(self):
+        ids      = self.created
+        token_a  = self._token_for(ids['parent_id'])
+        token_b  = self._token_for(ids['parent_b_id'])
+
+        # parent_b creates for their own child
+        self._api('post',
+                  f'/parent/children/{ids["student_b_id"]}/complaints',
+                  token_b,
+                  json={'category': 'financial', 'title': 'B complaint',
+                        'body': 'school B details'})
+
+        # parent_a cannot see parent_b's complaints on student_b
+        resp = self._api('get',
+                         f'/parent/children/{ids["student_b_id"]}/complaints',
+                         token_a)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_mobile_no_auth_returns_401(self):
+        ids  = self.created
+        resp = self.app.test_client().get(
+            f'/api/mobile/v1/parent/children/{ids["student_a_id"]}/complaints',
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 401)
+
+    def test_mobile_complaint_admin_reply_visible_in_mobile(self):
+        from app.blueprints.admin import complaint_detail
+        from flask_login import login_user, logout_user
+
+        ids = self.created
+        with self.app.app_context():
+            complaint = Complaint(
+                parent_id=ids['parent_id'],
+                student_id=ids['student_a_id'],
+                school_id=ids['school_a_id'],
+                academic_year_id=ids['year_a_id'],
+                title='Mobile reply test',
+                complaint_type='academic',
+                details='details',
+                status='new',
+            )
+            db.session.add(complaint)
+            db.session.commit()
+            complaint_id = complaint.id
+
+        # Admin replies via web
+        with self.app.test_request_context(
+            f'/admin/complaints/{complaint_id}',
+            method='POST',
+            data={'status': 'replied', 'manager_reply': 'تمت المعالجة'},
+        ):
+            manager = db.session.get(User, ids['manager_a_id'],
+                                     execution_options={'bypass_tenant_scope': True})
+            login_user(manager)
+            self._run_before_request()
+            complaint_detail(complaint_id)
+            logout_user()
+
+        # Mobile API sees the updated status and reply
+        token = self._token_for(ids['parent_id'])
+        resp  = self._api('get',
+                          f'/parent/children/{ids["student_a_id"]}/complaints/{complaint_id}',
+                          token)
+        self.assertEqual(resp.status_code, 200)
+        c = resp.get_json()['complaint']
+        self.assertEqual(c['status'], 'replied')
+        self.assertEqual(c['admin_reply'], 'تمت المعالجة')
+
     def test_manager_sees_only_own_school_complaints_and_reply_notifies_parent(self):
         from app.blueprints.admin import complaint_detail, complaints_list
 
