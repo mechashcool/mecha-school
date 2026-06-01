@@ -23,7 +23,8 @@ _TEST_SCHOOL_RE = re.compile(
     r'School A|School B|NoYear School|Year School|Other Year School|'
     r'Isolation School|Evaluation School|Finance School|Notify School|'
     r'Notify Other|Grade Filter School|Delete Guard School|'
-    r'Demo School|Test School'
+    r'Demo School|Test School|'
+    r'Chat Admin School A|Chat Admin School B'
     r') [0-9a-f]{6,32}$',
     re.IGNORECASE,
 )

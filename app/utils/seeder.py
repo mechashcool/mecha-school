@@ -543,6 +543,108 @@ def register_commands(app):
         sync_sequences()
         click.echo('✓ Sequences synced.')
 
+    @app.cli.command('cleanup-chat-test-schools')
+    @click.option('--execute', is_flag=True, default=False,
+                  help='Actually delete matched schools. Default is dry-run.')
+    @with_appcontext
+    def cleanup_chat_test_schools_cmd(execute):
+        """Find and optionally delete test schools created by automated chat tests.
+
+        Targets schools whose names match:
+          "Chat Admin School A <hex-suffix>"
+          "Chat Admin School B <hex-suffix>"
+
+        Dry-run is the default. Pass --execute to perform deletion.
+        Schools that contain students, employees, fees, or attendance records
+        are reported but never auto-deleted.
+        """
+        from sqlalchemy import or_
+        from app.utils.school_cleanup import cleanup_school_cascade, linked_school_counts
+        from app.models import ChatRoom
+
+        schools = (
+            School.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter(
+                or_(
+                    School.school_name.like('Chat Admin School A %'),
+                    School.school_name.like('Chat Admin School B %'),
+                )
+            )
+            .order_by(School.id)
+            .all()
+        )
+
+        if not schools:
+            click.echo('No test schools found matching "Chat Admin School A/B *".')
+            return
+
+        click.echo(f'\nFound {len(schools)} matched school(s):\n')
+
+        _REAL_DATA_LABELS = {
+            'الطلاب', 'الأعوام الدراسية', 'المراحل', 'الشُعب', 'المواد',
+            'الموظفون/التدريسيون', 'سجلات الرسوم', 'أقساط الرسوم',
+            'الإيرادات', 'المصروفات', 'الرواتب',
+            'حضور الطلاب', 'حضور الموظفين',
+            'الاختبارات', 'نتائج الاختبارات',
+        }
+
+        safe = []
+        unsafe = []
+
+        for school in schools:
+            counts = linked_school_counts(school.id)
+            chat_rooms = (
+                ChatRoom.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter_by(school_id=school.id)
+                .count()
+            )
+
+            click.echo(f'  School ID  : {school.id}')
+            click.echo(f'  Name       : {school.school_name!r}')
+            click.echo(f'  Created    : {school.created_at or "unknown"}')
+            click.echo(f'  Chat rooms : {chat_rooms}')
+            if counts:
+                click.echo(f'  Linked data: {", ".join(f"{k}: {v}" for k, v in counts.items())}')
+            else:
+                click.echo(f'  Linked data: none')
+
+            has_real = bool(_REAL_DATA_LABELS & set(counts.keys()))
+            if has_real:
+                click.echo(f'  Status     : UNSAFE — real data present, will NOT be deleted\n')
+                unsafe.append(school)
+            else:
+                click.echo(f'  Status     : SAFE — only test/chat records\n')
+                safe.append(school)
+
+        click.echo(f'Matched  : {len(schools)}')
+        click.echo(f'Safe     : {len(safe)}')
+        click.echo(f'Skipped  : {len(unsafe)} (real data present)')
+
+        if not execute:
+            click.echo('\n[DRY RUN] No changes made.')
+            click.echo('  Dry-run : flask cleanup-chat-test-schools')
+            click.echo('  Execute : flask cleanup-chat-test-schools --execute')
+            return
+
+        if not safe:
+            click.echo('\nNothing safe to delete.')
+            return
+
+        click.echo(f'\nDeleting {len(safe)} school(s)...')
+        for school in safe:
+            sid, name = school.id, school.school_name
+            try:
+                cleanup_school_cascade(sid)
+                db.session.commit()
+                click.echo(f'  ✓ Deleted id={sid}  {name!r}')
+            except Exception as exc:
+                db.session.rollback()
+                click.echo(f'  ✗ FAILED  id={sid}  {name!r}: {exc}')
+
+        click.echo(f'\nDone. {len(safe)} school(s) processed.')
+
     @app.cli.command('rotate-device-key')
     @click.argument('device_id')
     @with_appcontext

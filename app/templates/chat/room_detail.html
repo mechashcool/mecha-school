@@ -357,52 +357,12 @@ if (textarea) {
   });
 }
 
-// ─── SSE real-time updates ────────────────────────────────────────────────────
-const SSE_URL  = '{{ sse_url }}';
+// ─── Polling ──────────────────────────────────────────────────────────────────
 const POLL_URL = '{{ poll_url }}';
-
-let evtSrc        = null;
-let reconnTimer   = null;
-let pollTimer     = null;
-
-function connectSSE() {
-  if (reconnTimer) { clearTimeout(reconnTimer); reconnTimer = null; }
-  if (!window.EventSource) { console.warn('[chat-sse] not supported, polling'); startPolling(); return; }
-
-  const url = SSE_URL + '?after_id=' + lastMsgId;
-  console.log('[chat-sse] connecting after_id=' + lastMsgId);
-  evtSrc = new EventSource(url);
-
-  evtSrc.onopen = function() {
-    console.log('[chat-sse] connected');
-    stopPolling();
-  };
-
-  evtSrc.addEventListener('message', function(e) {
-    try {
-      const msg = JSON.parse(e.data);
-      appendMessageToDom(msg);
-      lastMsgId = Math.max(lastMsgId, msg.id);
-    } catch (err) { console.error('[chat-sse] parse error:', err); }
-  });
-
-  evtSrc.addEventListener('timeout', function() {
-    // Server cycled the stream to free the Gunicorn thread; reconnect immediately.
-    console.log('[chat-sse] server timeout, reconnecting immediately');
-    evtSrc.close(); evtSrc = null;
-    clearTimeout(reconnTimer);
-    connectSSE();
-  });
-
-  evtSrc.onerror = function() {
-    console.warn('[chat-sse] lost, reconnect in 3s');
-    evtSrc.close(); evtSrc = null;
-    if (!pollTimer) startPolling();
-    reconnTimer = setTimeout(connectSSE, 3000);
-  };
-}
+let pollTimer  = null;
 
 async function pollOnce() {
+  if (document.hidden) return;
   try {
     const resp = await fetch(POLL_URL + '?after_id=' + lastMsgId,
       { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
@@ -417,19 +377,24 @@ async function pollOnce() {
 
 function startPolling() {
   if (pollTimer) return;
-  console.log('[chat-sse] polling fallback active');
-  pollTimer = setInterval(pollOnce, 5000);
+  pollTimer = setInterval(pollOnce, 3000);
+  console.log('[chat-poll] started interval=3s');
 }
 function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
 
-connectSSE();
-
-window.addEventListener('beforeunload', function() {
-  if (evtSrc) evtSrc.close();
-  clearTimeout(reconnTimer);
-  stopPolling();
+document.addEventListener('visibilitychange', function() {
+  if (document.hidden) {
+    stopPolling();
+  } else {
+    pollOnce();
+    startPolling();
+  }
 });
+
+startPolling();
+
+window.addEventListener('beforeunload', stopPolling);
 </script>
 {% endblock %}
