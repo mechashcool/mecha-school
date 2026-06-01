@@ -571,6 +571,7 @@ def room_detail(room_id):
 
     if request.method == 'POST':
         is_ajax = _is_ajax_request()
+        _log.info('[chat-ajax] ajax=%s room_id=%s user_id=%s', is_ajax, room.id, current_user.id)
 
         if not can_send:
             _log.info(
@@ -617,6 +618,7 @@ def room_detail(room_id):
         _push_chat_message(room, msg)
 
         if is_ajax:
+            _log.info('[chat-ajax] returning json message_id=%s room_id=%s', msg.id, room.id)
             return jsonify({'ok': True, 'message': _format_message_json(msg)})
         return redirect(url_for('chat.room_detail', room_id=room.id))
 
@@ -1171,6 +1173,7 @@ def user_room(room_id):
     # ── POST: send message ────────────────────────────────────────────────────
     if request.method == 'POST':
         is_ajax = _is_ajax_request()
+        _log.info('[chat-ajax] ajax=%s room_id=%s user_id=%s', is_ajax, room.id, current_user.id)
 
         if not can_send:
             error_msg = send_blocked_reason or 'لا يمكنك الإرسال حالياً.'
@@ -1218,6 +1221,7 @@ def user_room(room_id):
         _push_chat_message(room, msg)
 
         if is_ajax:
+            _log.info('[chat-ajax] returning json message_id=%s room_id=%s', msg.id, room.id)
             return jsonify({'ok': True, 'message': _format_message_json(msg)})
         return redirect(url_for('chat.user_room', room_id=room.id))
 

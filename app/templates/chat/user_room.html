@@ -198,32 +198,45 @@
 </div>
 {% endblock %}
 
-{% block scripts %}
+{% block extra_js %}
 <script>
-// Scroll to bottom of messages on load
+console.log('[chat-ajax] handler attached — user_room');
+
 const box = document.getElementById('msgBox');
 if (box) box.scrollTop = box.scrollHeight;
 
-const form = document.getElementById('sendForm');
-const textarea = document.getElementById('msgBody');
-const sendBtn = document.getElementById('sendBtn');
-const sendError = document.getElementById('sendError');
+const form        = document.getElementById('sendForm');
+const textarea    = document.getElementById('msgBody');
+const sendBtn     = document.getElementById('sendBtn');
+const sendError   = document.getElementById('sendError');
 const sendErrorText = document.getElementById('sendErrorText');
 
 function scrollChatToBottom() {
   const msgBox = document.getElementById('msgBox');
-  if (msgBox) {
-    setTimeout(() => { msgBox.scrollTop = msgBox.scrollHeight; }, 50);
+  if (msgBox) setTimeout(() => { msgBox.scrollTop = msgBox.scrollHeight; }, 50);
+}
+
+function ensureMsgBox() {
+  let msgBox = document.getElementById('msgBox');
+  if (!msgBox) {
+    const cardBody = document.querySelector('.card-body.p-0');
+    if (!cardBody) return null;
+    cardBody.innerHTML = '';
+    msgBox = document.createElement('div');
+    msgBox.id = 'msgBox';
+    msgBox.style.cssText = 'max-height:500px;overflow-y:auto;padding:16px';
+    cardBody.appendChild(msgBox);
   }
+  return msgBox;
 }
 
 function appendMessageToDom(msgData) {
-  const msgBox = document.getElementById('msgBox');
+  const msgBox = ensureMsgBox();
   if (!msgBox) return;
 
   const senderInitial = (msgData.sender_name || '؟')[0];
   const isFlexReverse = msgData.is_self ? 'flex-row-reverse' : '';
-  const bgColor = msgData.is_self ? '#e8f4fd' : '#fff';
+  const bgColor  = msgData.is_self ? '#e8f4fd' : '#fff';
   const avatarBg = msgData.is_self ? 'bg-primary' : 'bg-secondary';
   const msgHtml = `
     <div class="d-flex mb-3 align-items-start gap-2 ${isFlexReverse}">
@@ -232,7 +245,7 @@ function appendMessageToDom(msgData) {
         ${senderInitial}
       </div>
       <div style="max-width:70%">
-        <div class="d-flex gap-2 align-items-center mb-1 ${isFlexReverse ? 'flex-row-reverse' : ''}">
+        <div class="d-flex gap-2 align-items-center mb-1 ${isFlexReverse}">
           <span class="fw-semibold" style="font-size:13px">${msgData.is_self ? 'أنت' : escapeHtml(msgData.sender_name)}</span>
           <span class="text-muted" style="font-size:11px">${escapeHtml(msgData.created_at)}</span>
         </div>
@@ -247,30 +260,33 @@ function appendMessageToDom(msgData) {
 }
 
 function escapeHtml(unsafe) {
+  if (typeof unsafe !== 'string') return '';
   return unsafe
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
 function showError(msg) {
-  sendError.classList.remove('d-none');
-  sendErrorText.textContent = msg;
+  if (sendError) { sendError.classList.remove('d-none'); }
+  if (sendErrorText) { sendErrorText.textContent = msg; }
 }
 
 function hideError() {
-  sendError.classList.add('d-none');
-  sendErrorText.textContent = '';
+  if (sendError) { sendError.classList.add('d-none'); }
+  if (sendErrorText) { sendErrorText.textContent = ''; }
 }
 
 function disableSendBtn() {
+  if (!sendBtn) return;
   sendBtn.disabled = true;
   sendBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
 }
 
 function enableSendBtn() {
+  if (!sendBtn) return;
   sendBtn.disabled = false;
   sendBtn.innerHTML = '<i class="bi bi-send-fill"></i>';
 }
@@ -278,8 +294,9 @@ function enableSendBtn() {
 if (form) {
   form.addEventListener('submit', async function(e) {
     e.preventDefault();
+    console.log('[chat-ajax] submitting via fetch');
 
-    const body = textarea.value.trim();
+    const body = textarea ? textarea.value.trim() : '';
     if (!body) {
       showError('الرسالة لا يمكن أن تكون فارغة.');
       return;
@@ -295,20 +312,22 @@ if (form) {
         body: formData,
         headers: {
           'X-Requested-With': 'XMLHttpRequest',
+          'Accept': 'application/json',
         },
       });
 
       const data = await response.json();
+      console.log('[chat-ajax] response:', data);
 
       if (data.ok) {
-        textarea.value = '';
+        if (textarea) textarea.value = '';
         appendMessageToDom(data.message);
       } else {
         showError(data.error || 'حدث خطأ أثناء الإرسال.');
       }
     } catch (err) {
       showError('تعذر إرسال الرسالة، حاول مرة أخرى');
-      console.error('Chat send error:', err);
+      console.error('[chat-ajax] error:', err);
     } finally {
       enableSendBtn();
     }
@@ -317,9 +336,9 @@ if (form) {
 
 if (textarea) {
   textarea.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter' && e.ctrlKey) {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      form.dispatchEvent(new Event('submit'));
+      if (form) form.requestSubmit();
     }
   });
 }
