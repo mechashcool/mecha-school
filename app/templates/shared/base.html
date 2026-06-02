@@ -4,8 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}{{ school.school_name if school else 'Mecha-School' }}{% endblock %} — {{ school.school_name if school else 'Mecha-School' }}</title>
-  {% if school and school.logo_path %}
-  <link rel="icon" type="image/png" href="{{ url_for('static', filename='uploads/' + school.logo_path) }}">
+  {% set _favicon_url = resolve_photo_url(school.logo_path) if school and school.logo_path else None %}
+  {% if _favicon_url %}
+  <link rel="icon" type="image/png" href="{{ _favicon_url }}">
   {% endif %}
   {% if school and school.primary_color %}
   <style>:root { --accent: {{ school.primary_color }} !important; }</style>

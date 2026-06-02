@@ -1164,10 +1164,9 @@ def settings():
 @login_required
 @admin_required
 def school_settings():
-    import os
-    from werkzeug.utils import secure_filename
     from flask import current_app
     from app.utils.audit import log_action
+    from app.utils.helpers import save_uploaded_file, LOGO_IMAGE_EXTENSIONS, LOGO_MAX_BYTES
 
     school = get_current_school()
 
@@ -1192,13 +1191,19 @@ def school_settings():
 
         logo_file = request.files.get('logo')
         if logo_file and logo_file.filename:
-            fname = secure_filename(
-                f"school_{school.id}_logo_{int(datetime.utcnow().timestamp())}_{logo_file.filename}"
+            bucket = current_app.config.get('SUPABASE_STORAGE_BUCKET_MEDIA', 'school-media')
+            result = save_uploaded_file(
+                logo_file,
+                subfolder=f'schools/{school.id}/identity',
+                prefix='logo',
+                bucket=bucket,
+                allowed_exts=LOGO_IMAGE_EXTENSIONS,
+                max_size=LOGO_MAX_BYTES,
             )
-            uploads_dir = os.path.join(current_app.root_path, 'static', 'uploads')
-            os.makedirs(uploads_dir, exist_ok=True)
-            logo_file.save(os.path.join(uploads_dir, fname))
-            school.logo_path = fname
+            if result:
+                school.logo_path = result
+            else:
+                flash('فشل رفع الشعار. تأكد من أن الملف صورة صالحة (PNG/JPG/WEBP/SVG) ولا يتجاوز 2 ميغابايت.', 'warning')
 
         db.session.commit()
         log_action('edit', 'school', school.id, details='white-label identity updated')

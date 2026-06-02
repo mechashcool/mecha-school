@@ -21,8 +21,9 @@
       </ol>
     </nav>
     <h1 class="page-title">
-      {% if school.logo_path %}
-      <img src="{{ url_for('static', filename='uploads/' + school.logo_path) }}"
+      {% set _detail_logo = resolve_photo_url(school.logo_path) %}
+      {% if _detail_logo %}
+      <img src="{{ _detail_logo }}"
            alt="logo" style="height:36px;border-radius:6px;margin-left:10px;">
       {% endif %}
       {{ school.school_name_ar or school.school_name }}

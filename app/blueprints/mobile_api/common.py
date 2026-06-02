@@ -7,6 +7,7 @@ POST /api/mobile/v1/me/device-token  save/update the FCM push token
 from flask import g, request
 
 from app.models import db
+from app.utils.helpers import resolve_photo_url
 from .utils import jwt_required, ok, err
 from . import mobile_api_bp
 
@@ -25,7 +26,7 @@ def me():
             'id':            s.id,
             'name':          s.school_name,
             'name_ar':       s.school_name_ar,
-            'logo':          s.logo_path,
+            'logo':          resolve_photo_url(s.logo_path),
             'primary_color': s.primary_color,
             'currency':      s.currency_symbol,
             'currency_code': s.currency_code,

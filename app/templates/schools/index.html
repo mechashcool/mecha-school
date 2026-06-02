@@ -81,8 +81,9 @@
          style="border-width:2px">
       <div class="card-header d-flex align-items-center justify-content-between">
         <div class="d-flex align-items-center gap-3">
-          {% if s.logo_path %}
-          <img src="{{ url_for('static', filename='uploads/' + s.logo_path) }}"
+          {% set _idx_logo = resolve_photo_url(s.logo_path) %}
+          {% if _idx_logo %}
+          <img src="{{ _idx_logo }}"
                style="width:40px;height:40px;object-fit:cover;border-radius:8px">
           {% else %}
           <div style="width:40px;height:40px;background:{{ s.primary_color or '#0d6efd' }};

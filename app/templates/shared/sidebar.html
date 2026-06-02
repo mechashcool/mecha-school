@@ -7,8 +7,9 @@
    ───────────────────────────────────────────────────────────────────── #}
 <nav id="sidebar">
   <div class="sidebar-logo">
-    {% if school and school.logo_path %}
-    <img src="{{ url_for('static', filename='uploads/' + school.logo_path) }}"
+    {% set _sidebar_logo = resolve_photo_url(school.logo_path) if school and school.logo_path else None %}
+    {% if _sidebar_logo %}
+    <img src="{{ _sidebar_logo }}"
          alt="logo" class="logo-icon" style="object-fit:cover;background:#fff">
     {% else %}
     <div class="logo-icon">{{ (school.school_name[0] if school and school.school_name else 'M') }}</div>

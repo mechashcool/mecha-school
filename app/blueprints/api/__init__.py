@@ -26,6 +26,7 @@ from app.models import (db, Student, FeeRecord, FeeInstallment,
                          Notification, User, SchoolSettings,
                          parent_students)
 from app.utils.notification_visibility import notification_visible_to
+from app.utils.helpers import resolve_photo_url
 from app.services.attendance_service import process_student_scan
 
 api_bp = Blueprint('api', __name__)
@@ -110,7 +111,7 @@ def me():
         },
         'school': {
             'name':    school.school_name,
-            'logo':    school.logo_path,
+            'logo':    resolve_photo_url(school.logo_path),
             'color':   school.primary_color,
             'currency': school.currency_symbol,
         },

@@ -8,6 +8,45 @@ from datetime import datetime
 import os
 
 
+def _resolve_logo_for_pdf(logo_path: str | None) -> str | None:
+    """Return a local filesystem path usable by ReportLab's Image(), or None.
+
+    - Local relative paths (uploads/...) → resolved under static/.
+    - Legacy bare filenames → also tried under static/uploads/.
+    - Supabase / http(s) URLs → downloaded to a temp file; caller does NOT need
+      to clean it up (the OS will reclaim it on next reboot or via tempfile GC).
+    - Missing / inaccessible → returns None so the PDF just omits the logo.
+    """
+    if not logo_path:
+        return None
+
+    if logo_path.startswith(('http://', 'https://')):
+        try:
+            import requests as _req
+            import tempfile
+            resp = _req.get(logo_path, timeout=10)
+            if resp.status_code == 200:
+                ext = logo_path.rsplit('.', 1)[-1].lower() if '.' in logo_path else 'png'
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}')
+                tmp.write(resp.content)
+                tmp.flush()
+                tmp.close()
+                return tmp.name
+        except Exception:
+            pass
+        return None
+
+    from flask import current_app
+    candidates = [logo_path]
+    if '/' not in logo_path:
+        candidates.append(f'uploads/{logo_path}')
+    for candidate in candidates:
+        full = os.path.join(current_app.root_path, 'static', candidate)
+        if os.path.isfile(full):
+            return full
+    return None
+
+
 def _get_rl():
     """Lazy-import ReportLab so the app doesn't crash if it's not installed."""
     try:
@@ -170,10 +209,10 @@ def generate_fee_receipt(installment, school_settings=None, print_date=None) -> 
     # Arabic school name (right side)
     arabic_name_element = Paragraph(_shape_arabic_text(school_name_ar), arabic_title)
     
-    # Logo (center)
+    # Logo (center) — supports both local paths and Supabase/CDN URLs
     if school_settings and school_settings.logo_path:
-        logo_path = os.path.join(current_app.root_path, 'static', 'uploads', school_settings.logo_path)
-        if os.path.exists(logo_path):
+        logo_path = _resolve_logo_for_pdf(school_settings.logo_path)
+        if logo_path:
             try:
                 logo_element = Image(logo_path, width=1.5*cm, height=1.5*cm)
                 logo_element.hAlign = 'CENTER'

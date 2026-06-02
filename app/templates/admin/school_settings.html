@@ -146,8 +146,9 @@
           <i class="bi bi-image-fill text-accent"></i>الشعار
         </div>
         <div class="card-body text-center">
-          {% if settings.logo_path %}
-          <img src="{{ url_for('static', filename='uploads/' + settings.logo_path) }}"
+          {% set _logo_url = resolve_photo_url(settings.logo_path) %}
+          {% if _logo_url %}
+          <img src="{{ _logo_url }}"
                alt="Logo" style="max-width:180px;max-height:180px;
                                  border-radius:14px;border:1px solid #dde3ec;
                                  padding:8px;background:#fff">

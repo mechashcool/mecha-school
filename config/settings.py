@@ -19,8 +19,12 @@ class Config:
 
     # Supabase Storage — set these in Render environment variables for production
     SUPABASE_URL         = os.environ.get('SUPABASE_URL', '')
-    SUPABASE_SERVICE_KEY = os.environ.get('SUPABASE_SERVICE_KEY', '')
-    SUPABASE_BUCKET      = os.environ.get('SUPABASE_BUCKET', 'uploads')
+    # Accept the standard Supabase name SUPABASE_SERVICE_ROLE_KEY; fall back to
+    # the legacy SUPABASE_SERVICE_KEY so existing deployments keep working.
+    SUPABASE_SERVICE_KEY = (os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or
+                            os.environ.get('SUPABASE_SERVICE_KEY', ''))
+    SUPABASE_BUCKET               = os.environ.get('SUPABASE_BUCKET', 'uploads')
+    SUPABASE_STORAGE_BUCKET_MEDIA = os.environ.get('SUPABASE_STORAGE_BUCKET_MEDIA', 'school-media')
 
     @staticmethod
     def init_app(app):

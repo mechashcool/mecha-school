@@ -23,8 +23,9 @@
 
 {# Print header (visible only when printing) #}
 <div class="print-header mb-3 text-center">
-  {% if school and school.logo_path %}
-  <img src="{{ url_for('static', filename='uploads/' + school.logo_path) }}"
+  {% set _profile_logo = resolve_photo_url(school.logo_path) if school and school.logo_path else None %}
+  {% if _profile_logo %}
+  <img src="{{ _profile_logo }}"
        style="height:60px;margin-bottom:8px">
   {% endif %}
   <h2 style="margin:0">{{ school.school_name if school else 'المدرسة' }}</h2>

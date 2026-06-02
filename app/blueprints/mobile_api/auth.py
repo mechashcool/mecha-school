@@ -10,6 +10,7 @@ import datetime
 from flask import g, request
 
 from app.models import db, User, Employee, MobileDeviceToken
+from app.utils.helpers import resolve_photo_url
 from .utils import encode_token, jwt_required, ok, err, photo_url
 
 # Circular import guard — routes are registered by __init__.py after the bp is created
@@ -25,7 +26,7 @@ def _school_payload(school) -> dict | None:
         'id':            school.id,
         'name':          school.school_name,
         'name_ar':       school.school_name_ar,
-        'logo':          school.logo_path,
+        'logo':          resolve_photo_url(school.logo_path),
         'primary_color': school.primary_color,
         'currency':      school.currency_symbol,
         'currency_code': school.currency_code,

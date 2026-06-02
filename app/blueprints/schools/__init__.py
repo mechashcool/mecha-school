@@ -329,20 +329,25 @@ def edit(school_id):
                 return render_template('schools/form.html', school=school)
         school.code = new_code
 
-        # Logo upload
-        import os
-        from werkzeug.utils import secure_filename
+        # Logo upload — stored in Supabase Storage (school-media bucket) in production,
+        # or local static/uploads/ in development.
         from flask import current_app
+        from app.utils.helpers import save_uploaded_file, LOGO_IMAGE_EXTENSIONS, LOGO_MAX_BYTES
         logo_file = request.files.get('logo')
         if logo_file and logo_file.filename:
-            import time as _t
-            fname = secure_filename(
-                f"school_{school.id}_logo_{int(_t.time())}_{logo_file.filename}"
+            bucket = current_app.config.get('SUPABASE_STORAGE_BUCKET_MEDIA', 'school-media')
+            result = save_uploaded_file(
+                logo_file,
+                subfolder=f'schools/{school.id}/identity',
+                prefix='logo',
+                bucket=bucket,
+                allowed_exts=LOGO_IMAGE_EXTENSIONS,
+                max_size=LOGO_MAX_BYTES,
             )
-            uploads_dir = os.path.join(current_app.root_path, 'static', 'uploads')
-            os.makedirs(uploads_dir, exist_ok=True)
-            logo_file.save(os.path.join(uploads_dir, fname))
-            school.logo_path = fname
+            if result:
+                school.logo_path = result
+            else:
+                flash('فشل رفع الشعار. تأكد من أن الملف صورة صالحة (PNG/JPG/WEBP/SVG) ولا يتجاوز 2 ميغابايت.', 'warning')
 
         db.session.commit()
         log_action('edit', 'school', school.id,

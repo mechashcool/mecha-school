@@ -8,8 +8,10 @@ from flask import current_app, url_for
 from werkzeug.utils import secure_filename
 
 
-ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'}
 ALLOWED_DOC_EXTENSIONS   = {'pdf', 'doc', 'docx', 'xls', 'xlsx'}
+LOGO_IMAGE_EXTENSIONS    = {'png', 'jpg', 'jpeg', 'webp', 'svg'}
+LOGO_MAX_BYTES           = 2 * 1024 * 1024  # 2 MB
 
 _CONTENT_TYPES = {
     'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
@@ -25,12 +27,14 @@ def allowed_file(filename, extensions=None):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in extensions
 
 
-def _supabase_upload(file_bytes: bytes, object_path: str, content_type: str) -> str | None:
+def _supabase_upload(file_bytes: bytes, object_path: str, content_type: str,
+                     bucket: str | None = None) -> str | None:
     """Upload bytes to Supabase Storage; return the public URL or None on failure."""
     import requests as _req
     url = current_app.config.get('SUPABASE_URL', '').rstrip('/')
     key = current_app.config.get('SUPABASE_SERVICE_KEY', '')
-    bucket = current_app.config.get('SUPABASE_BUCKET', 'uploads')
+    if bucket is None:
+        bucket = current_app.config.get('SUPABASE_BUCKET', 'uploads')
     if not url or not key:
         return None
     try:
@@ -41,6 +45,7 @@ def _supabase_upload(file_bytes: bytes, object_path: str, content_type: str) -> 
                 'Authorization': f'Bearer {key}',
                 'apikey': key,
                 'Content-Type': content_type,
+                'x-upsert': 'true',
             },
             timeout=30,
         )
@@ -55,7 +60,8 @@ def _supabase_upload(file_bytes: bytes, object_path: str, content_type: str) -> 
         return None
 
 
-def save_uploaded_file(file, subfolder='misc', prefix=None):
+def save_uploaded_file(file, subfolder='misc', prefix=None, bucket=None,
+                       allowed_exts=None, max_size=None):
     """
     Save an uploaded FileStorage object.
 
@@ -63,13 +69,26 @@ def save_uploaded_file(file, subfolder='misc', prefix=None):
       - A full Supabase public URL when SUPABASE_URL + SUPABASE_SERVICE_KEY are set (production).
       - A relative path string like 'uploads/subfolder/file.ext' for local dev.
       - None on validation failure or upload error.
+
+    Args:
+      bucket:       Supabase bucket name override (defaults to SUPABASE_BUCKET config).
+      allowed_exts: Set of allowed lowercase extensions; defaults to ALLOWED_IMAGE_EXTENSIONS.
+      max_size:     Maximum byte size; returns None if exceeded.
     """
     if not file or file.filename == '':
         return None
-    if not allowed_file(file.filename):
+
+    ext = (file.filename.rsplit('.', 1)[1].lower()
+           if '.' in file.filename else '')
+    check_exts = allowed_exts if allowed_exts is not None else ALLOWED_IMAGE_EXTENSIONS
+    if ext not in check_exts:
         return None
 
-    ext = file.filename.rsplit('.', 1)[1].lower()
+    # Read bytes once — used for both size check, Supabase upload, and local save.
+    file_bytes = file.read()
+    if max_size and len(file_bytes) > max_size:
+        return None
+
     base_name = uuid.uuid4().hex
     if prefix:
         safe_prefix = secure_filename(prefix)
@@ -80,20 +99,15 @@ def save_uploaded_file(file, subfolder='misc', prefix=None):
     content_type = _CONTENT_TYPES.get(ext, 'application/octet-stream')
 
     # Production: try Supabase Storage first
-    supabase_url = _supabase_upload(file.read(), object_path, content_type)
+    supabase_url = _supabase_upload(file_bytes, object_path, content_type, bucket=bucket)
     if supabase_url is not None:
         return supabase_url
 
     # Development / fallback: local filesystem
-    # Reset stream in case read() was called (won't help if already consumed, but
-    # file.seek(0) works for in-memory FileStorage objects used in tests)
-    try:
-        file.seek(0)
-    except Exception:
-        pass
     upload_dir = os.path.join(current_app.root_path, 'static', 'uploads', subfolder)
     os.makedirs(upload_dir, exist_ok=True)
-    file.save(os.path.join(upload_dir, filename))
+    with open(os.path.join(upload_dir, filename), 'wb') as fh:
+        fh.write(file_bytes)
     return f"uploads/{subfolder}/{filename}"
 
 
@@ -102,21 +116,27 @@ def resolve_photo_url(photo: str | None) -> str | None:
     Return a displayable URL for a stored photo value.
 
     - Supabase / CDN URLs (http/https) are returned as-is.
-    - Legacy relative paths (uploads/...) are resolved to /static/... only if
-      the file still exists on disk (guards against broken images from Render's
-      ephemeral filesystem after a redeploy).
-    - None / empty / missing file → returns None (caller shows placeholder).
+    - New relative paths like 'uploads/subfolder/file.ext' are resolved to
+      /static/... only when the file still exists on disk.
+    - Legacy bare filenames (no slash) are looked up under static/uploads/ for
+      backward compatibility with records created before the Supabase migration.
+    - None / empty / missing file → returns None so callers can show a placeholder.
     """
     if not photo:
         return None
     if photo.startswith(('http://', 'https://')):
         return photo
-    # Legacy local path — only serve if the file is actually present
     try:
-        full_path = os.path.join(current_app.root_path, 'static', photo)
-        if not os.path.isfile(full_path):
-            return None
-        return url_for('static', filename=photo)
+        # Build candidate paths to check, most-specific first.
+        candidates = [photo]
+        if '/' not in photo:
+            # Legacy: bare filename stored without a directory prefix.
+            candidates.append(f'uploads/{photo}')
+        for candidate in candidates:
+            full_path = os.path.join(current_app.root_path, 'static', candidate)
+            if os.path.isfile(full_path):
+                return url_for('static', filename=candidate)
+        return None
     except Exception:
         return None
 

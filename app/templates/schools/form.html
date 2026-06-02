@@ -226,8 +226,9 @@
       <div class="card mb-4">
         <div class="card-header"><h6 class="mb-0">الشعار</h6></div>
         <div class="card-body text-center">
-          {% if school and school.logo_path %}
-          <img src="{{ url_for('static', filename='uploads/' + school.logo_path) }}"
+          {% set _form_logo = resolve_photo_url(school.logo_path) if school and school.logo_path else None %}
+          {% if _form_logo %}
+          <img src="{{ _form_logo }}"
                class="img-thumbnail mb-3" style="max-height:120px">
           {% else %}
           <div class="bg-light rounded d-flex align-items-center justify-content-center mb-3"
