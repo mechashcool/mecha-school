@@ -7,13 +7,13 @@ from collections import OrderedDict
 from sqlalchemy import or_
 
 from app.models import (
-    db, AcademicYear, Announcement, AnnouncementTarget, AuditLog, Device,
-    Employee, EmployeeAttendance, EmployeeDocument, EmployeeEvaluation, Exam,
-    ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord, FeeType,
-    Grade, Notification, NotificationRead, PushNotification, Revenue,
-    RevenueCategory, SalaryRecord, Schedule, School, Section, Student,
-    StudentAttendance, StudentDocument, StudentSuspension, Subject, User,
-    parent_students, teacher_subjects, user_permissions,
+    db, AcademicYear, Announcement, AnnouncementTarget, AuditLog, Complaint,
+    Device, Employee, EmployeeAttendance, EmployeeDocument, EmployeeEvaluation,
+    Exam, ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord,
+    FeeType, Grade, LeaveRequest, Notification, NotificationRead,
+    PushNotification, Revenue, RevenueCategory, SalaryRecord, Schedule, School,
+    Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
+    Subject, User, parent_students, teacher_subjects, user_permissions,
 )
 
 
@@ -24,7 +24,8 @@ _TEST_SCHOOL_RE = re.compile(
     r'Isolation School|Evaluation School|Finance School|Notify School|'
     r'Notify Other|Grade Filter School|Delete Guard School|'
     r'Demo School|Test School|'
-    r'Chat Admin School A|Chat Admin School B'
+    r'Chat Admin School A|Chat Admin School B|'
+    r'Parent Request A|Parent Request B'
     r') [0-9a-f]{6,32}$',
     re.IGNORECASE,
 )
@@ -39,6 +40,8 @@ LINKED_SCHOOL_MODELS = (
     (Student, 'الطلاب'),
     (StudentDocument, 'مستندات الطلاب'),
     (StudentSuspension, 'إيقافات الطلاب'),
+    (Complaint, 'الشكاوى'),
+    (LeaveRequest, 'طلبات الغياب'),
     (Employee, 'الموظفون/التدريسيون'),
     (EmployeeDocument, 'مستندات الموظفين'),
     (FeeType, 'أنواع الرسوم'),
@@ -86,6 +89,8 @@ SCHOOL_DELETE_ORDER = (
     (FeeType, 'أنواع الرسوم'),
     (RevenueCategory, 'تصنيفات الإيرادات'),
     (ExpenseCategory, 'تصنيفات المصروفات'),
+    (Complaint, 'الشكاوى'),
+    (LeaveRequest, 'طلبات الغياب'),
     (Student, 'الطلاب'),
     (Section, 'الشُعب'),
     (Subject, 'المواد'),

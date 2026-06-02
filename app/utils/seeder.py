@@ -663,6 +663,227 @@ def register_commands(app):
 
         click.echo(f'\nDone. {len(safe)} school(s) processed.')
 
+    @app.cli.command('cleanup-test-data')
+    @click.option('--execute', is_flag=True, default=False,
+                  help='Actually delete matched records. Default is dry-run.')
+    @with_appcontext
+    def cleanup_test_data_cmd(execute):
+        """Find and optionally delete test schools and test students.
+
+        Test school patterns (name must match exactly):
+          "Chat Admin School A <hex>", "Chat Admin School B <hex>"
+          "Parent Request A <hex>",    "Parent Request B <hex>"
+
+        Test student patterns (strict prefix match):
+          full_name starts with "Own Student " or "Other Student "
+          student_id starts with "PRA-" or "PRB-"
+
+        Dry-run is the default. Pass --execute to perform deletion.
+        Schools with real-looking student data are skipped automatically.
+        """
+        from sqlalchemy import or_, text as sql_text
+        from app.utils.school_cleanup import cleanup_school_cascade
+        from app.models import (
+            ChatRoom, User, Student, Employee,
+            FeeRecord, StudentAttendance, Complaint, LeaveRequest,
+            Exam, Notification,
+        )
+
+        _SCHOOL_PATTERNS = [
+            'Chat Admin School A %',
+            'Chat Admin School B %',
+            'Parent Request A %',
+            'Parent Request B %',
+        ]
+        _STUDENT_NAME_PREFIXES = ('Own Student ', 'Other Student ')
+        _STUDENT_CODE_PREFIXES = ('PRA-', 'PRB-')
+
+        def _is_test_student_record(stu):
+            return (
+                any(stu.full_name.startswith(p) for p in _STUDENT_NAME_PREFIXES) or
+                any((stu.student_id or '').startswith(p) for p in _STUDENT_CODE_PREFIXES)
+            )
+
+        def _count(model, school_id):
+            return (
+                model.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter(model.school_id == school_id)
+                .count()
+            )
+
+        mode = 'EXECUTE' if execute else 'DRY RUN'
+        click.echo(f'\n{"=" * 64}')
+        click.echo(f' cleanup-test-data -- {mode}')
+        click.echo(f'{"=" * 64}\n')
+
+        # ── Phase 1: test schools ────────────────────────────────────────────
+        school_filter = or_(*[School.school_name.like(p) for p in _SCHOOL_PATTERNS])
+        test_schools = (
+            School.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter(school_filter)
+            .order_by(School.id)
+            .all()
+        )
+
+        click.echo(f'PHASE 1 -- Test schools ({len(test_schools)} matched)\n')
+
+        safe_school_ids = []
+        unsafe_school_ids = []
+
+        for school in test_schools:
+            sid = school.id
+            students = (
+                Student.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter_by(school_id=sid)
+                .all()
+            )
+            real_students = [s for s in students if not _is_test_student_record(s)]
+
+            click.echo(f'  School ID  : {sid}')
+            click.echo(f'  Name       : {school.school_name}')
+            click.echo(f'  Created    : {school.created_at or "unknown"}')
+            click.echo(f'  Users      : {_count(User, sid)}')
+            click.echo(f'  Students   : {len(students)}  (real-looking: {len(real_students)})')
+            click.echo(f'  Employees  : {_count(Employee, sid)}')
+            click.echo(f'  Chat rooms : {_count(ChatRoom, sid)}')
+            click.echo(f'  Complaints : {_count(Complaint, sid)}')
+            click.echo(f'  Leave reqs : {_count(LeaveRequest, sid)}')
+            click.echo(f'  Attendance : {_count(StudentAttendance, sid)}')
+            click.echo(f'  Fees       : {_count(FeeRecord, sid)}')
+            click.echo(f'  Exams      : {_count(Exam, sid)}')
+            click.echo(f'  Notifs     : {_count(Notification, sid)}')
+
+            if real_students:
+                names = ', '.join(repr(s.full_name) for s in real_students[:3])
+                click.echo(f'  Status     : UNSAFE -- real-looking students: {names}')
+                unsafe_school_ids.append(sid)
+            else:
+                click.echo(f'  Status     : SAFE')
+                safe_school_ids.append(sid)
+            click.echo()
+
+        all_test_school_ids = {s.id for s in test_schools}
+
+        click.echo(f'  Matched  : {len(test_schools)}')
+        click.echo(f'  Safe     : {len(safe_school_ids)}')
+        click.echo(f'  Skipped  : {len(unsafe_school_ids)} (real data detected)')
+
+        # ── Phase 2: orphaned test students not in any matched test school ───
+        student_filter = or_(
+            Student.full_name.like('Own Student %'),
+            Student.full_name.like('Other Student %'),
+            Student.student_id.like('PRA-%'),
+            Student.student_id.like('PRB-%'),
+        )
+        orphan_q = (
+            Student.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter(student_filter)
+        )
+        if all_test_school_ids:
+            orphan_q = orphan_q.filter(Student.school_id.notin_(all_test_school_ids))
+        orphaned = orphan_q.order_by(Student.id).all()
+
+        click.echo(f'\nPHASE 2 -- Orphaned test students ({len(orphaned)} found)\n')
+
+        orphan_ids = []
+
+        for s in orphaned:
+            c_n  = (Complaint.query
+                    .execution_options(bypass_tenant_scope=True)
+                    .filter_by(student_id=s.id).count())
+            lr_n = (LeaveRequest.query
+                    .execution_options(bypass_tenant_scope=True)
+                    .filter_by(student_id=s.id).count())
+            att_n = (StudentAttendance.query
+                     .execution_options(bypass_tenant_scope=True)
+                     .filter_by(student_id=s.id).count())
+            fee_n = (FeeRecord.query
+                     .execution_options(bypass_tenant_scope=True)
+                     .filter_by(student_id=s.id).count())
+            par_n = db.session.execute(
+                sql_text('SELECT COUNT(*) FROM parent_students WHERE student_id = :sid'),
+                {'sid': s.id},
+            ).scalar()
+
+            click.echo(f'  PK        : {s.id}')
+            click.echo(f'  Code      : {s.student_id}')
+            click.echo(f'  Name      : {s.full_name}')
+            click.echo(f'  School ID : {s.school_id}')
+            click.echo(f'  Parents   : {par_n}')
+            click.echo(f'  Complaints: {c_n}')
+            click.echo(f'  Leave reqs: {lr_n}')
+            click.echo(f'  Attendance: {att_n}')
+            click.echo(f'  Fees      : {fee_n}')
+            click.echo(f'  Status    : SAFE (matches strict test pattern)')
+            click.echo()
+            orphan_ids.append(s.id)
+
+        # ── Summary ──────────────────────────────────────────────────────────
+        click.echo(f'Summary:')
+        click.echo(f'  Safe schools to delete  : {len(safe_school_ids)}')
+        click.echo(f'  Skipped schools         : {len(unsafe_school_ids)}')
+        click.echo(f'  Orphaned students       : {len(orphan_ids)}')
+
+        if not execute:
+            click.echo('\n[DRY RUN] No changes made.')
+            click.echo('  Dry-run : flask cleanup-test-data')
+            click.echo('  Execute : flask cleanup-test-data --execute')
+            return
+
+        # ── Execute: schools ──────────────────────────────────────────────────
+        click.echo(f'\nDeleting {len(safe_school_ids)} school(s)...')
+        for sid in safe_school_ids:
+            school_obj = (School.query
+                          .execution_options(bypass_tenant_scope=True)
+                          .get(sid))
+            name = school_obj.school_name if school_obj else f'id={sid}'
+            try:
+                cleanup_school_cascade(sid)
+                db.session.commit()
+                click.echo(f'  OK   school id={sid}  {name!r}')
+            except Exception as exc:
+                db.session.rollback()
+                click.echo(f'  ERR  school id={sid}  {name!r}: {exc}')
+
+        # ── Execute: orphaned students ────────────────────────────────────────
+        click.echo(f'\nDeleting {len(orphan_ids)} orphaned student(s)...')
+        for sid in orphan_ids:
+            try:
+                db.session.execute(sql_text(
+                    'DELETE FROM parent_students WHERE student_id = :sid'), {'sid': sid})
+                db.session.execute(sql_text(
+                    'DELETE FROM complaints WHERE student_id = :sid'), {'sid': sid})
+                db.session.execute(sql_text(
+                    'DELETE FROM leave_requests WHERE student_id = :sid'), {'sid': sid})
+                db.session.execute(sql_text(
+                    'DELETE FROM student_attendance WHERE student_id = :sid'), {'sid': sid})
+                db.session.execute(sql_text(
+                    'DELETE FROM fee_installments'
+                    ' WHERE fee_record_id IN'
+                    ' (SELECT id FROM fee_records WHERE student_id = :sid)'),
+                    {'sid': sid})
+                db.session.execute(sql_text(
+                    'DELETE FROM fee_records WHERE student_id = :sid'), {'sid': sid})
+                db.session.execute(sql_text(
+                    'DELETE FROM exam_results WHERE student_id = :sid'), {'sid': sid})
+                db.session.execute(sql_text(
+                    'DELETE FROM student_documents WHERE student_id = :sid'), {'sid': sid})
+                db.session.execute(sql_text(
+                    'DELETE FROM student_suspensions WHERE student_id = :sid'), {'sid': sid})
+                db.session.execute(sql_text(
+                    'DELETE FROM students WHERE id = :sid'), {'sid': sid})
+                db.session.commit()
+                click.echo(f'  OK   student id={sid}')
+            except Exception as exc:
+                db.session.rollback()
+                click.echo(f'  ERR  student id={sid}: {exc}')
+
+        click.echo('\nDone.')
+
     @app.cli.command('rotate-device-key')
     @click.argument('device_id')
     @with_appcontext

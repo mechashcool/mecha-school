@@ -751,8 +751,8 @@ def delete(student_id):
              " WHERE fee_record_id IN (SELECT id FROM fee_records WHERE student_id = :sid)"),
         {'sid': sid},
     )
-    for tbl in ('student_attendance', 'fee_records', 'exam_results',
-                'student_documents', 'student_suspensions'):
+    for tbl in ('complaints', 'leave_requests', 'student_attendance', 'fee_records',
+                'exam_results', 'student_documents', 'student_suspensions'):
         db.session.execute(text(f"DELETE FROM {tbl} WHERE student_id = :sid"), {'sid': sid})
 
     db.session.delete(student)
