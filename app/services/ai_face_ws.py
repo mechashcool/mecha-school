@@ -1035,7 +1035,23 @@ async def _serve():
 
 
 def _run_server_thread():
-    asyncio.run(_serve())
+    import errno as _errno
+    try:
+        asyncio.run(_serve())
+    except OSError as e:
+        if e.errno == _errno.EADDRINUSE:
+            # Happens when a second Gunicorn worker (preload_app=False) tries to bind
+            # the same WS port that the first worker already holds.  One worker owning
+            # the WS server is intentional; the others simply skip it.
+            log.warning(
+                "AI Face WS port %d already in use — "
+                "another worker owns the WS server; this worker will skip it.",
+                _WS_PORT,
+            )
+        else:
+            log.exception("AI Face WS server thread crashed (OSError)")
+    except Exception:
+        log.exception("AI Face WS server thread crashed unexpectedly")
 
 
 def start_ai_face_ws_server(app) -> None:
@@ -1046,8 +1062,35 @@ def start_ai_face_ws_server(app) -> None:
     """
     global _flask_app
 
-    if os.environ.get("AIFACE_WS_ENABLED", "true").lower() in ("0", "false", "no"):
+    _web_port   = os.environ.get("PORT", "(not set)")
+    _ws_enabled = os.environ.get("AIFACE_WS_ENABLED", "true").lower() not in ("0", "false", "no")
+    _ws_port_src = os.environ.get("AIFACE_WS_PORT")  # None means "using default 7788"
+
+    # Always emit a startup diagnostic so Render logs show exactly what was in effect.
+    log.info(
+        "AI Face WS startup — PORT=%s  AIFACE_WS_PORT=%s (effective WS port: %d)  "
+        "AIFACE_WS_ENABLED=%s",
+        _web_port,
+        _ws_port_src if _ws_port_src is not None else "(not set, default=7788)",
+        _WS_PORT,
+        "true" if _ws_enabled else "false",
+    )
+
+    if not _ws_enabled:
         log.info("AI Face WS server disabled (AIFACE_WS_ENABLED=false)")
+        return
+
+    # Safety guard: refuse to bind on the same port Gunicorn uses for HTTP.
+    # This catches the case where AIFACE_WS_PORT was accidentally set to $PORT
+    # in the Render dashboard (or any other deployment where PORT is exported).
+    if _web_port != "(not set)" and str(_WS_PORT) == str(_web_port):
+        log.error(
+            "AIFACE_WS_PORT (%d) matches the web server PORT (%s) — "
+            "AI Face WS server will NOT start to avoid a port conflict with Gunicorn. "
+            "Fix: remove AIFACE_WS_PORT from Render env vars to use the default (7788), "
+            "or set it explicitly to a port that differs from PORT.",
+            _WS_PORT, _web_port,
+        )
         return
 
     _flask_app = app
