@@ -3,16 +3,39 @@ import os
 
 bind         = f"0.0.0.0:{os.environ.get('PORT', '5000')}"
 worker_class = 'gthread'           # threaded workers; good for AJAX/polling I/O
-workers      = int(os.environ.get('WEB_CONCURRENCY', 2))
-threads      = int(os.environ.get('GUNICORN_THREADS', 8))
-timeout      = int(os.environ.get('GUNICORN_TIMEOUT', 120))
+
+# Render free-tier recommendation: 1 worker × 4 threads.
+# Two workers double memory, DB connections, and background scheduler instances.
+# Override with WEB_CONCURRENCY / GUNICORN_THREADS env vars if you need more.
+workers = int(os.environ.get('WEB_CONCURRENCY', 1))
+threads = int(os.environ.get('GUNICORN_THREADS', 4))
+timeout = int(os.environ.get('GUNICORN_TIMEOUT', 120))
 
 accesslog = '-'
-errorlog = '-'
+errorlog  = '-'
 preload_app = False
 
-max_requests = int(os.environ.get('GUNICORN_MAX_REQUESTS', 500))
+max_requests        = int(os.environ.get('GUNICORN_MAX_REQUESTS', 500))
 max_requests_jitter = int(os.environ.get('GUNICORN_MAX_REQUESTS_JITTER', 50))
+
+
+def on_starting(server):
+    """Log key env vars once when the Gunicorn master starts."""
+    import logging
+    logging.getLogger('gunicorn.error').info(
+        '[startup] Gunicorn master starting — '
+        'PORT=%s  WEB_CONCURRENCY=%s (effective workers=%s)  '
+        'GUNICORN_THREADS=%s (effective threads=%s)  '
+        'AIFACE_WS_ENABLED=%s  AIFACE_WS_PORT=%s  '
+        'ATTENDANCE_SCHEDULER_DISABLED=%s  FEE_REMINDER_SCHEDULER_DISABLED=%s',
+        os.environ.get('PORT', '5000'),
+        os.environ.get('WEB_CONCURRENCY', '(not set)'), workers,
+        os.environ.get('GUNICORN_THREADS',  '(not set)'), threads,
+        os.environ.get('AIFACE_WS_ENABLED', '(not set)'),
+        os.environ.get('AIFACE_WS_PORT',    '(not set, default=7788)'),
+        os.environ.get('ATTENDANCE_SCHEDULER_DISABLED', '(not set, default=false)'),
+        os.environ.get('FEE_REMINDER_SCHEDULER_DISABLED', '(not set, default=false)'),
+    )
 
 
 def post_fork(server, worker):

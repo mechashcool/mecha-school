@@ -357,8 +357,26 @@ def create_app(config_name=None):
     # must not start background threads: they hold DB connections, interfere with
     # migrations, and fail when the schema is incomplete.
     import sys as _sys
+    import logging as _logging
     _cli_cmd = _sys.argv[1] if len(_sys.argv) >= 2 else ''
     _skip_schedulers = _cli_cmd in ('db', 'shell', 'routes', 'digest', 'collect')
+
+    _startup_log = _logging.getLogger('mecha.startup')
+    _startup_log.info(
+        '[startup] app=%s  env=%s  PORT=%s  WEB_CONCURRENCY=%s  '
+        'AIFACE_WS_ENABLED=%s  AIFACE_WS_PORT=%s  '
+        'ATTENDANCE_SCHEDULER_DISABLED=%s  FEE_REMINDER_SCHEDULER_DISABLED=%s  '
+        'HIKVISION_AUTO_SYNC=%s  skip_background=%s',
+        app.name, config_name,
+        os.environ.get('PORT', '(not set)'),
+        os.environ.get('WEB_CONCURRENCY', '(not set)'),
+        os.environ.get('AIFACE_WS_ENABLED', '(not set)'),
+        os.environ.get('AIFACE_WS_PORT', '(not set, default=7788)'),
+        os.environ.get('ATTENDANCE_SCHEDULER_DISABLED', '(not set, default=false)'),
+        os.environ.get('FEE_REMINDER_SCHEDULER_DISABLED', '(not set, default=false)'),
+        os.environ.get('HIKVISION_AUTO_SYNC', '(not set, default=false)'),
+        _skip_schedulers,
+    )
 
     if not _skip_schedulers:
         from app.services.hikvision import start_auto_sync

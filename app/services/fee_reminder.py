@@ -32,8 +32,7 @@ _scheduler_thread: threading.Thread | None = None
 def start_fee_reminder_scheduler(app) -> None:
     """Called once from create_app(). Safe to call multiple times."""
     if os.environ.get('FEE_REMINDER_SCHEDULER_DISABLED', '').lower() == 'true':
-        app.logger.warning(
-            '[fees-reminder] scheduler disabled via FEE_REMINDER_SCHEDULER_DISABLED')
+        _log.info('[fees-reminder] scheduler disabled (FEE_REMINDER_SCHEDULER_DISABLED=true)')
         return
 
     global _scheduler_thread
@@ -48,7 +47,7 @@ def start_fee_reminder_scheduler(app) -> None:
         name='fee-reminder-scheduler',
     )
     _scheduler_thread.start()
-    app.logger.warning('[fees-reminder] scheduler started (interval=%ds)', interval)
+    _log.info('[fees-reminder] scheduler started (interval=%ds)', interval)
 
 
 # ─── Internal loop ────────────────────────────────────────────────────────────
@@ -81,7 +80,7 @@ def _scheduler_loop(app, interval: int) -> None:
 def _run_check() -> None:
     from app.models import School
 
-    _log.warning('[fees-reminder] scheduler tick — loading all schools')
+    _log.debug('[fees-reminder] scheduler tick — loading all schools')
 
     all_schools = (
         School.query
@@ -89,12 +88,7 @@ def _run_check() -> None:
         .all()
     )
 
-    _log.warning('[fees-reminder] total schools in db: %d', len(all_schools))
-    for s in all_schools:
-        _log.warning(
-            '[fees-reminder] school id=%s name=%r is_active=%s fee_reminder_enabled=%s',
-            s.id, s.school_name, s.is_active, getattr(s, 'fee_reminder_enabled', None),
-        )
+    _log.debug('[fees-reminder] total schools in db: %d', len(all_schools))
 
     total_sent = total_skipped = 0
     for school in all_schools:
@@ -110,8 +104,11 @@ def _run_check() -> None:
             except Exception:
                 pass
 
-    _log.warning('[fees-reminder] completed — total sent=%d skipped=%d',
-                 total_sent, total_skipped)
+    if total_sent:
+        _log.info('[fees-reminder] tick complete — sent=%d skipped=%d',
+                  total_sent, total_skipped)
+    else:
+        _log.debug('[fees-reminder] tick complete — sent=0 skipped=%d', total_skipped)
 
 
 def _check_school(school) -> tuple[int, int]:
@@ -125,9 +122,6 @@ def _check_school(school) -> tuple[int, int]:
     value   = int(getattr(school, 'fee_reminder_before_value', None) or 3)
     unit    = getattr(school, 'fee_reminder_before_unit',  None) or 'days'
 
-    _log.warning('[fees-reminder] checking school_id=%s enabled=%s value=%s unit=%s',
-                 school.id, enabled, value, unit)
-
     if not enabled:
         return 0, 0
 
@@ -140,8 +134,6 @@ def _check_school(school) -> tuple[int, int]:
     else:  # minutes
         target_date = (local_now + timedelta(minutes=value)).date()
 
-    _log.warning('[fees-reminder] school_id=%s target_window=%s', school.id, target_date)
-
     installments = (
         FeeInstallment.query
         .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
@@ -153,8 +145,8 @@ def _check_school(school) -> tuple[int, int]:
         .all()
     )
 
-    _log.warning('[fees-reminder] school_id=%s found %d installment(s) due on %s',
-                 school.id, len(installments), target_date)
+    _log.debug('[fees-reminder] school_id=%s found %d installment(s) due on %s',
+               school.id, len(installments), target_date)
 
     sent = skipped = 0
 
@@ -183,8 +175,8 @@ def _check_school(school) -> tuple[int, int]:
         ]
 
         if not parent_ids:
-            _log.warning('[fees-reminder] installment_id=%s student_id=%s — no linked parents, skip',
-                         inst.id, student.id)
+            _log.debug('[fees-reminder] installment_id=%s student_id=%s — no linked parents, skip',
+                       inst.id, student.id)
             continue
 
         for parent_id in parent_ids:
@@ -200,9 +192,6 @@ def _check_school(school) -> tuple[int, int]:
                 .first()
             )
             if already_sent:
-                _log.warning(
-                    '[fees-reminder] skipped duplicate student_id=%s installment_id=%s parent_id=%s',
-                    student.id, inst.id, parent_id)
                 skipped += 1
                 continue
 
@@ -265,7 +254,7 @@ def _check_school(school) -> tuple[int, int]:
                                parent_id, fcm_exc)
 
                 sent += 1
-                _log.warning(
+                _log.info(
                     '[fees-reminder] sent reminder student_id=%s installment_id=%s parent_user_id=%s',
                     student.id, inst.id, parent_id)
 
@@ -275,6 +264,4 @@ def _check_school(school) -> tuple[int, int]:
                     parent_id, inst.id, exc)
                 db.session.rollback()
 
-    _log.warning('[fees-reminder] school_id=%s completed sent=%d skipped=%d',
-                 school.id, sent, skipped)
     return sent, skipped
