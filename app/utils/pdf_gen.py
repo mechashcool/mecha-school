@@ -297,8 +297,8 @@ def generate_fee_receipt(installment, school_settings=None, print_date=None) -> 
         [create_arabic_paragraph('رقم الطالب / Student ID', arabic_bold), create_data_paragraph(student.student_id)],
         [create_arabic_paragraph('نوع الرسم / Fee Type', arabic_bold), create_data_paragraph(fee_record.fee_type.name)],
         [create_arabic_paragraph('القسط / Installment', arabic_bold), create_data_paragraph(f"#{installment.installment_no}")],
-        [create_arabic_paragraph('المبلغ المدفوع / Amount Paid', arabic_bold), create_data_paragraph(f"{float(installment.received_amount):,.2f} {school_settings.currency_symbol if school_settings else '﷼'}")],
-        [create_arabic_paragraph('المبلغ المتبقي / Remaining Balance', arabic_bold), create_data_paragraph(f"{remaining:,.2f} {school_settings.currency_symbol if school_settings else '﷼'}")],
+        [create_arabic_paragraph('المبلغ المدفوع / Amount Paid', arabic_bold), create_data_paragraph(f"{float(installment.received_amount):,.2f} {school_settings.currency_symbol if school_settings else 'د.ع'}")],
+        [create_arabic_paragraph('المبلغ المتبقي / Remaining Balance', arabic_bold), create_data_paragraph(f"{remaining:,.2f} {school_settings.currency_symbol if school_settings else 'د.ع'}")],
         [create_arabic_paragraph('تاريخ الاستحقاق / Due Date', arabic_bold), create_data_paragraph(installment.due_date.strftime('%Y-%m-%d') if installment.due_date else '—')],
         [create_arabic_paragraph('تاريخ إصدار الوصل / Receipt Issue Date', arabic_bold), create_data_paragraph(issue_date.strftime('%Y-%m-%d'))],
         [create_arabic_paragraph('طريقة الدفع / Payment Method', arabic_bold), create_data_paragraph({

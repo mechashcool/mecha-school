@@ -334,8 +334,8 @@ def generate_receipt(inst_id):
     inst = FeeInstallment.query.get_or_404(inst_id)
     if not inst.receipt_no:
         abort(404, "No receipt available for this installment")
-    
-    school_settings = SchoolSettings.get()
+
+    school_settings = get_current_school() or SchoolSettings.get()
     pdf_bytes = generate_fee_receipt(inst, school_settings, print_date=date.today())
     
     if not pdf_bytes:
