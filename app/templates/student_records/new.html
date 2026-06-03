@@ -476,8 +476,6 @@
 (function () {
   const searchInput = document.getElementById('student-search-input');
   const searchRes   = document.getElementById('search-results');
-  const hiddenSid   = document.getElementById('hidden-student-id');
-  const submitBtn   = document.getElementById('submit-btn');
 
   if (!searchInput) return;
 
@@ -518,56 +516,9 @@
   }
 
   function selectStudent(s) {
-    searchRes.style.display = 'none';
-    searchInput.value = s.full_name;
-    if (s.has_record) {
-      window.location.href = `{{ url_for('student_records.new') }}?student_id=${s.id}`;
-      return;
-    }
-    fetch(`{{ url_for('student_records.get_student_data', student_id=0) }}`.replace('/0', `/${s.id}`))
-      .then(r => r.json())
-      .then(data => {
-        hiddenSid.value = s.id;
-        if (submitBtn) submitBtn.disabled = false;
-        const fmap = {
-          'snap_full_name':       'f-full-name',
-          'snap_student_number':  'f-student-number',
-          'snap_nationality':     'f-nationality',
-          'snap_address':         'f-gaddress',
-          'snap_phone':           'f-gphone',
-          'snap_date_of_birth':   'f-dob',
-          'snap_enrollment_date': 'f-enrollment-date',
-          'snap_guardian_name':   'f-gname',
-          'snap_guardian_phone':  'f-gphone',
-          'snap_guardian_email':  'f-gemail',
-          'snap_guardian_relation': 'f-grelation',
-          'snap_guardian_address':  'f-gaddress',
-          'snap_school_name':     'f-school-en',
-          'snap_school_name_ar':  'f-school-ar',
-          'snap_year_name':       'f-year',
-          'snap_grade_name':      'f-grade',
-          'snap_stage':           'f-stage',
-          'snap_section_name':    'f-section',
-          'admission_date':       'f-admission-date',
-          'birth_place':          'f-birth-place',
-          'civil_registry_num':   'f-civil-registry',
-          'religion':             'f-religion',
-          'father_name':          'f-father-name',
-          'father_occupation':    'f-father-occ',
-          'father_house_num':     'f-father-house',
-          'father_mahalla':       'f-father-mahalla',
-          'guardian_house_num':   'f-guardian-house',
-          'guardian_mahalla':     'f-guardian-mahalla',
-        };
-        Object.entries(fmap).forEach(([key, id]) => {
-          const el = document.getElementById(id);
-          if (el && data[key] !== undefined) el.value = data[key];
-        });
-        const genderEl = document.getElementById('f-gender');
-        if (genderEl && data.snap_gender) genderEl.value = data.snap_gender;
-        const statusEl = document.getElementById('f-status');
-        if (statusEl && data.snap_status) statusEl.value = data.snap_status;
-      });
+    // Always redirect to the server-rendered pre-fill page — this is reliable
+    // whether or not the student already has a record.
+    window.location.href = `{{ url_for('student_records.new') }}?student_id=${s.id}`;
   }
 
   document.addEventListener('click', e => {
