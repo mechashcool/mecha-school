@@ -2390,9 +2390,18 @@ class StudentRegistrationRecord(db.Model):
     has_photo            = db.Column(db.Boolean, default=False)
     document_notes       = db.Column(db.Text,    nullable=True)
 
-    # ── Academic history (editable JSON array) ────────────────────────────────
-    # Each entry: {year, grade, section, result, gpa, round, status, notes}
+    # ── Academic history — subject×year grade grid ────────────────────────────
+    # New format: {"years": [{class, year, s0_n, s0_t, ..., total_n, total_t,
+    #   behavior, result, notes_results, final_result, principal_sig,
+    #   col_notes, extra: [{name,n,t}]}]}
     academic_history_json = db.Column(db.Text, nullable=True)
+
+    # ── Extra official-form fields (JSON) ─────────────────────────────────────
+    # Stores: record_number, father_name, father_house_num, father_mahalla,
+    #   father_occupation, guardian_house_num, guardian_mahalla,
+    #   civil_registry_num, birth_place, religion, departure_date,
+    #   departure_reason
+    extra_fields_json = db.Column(db.Text, nullable=True)
 
     # ── Notes and signatures ──────────────────────────────────────────────────
     general_notes    = db.Column(db.Text,        nullable=True)
@@ -2420,15 +2429,36 @@ class StudentRegistrationRecord(db.Model):
         import json
         if self.academic_history_json:
             try:
-                return json.loads(self.academic_history_json)
+                data = json.loads(self.academic_history_json)
+                if isinstance(data, dict):
+                    return data
+                # Old list format — discard, return empty grid
+                return {'years': []}
             except Exception:
-                return []
-        return []
+                pass
+        return {'years': []}
 
     @academic_history.setter
     def academic_history(self, value):
         import json
         self.academic_history_json = (
+            json.dumps(value, ensure_ascii=False) if value is not None else None
+        )
+
+    @property
+    def extra_fields(self):
+        import json
+        if self.extra_fields_json:
+            try:
+                return json.loads(self.extra_fields_json)
+            except Exception:
+                return {}
+        return {}
+
+    @extra_fields.setter
+    def extra_fields(self, value):
+        import json
+        self.extra_fields_json = (
             json.dumps(value, ensure_ascii=False) if value is not None else None
         )
 

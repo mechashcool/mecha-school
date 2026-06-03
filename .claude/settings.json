@@ -37,7 +37,8 @@
       "Bash(python -m flask db heads)",
       "Bash(python -m pytest tests/test_student_registration_records.py -v)",
       "Bash(python -m pytest tests/test_student_registration_records.py::StudentRegistrationRecordTest::test_cross_school_view_blocked -v)",
-      "Bash(python -m pytest tests/test_student_registration_records.py::StudentRegistrationRecordTest::test_cross_school_view_blocked -v -s)"
+      "Bash(python -m pytest tests/test_student_registration_records.py::StudentRegistrationRecordTest::test_cross_school_view_blocked -v -s)",
+      "Bash(grep -v \"^$\")"
     ]
   }
 }

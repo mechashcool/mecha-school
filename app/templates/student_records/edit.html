@@ -2,28 +2,8 @@
 {% block title %}تعديل سجل قيد — {{ record.snap_full_name }}{% endblock %}
 {% block page_title %}تعديل سجل قيد الطالب{% endblock %}
 
-{% macro text_field(label, name, val, col="col-md-3", required=False) %}
-<div class="{{ col }}">
-  <label class="form-label">{{ label }}{% if required %} <span class="text-danger">*</span>{% endif %}</label>
-  <input type="text" name="{{ name }}" class="form-control"
-         value="{{ val or '' }}"{% if required %} required{% endif %}>
-</div>
-{% endmacro %}
-
-{% macro date_field(label, name, val, col="col-md-3") %}
-<div class="{{ col }}">
-  <label class="form-label">{{ label }}</label>
-  <input type="date" name="{{ name }}" class="form-control"
-         value="{{ val.isoformat() if val else '' }}">
-</div>
-{% endmacro %}
-
-{% macro textarea_field(label, name, val, col="col-md-6", rows=2) %}
-<div class="{{ col }}">
-  <label class="form-label">{{ label }}</label>
-  <textarea name="{{ name }}" class="form-control" rows="{{ rows }}">{{ val or '' }}</textarea>
-</div>
-{% endmacro %}
+{% set ef = record.extra_fields %}
+{% set gh = record.academic_history %}
 
 {% block content %}
 <div class="page-header">
@@ -33,9 +13,7 @@
   </div>
   <div class="d-flex gap-2">
     <a href="{{ url_for('student_records.view', record_id=record.id) }}"
-       class="btn btn-outline-secondary">
-      <i class="bi bi-arrow-right me-1"></i>عرض السجل
-    </a>
+       class="btn btn-outline-secondary"><i class="bi bi-arrow-right me-1"></i>عرض السجل</a>
     <a href="{{ url_for('student_records.pdf', record_id=record.id) }}"
        target="_blank" class="btn btn-outline-danger">
       <i class="bi bi-file-earmark-pdf-fill me-1"></i>طباعة PDF
@@ -44,196 +22,418 @@
 </div>
 
 <form method="POST">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
 
-  {# ══ 1. بيانات الطالب ══ #}
-  <div class="card mb-4">
+  {# ══ القسم الأول: بيانات السجل الرسمية ══ #}
+  <div class="card mb-3">
     <div class="card-header fw-semibold text-primary">
-      <i class="bi bi-person-fill me-1"></i> بيانات الطالب
+      <i class="bi bi-person-vcard me-1"></i> بيانات السجل الرسمية
     </div>
     <div class="card-body">
-      <div class="row g-3">
-        {{ text_field('اسم الطالب', 'snap_full_name', record.snap_full_name, 'col-md-6', True) }}
-        {{ text_field('رقم الطالب', 'snap_student_number', record.snap_student_number) }}
-        <div class="col-md-3">
-          <label class="form-label">الجنس</label>
-          <select name="snap_gender" class="form-select">
+
+      <div class="row g-2 mb-2">
+        <div class="col-md-2">
+          <label class="form-label small fw-semibold">رقم الصحيفة</label>
+          <input type="text" name="record_number" class="form-control form-control-sm"
+                 value="{{ ef.get('record_number', '') }}">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small fw-semibold">اسم الطالب <span class="text-danger">*</span></label>
+          <input type="text" name="snap_full_name" class="form-control form-control-sm" required
+                 value="{{ record.snap_full_name or '' }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small fw-semibold">رقمه (رقم القيد)</label>
+          <input type="text" name="snap_student_number" class="form-control form-control-sm"
+                 value="{{ record.snap_student_number or '' }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small fw-semibold">الجنس</label>
+          <select name="snap_gender" class="form-select form-select-sm">
             <option value="">—</option>
             <option value="male"   {{ 'selected' if record.snap_gender == 'male' }}>ذكر</option>
             <option value="female" {{ 'selected' if record.snap_gender == 'female' }}>أنثى</option>
           </select>
         </div>
-        {{ date_field('تاريخ الميلاد', 'snap_date_of_birth', record.snap_date_of_birth) }}
-        {{ text_field('الجنسية', 'snap_nationality', record.snap_nationality) }}
-        {{ text_field('هاتف الطالب', 'snap_phone', record.snap_phone) }}
+        <div class="col-md-2">
+          <label class="form-label small fw-semibold">الديانة</label>
+          <input type="text" name="religion" class="form-control form-control-sm"
+                 value="{{ ef.get('religion', '') }}">
+        </div>
+      </div>
+
+      <div class="row g-2 mb-2">
         <div class="col-md-3">
-          <label class="form-label">الحالة</label>
-          <select name="snap_status" class="form-select">
+          <label class="form-label small fw-semibold">تاريخ الولادة</label>
+          <input type="date" name="snap_date_of_birth" class="form-control form-control-sm"
+                 value="{{ record.snap_date_of_birth.isoformat() if record.snap_date_of_birth else '' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">مسقط الرأس</label>
+          <input type="text" name="birth_place" class="form-control form-control-sm"
+                 value="{{ ef.get('birth_place', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">رقم دفتر نفوس الطالب</label>
+          <input type="text" name="civil_registry_num" class="form-control form-control-sm"
+                 value="{{ ef.get('civil_registry_num', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">الجنسية</label>
+          <input type="text" name="snap_nationality" class="form-control form-control-sm"
+                 value="{{ record.snap_nationality or '' }}">
+        </div>
+      </div>
+
+      <hr class="my-2">
+      <div class="small fw-semibold text-secondary mb-2">بيانات الأب</div>
+      <div class="row g-2 mb-2">
+        <div class="col-md-4">
+          <label class="form-label small fw-semibold">اسم الأب وشهرته</label>
+          <input type="text" name="father_name" class="form-control form-control-sm"
+                 value="{{ ef.get('father_name', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">صنعة الأب وعمله</label>
+          <input type="text" name="father_occupation" class="form-control form-control-sm"
+                 value="{{ ef.get('father_occupation', '') }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small fw-semibold">رقم الدار (أب)</label>
+          <input type="text" name="father_house_num" class="form-control form-control-sm"
+                 value="{{ ef.get('father_house_num', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">المحلة (أب)</label>
+          <input type="text" name="father_mahalla" class="form-control form-control-sm"
+                 value="{{ ef.get('father_mahalla', '') }}">
+        </div>
+      </div>
+
+      <hr class="my-2">
+      <div class="small fw-semibold text-secondary mb-2">بيانات ولي الأمر</div>
+      <div class="row g-2 mb-2">
+        <div class="col-md-4">
+          <label class="form-label small fw-semibold">اسم ولي أمر الطالب</label>
+          <input type="text" name="snap_guardian_name" class="form-control form-control-sm"
+                 value="{{ record.snap_guardian_name or '' }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small fw-semibold">صلة القرابة</label>
+          <input type="text" name="snap_guardian_relation" class="form-control form-control-sm"
+                 value="{{ record.snap_guardian_relation or '' }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small fw-semibold">هاتف ولي الأمر</label>
+          <input type="text" name="snap_guardian_phone" class="form-control form-control-sm"
+                 value="{{ record.snap_guardian_phone or '' }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small fw-semibold">رقم الدار (ولي)</label>
+          <input type="text" name="guardian_house_num" class="form-control form-control-sm"
+                 value="{{ ef.get('guardian_house_num', '') }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small fw-semibold">المحلة (ولي)</label>
+          <input type="text" name="guardian_mahalla" class="form-control form-control-sm"
+                 value="{{ ef.get('guardian_mahalla', '') }}">
+        </div>
+      </div>
+      <div class="row g-2 mb-2">
+        <div class="col-md-4">
+          <label class="form-label small fw-semibold">البريد الإلكتروني</label>
+          <input type="email" name="snap_guardian_email" class="form-control form-control-sm"
+                 value="{{ record.snap_guardian_email or '' }}">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small fw-semibold">عنوان ولي الأمر</label>
+          <input type="text" name="snap_guardian_address" class="form-control form-control-sm"
+                 value="{{ record.snap_guardian_address or '' }}">
+        </div>
+      </div>
+
+      <hr class="my-2">
+      <div class="small fw-semibold text-secondary mb-2">بيانات القبول والمدرسة</div>
+      <div class="row g-2 mb-2">
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">المدرسة (عربي)</label>
+          <input type="text" name="snap_school_name_ar" class="form-control form-control-sm"
+                 value="{{ record.snap_school_name_ar or '' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">المدرسة (إنجليزي)</label>
+          <input type="text" name="snap_school_name" class="form-control form-control-sm"
+                 value="{{ record.snap_school_name or '' }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small fw-semibold">العام الدراسي</label>
+          <input type="text" name="snap_year_name" class="form-control form-control-sm"
+                 value="{{ record.snap_year_name or '' }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small fw-semibold">الصف المقبول فيه</label>
+          <input type="text" name="snap_grade_name" class="form-control form-control-sm"
+                 value="{{ record.snap_grade_name or '' }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small fw-semibold">الشعبة</label>
+          <input type="text" name="snap_section_name" class="form-control form-control-sm"
+                 value="{{ record.snap_section_name or '' }}">
+        </div>
+      </div>
+      <div class="row g-2 mb-2">
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">تاريخ دخول المدرسة</label>
+          <input type="date" name="snap_enrollment_date" class="form-control form-control-sm"
+                 value="{{ record.snap_enrollment_date.isoformat() if record.snap_enrollment_date else '' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">تاريخ القبول الرسمي</label>
+          <input type="date" name="admission_date" class="form-control form-control-sm"
+                 value="{{ record.admission_date.isoformat() if record.admission_date else '' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">آخر مدرسة كان فيها</label>
+          <input type="text" name="previous_school" class="form-control form-control-sm"
+                 value="{{ record.previous_school or '' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">رقم الوثيقة</label>
+          <input type="text" name="document_number" class="form-control form-control-sm"
+                 value="{{ record.document_number or '' }}">
+        </div>
+      </div>
+      <div class="row g-2 mb-2">
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">المرحلة</label>
+          <input type="text" name="snap_stage" class="form-control form-control-sm"
+                 value="{{ record.snap_stage or '' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">الحالة</label>
+          <select name="snap_status" class="form-select form-select-sm">
             <option value="active"   {{ 'selected' if record.snap_status == 'active' }}>نشط</option>
             <option value="archived" {{ 'selected' if record.snap_status == 'archived' }}>محفوظ</option>
             <option value="inactive" {{ 'selected' if record.snap_status == 'inactive' }}>غير نشط</option>
           </select>
         </div>
-        {{ text_field('العنوان', 'snap_address', record.snap_address, 'col-md-6') }}
-        {{ date_field('تاريخ التسجيل', 'snap_enrollment_date', record.snap_enrollment_date) }}
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">تاريخ المغادرة</label>
+          <input type="text" name="departure_date" class="form-control form-control-sm"
+                 value="{{ ef.get('departure_date', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">سبب المغادرة والملاحظات</label>
+          <input type="text" name="departure_reason" class="form-control form-control-sm"
+                 value="{{ ef.get('departure_reason', '') }}">
+        </div>
+      </div>
+      <div class="row g-2 mb-2">
+        <div class="col-md-6">
+          <label class="form-label small fw-semibold">سبب التحويل</label>
+          <textarea name="transfer_reason" class="form-control form-control-sm" rows="2">{{ record.transfer_reason or '' }}</textarea>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small fw-semibold">ملاحظات القبول</label>
+          <textarea name="admission_notes" class="form-control form-control-sm" rows="2">{{ record.admission_notes or '' }}</textarea>
+        </div>
       </div>
     </div>
   </div>
 
-  {# ══ 2. بيانات ولي الأمر ══ #}
-  <div class="card mb-4">
-    <div class="card-header fw-semibold text-warning">
-      <i class="bi bi-person-heart me-1"></i> بيانات ولي الأمر
-    </div>
-    <div class="card-body">
-      <div class="row g-3">
-        {{ text_field('اسم ولي الأمر',   'snap_guardian_name',     record.snap_guardian_name, 'col-md-4') }}
-        {{ text_field('صلة القرابة',     'snap_guardian_relation', record.snap_guardian_relation) }}
-        {{ text_field('الهاتف',          'snap_guardian_phone',    record.snap_guardian_phone) }}
-        {{ text_field('البريد الإلكتروني','snap_guardian_email',    record.snap_guardian_email, 'col-md-4') }}
-        {{ text_field('العنوان',          'snap_guardian_address',  record.snap_guardian_address, 'col-md-5') }}
-      </div>
-    </div>
-  </div>
-
-  {# ══ 3. بيانات القبول والتسجيل ══ #}
-  <div class="card mb-4">
-    <div class="card-header fw-semibold text-success">
-      <i class="bi bi-building me-1"></i> بيانات القبول والتسجيل
-    </div>
-    <div class="card-body">
-      <div class="row g-3">
-        {{ text_field('المدرسة (عربي)',    'snap_school_name_ar', record.snap_school_name_ar) }}
-        {{ text_field('المدرسة (إنجليزي)', 'snap_school_name',    record.snap_school_name) }}
-        {{ text_field('العام الدراسي',     'snap_year_name',      record.snap_year_name, 'col-md-2') }}
-        {{ text_field('المرحلة',           'snap_stage',          record.snap_stage, 'col-md-2') }}
-        {{ text_field('الصف',              'snap_grade_name',     record.snap_grade_name, 'col-md-2') }}
-        {{ text_field('الشعبة',            'snap_section_name',   record.snap_section_name, 'col-md-2') }}
-        {{ date_field('تاريخ القبول',      'admission_date',      record.admission_date) }}
-        {{ text_field('رقم الوثيقة',       'document_number',     record.document_number) }}
-        {{ text_field('المدرسة السابقة',   'previous_school',     record.previous_school, 'col-md-4') }}
-        {{ textarea_field('سبب التحويل',   'transfer_reason',     record.transfer_reason) }}
-        {{ textarea_field('ملاحظات القبول','admission_notes',     record.admission_notes) }}
-      </div>
-    </div>
-  </div>
-
-  {# ══ 4. معلومات الوثائق ══ #}
-  <div class="card mb-4">
+  {# ══ القسم الثاني: الوثائق ══ #}
+  <div class="card mb-3">
     <div class="card-header fw-semibold text-info">
-      <i class="bi bi-folder-fill me-1"></i> معلومات الوثائق
+      <i class="bi bi-folder-fill me-1"></i> الوثائق المرفقة
     </div>
     <div class="card-body">
-      <div class="row g-3">
+      <div class="row g-2 align-items-center">
         <div class="col-auto">
           <div class="form-check form-switch">
-            <input class="form-check-input" type="checkbox" name="has_birth_cert"
-                   id="e-birth" value="1" {{ 'checked' if record.has_birth_cert }}>
-            <label class="form-check-label" for="e-birth">شهادة الميلاد</label>
+            <input class="form-check-input" type="checkbox" name="has_birth_cert" value="1" id="e-hbc"
+                   {{ 'checked' if record.has_birth_cert }}>
+            <label class="form-check-label" for="e-hbc">شهادة الميلاد</label>
           </div>
         </div>
         <div class="col-auto">
           <div class="form-check form-switch">
-            <input class="form-check-input" type="checkbox" name="has_id_card"
-                   id="e-id" value="1" {{ 'checked' if record.has_id_card }}>
-            <label class="form-check-label" for="e-id">بطاقة الهوية</label>
+            <input class="form-check-input" type="checkbox" name="has_id_card" value="1" id="e-hic"
+                   {{ 'checked' if record.has_id_card }}>
+            <label class="form-check-label" for="e-hic">بطاقة الهوية</label>
           </div>
         </div>
         <div class="col-auto">
           <div class="form-check form-switch">
-            <input class="form-check-input" type="checkbox" name="has_prev_certificate"
-                   id="e-prev" value="1" {{ 'checked' if record.has_prev_certificate }}>
-            <label class="form-check-label" for="e-prev">شهادة المدرسة السابقة</label>
+            <input class="form-check-input" type="checkbox" name="has_prev_certificate" value="1" id="e-hpc"
+                   {{ 'checked' if record.has_prev_certificate }}>
+            <label class="form-check-label" for="e-hpc">شهادة المدرسة السابقة</label>
           </div>
         </div>
         <div class="col-auto">
           <div class="form-check form-switch">
-            <input class="form-check-input" type="checkbox" name="has_photo"
-                   id="e-photo" value="1" {{ 'checked' if record.has_photo }}>
-            <label class="form-check-label" for="e-photo">صورة شخصية</label>
+            <input class="form-check-input" type="checkbox" name="has_photo" value="1" id="e-hph"
+                   {{ 'checked' if record.has_photo }}>
+            <label class="form-check-label" for="e-hph">صورة شخصية</label>
           </div>
         </div>
-        {{ textarea_field('ملاحظات الوثائق', 'document_notes', record.document_notes, 'col-12') }}
+        <div class="col-md-5">
+          <input type="text" name="document_notes" class="form-control form-control-sm"
+                 value="{{ record.document_notes or '' }}" placeholder="ملاحظات الوثائق">
+        </div>
       </div>
     </div>
   </div>
 
-  {# ══ 5. سجل السنوات الدراسية ══ #}
-  <div class="card mb-4">
-    <div class="card-header fw-semibold text-secondary d-flex justify-content-between align-items-center">
-      <span><i class="bi bi-table me-1"></i> سجل السنوات الدراسية</span>
-      <button type="button" class="btn btn-sm btn-outline-secondary" id="add-history-row">
-        <i class="bi bi-plus-circle me-1"></i>إضافة سنة
-      </button>
+  {# ══ القسم الثالث: جدول مواد الدراسة ══ #}
+  {% set saved_years = gh.get('years', []) %}
+  <div class="card mb-3">
+    <div class="card-header fw-semibold text-secondary">
+      <i class="bi bi-table me-1"></i> سجل مواد الدراسة (درجات كل سنة دراسية)
     </div>
-    <div class="card-body p-0">
-      <div class="table-responsive">
-        <table class="table table-bordered mb-0 align-middle" id="history-table">
-          <thead class="table-light">
-            <tr>
-              <th>العام الدراسي</th>
-              <th>الصف</th>
-              <th>الشعبة</th>
-              <th>النتيجة</th>
-              <th>المعدل</th>
-              <th>الدور</th>
-              <th>الحالة</th>
-              <th>الملاحظات</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="history-body">
-            {% set hist = record.academic_history %}
-            {% if hist %}
-              {% for row in hist %}
-              <tr class="history-row">
-                <td><input type="text" name="history_year"    class="form-control form-control-sm" value="{{ row.year or '' }}"></td>
-                <td><input type="text" name="history_grade"   class="form-control form-control-sm" value="{{ row.grade or '' }}"></td>
-                <td><input type="text" name="history_section" class="form-control form-control-sm" value="{{ row.section or '' }}"></td>
-                <td><input type="text" name="history_result"  class="form-control form-control-sm" value="{{ row.result or '' }}"></td>
-                <td><input type="text" name="history_gpa"     class="form-control form-control-sm" value="{{ row.gpa or '' }}"></td>
-                <td><input type="text" name="history_round"   class="form-control form-control-sm" value="{{ row.round or '' }}"></td>
-                <td><input type="text" name="history_status"  class="form-control form-control-sm" value="{{ row.status or '' }}"></td>
-                <td><input type="text" name="history_notes"   class="form-control form-control-sm" value="{{ row.notes or '' }}"></td>
-                <td>
-                  <button type="button" class="btn btn-sm btn-outline-danger remove-row">
-                    <i class="bi bi-trash3"></i>
-                  </button>
-                </td>
-              </tr>
-              {% endfor %}
-            {% else %}
-            <tr class="history-row">
-              <td><input type="text" name="history_year"    class="form-control form-control-sm"></td>
-              <td><input type="text" name="history_grade"   class="form-control form-control-sm"></td>
-              <td><input type="text" name="history_section" class="form-control form-control-sm"></td>
-              <td><input type="text" name="history_result"  class="form-control form-control-sm"></td>
-              <td><input type="text" name="history_gpa"     class="form-control form-control-sm"></td>
-              <td><input type="text" name="history_round"   class="form-control form-control-sm"></td>
-              <td><input type="text" name="history_status"  class="form-control form-control-sm"></td>
-              <td><input type="text" name="history_notes"   class="form-control form-control-sm"></td>
-              <td>
-                <button type="button" class="btn btn-sm btn-outline-danger remove-row">
-                  <i class="bi bi-trash3"></i>
-                </button>
-              </td>
-            </tr>
-            {% endif %}
-          </tbody>
-        </table>
+    <div class="card-body p-2">
+      <div class="accordion accordion-flush" id="yearsAccordion">
+        {% for i in range(9) %}
+        {% set yr = saved_years[i] if i < saved_years|length else {} %}
+        <div class="accordion-item border mb-1">
+          <h2 class="accordion-header">
+            <button class="accordion-button {{ '' if yr.get('class') or yr.get('year') else 'collapsed' }} py-2 fw-semibold"
+                    type="button" data-bs-toggle="collapse" data-bs-target="#eyear{{ i }}">
+              <span class="me-2 badge bg-secondary">{{ year_labels[i] }}</span>
+              السنة الدراسية {{ i + 1 }}
+              {% if yr.get('class') or yr.get('year') %}
+              <small class="text-info me-2"> — {{ yr.get('class', '') }} {{ yr.get('year', '') }}</small>
+              {% endif %}
+            </button>
+          </h2>
+          <div id="eyear{{ i }}" class="accordion-collapse collapse {{ 'show' if yr.get('class') or yr.get('year') else '' }}">
+            <div class="accordion-body p-2">
+              <div class="row g-2 mb-2">
+                <div class="col-md-3">
+                  <label class="form-label small">الصف</label>
+                  <input type="text" name="y{{ i }}_class" class="form-control form-control-sm"
+                         value="{{ yr.get('class', '') }}" placeholder="مثال: الأول الابتدائي">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label small">السنة الدراسية</label>
+                  <input type="text" name="y{{ i }}_year" class="form-control form-control-sm"
+                         value="{{ yr.get('year', '') }}" placeholder="مثال: 2025">
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label small">ملاحظات</label>
+                  <input type="text" name="y{{ i }}_col_notes" class="form-control form-control-sm"
+                         value="{{ yr.get('col_notes', '') }}">
+                </div>
+              </div>
+              <div class="table-responsive">
+                <table class="table table-bordered table-sm mb-2" style="font-size:0.8rem">
+                  <thead class="table-light text-center">
+                    <tr>
+                      <th style="width:35%">مادة الدراسة</th>
+                      <th style="width:25%">رقماً</th>
+                      <th style="width:40%">كتابة</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for j, subj in enumerate(subjects) %}
+                    <tr>
+                      <td class="fw-semibold">{{ subj }}</td>
+                      <td><input type="number" name="y{{ i }}_s{{ j }}_n" min="0" max="100"
+                                 class="form-control form-control-sm text-center"
+                                 value="{{ yr.get('s' ~ j ~ '_n', '') }}"></td>
+                      <td><input type="text" name="y{{ i }}_s{{ j }}_t"
+                                 class="form-control form-control-sm"
+                                 value="{{ yr.get('s' ~ j ~ '_t', '') }}"></td>
+                    </tr>
+                    {% endfor %}
+                    {% set extras = yr.get('extra', [{}, {}, {}]) %}
+                    {% for k in range(3) %}
+                    {% set ex = extras[k] if k < extras|length else {} %}
+                    <tr class="table-warning">
+                      <td><input type="text" name="y{{ i }}_ex{{ k }}_name"
+                                 class="form-control form-control-sm" placeholder="مادة إضافية"
+                                 value="{{ ex.get('name', '') }}"></td>
+                      <td><input type="number" name="y{{ i }}_ex{{ k }}_n" min="0" max="100"
+                                 class="form-control form-control-sm text-center"
+                                 value="{{ ex.get('n', '') }}"></td>
+                      <td><input type="text" name="y{{ i }}_ex{{ k }}_t"
+                                 class="form-control form-control-sm"
+                                 value="{{ ex.get('t', '') }}"></td>
+                    </tr>
+                    {% endfor %}
+                    <tr class="table-secondary fw-bold">
+                      <td>المجموع</td>
+                      <td><input type="text" name="y{{ i }}_total_n"
+                                 class="form-control form-control-sm text-center fw-bold"
+                                 value="{{ yr.get('total_n', '') }}"></td>
+                      <td><input type="text" name="y{{ i }}_total_t"
+                                 class="form-control form-control-sm"
+                                 value="{{ yr.get('total_t', '') }}"></td>
+                    </tr>
+                    <tr>
+                      <td>السلوك</td>
+                      <td colspan="2"><input type="text" name="y{{ i }}_behavior"
+                                            class="form-control form-control-sm"
+                                            value="{{ yr.get('behavior', '') }}"></td>
+                    </tr>
+                    <tr>
+                      <td>النتيجة</td>
+                      <td colspan="2"><input type="text" name="y{{ i }}_result"
+                                            class="form-control form-control-sm"
+                                            value="{{ yr.get('result', '') }}"></td>
+                    </tr>
+                    <tr>
+                      <td>ملاحظات عن النتائج</td>
+                      <td colspan="2"><input type="text" name="y{{ i }}_notes_results"
+                                            class="form-control form-control-sm"
+                                            value="{{ yr.get('notes_results', '') }}"></td>
+                    </tr>
+                    <tr>
+                      <td>النتيجة النهائية</td>
+                      <td colspan="2"><input type="text" name="y{{ i }}_final_result"
+                                            class="form-control form-control-sm"
+                                            value="{{ yr.get('final_result', '') }}"></td>
+                    </tr>
+                    <tr>
+                      <td>توقيع مدير المدرسة</td>
+                      <td colspan="2"><input type="text" name="y{{ i }}_principal_sig"
+                                            class="form-control form-control-sm"
+                                            value="{{ yr.get('principal_sig', '') }}"></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
       </div>
+      <small class="text-muted">
+        ملاحظة: الدرجة الكبرى في الصفوف الأربعة الأولى (100)، الدرجة الصغرى في الصفين الخامس والسادس (50)
+      </small>
     </div>
   </div>
 
-  {# ══ 6. الملاحظات والتواقيع ══ #}
+  {# ══ القسم الرابع: الملاحظات والتواقيع ══ #}
   <div class="card mb-4">
     <div class="card-header fw-semibold">
       <i class="bi bi-pen-fill me-1"></i> الملاحظات والتواقيع
     </div>
     <div class="card-body">
-      <div class="row g-3">
-        {{ textarea_field('الملاحظات العامة', 'general_notes', record.general_notes, 'col-12', 3) }}
-        {{ text_field('توقيع المدير / الإدارة', 'signature_admin',  record.signature_admin,  'col-md-4') }}
-        {{ text_field('توقيع ولي الأمر',        'signature_parent', record.signature_parent, 'col-md-4') }}
+      <div class="row g-2">
+        <div class="col-12">
+          <label class="form-label small fw-semibold">الملاحظات العامة</label>
+          <textarea name="general_notes" class="form-control form-control-sm" rows="2">{{ record.general_notes or '' }}</textarea>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small fw-semibold">توقيع المدير / الإدارة</label>
+          <input type="text" name="signature_admin" class="form-control form-control-sm"
+                 value="{{ record.signature_admin or '' }}">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small fw-semibold">توقيع ولي الأمر</label>
+          <input type="text" name="signature_parent" class="form-control form-control-sm"
+                 value="{{ record.signature_parent or '' }}">
+        </div>
       </div>
     </div>
   </div>
@@ -246,30 +446,4 @@
     </button>
   </div>
 </form>
-
-<script>
-(function () {
-  const addBtn   = document.getElementById('add-history-row');
-  const histBody = document.getElementById('history-body');
-  if (!addBtn || !histBody) return;
-
-  addBtn.addEventListener('click', () => {
-    const tpl   = histBody.querySelector('.history-row');
-    const clone = tpl.cloneNode(true);
-    clone.querySelectorAll('input').forEach(i => i.value = '');
-    histBody.appendChild(clone);
-  });
-
-  histBody.addEventListener('click', e => {
-    if (e.target.closest('.remove-row')) {
-      const rows = histBody.querySelectorAll('.history-row');
-      if (rows.length > 1) {
-        e.target.closest('.history-row').remove();
-      } else {
-        e.target.closest('.history-row').querySelectorAll('input').forEach(i => i.value = '');
-      }
-    }
-  });
-})();
-</script>
 {% endblock %}

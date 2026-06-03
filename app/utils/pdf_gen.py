@@ -949,13 +949,30 @@ def generate_single_employee_attendance_pdf(emp_row, date_from: str, date_to: st
     return buf_emp.getvalue()
 
 
-# ─── STUDENT REGISTRATION RECORD (سجل قيد الطالب) — A3 Landscape ────────────
+# ─── STUDENT REGISTRATION RECORD (سجل القيد العام) — A3 Landscape ──────────
+
+_SUBJECTS = [
+    'التربية الإسلامية',
+    'اللغة العربية',
+    'اللغة الإنكليزية',
+    'الرياضيات',
+    'العلوم',
+    'الاجتماعيات',
+    'التربية الفنية والنشيد',
+    'التربية الرياضية',
+]
+
 
 def generate_registration_record_pdf(record, school=None) -> bytes | None:
-    """
-    Generate an official A3-landscape student registration record PDF.
-    record : StudentRegistrationRecord model instance.
-    school : School model instance (for logo / name override).
+    """Generate official A3-landscape سجل القيد العام matching the paper form.
+
+    Layout:
+    1. Title row:  سجل القيد العام (right) | رقم الصحيفة (left)
+    2. School name + optional logo
+    3. Top student-info grid (19 physical columns, RTL)
+    4. Subject×year grade grid (subject rows × 9 year columns)
+    5. Bottom note
+
     Returns bytes or None if ReportLab is unavailable.
     """
     if not _get_rl():
@@ -966,289 +983,415 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
     from reportlab.lib import colors
     from reportlab.lib.colors import HexColor
     from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle,
-                                     Paragraph, Spacer, Image, HRFlowable)
+                                     Paragraph, Spacer, Image)
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
 
-    arabic_font_registered = _register_arabic_fonts(pdfmetrics, TTFont)
-    fn   = 'Amiri'      if arabic_font_registered else 'Helvetica'
-    fn_b = 'Amiri-Bold' if arabic_font_registered else 'Helvetica-Bold'
+    arabic_ok = _register_arabic_fonts(pdfmetrics, TTFont)
+    fn   = 'Amiri'      if arabic_ok else 'Helvetica'
+    fn_b = 'Amiri-Bold' if arabic_ok else 'Helvetica-Bold'
     ar   = _shape_arabic_text
 
-    NAVY   = HexColor('#1a3a5c')
-    LTBLUE = HexColor('#e8f0f8')
-    GREY   = HexColor('#f5f5f5')
-    WHITE  = colors.white
     BLACK  = colors.black
-    BORDER = HexColor('#b0b8c4')
+    WHITE  = colors.white
+    BORDER = HexColor('#333333')
+    NAVY   = HexColor('#1a3a5c')
+    LTGREY = HexColor('#f0f0f0')
 
-    buf = BytesIO()
+    buf       = BytesIO()
     page_size = landscape(A3)
-    pw, _  = page_size  # ~1190 × 842 pt
+    pw, ph    = page_size   # ~1190.55 × 841.89 pt
 
-    doc = SimpleDocTemplate(
+    MARG = 0.8 * cm          # uniform margins
+    doc  = SimpleDocTemplate(
         buf, pagesize=page_size,
-        leftMargin=1.2*cm, rightMargin=1.2*cm,
-        topMargin=1.2*cm, bottomMargin=1.2*cm,
+        leftMargin=MARG, rightMargin=MARG,
+        topMargin=MARG, bottomMargin=MARG,
     )
 
-    # ── Styles ──────────────────────────────────────────────────────────────
-    def style(name, **kw):
-        return ParagraphStyle(name, fontName=kw.pop('fontName', fn),
-                               fontSize=kw.pop('fontSize', 9), **kw)
+    AW = pw - 2 * MARG   # available width ≈ 1145 pt
 
-    title_s   = style('title',   fontName=fn_b, fontSize=18, alignment=1, textColor=NAVY)
-    sub_s     = style('sub',     fontName=fn,   fontSize=10, alignment=1,
-                      textColor=HexColor('#555555'))
-    sec_s     = style('sec',     fontName=fn_b, fontSize=11, textColor=WHITE, alignment=1)
-    lbl_s     = style('lbl',     fontName=fn_b, fontSize=8,  textColor=HexColor('#444444'),
-                      alignment=2)
-    val_s     = style('val',     fontName=fn,   fontSize=9,  textColor=BLACK, alignment=2)
-    hdr_s     = style('hdr',     fontName=fn_b, fontSize=8,  textColor=WHITE, alignment=1)
-    cell_s    = style('cell',    fontName=fn,   fontSize=8,  textColor=BLACK, alignment=1)
-    foot_s    = style('foot',    fontName=fn,   fontSize=7,  textColor=HexColor('#888888'),
-                      alignment=1)
+    # ── Style helpers ────────────────────────────────────────────────────────
+    def ps(name, font=fn, size=8, align=1, color=BLACK, **kw):
+        return ParagraphStyle(name, fontName=font, fontSize=size,
+                               alignment=align, textColor=color, **kw)
 
+    title_s  = ps('T',  fn_b, 14, 1, NAVY)
+    hdr_s    = ps('H',  fn_b,  7, 1, BLACK)
+    shdr_s   = ps('SH', fn_b,  6, 1, BLACK)
+    cell_s   = ps('C',  fn,    7, 1, BLACK)
+    subj_s   = ps('SU', fn_b,  7, 2, BLACK)   # right-aligned subject names
+    foot_s   = ps('F',  fn,    6, 1, HexColor('#666666'))
 
-    def p(text, s=val_s):
-        return Paragraph(ar(str(text or '—')), s)
+    def p(text, s=cell_s):
+        return Paragraph(ar(str(text or '')), s)
 
-    avail_w = pw - 2.4*cm  # total usable width
+    def ph_(text, s=hdr_s):
+        return Paragraph(ar(str(text or '')), s)
+
+    PAD  = [('TOPPADDING',    (0,0), (-1,-1), 2),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+            ('LEFTPADDING',   (0,0), (-1,-1), 2),
+            ('RIGHTPADDING',  (0,0), (-1,-1), 2)]
+    GRID = [('GRID', (0,0), (-1,-1), 0.5, BORDER),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('ALIGN',  (0,0), (-1,-1), 'CENTER')]
 
     elements = []
 
-    # ── 1. HEADER ────────────────────────────────────────────────────────────
-    school_ar = ar((school.school_name_ar if school and school.school_name_ar
-                    else (record.snap_school_name_ar or record.snap_school_name or 'المدرسة')))
-    school_en = school.school_name if school else record.snap_school_name or ''
+    # ── Collect extra fields ──────────────────────────────────────────────────
+    ef  = record.extra_fields   # dict
+    gh  = record.academic_history
+    sav = gh.get('years', [])
+    # Pad to 9 slots
+    while len(sav) < 9:
+        sav.append({})
+
+    gender_ar = {'male': 'ذكر', 'female': 'أنثى'}.get(
+        record.snap_gender or '', record.snap_gender or '')
+
+    # ── 1. TITLE ROW ─────────────────────────────────────────────────────────
+    rec_num = ef.get('record_number', '')
+    school_ar = (school.school_name_ar if school and school.school_name_ar
+                 else record.snap_school_name_ar or record.snap_school_name or '')
 
     logo_el = None
     if school and school.logo_path:
         lp = _resolve_logo_for_pdf(school.logo_path)
         if lp:
             try:
-                logo_el = Image(lp, width=2.2*cm, height=2.2*cm)
-                logo_el.hAlign = 'CENTER'
+                logo_el = Image(lp, width=1.5*cm, height=1.5*cm)
             except Exception:
                 pass
 
-    header_data = [[
-        Paragraph(school_ar, style('ha', fontName=fn_b, fontSize=14,
-                                   alignment=2, textColor=NAVY)),
-        logo_el or Paragraph('', sub_s),
-        Paragraph(school_en, style('he', fontName=fn_b, fontSize=14,
-                                   alignment=0, textColor=NAVY)),
+    title_row = [[
+        Paragraph(ar(f'رقم الصحيفة   {rec_num}  ..................'),
+                  ps('TL', fn, 9, 0, BLACK)),
+        logo_el or Paragraph('', cell_s),
+        Paragraph(ar(f'{school_ar}'), ps('TSC', fn_b, 10, 1, NAVY)),
+        Paragraph(ar('سجل القيد العام'), ps('TR', fn_b, 14, 2, NAVY)),
     ]]
-    header_tbl = Table(header_data, colWidths=[avail_w*0.42, avail_w*0.16, avail_w*0.42])
-    header_tbl.setStyle(TableStyle([
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('ALIGN',  (0,0), (0,0),  'RIGHT'),
-        ('ALIGN',  (1,0), (1,0),  'CENTER'),
-        ('ALIGN',  (2,0), (2,0),  'LEFT'),
-        ('TOPPADDING',    (0,0), (-1,-1), 0),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 0),
-    ]))
-    elements.append(header_tbl)
-    elements.append(Spacer(1, 0.25*cm))
-    elements.append(Paragraph(ar('سجل قيد الطالب'), title_s))
-    elements.append(Spacer(1, 0.15*cm))
-    elements.append(HRFlowable(width='100%', thickness=2, color=NAVY, spaceAfter=0.2*cm))
-
-    # ── Helper: section heading ───────────────────────────────────────────────
-    def section_heading(arabic_text):
-        tbl = Table([[p(arabic_text, sec_s)]],
-                    colWidths=[avail_w])
-        tbl.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,-1), NAVY),
-            ('TOPPADDING', (0,0), (-1,-1), 4),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-            ('LEFTPADDING', (0,0), (-1,-1), 6),
-        ]))
-        elements.append(tbl)
-        elements.append(Spacer(1, 0.1*cm))
-
-    # ── Helper: info grid (pairs) ────────────────────────────────────────────
-    def info_row(pairs, col_widths=None):
-        """pairs = [(label, value), ...] — max 4 per row."""
-        n = len(pairs)
-        cws = col_widths or ([avail_w / (n * 2)] * (n * 2))
-        row_lbl = [p(lbl, lbl_s) for lbl, _ in pairs]
-        row_val = [p(val, val_s) for _, val in pairs]
-        tbl = Table([row_lbl, row_val], colWidths=cws)
-        tbl.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), LTBLUE),
-            ('GRID', (0,0), (-1,-1), 0.4, BORDER),
-            ('ALIGN', (0,0), (-1,-1), 'RIGHT'),
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-            ('TOPPADDING', (0,0), (-1,-1), 3),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 3),
-            ('LEFTPADDING', (0,0), (-1,-1), 5),
-            ('RIGHTPADDING', (0,0), (-1,-1), 5),
-        ]))
-        elements.append(tbl)
-        elements.append(Spacer(1, 0.1*cm))
-
-    # ── 2. STUDENT DATA ──────────────────────────────────────────────────────
-    section_heading('بيانات الطالب')
-
-    gender_ar = {'male': 'ذكر', 'female': 'أنثى'}.get(record.snap_gender or '', record.snap_gender or '')
-    status_ar = {'active': 'نشط', 'archived': 'محفوظ', 'inactive': 'غير نشط'}.get(
-        record.snap_status or '', record.snap_status or '')
-
-    info_row([('اسم الطالب',  record.snap_full_name),
-              ('رقم الطالب',  record.snap_student_number),
-              ('الجنس',        gender_ar),
-              ('تاريخ الميلاد', record.snap_date_of_birth)])
-    info_row([('الجنسية',      record.snap_nationality),
-              ('هاتف الطالب',  record.snap_phone),
-              ('الحالة',       status_ar),
-              ('تاريخ التسجيل', record.snap_enrollment_date)])
-    info_row([('العنوان',     record.snap_address or ''),
-              ('',            '')],
-             col_widths=[avail_w*0.12, avail_w*0.38,
-                         avail_w*0.12, avail_w*0.38])
-
-    # ── 3. GUARDIAN DATA ─────────────────────────────────────────────────────
-    section_heading('بيانات ولي الأمر')
-    info_row([('اسم ولي الأمر',  record.snap_guardian_name),
-              ('صلة القرابة',   record.snap_guardian_relation),
-              ('الهاتف',         record.snap_guardian_phone),
-              ('البريد',         record.snap_guardian_email)])
-    info_row([('عنوان ولي الأمر', record.snap_guardian_address or ''),
-              ('',               '')],
-             col_widths=[avail_w*0.12, avail_w*0.38,
-                         avail_w*0.12, avail_w*0.38])
-
-    # ── 4. ADMISSION DATA ────────────────────────────────────────────────────
-    section_heading('بيانات القبول والتسجيل')
-    info_row([('المدرسة',      record.snap_school_name_ar or record.snap_school_name),
-              ('العام الدراسي', record.snap_year_name),
-              ('المرحلة',      record.snap_stage),
-              ('الصف / الشعبة',
-               f"{record.snap_grade_name or ''} / {record.snap_section_name or ''}")])
-    info_row([('تاريخ القبول',  record.admission_date),
-              ('رقم الوثيقة',  record.document_number),
-              ('المدرسة السابقة', record.previous_school),
-              ('سبب التحويل',  record.transfer_reason)])
-
-    # ── 5. DOCUMENTS CHECKLIST ───────────────────────────────────────────────
-    section_heading('الوثائق المطلوبة')
-
-    def chk(flag, label):
-        mark = '✔' if flag else '✘'
-        clr  = HexColor('#1a7a1a') if flag else HexColor('#cc0000')
-        return Paragraph(f'{ar(label)}  {mark}',
-                         style('ck', fontName=fn, fontSize=10,
-                                textColor=clr, alignment=1))
-
-    docs_row = [[chk(record.has_birth_cert,       'شهادة الميلاد'),
-                 chk(record.has_id_card,           'بطاقة الهوية'),
-                 chk(record.has_prev_certificate,  'شهادة المدرسة السابقة'),
-                 chk(record.has_photo,             'صورة شخصية')]]
-    docs_tbl = Table(docs_row, colWidths=[avail_w/4]*4)
-    docs_tbl.setStyle(TableStyle([
-        ('GRID', (0,0), (-1,-1), 0.4, BORDER),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('TOPPADDING', (0,0), (-1,-1), 5),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-        ('BACKGROUND', (0,0), (-1,-1), GREY),
-    ]))
-    elements.append(docs_tbl)
-    elements.append(Spacer(1, 0.1*cm))
-
-    if record.document_notes:
-        info_row([('ملاحظات الوثائق', record.document_notes), ('', '')],
-                 col_widths=[avail_w*0.12, avail_w*0.38,
-                             avail_w*0.12, avail_w*0.38])
-
-    # ── 6. ACADEMIC HISTORY TABLE ────────────────────────────────────────────
-    section_heading('سجل السنوات الدراسية')
-
-    hist = record.academic_history
-    ah_headers = ['العام الدراسي', 'الصف', 'الشعبة', 'النتيجة',
-                  'المعدل', 'الدور', 'الحالة', 'الملاحظات']
-    ah_cws = [avail_w * f for f in [0.15, 0.12, 0.10, 0.12,
-                                     0.10, 0.10, 0.12, 0.19]]
-
-    ah_data = [[p(h, hdr_s) for h in ah_headers]]
-    if hist:
-        for row in hist:
-            ah_data.append([
-                p(row.get('year', '')),
-                p(row.get('grade', '')),
-                p(row.get('section', '')),
-                p(row.get('result', '')),
-                p(row.get('gpa', '')),
-                p(row.get('round', '')),
-                p(row.get('status', '')),
-                p(row.get('notes', '')),
-            ])
-    else:
-        # Empty rows for manual filling
-        for _ in range(4):
-            ah_data.append([Paragraph('', cell_s)] * 8)
-
-    ah_tbl = Table(ah_data, colWidths=ah_cws, repeatRows=1)
-    ah_style = [
-        ('BACKGROUND', (0,0), (-1,0), NAVY),
-        ('TEXTCOLOR',  (0,0), (-1,0), WHITE),
-        ('GRID', (0,0), (-1,-1), 0.4, BORDER),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('TOPPADDING', (0,0), (-1,-1), 4),
+    title_tbl = Table(title_row, colWidths=[AW*0.28, AW*0.07, AW*0.35, AW*0.30])
+    title_tbl.setStyle(TableStyle([
+        ('VALIGN',        (0,0), (-1,-1), 'MIDDLE'),
+        ('TOPPADDING',    (0,0), (-1,-1), 4),
         ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-    ]
-    for i in range(1, len(ah_data)):
-        if i % 2 == 0:
-            ah_style.append(('BACKGROUND', (0,i), (-1,i), GREY))
-    ah_tbl.setStyle(TableStyle(ah_style))
-    elements.append(ah_tbl)
-    elements.append(Spacer(1, 0.15*cm))
-
-    # ── 7. NOTES & SIGNATURES ────────────────────────────────────────────────
-    section_heading('الملاحظات والتواقيع')
-    if record.general_notes:
-        info_row([('الملاحظات', record.general_notes), ('', '')],
-                 col_widths=[avail_w*0.12, avail_w*0.38,
-                             avail_w*0.12, avail_w*0.38])
-
-    sig_data = [[
-        p('توقيع المدير', lbl_s),
-        p(record.signature_admin or '_' * 30, val_s),
-        p('توقيع ولي الأمر', lbl_s),
-        p(record.signature_parent or '_' * 30, val_s),
-        p('التاريخ', lbl_s),
-        p(datetime.utcnow().strftime('%Y-%m-%d'), val_s),
-    ]]
-    sig_tbl = Table(sig_data, colWidths=[avail_w*f for f in
-                                          [0.10, 0.23, 0.13, 0.23, 0.08, 0.23]])
-    sig_tbl.setStyle(TableStyle([
-        ('GRID', (0,0), (-1,-1), 0.4, BORDER),
-        ('BACKGROUND', (0,0), (0,0), LTBLUE),
-        ('BACKGROUND', (2,0), (2,0), LTBLUE),
-        ('BACKGROUND', (4,0), (4,0), LTBLUE),
-        ('ALIGN', (0,0), (-1,-1), 'RIGHT'),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('TOPPADDING', (0,0), (-1,-1), 6),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
-        ('LEFTPADDING', (0,0), (-1,-1), 5),
-        ('RIGHTPADDING', (0,0), (-1,-1), 5),
     ]))
-    elements.append(sig_tbl)
-    elements.append(Spacer(1, 0.2*cm))
+    elements.append(title_tbl)
+    elements.append(Spacer(1, 3))
 
-    # ── 8. FOOTER ────────────────────────────────────────────────────────────
-    elements.append(HRFlowable(width='100%', thickness=1,
-                               color=HexColor('#cccccc'), spaceAfter=0.1*cm))
-    school_display = school.school_name_ar or school.school_name if school else ''
-    foot_text = ar(
-        f'تم إنشاء هذا السجل بواسطة نظام المهندس المدرسي  |  '
-        f'{school_display}  |  '
-        f'{datetime.utcnow().strftime("%Y-%m-%d %H:%M")} UTC'
+    # ── 2. TOP STUDENT INFO TABLE ─────────────────────────────────────────────
+    # 19 physical columns (left=0 → right=18).
+    # Rightmost (col 18,17) = الطالب.  Leftmost (col 0) = سبب المغادرة.
+    # Columns with sub-groups: الطالب(17-18), مسكن الأب(14-15), مسكن ولي(10-11)
+
+    TOP_CWS = [
+        95,  # 0  سبب المغادرة والملاحظات
+        55,  # 1  تاريخ المغادرة
+        80,  # 2  آخر مدرسة كان فيها
+        55,  # 3  الصف الذي قبل فيه
+        55,  # 4  تاريخ دخول المدرسة
+        45,  # 5  ديانته
+        40,  # 6  جنسه
+        55,  # 7  تاريخ ولادته
+        60,  # 8  مسقط رأسه
+        65,  # 9  رقم دفتر نفوس
+        40,  # 10 مسكن ولي — المحلة
+        40,  # 11 مسكن ولي — رقم الدار
+        80,  # 12 اسم ولي أمر الطالب
+        65,  # 13 صنعة الأب وعمله
+        40,  # 14 مسكن الأب — المحلة
+        40,  # 15 مسكن الأب — رقم الدار
+        80,  # 16 اسم أبيه وشهرته
+        95,  # 17 الطالب — اسمه
+        55,  # 18 الطالب — رقمه
+    ]
+    # Adjust to fill AW exactly
+    diff = int(AW) - sum(TOP_CWS)
+    TOP_CWS[0] += diff  # absorb any rounding into the widest left column
+
+    NC = len(TOP_CWS)  # 19
+
+    # Row 0: main headers (some spanning 2 rows, some spanning 2 cols)
+    R0 = [
+        ph_('سبب المغادرة\nوالملاحظات'),  # 0  rowspan 2
+        ph_('تاريخ\nالمغادرة'),            # 1  rowspan 2
+        ph_('آخر مدرسة\nكان فيها'),        # 2  rowspan 2
+        ph_('الصف الذي\nقبل فيه'),         # 3  rowspan 2
+        ph_('تاريخ دخول\nالمدرسة'),        # 4  rowspan 2
+        ph_('ديانته'),                      # 5  rowspan 2
+        ph_('جنسه'),                        # 6  rowspan 2
+        ph_('تاريخ\nولادته'),               # 7  rowspan 2
+        ph_('مسقط\nرأسه'),                  # 8  rowspan 2
+        ph_('رقم دفتر\nنفوس الطالب'),       # 9  rowspan 2
+        ph_('مسكن ولي أمره'),               # 10 colspan 2
+        '',                                 # 11 spanned by 10
+        ph_('اسم ولي\nأمر الطالب'),          # 12 rowspan 2
+        ph_('صنعة الأب\nوعمله'),             # 13 rowspan 2
+        ph_('مسكن الأب'),                   # 14 colspan 2
+        '',                                 # 15 spanned by 14
+        ph_('اسم أبيه\nوشهرته'),             # 16 rowspan 2
+        ph_('الطالب'),                       # 17 colspan 2
+        '',                                 # 18 spanned by 17
+    ]
+
+    # Row 1: sub-headers for spanned groups; empty cells for rowspan-2 cols
+    R1 = [
+        '',        # 0  spanned from R0
+        '',        # 1
+        '',        # 2
+        '',        # 3
+        '',        # 4
+        '',        # 5
+        '',        # 6
+        '',        # 7
+        '',        # 8
+        '',        # 9
+        ph_('المحلة', shdr_s),   # 10
+        ph_('رقم\nالدار', shdr_s),  # 11
+        '',        # 12 spanned
+        '',        # 13 spanned
+        ph_('المحلة', shdr_s),   # 14
+        ph_('رقم\nالدار', shdr_s),  # 15
+        '',        # 16 spanned
+        ph_('اسمه', shdr_s),    # 17
+        ph_('رقمه', shdr_s),    # 18
+    ]
+
+    # Row 2: data values
+    dob_str  = str(record.snap_date_of_birth) if record.snap_date_of_birth else ''
+    enr_str  = str(record.snap_enrollment_date) if record.snap_enrollment_date else ''
+    adm_str  = str(record.admission_date) if record.admission_date else ''
+    R2 = [
+        p(ef.get('departure_reason', '')),   # 0
+        p(ef.get('departure_date', '')),     # 1
+        p(record.previous_school or ''),     # 2
+        p(record.snap_grade_name or ''),     # 3
+        p(enr_str or adm_str),               # 4
+        p(ef.get('religion', '')),           # 5
+        p(gender_ar),                        # 6
+        p(dob_str),                          # 7
+        p(ef.get('birth_place', '')),        # 8
+        p(ef.get('civil_registry_num', '')), # 9
+        p(ef.get('guardian_mahalla', '')),   # 10
+        p(ef.get('guardian_house_num', '')), # 11
+        p(record.snap_guardian_name or ''),  # 12
+        p(ef.get('father_occupation', '')),  # 13
+        p(ef.get('father_mahalla', '')),     # 14
+        p(ef.get('father_house_num', '')),   # 15
+        p(ef.get('father_name', '')),        # 16
+        p(record.snap_full_name or ''),      # 17
+        p(record.snap_student_number or ''), # 18
+    ]
+
+    top_data  = [R0, R1, R2]
+    top_table = Table(top_data, colWidths=TOP_CWS)
+
+    # Build spans list
+    rowspan_cols = [0,1,2,3,4,5,6,7,8,9,12,13,16]
+    spans = []
+    for c in rowspan_cols:
+        spans.append(('SPAN', (c, 0), (c, 1)))
+    spans += [
+        ('SPAN', (10, 0), (11, 0)),  # مسكن ولي
+        ('SPAN', (14, 0), (15, 0)),  # مسكن الأب
+        ('SPAN', (17, 0), (18, 0)),  # الطالب
+    ]
+
+    top_style = TableStyle(
+        GRID + PAD + spans + [
+            ('BACKGROUND', (0,0), (-1,1), LTGREY),
+            ('FONTNAME',   (0,0), (-1,1), fn_b),
+            ('FONTSIZE',   (0,0), (-1,-1), 7),
+            ('ROWHEIGHT',  (0,0), (0,0), 22),
+            ('ROWHEIGHT',  (0,1), (0,1), 14),
+            ('ROWHEIGHT',  (0,2), (0,2), 20),
+        ]
     )
-    elements.append(Paragraph(foot_text, foot_s))
+    top_table.setStyle(top_style)
+    elements.append(top_table)
+    elements.append(Spacer(1, 4))
+
+    # ── 3. GRADE GRID ────────────────────────────────────────────────────────
+    # 20 physical columns:
+    #   col 0: الملاحظات
+    #   cols 1-18: 9 years × 2 sub-cols each
+    #     year_i occupies cols (17 - 2*i) and (18 - 2*i)
+    #     → year 0 (الأول)  = cols 17,18  (rightmost)
+    #     → year 8 (التاسع) = cols  1,2   (leftmost)
+    #   col 19: مواد الدراسة
+
+    NOTES_W  = 80
+    SUBJ_W   = 110
+    YCOL_W   = (int(AW) - NOTES_W - SUBJ_W) // 18   # ≈ 53 pt per sub-col
+
+    # Re-compute to fill exactly
+    remainder = int(AW) - NOTES_W - SUBJ_W - YCOL_W * 18
+    NOTES_W  += remainder   # absorb difference
+
+    GC = 20   # 1 + 18 + 1
+    GCWS = [NOTES_W] + [YCOL_W] * 18 + [SUBJ_W]
+
+    # Helper: physical col index for year yi's n-sub-col
+    def ync(yi):
+        return 17 - 2 * yi   # n-col (number)
+    def ytc(yi):
+        return 18 - 2 * yi   # t-col (text)
+
+    YEAR_LABELS = ['الأول', 'الثاني', 'الثالث', 'الرابع', 'الخامس',
+                   'السادس', 'السابع', 'الثامن', 'التاسع']
+
+    # 4 header rows
+    def blank_row():
+        return [''] * GC
+
+    GHR0 = blank_row()   # الصف
+    GHR1 = blank_row()   # السنة
+    GHR2 = blank_row()   # الدرجة
+    GHR3 = blank_row()   # رقماً / كتابة
+
+    GHR0[0]  = ph_('الملاحظات')
+    GHR0[19] = ph_('مواد\nالدراسة')
+
+    for yi in range(9):
+        yr   = sav[yi]
+        clas = yr.get('class', '')
+        year = yr.get('year', '')
+        nc   = ync(yi)
+        tc   = ytc(yi)
+        GHR0[nc] = ph_(clas or YEAR_LABELS[yi])
+        GHR1[nc] = ph_(f'السنة\n{year}' if year else 'السنة\n........')
+        GHR2[nc] = ph_('الدرجة')
+        GHR3[nc] = ph_('رقماً', shdr_s)
+        GHR3[tc] = ph_('كتابة', shdr_s)
+
+    g_data = [GHR0, GHR1, GHR2, GHR3]
+
+    # Subject rows
+    def subj_row(subj_label, key_n, key_t):
+        row = blank_row()
+        row[19] = Paragraph(ar(subj_label), subj_s)
+        for yi in range(9):
+            yr = sav[yi]
+            row[ync(yi)] = p(yr.get(key_n, ''))
+            row[ytc(yi)] = p(yr.get(key_t, ''))
+        return row
+
+    for j, subj in enumerate(_SUBJECTS):
+        g_data.append(subj_row(subj, f's{j}_n', f's{j}_t'))
+
+    # 3 extra subject rows (from saved data or blank)
+    for k in range(3):
+        row = blank_row()
+        for yi in range(9):
+            yr      = sav[yi]
+            extras  = yr.get('extra', [])
+            ex      = extras[k] if k < len(extras) else {}
+            name    = ex.get('name', '')
+            en_val  = ex.get('n', '')
+            et_val  = ex.get('t', '')
+            row[19] = Paragraph(ar(name or ''), subj_s) if name else p('')
+            row[ync(yi)] = p(en_val)
+            row[ytc(yi)] = p(et_val)
+        g_data.append(row)
+
+    # Bottom section rows
+    def bottom_row(label, key):
+        row = blank_row()
+        row[19] = Paragraph(ar(label), subj_s)
+        for yi in range(9):
+            yr = sav[yi]
+            row[ync(yi)] = p(yr.get(key, ''))
+        return row
+
+    def bottom_row2(label, key_n, key_t):
+        row = blank_row()
+        row[19] = Paragraph(ar(label), subj_s)
+        for yi in range(9):
+            yr = sav[yi]
+            row[ync(yi)] = p(yr.get(key_n, ''))
+            row[ytc(yi)] = p(yr.get(key_t, ''))
+        return row
+
+    g_data.append(bottom_row2('المجموع', 'total_n', 'total_t'))
+    g_data.append(bottom_row('السلوك', 'behavior'))
+    g_data.append(bottom_row('النتيجة', 'result'))
+    g_data.append(bottom_row('ملاحظات عن\nنتائج الدروس', 'notes_results'))
+    g_data.append(bottom_row('النتيجة النهائية', 'final_result'))
+    g_data.append(bottom_row('توقيع مدير\nالمدرسة', 'principal_sig'))
+
+    NROWS = len(g_data)
+
+    grid_spans = [
+        # الملاحظات and مواد الدراسة span all 4 header rows
+        ('SPAN', (0,  0), (0,  3)),
+        ('SPAN', (19, 0), (19, 3)),
+    ]
+    for yi in range(9):
+        nc = ync(yi)
+        tc = ytc(yi)
+        grid_spans += [
+            ('SPAN', (nc, 0), (tc, 0)),   # الصف spans n+t
+            ('SPAN', (nc, 1), (tc, 1)),   # السنة spans n+t
+            ('SPAN', (nc, 2), (tc, 2)),   # الدرجة spans n+t
+        ]
+        # Bottom rows: السلوك, النتيجة, ملاحظات, النتيجة النهائية, توقيع — span n+t
+        for roff in [NROWS-5, NROWS-4, NROWS-3, NROWS-2, NROWS-1]:
+            grid_spans.append(('SPAN', (nc, roff), (tc, roff)))
+
+    HDR_ROWS = 4
+    g_style = TableStyle(
+        GRID + PAD + grid_spans + [
+            ('BACKGROUND',  (0, 0),  (-1, HDR_ROWS-1), LTGREY),
+            ('FONTNAME',    (0, 0),  (-1, HDR_ROWS-1), fn_b),
+            ('FONTSIZE',    (0, 0),  (-1, -1),          7),
+            ('BACKGROUND',  (0, 0),  (0,  -1),          HexColor('#e8f0f8')),  # الملاحظات col tint
+            ('BACKGROUND',  (19, 0), (19, -1),          LTGREY),               # مواد col tint
+            ('FONTNAME',    (19, 0), (19, -1),           fn_b),
+            ('ROWHEIGHT',   (0, 0),  (0, 0),             18),
+            ('ROWHEIGHT',   (0, 1),  (0, 1),             14),
+            ('ROWHEIGHT',   (0, 2),  (0, 2),             12),
+            ('ROWHEIGHT',   (0, 3),  (0, 3),             10),
+        ]
+    )
+    for r in range(HDR_ROWS, NROWS):
+        if (r - HDR_ROWS) % 2 == 0:
+            g_style.add('BACKGROUND', (0, r), (18, r), WHITE)
+        else:
+            g_style.add('BACKGROUND', (0, r), (18, r), HexColor('#f9f9f9'))
+
+    grade_tbl = Table(g_data, colWidths=GCWS)
+    grade_tbl.setStyle(g_style)
+    elements.append(grade_tbl)
+    elements.append(Spacer(1, 6))
+
+    # ── 4. BOTTOM NOTE ───────────────────────────────────────────────────────
+    note_text = ar(
+        'ملاحظة: الدرجة الكبرى في الصفوف الأربعة الأولى (100) ، '
+        'الدرجة الصغرى في الصفين الخامس والسادس (50)'
+    )
+    elements.append(Paragraph(note_text, foot_s))
+    elements.append(Spacer(1, 4))
+
+    # Signatures / footer
+    school_display = (school.school_name_ar or school.school_name) if school else ''
+    foot_row = [[
+        p(ef.get('departure_date', '') and ar('تاريخ المغادرة: ' + ef.get('departure_date', ''))),
+        p(record.signature_admin and ar('توقيع المدير: ' + record.signature_admin) or ''),
+        p(record.signature_parent and ar('توقيع ولي الأمر: ' + record.signature_parent) or ''),
+        Paragraph(ar(f'{school_display}   |   {datetime.utcnow().strftime("%Y-%m-%d")}'),
+                  foot_s),
+    ]]
+    foot_tbl = Table(foot_row, colWidths=[AW*0.22, AW*0.28, AW*0.28, AW*0.22])
+    foot_tbl.setStyle(TableStyle([
+        ('GRID',          (0,0), (-1,-1), 0.4, HexColor('#aaaaaa')),
+        ('VALIGN',        (0,0), (-1,-1), 'MIDDLE'),
+        ('TOPPADDING',    (0,0), (-1,-1), 3),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+        ('FONTSIZE',      (0,0), (-1,-1), 7),
+    ]))
+    elements.append(foot_tbl)
 
     doc.build(elements)
     return buf.getvalue()

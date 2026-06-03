@@ -18,6 +18,24 @@ student_records_bp = Blueprint(
     template_folder='../../templates/student_records',
 )
 
+# Standard subjects in the official registration record
+SUBJECTS = [
+    'التربية الإسلامية',
+    'اللغة العربية',
+    'اللغة الإنكليزية',
+    'الرياضيات',
+    'العلوم',
+    'الاجتماعيات',
+    'التربية الفنية والنشيد',
+    'التربية الرياضية',
+]
+
+# Year labels for accordion display (9 school years)
+YEAR_LABELS = [
+    'الأول', 'الثاني', 'الثالث', 'الرابع', 'الخامس',
+    'السادس', 'السابع', 'الثامن', 'التاسع',
+]
+
 
 def _school_or_404():
     school = get_current_school()
@@ -31,7 +49,6 @@ def _build_autofill(student: Student, school: School) -> dict:
     section = student.section
     grade   = section.grade if section else None
 
-    # Linked parent user (first found)
     parent_user = None
     parent_rel  = None
     if hasattr(student, 'parents'):
@@ -56,14 +73,13 @@ def _build_autofill(student: Student, school: School) -> dict:
         'snap_phone':           student.phone or '',
         'snap_status':          student.status or 'active',
         'snap_enrollment_date': student.enrollment_date.isoformat() if student.enrollment_date else '',
-        # Guardian from student model fields
+        # Guardian
         'snap_guardian_name':     student.guardian_name or '',
         'snap_guardian_phone':    student.guardian_phone or '',
         'snap_guardian_email':    student.guardian_email or '',
         'snap_guardian_relation': student.guardian_relation or '',
         'snap_guardian_address':  '',
-        # Override with linked parent user if available
-        **(  # noqa: PIE800
+        **(
             {
                 'snap_guardian_name':     parent_user.full_name,
                 'snap_guardian_phone':    parent_user.phone or student.guardian_phone or '',
@@ -78,9 +94,122 @@ def _build_autofill(student: Student, school: School) -> dict:
         'snap_grade_name':     grade.name if grade else '',
         'snap_stage':          grade.stage if grade else '',
         'snap_section_name':   section.name if section else '',
-        # Admission defaults
+        # Admission
         'admission_date': student.enrollment_date.isoformat() if student.enrollment_date else '',
+        # Extra fields (mostly blank — entered manually on the official form)
+        'record_number':      '',
+        'father_name':        '',
+        'father_house_num':   '',
+        'father_mahalla':     '',
+        'father_occupation':  '',
+        'guardian_house_num': '',
+        'guardian_mahalla':   '',
+        'civil_registry_num': '',
+        'birth_place':        '',
+        'religion':           '',
+        'departure_date':     '',
+        'departure_reason':   '',
     }
+
+
+def _parse_date(val):
+    if not val:
+        return None
+    try:
+        return date.fromisoformat(val.strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+def _parse_extra_fields(form) -> dict:
+    """Extract the extra official-form fields from POST data."""
+    keys = [
+        'record_number', 'father_name', 'father_house_num', 'father_mahalla',
+        'father_occupation', 'guardian_house_num', 'guardian_mahalla',
+        'civil_registry_num', 'birth_place', 'religion',
+        'departure_date', 'departure_reason',
+    ]
+    return {k: form.get(k, '').strip() for k in keys}
+
+
+def _parse_grades_from_form(form) -> dict:
+    """Extract the subject×year grade grid from POST form data.
+    Always produces exactly 9 entries (one per slot) so the PDF can map
+    slot index directly to physical column position.
+    Returns: {"years": [...9 items...]} stored in academic_history_json.
+    """
+    years = []
+    for i in range(9):
+        row = {
+            'class': form.get(f'y{i}_class', '').strip(),
+            'year':  form.get(f'y{i}_year',  '').strip(),
+        }
+        for j in range(len(SUBJECTS)):
+            row[f's{j}_n'] = form.get(f'y{i}_s{j}_n', '').strip()
+            row[f's{j}_t'] = form.get(f'y{i}_s{j}_t', '').strip()
+
+        row['extra'] = [
+            {
+                'name': form.get(f'y{i}_ex{k}_name', '').strip(),
+                'n':    form.get(f'y{i}_ex{k}_n',    '').strip(),
+                't':    form.get(f'y{i}_ex{k}_t',    '').strip(),
+            }
+            for k in range(3)
+        ]
+        for fld in ['total_n', 'total_t', 'behavior', 'result',
+                    'notes_results', 'final_result', 'principal_sig', 'col_notes']:
+            row[fld] = form.get(f'y{i}_{fld}', '').strip()
+
+        years.append(row)  # Always keep all 9 slots — preserves slot↔PDF-column mapping
+
+    return {'years': years}
+
+
+def _apply_record_fields(record, form, school):
+    """Apply all form fields to a record object (new or existing)."""
+    record.snap_full_name       = form.get('snap_full_name', '').strip()
+    record.snap_student_number  = form.get('snap_student_number', '').strip()
+    record.snap_gender          = form.get('snap_gender', '').strip()
+    record.snap_date_of_birth   = _parse_date(form.get('snap_date_of_birth'))
+    record.snap_nationality     = form.get('snap_nationality', '').strip()
+    record.snap_address         = form.get('snap_address', '').strip()
+    record.snap_phone           = form.get('snap_phone', '').strip()
+    record.snap_status          = form.get('snap_status', 'active').strip()
+    record.snap_enrollment_date = _parse_date(form.get('snap_enrollment_date'))
+
+    record.snap_guardian_name     = form.get('snap_guardian_name', '').strip()
+    record.snap_guardian_phone    = form.get('snap_guardian_phone', '').strip()
+    record.snap_guardian_email    = form.get('snap_guardian_email', '').strip()
+    record.snap_guardian_relation = form.get('snap_guardian_relation', '').strip()
+    record.snap_guardian_address  = form.get('snap_guardian_address', '').strip()
+
+    record.snap_school_name    = form.get('snap_school_name',
+                                          school.school_name if school else '').strip()
+    record.snap_school_name_ar = form.get('snap_school_name_ar',
+                                          school.school_name_ar or '' if school else '').strip()
+    record.snap_year_name      = form.get('snap_year_name', '').strip()
+    record.snap_grade_name     = form.get('snap_grade_name', '').strip()
+    record.snap_stage          = form.get('snap_stage', '').strip()
+    record.snap_section_name   = form.get('snap_section_name', '').strip()
+
+    record.admission_date  = _parse_date(form.get('admission_date'))
+    record.document_number = form.get('document_number', '').strip()
+    record.previous_school = form.get('previous_school', '').strip()
+    record.transfer_reason = form.get('transfer_reason', '').strip()
+    record.admission_notes = form.get('admission_notes', '').strip()
+
+    record.has_birth_cert       = bool(form.get('has_birth_cert'))
+    record.has_id_card          = bool(form.get('has_id_card'))
+    record.has_prev_certificate = bool(form.get('has_prev_certificate'))
+    record.has_photo            = bool(form.get('has_photo'))
+    record.document_notes       = form.get('document_notes', '').strip()
+
+    record.general_notes    = form.get('general_notes', '').strip()
+    record.signature_admin  = form.get('signature_admin', '').strip()
+    record.signature_parent = form.get('signature_parent', '').strip()
+
+    record.academic_history = _parse_grades_from_form(form)
+    record.extra_fields     = _parse_extra_fields(form)
 
 
 # ─── AJAX: student search ─────────────────────────────────────────────────────
@@ -99,13 +228,12 @@ def search_students():
         .options(joinedload(Student.section).joinedload(Section.grade))
         .filter(Student.school_id == school.id)
     )
-    if q:
-        query = query.filter(
-            db.or_(
-                Student.full_name.ilike(f'%{q}%'),
-                Student.student_id.ilike(f'%{q}%'),
-            )
+    query = query.filter(
+        db.or_(
+            Student.full_name.ilike(f'%{q}%'),
+            Student.student_id.ilike(f'%{q}%'),
         )
+    )
     students = query.order_by(Student.full_name).limit(20).all()
 
     results = []
@@ -193,7 +321,6 @@ def new():
             flash('الطالب غير موجود أو لا ينتمي لهذه المدرسة.', 'danger')
             return redirect(url_for('student_records.new'))
 
-        # Duplicate guard
         existing = StudentRegistrationRecord.query.filter_by(
             school_id=school.id, student_id=sid
         ).first()
@@ -201,64 +328,22 @@ def new():
             flash('يوجد سجل قيد لهذا الطالب مسبقاً.', 'warning')
             return redirect(url_for('student_records.view', record_id=existing.id))
 
-        # Parse academic history rows from form
-        history = _parse_history_from_form(request.form)
-
         record = StudentRegistrationRecord(
             school_id=school.id,
             student_id=sid,
             created_by=current_user.id,
-            # Student snapshot
-            snap_full_name       = request.form.get('snap_full_name', '').strip(),
-            snap_student_number  = request.form.get('snap_student_number', '').strip(),
-            snap_gender          = request.form.get('snap_gender', '').strip(),
-            snap_date_of_birth   = _parse_date(request.form.get('snap_date_of_birth')),
-            snap_nationality     = request.form.get('snap_nationality', '').strip(),
-            snap_address         = request.form.get('snap_address', '').strip(),
-            snap_phone           = request.form.get('snap_phone', '').strip(),
-            snap_status          = request.form.get('snap_status', 'active').strip(),
-            snap_enrollment_date = _parse_date(request.form.get('snap_enrollment_date')),
-            # Guardian snapshot
-            snap_guardian_name     = request.form.get('snap_guardian_name', '').strip(),
-            snap_guardian_phone    = request.form.get('snap_guardian_phone', '').strip(),
-            snap_guardian_email    = request.form.get('snap_guardian_email', '').strip(),
-            snap_guardian_relation = request.form.get('snap_guardian_relation', '').strip(),
-            snap_guardian_address  = request.form.get('snap_guardian_address', '').strip(),
-            # Placement snapshot
-            snap_school_name    = request.form.get('snap_school_name', school.school_name).strip(),
-            snap_school_name_ar = request.form.get('snap_school_name_ar', school.school_name_ar or '').strip(),
-            snap_year_name      = request.form.get('snap_year_name', '').strip(),
-            snap_grade_name     = request.form.get('snap_grade_name', '').strip(),
-            snap_stage          = request.form.get('snap_stage', '').strip(),
-            snap_section_name   = request.form.get('snap_section_name', '').strip(),
-            # Admission
-            admission_date  = _parse_date(request.form.get('admission_date')),
-            document_number = request.form.get('document_number', '').strip(),
-            previous_school = request.form.get('previous_school', '').strip(),
-            transfer_reason = request.form.get('transfer_reason', '').strip(),
-            admission_notes = request.form.get('admission_notes', '').strip(),
-            # Documents
-            has_birth_cert       = bool(request.form.get('has_birth_cert')),
-            has_id_card          = bool(request.form.get('has_id_card')),
-            has_prev_certificate = bool(request.form.get('has_prev_certificate')),
-            has_photo            = bool(request.form.get('has_photo')),
-            document_notes       = request.form.get('document_notes', '').strip(),
-            # Notes & signatures
-            general_notes    = request.form.get('general_notes', '').strip(),
-            signature_admin  = request.form.get('signature_admin', '').strip(),
-            signature_parent = request.form.get('signature_parent', '').strip(),
         )
-        record.academic_history = history
+        _apply_record_fields(record, request.form, school)
         db.session.add(record)
         db.session.commit()
         flash(f'تم إنشاء سجل القيد للطالب {record.snap_full_name} بنجاح.', 'success')
         return redirect(url_for('student_records.view', record_id=record.id))
 
-    # GET — pre-select student if given in query string
-    prefill      = {}
-    pre_student  = None
-    has_record   = False
-    existing_id  = None
+    # GET
+    prefill     = {}
+    pre_student = None
+    has_record  = False
+    existing_id = None
     sid = request.args.get('student_id', type=int)
     if sid:
         pre_student = Student.query.filter_by(id=sid, school_id=school.id).first()
@@ -275,7 +360,8 @@ def new():
     return render_template('student_records/new.html',
                            school=school, prefill=prefill,
                            pre_student=pre_student,
-                           has_record=has_record, existing_id=existing_id)
+                           has_record=has_record, existing_id=existing_id,
+                           subjects=SUBJECTS, year_labels=YEAR_LABELS)
 
 
 # ─── VIEW ─────────────────────────────────────────────────────────────────────
@@ -289,7 +375,8 @@ def view(record_id):
         id=record_id, school_id=school.id
     ).first_or_404()
     return render_template('student_records/view.html',
-                           record=record, school=school)
+                           record=record, school=school,
+                           subjects=SUBJECTS, year_labels=YEAR_LABELS)
 
 
 # ─── EDIT ─────────────────────────────────────────────────────────────────────
@@ -304,56 +391,15 @@ def edit(record_id):
     ).first_or_404()
 
     if request.method == 'POST':
-        history = _parse_history_from_form(request.form)
-
-        record.snap_full_name       = request.form.get('snap_full_name', '').strip()
-        record.snap_student_number  = request.form.get('snap_student_number', '').strip()
-        record.snap_gender          = request.form.get('snap_gender', '').strip()
-        record.snap_date_of_birth   = _parse_date(request.form.get('snap_date_of_birth'))
-        record.snap_nationality     = request.form.get('snap_nationality', '').strip()
-        record.snap_address         = request.form.get('snap_address', '').strip()
-        record.snap_phone           = request.form.get('snap_phone', '').strip()
-        record.snap_status          = request.form.get('snap_status', 'active').strip()
-        record.snap_enrollment_date = _parse_date(request.form.get('snap_enrollment_date'))
-
-        record.snap_guardian_name     = request.form.get('snap_guardian_name', '').strip()
-        record.snap_guardian_phone    = request.form.get('snap_guardian_phone', '').strip()
-        record.snap_guardian_email    = request.form.get('snap_guardian_email', '').strip()
-        record.snap_guardian_relation = request.form.get('snap_guardian_relation', '').strip()
-        record.snap_guardian_address  = request.form.get('snap_guardian_address', '').strip()
-
-        record.snap_school_name    = request.form.get('snap_school_name', '').strip()
-        record.snap_school_name_ar = request.form.get('snap_school_name_ar', '').strip()
-        record.snap_year_name      = request.form.get('snap_year_name', '').strip()
-        record.snap_grade_name     = request.form.get('snap_grade_name', '').strip()
-        record.snap_stage          = request.form.get('snap_stage', '').strip()
-        record.snap_section_name   = request.form.get('snap_section_name', '').strip()
-
-        record.admission_date  = _parse_date(request.form.get('admission_date'))
-        record.document_number = request.form.get('document_number', '').strip()
-        record.previous_school = request.form.get('previous_school', '').strip()
-        record.transfer_reason = request.form.get('transfer_reason', '').strip()
-        record.admission_notes = request.form.get('admission_notes', '').strip()
-
-        record.has_birth_cert       = bool(request.form.get('has_birth_cert'))
-        record.has_id_card          = bool(request.form.get('has_id_card'))
-        record.has_prev_certificate = bool(request.form.get('has_prev_certificate'))
-        record.has_photo            = bool(request.form.get('has_photo'))
-        record.document_notes       = request.form.get('document_notes', '').strip()
-
-        record.academic_history = history
-
-        record.general_notes    = request.form.get('general_notes', '').strip()
-        record.signature_admin  = request.form.get('signature_admin', '').strip()
-        record.signature_parent = request.form.get('signature_parent', '').strip()
-
+        _apply_record_fields(record, request.form, school)
         record.updated_at = datetime.utcnow()
         db.session.commit()
         flash('تم تحديث سجل القيد بنجاح.', 'success')
         return redirect(url_for('student_records.view', record_id=record.id))
 
     return render_template('student_records/edit.html',
-                           record=record, school=school)
+                           record=record, school=school,
+                           subjects=SUBJECTS, year_labels=YEAR_LABELS)
 
 
 # ─── PDF ──────────────────────────────────────────────────────────────────────
@@ -378,43 +424,3 @@ def pdf(record_id):
     return send_file(buf, mimetype='application/pdf',
                      as_attachment=False,
                      download_name=fname)
-
-
-# ─── Helpers ──────────────────────────────────────────────────────────────────
-
-def _parse_date(val):
-    if not val:
-        return None
-    try:
-        return date.fromisoformat(val.strip())
-    except (ValueError, AttributeError):
-        return None
-
-
-def _parse_history_from_form(form) -> list:
-    """Extract repeating academic history rows from multidict form."""
-    years    = form.getlist('history_year')
-    grades   = form.getlist('history_grade')
-    sections = form.getlist('history_section')
-    results  = form.getlist('history_result')
-    gpas     = form.getlist('history_gpa')
-    rounds   = form.getlist('history_round')
-    statuses = form.getlist('history_status')
-    notes    = form.getlist('history_notes')
-
-    history = []
-    for i in range(len(years)):
-        row = {
-            'year':    years[i]    if i < len(years)    else '',
-            'grade':   grades[i]   if i < len(grades)   else '',
-            'section': sections[i] if i < len(sections) else '',
-            'result':  results[i]  if i < len(results)  else '',
-            'gpa':     gpas[i]     if i < len(gpas)     else '',
-            'round':   rounds[i]   if i < len(rounds)   else '',
-            'status':  statuses[i] if i < len(statuses) else '',
-            'notes':   notes[i]    if i < len(notes)    else '',
-        }
-        # Skip fully empty rows
-        if any(v.strip() for v in row.values()):
-            history.append(row)
-    return history
