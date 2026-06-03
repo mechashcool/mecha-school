@@ -892,6 +892,144 @@ def reopen_room(room_id):
     return redirect(url_for('chat.room_detail', room_id=room.id))
 
 
+# ─── Manual add-member ───────────────────────────────────────────────────────
+
+@chat_bp.route('/rooms/<int:room_id>/members/add', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def add_member(room_id):
+    """
+    GET  — show a same-school user picker (excludes existing members).
+    POST — add the chosen user to the room as a member.
+
+    Security:
+    - Admin only (@admin_required).
+    - Room must belong to the admin's school.
+    - Private rooms are rejected (403) — manual addition is for groups only.
+    - Target user must be active and belong to the same school.
+    - Duplicate membership is silently guarded (flash + redirect).
+    """
+    _require_chat_module()
+    school = get_current_school()
+    if not school:
+        abort(404)
+    room = (
+        ChatRoom.query
+        .execution_options(bypass_tenant_scope=True)
+        .filter_by(id=room_id, school_id=school.id)
+        .first_or_404()
+    )
+
+    if room.type == 'private':
+        abort(403)
+
+    if request.method == 'POST':
+        user_id = request.form.get('user_id', type=int)
+        if not user_id:
+            flash('يرجى اختيار مستخدم.', 'warning')
+            return redirect(url_for('chat.add_member', room_id=room_id))
+
+        # Strict same-school guard.
+        target = (
+            User.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(id=user_id, school_id=school.id, is_active=True)
+            .first()
+        )
+        if not target:
+            flash('المستخدم غير موجود أو لا ينتمي إلى هذه المدرسة.', 'danger')
+            return redirect(url_for('chat.add_member', room_id=room_id))
+
+        # Duplicate guard.
+        if ChatRoomMember.query.filter_by(room_id=room_id, user_id=user_id).first():
+            flash('هذا المستخدم موجود مسبقاً في المجموعة.', 'warning')
+            return redirect(url_for('chat.room_detail', room_id=room_id))
+
+        db.session.add(ChatRoomMember(room_id=room_id, user_id=user_id, role='member'))
+        room.updated_at = datetime.utcnow()
+        db.session.commit()
+        _log.info('[chat] add_member room_id=%s added user_id=%s by admin=%s',
+                  room_id, user_id, current_user.id)
+        flash(f'تمت إضافة {target.full_name} إلى المجموعة.', 'success')
+        return redirect(url_for('chat.room_detail', room_id=room_id))
+
+    # ── GET — build user picker ───────────────────────────────────────────────
+    q_str       = request.args.get('q', '').strip()
+    role_filter = request.args.get('role', '')
+
+    # Exclude users who are already members.
+    existing_ids = {
+        m.user_id for m in ChatRoomMember.query.filter_by(room_id=room_id).all()
+    }
+
+    user_query = (
+        User.query
+        .execution_options(bypass_tenant_scope=True)
+        .join(User.role)
+        .filter(
+            User.school_id == school.id,
+            User.is_active == True,
+            User.id.notin_(existing_ids) if existing_ids else True,
+        )
+    )
+    if role_filter == 'parent':
+        user_query = user_query.filter(Role.name == 'parent')
+    elif role_filter == 'teacher':
+        user_query = user_query.filter(Role.name == 'teacher')
+    elif role_filter == 'admin':
+        user_query = user_query.filter(Role.is_admin == True)
+
+    if q_str:
+        user_query = user_query.filter(User.full_name.ilike(f'%{q_str}%'))
+
+    users = user_query.order_by(Role.name, User.full_name).all()
+
+    # For parents: map user_id → [child name, …]
+    parent_ids = [u.id for u in users if u.role and u.role.name == 'parent']
+    children_map: dict[int, list[str]] = {}
+    if parent_ids:
+        rows = (
+            db.session.query(parent_students.c.user_id, Student.full_name)
+            .join(Student, Student.id == parent_students.c.student_id)
+            .filter(parent_students.c.user_id.in_(parent_ids))
+            .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+            .all()
+        )
+        for uid, name in rows:
+            children_map.setdefault(uid, []).append(name)
+
+    # For employees: map user_id → job_title
+    user_ids = [u.id for u in users]
+    job_titles: dict[int, str] = {}
+    if user_ids:
+        emp_rows = (
+            Employee.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter(
+                Employee.school_id == school.id,
+                Employee.user_id.in_(user_ids),
+                Employee.job_title != None,
+            )
+            .with_entities(Employee.user_id, Employee.job_title)
+            .all()
+        )
+        for uid, title in emp_rows:
+            if uid and title:
+                job_titles[uid] = title
+
+    return render_template(
+        'chat/add_member.html',
+        room=room,
+        users=users,
+        children_map=children_map,
+        job_titles=job_titles,
+        existing_count=len(existing_ids),
+        q=q_str,
+        role_filter=role_filter,
+        school=school,
+    )
+
+
 # ─── Rebuild members ──────────────────────────────────────────────────────────
 
 @chat_bp.route('/rooms/<int:room_id>/rebuild-members', methods=['POST'])

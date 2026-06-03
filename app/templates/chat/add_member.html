@@ -1,0 +1,136 @@
+{% extends "shared/base.html" %}
+{% block title %}إضافة عضو — {{ room.name }}{% endblock %}
+{% block page_title %}إضافة عضو{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">إضافة عضو</h1>
+    <p class="page-subtitle">
+      {{ room.name }}
+      <span class="text-muted mx-1">·</span>
+      {{ existing_count }} عضو حالي
+    </p>
+  </div>
+  <a href="{{ url_for('chat.room_detail', room_id=room.id) }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>العودة للمجموعة
+  </a>
+</div>
+
+{# ── Search & role filter ── #}
+<div class="card mb-4">
+  <div class="card-body">
+    <form method="GET" action="{{ url_for('chat.add_member', room_id=room.id) }}"
+          class="row g-3 align-items-end">
+      <div class="col-12 col-md-6">
+        <label class="form-label">بحث بالاسم</label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="bi bi-search"></i></span>
+          <input type="text" name="q" class="form-control" placeholder="اكتب الاسم…"
+                 value="{{ q }}" autofocus>
+        </div>
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label">تصفية حسب الدور</label>
+        <select name="role" class="form-select" onchange="this.form.submit()">
+          <option value=""        {{ 'selected' if role_filter == '' }}>الكل</option>
+          <option value="parent"  {{ 'selected' if role_filter == 'parent' }}>أولياء الأمور</option>
+          <option value="teacher" {{ 'selected' if role_filter == 'teacher' }}>التدريسيون</option>
+          <option value="admin"   {{ 'selected' if role_filter == 'admin' }}>الإدارة</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-primary">بحث</button>
+        {% if q or role_filter %}
+        <a href="{{ url_for('chat.add_member', room_id=room.id) }}"
+           class="btn btn-outline-secondary ms-1">مسح</a>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ── User list ── #}
+{% if users %}
+<div class="list-group shadow-sm">
+  {% for user in users %}
+  {% set is_parent  = user.role and user.role.name == 'parent' %}
+  {% set is_teacher = user.role and user.role.name == 'teacher' %}
+  {% set children   = children_map.get(user.id, []) %}
+  {% set job        = job_titles.get(user.id) %}
+
+  <div class="list-group-item list-group-item-action d-flex align-items-center gap-3 py-3">
+
+    {# Avatar #}
+    <div class="rounded-circle d-flex align-items-center justify-content-center flex-shrink-0
+                {% if is_parent %}bg-warning bg-opacity-15
+                {% elif is_teacher %}bg-info bg-opacity-15
+                {% else %}bg-secondary bg-opacity-15{% endif %}"
+         style="width:44px;height:44px">
+      <i class="bi
+         {% if is_parent %}bi-person-heart text-warning
+         {% elif is_teacher %}bi-person-workspace text-info
+         {% else %}bi-person-badge text-secondary{% endif %} fs-5"></i>
+    </div>
+
+    {# Details #}
+    <div class="flex-grow-1 overflow-hidden">
+      <div class="fw-semibold text-truncate">{{ user.full_name }}</div>
+      <div class="small">
+        {% if is_parent %}
+          <span class="badge bg-warning text-dark">ولي أمر</span>
+        {% elif is_teacher %}
+          <span class="badge bg-info text-dark">مدرّس</span>
+        {% elif user.role and user.role.is_admin %}
+          <span class="badge bg-secondary">إدارة</span>
+        {% elif user.role %}
+          <span class="badge bg-light text-dark border">{{ user.role.name }}</span>
+        {% endif %}
+        {% if job %}
+          <span class="text-muted ms-1">— {{ job }}</span>
+        {% endif %}
+      </div>
+      {% if is_parent and children %}
+      <div class="small text-muted mt-1 text-truncate">
+        <i class="bi bi-people me-1"></i>{{ children | join('، ') }}
+      </div>
+      {% elif is_parent %}
+      <div class="small text-muted mt-1">
+        <i class="bi bi-dash me-1"></i>لا يوجد طلاب مرتبطون
+      </div>
+      {% endif %}
+    </div>
+
+    {# Add button — standalone form per user #}
+    <form method="POST" action="{{ url_for('chat.add_member', room_id=room.id) }}"
+          class="flex-shrink-0">
+      <input type="hidden" name="user_id" value="{{ user.id }}">
+      <button type="submit" class="btn btn-sm btn-outline-success">
+        <i class="bi bi-person-plus-fill me-1"></i>إضافة
+      </button>
+    </form>
+
+  </div>
+  {% endfor %}
+</div>
+
+<p class="text-muted small mt-3">
+  {{ users | length }} مستخدم غير مضاف بعد
+</p>
+
+{% else %}
+<div class="text-center py-5 text-muted">
+  <i class="bi bi-people" style="font-size:3rem"></i>
+  {% if q or role_filter %}
+  <p class="mt-3">لا يوجد مستخدمون مطابقون للبحث.</p>
+  <a href="{{ url_for('chat.add_member', room_id=room.id) }}"
+     class="btn btn-outline-secondary mt-2">
+    <i class="bi bi-x-circle me-1"></i>مسح الفلاتر
+  </a>
+  {% else %}
+  <p class="mt-3">جميع مستخدمي المدرسة أعضاء في هذه المجموعة بالفعل.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+{% endblock %}

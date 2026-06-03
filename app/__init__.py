@@ -85,6 +85,7 @@ def create_app(config_name=None):
     from app.blueprints.school_calendar   import school_calendar_bp
     from app.blueprints.homework          import homework_bp
     from app.blueprints.chat              import chat_bp
+    from app.blueprints.student_records   import student_records_bp
 
     app.register_blueprint(auth_bp,          url_prefix='/auth')
     app.register_blueprint(admin_bp,         url_prefix='/admin')
@@ -115,6 +116,7 @@ def create_app(config_name=None):
     app.register_blueprint(school_calendar_bp,     url_prefix='/school-calendar')
     app.register_blueprint(homework_bp,            url_prefix='/homework')
     app.register_blueprint(chat_bp,                url_prefix='/chat')
+    app.register_blueprint(student_records_bp,     url_prefix='/student-registration-records')
 
     # ── Jinja2 globals ────────────────────────────────────────────────────────
     from app.utils.helpers import resolve_photo_url

@@ -1,0 +1,532 @@
+{% extends "shared/base.html" %}
+{% block title %}إضافة سجل قيد جديد{% endblock %}
+{% block page_title %}إضافة سجل قيد جديد{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">إضافة سجل قيد جديد</h1>
+    <p class="page-subtitle">ابحث عن الطالب ثم أكمل بيانات السجل</p>
+  </div>
+  <a href="{{ url_for('student_records.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>العودة للقائمة
+  </a>
+</div>
+
+{# ── Step 1: Student search ── #}
+<div class="card mb-4" id="student-search-card">
+  <div class="card-header fw-semibold">
+    <i class="bi bi-search me-1"></i> الخطوة 1: اختيار الطالب
+  </div>
+  <div class="card-body">
+    {% if has_record and pre_student %}
+    <div class="alert alert-warning d-flex align-items-center gap-3">
+      <i class="bi bi-exclamation-triangle-fill fs-4"></i>
+      <div>
+        <strong>يوجد سجل قيد لهذا الطالب مسبقاً</strong> — {{ pre_student.full_name }}
+        <div class="mt-2">
+          <a href="{{ url_for('student_records.view', record_id=existing_id) }}"
+             class="btn btn-sm btn-outline-primary me-1">
+            <i class="bi bi-eye-fill me-1"></i>عرض السجل
+          </a>
+          <a href="{{ url_for('student_records.edit', record_id=existing_id) }}"
+             class="btn btn-sm btn-outline-secondary me-1">
+            <i class="bi bi-pencil-fill me-1"></i>تعديل السجل
+          </a>
+          <a href="{{ url_for('student_records.pdf', record_id=existing_id) }}"
+             target="_blank" class="btn btn-sm btn-outline-danger">
+            <i class="bi bi-file-earmark-pdf-fill me-1"></i>طباعة PDF
+          </a>
+        </div>
+      </div>
+    </div>
+    {% else %}
+
+    <div class="row g-3">
+      <div class="col-12 col-md-8">
+        <label class="form-label fw-semibold">البحث عن طالب</label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="bi bi-person-search"></i></span>
+          <input type="text" id="student-search-input" class="form-control"
+                 placeholder="اكتب الاسم أو رقم الطالب للبحث…"
+                 autocomplete="off"
+                 value="{{ pre_student.full_name if pre_student else '' }}">
+        </div>
+        <div id="search-results" class="list-group mt-1 position-absolute z-3"
+             style="max-width:500px;display:none"></div>
+      </div>
+    </div>
+
+    {% if pre_student %}
+    <div class="alert alert-info mt-3 mb-0 d-flex align-items-center gap-2">
+      <i class="bi bi-person-check-fill fs-5"></i>
+      <span>
+        تم اختيار: <strong>{{ pre_student.full_name }}</strong>
+        ({{ pre_student.student_id }})
+        — تم تعبئة الحقول التلقائية أدناه. يمكنك تعديلها قبل الحفظ.
+      </span>
+    </div>
+    {% endif %}
+
+    {% endif %}
+  </div>
+</div>
+
+{% if not has_record %}
+{# ── The main form ── #}
+<form method="POST" id="record-form">
+  <input type="hidden" name="student_id" id="hidden-student-id"
+         value="{{ pre_student.id if pre_student else '' }}">
+
+  {# ══ 1. بيانات الطالب ══ #}
+  <div class="card mb-4">
+    <div class="card-header fw-semibold text-primary">
+      <i class="bi bi-person-fill me-1"></i> بيانات الطالب
+    </div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label">اسم الطالب <span class="text-danger">*</span></label>
+          <input type="text" name="snap_full_name" class="form-control" required
+                 id="f-full-name"
+                 value="{{ prefill.get('snap_full_name', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">رقم الطالب</label>
+          <input type="text" name="snap_student_number" class="form-control"
+                 id="f-student-number"
+                 value="{{ prefill.get('snap_student_number', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">الجنس</label>
+          <select name="snap_gender" class="form-select" id="f-gender">
+            <option value="">—</option>
+            <option value="male"   {{ 'selected' if prefill.get('snap_gender') == 'male' }}>ذكر</option>
+            <option value="female" {{ 'selected' if prefill.get('snap_gender') == 'female' }}>أنثى</option>
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">تاريخ الميلاد</label>
+          <input type="date" name="snap_date_of_birth" class="form-control"
+                 id="f-dob"
+                 value="{{ prefill.get('snap_date_of_birth', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">الجنسية</label>
+          <input type="text" name="snap_nationality" class="form-control"
+                 id="f-nationality"
+                 value="{{ prefill.get('snap_nationality', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">هاتف الطالب</label>
+          <input type="text" name="snap_phone" class="form-control"
+                 id="f-phone"
+                 value="{{ prefill.get('snap_phone', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">الحالة</label>
+          <select name="snap_status" class="form-select" id="f-status">
+            <option value="active"   {{ 'selected' if prefill.get('snap_status', 'active') == 'active' }}>نشط</option>
+            <option value="archived" {{ 'selected' if prefill.get('snap_status') == 'archived' }}>محفوظ</option>
+            <option value="inactive" {{ 'selected' if prefill.get('snap_status') == 'inactive' }}>غير نشط</option>
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">العنوان</label>
+          <input type="text" name="snap_address" class="form-control"
+                 id="f-address"
+                 value="{{ prefill.get('snap_address', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">تاريخ التسجيل</label>
+          <input type="date" name="snap_enrollment_date" class="form-control"
+                 id="f-enrollment-date"
+                 value="{{ prefill.get('snap_enrollment_date', '') }}">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ══ 2. بيانات ولي الأمر ══ #}
+  <div class="card mb-4">
+    <div class="card-header fw-semibold text-warning">
+      <i class="bi bi-person-heart me-1"></i> بيانات ولي الأمر
+    </div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-md-4">
+          <label class="form-label">اسم ولي الأمر</label>
+          <input type="text" name="snap_guardian_name" class="form-control"
+                 id="f-gname"
+                 value="{{ prefill.get('snap_guardian_name', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">صلة القرابة</label>
+          <input type="text" name="snap_guardian_relation" class="form-control"
+                 id="f-grelation"
+                 value="{{ prefill.get('snap_guardian_relation', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">هاتف ولي الأمر</label>
+          <input type="text" name="snap_guardian_phone" class="form-control"
+                 id="f-gphone"
+                 value="{{ prefill.get('snap_guardian_phone', '') }}">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">البريد الإلكتروني</label>
+          <input type="email" name="snap_guardian_email" class="form-control"
+                 id="f-gemail"
+                 value="{{ prefill.get('snap_guardian_email', '') }}">
+        </div>
+        <div class="col-md-5">
+          <label class="form-label">عنوان ولي الأمر</label>
+          <input type="text" name="snap_guardian_address" class="form-control"
+                 id="f-gaddress"
+                 value="{{ prefill.get('snap_guardian_address', '') }}">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ══ 3. بيانات القبول والتسجيل ══ #}
+  <div class="card mb-4">
+    <div class="card-header fw-semibold text-success">
+      <i class="bi bi-building me-1"></i> بيانات القبول والتسجيل
+    </div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-md-3">
+          <label class="form-label">المدرسة (عربي)</label>
+          <input type="text" name="snap_school_name_ar" class="form-control"
+                 id="f-school-ar"
+                 value="{{ prefill.get('snap_school_name_ar', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">المدرسة (إنجليزي)</label>
+          <input type="text" name="snap_school_name" class="form-control"
+                 id="f-school-en"
+                 value="{{ prefill.get('snap_school_name', '') }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">العام الدراسي</label>
+          <input type="text" name="snap_year_name" class="form-control"
+                 id="f-year"
+                 value="{{ prefill.get('snap_year_name', '') }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">المرحلة</label>
+          <input type="text" name="snap_stage" class="form-control"
+                 id="f-stage"
+                 value="{{ prefill.get('snap_stage', '') }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">الصف</label>
+          <input type="text" name="snap_grade_name" class="form-control"
+                 id="f-grade"
+                 value="{{ prefill.get('snap_grade_name', '') }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">الشعبة</label>
+          <input type="text" name="snap_section_name" class="form-control"
+                 id="f-section"
+                 value="{{ prefill.get('snap_section_name', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">تاريخ القبول</label>
+          <input type="date" name="admission_date" class="form-control"
+                 id="f-admission-date"
+                 value="{{ prefill.get('admission_date', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">رقم الوثيقة</label>
+          <input type="text" name="document_number" class="form-control">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">المدرسة السابقة</label>
+          <input type="text" name="previous_school" class="form-control">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">سبب التحويل</label>
+          <textarea name="transfer_reason" class="form-control" rows="2"></textarea>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">ملاحظات القبول</label>
+          <textarea name="admission_notes" class="form-control" rows="2"></textarea>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ══ 4. معلومات الوثائق ══ #}
+  <div class="card mb-4">
+    <div class="card-header fw-semibold text-info">
+      <i class="bi bi-folder-fill me-1"></i> معلومات الوثائق
+    </div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-auto">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" name="has_birth_cert"
+                   id="has_birth_cert" value="1">
+            <label class="form-check-label" for="has_birth_cert">شهادة الميلاد</label>
+          </div>
+        </div>
+        <div class="col-auto">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" name="has_id_card"
+                   id="has_id_card" value="1">
+            <label class="form-check-label" for="has_id_card">بطاقة الهوية</label>
+          </div>
+        </div>
+        <div class="col-auto">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" name="has_prev_certificate"
+                   id="has_prev_cert" value="1">
+            <label class="form-check-label" for="has_prev_cert">شهادة المدرسة السابقة</label>
+          </div>
+        </div>
+        <div class="col-auto">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" name="has_photo"
+                   id="has_photo" value="1">
+            <label class="form-check-label" for="has_photo">صورة شخصية</label>
+          </div>
+        </div>
+        <div class="col-12">
+          <label class="form-label">ملاحظات الوثائق</label>
+          <textarea name="document_notes" class="form-control" rows="2"></textarea>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ══ 5. سجل السنوات الدراسية ══ #}
+  <div class="card mb-4">
+    <div class="card-header fw-semibold text-secondary d-flex justify-content-between align-items-center">
+      <span><i class="bi bi-table me-1"></i> سجل السنوات الدراسية</span>
+      <button type="button" class="btn btn-sm btn-outline-secondary" id="add-history-row">
+        <i class="bi bi-plus-circle me-1"></i>إضافة سنة
+      </button>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-bordered mb-0 align-middle" id="history-table">
+          <thead class="table-light">
+            <tr>
+              <th>العام الدراسي</th>
+              <th>الصف</th>
+              <th>الشعبة</th>
+              <th>النتيجة</th>
+              <th>المعدل</th>
+              <th>الدور</th>
+              <th>الحالة</th>
+              <th>الملاحظات</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="history-body">
+            <tr class="history-row">
+              <td><input type="text" name="history_year"    class="form-control form-control-sm"></td>
+              <td><input type="text" name="history_grade"   class="form-control form-control-sm"></td>
+              <td><input type="text" name="history_section" class="form-control form-control-sm"></td>
+              <td><input type="text" name="history_result"  class="form-control form-control-sm"></td>
+              <td><input type="text" name="history_gpa"     class="form-control form-control-sm"></td>
+              <td><input type="text" name="history_round"   class="form-control form-control-sm"></td>
+              <td><input type="text" name="history_status"  class="form-control form-control-sm"></td>
+              <td><input type="text" name="history_notes"   class="form-control form-control-sm"></td>
+              <td>
+                <button type="button" class="btn btn-sm btn-outline-danger remove-row">
+                  <i class="bi bi-trash3"></i>
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  {# ══ 6. الملاحظات والتواقيع ══ #}
+  <div class="card mb-4">
+    <div class="card-header fw-semibold">
+      <i class="bi bi-pen-fill me-1"></i> الملاحظات والتواقيع
+    </div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-12">
+          <label class="form-label">الملاحظات العامة</label>
+          <textarea name="general_notes" class="form-control" rows="3"></textarea>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">توقيع المدير / الإدارة</label>
+          <input type="text" name="signature_admin" class="form-control"
+                 placeholder="الاسم والتوقيع">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">توقيع ولي الأمر</label>
+          <input type="text" name="signature_parent" class="form-control"
+                 placeholder="الاسم والتوقيع">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Submit ── #}
+  <div class="d-flex gap-2 justify-content-end mb-5">
+    <a href="{{ url_for('student_records.index') }}" class="btn btn-outline-secondary">
+      إلغاء
+    </a>
+    <button type="submit" class="btn btn-primary" id="submit-btn" disabled>
+      <i class="bi bi-save-fill me-1"></i>حفظ السجل
+    </button>
+  </div>
+</form>
+{% endif %}
+
+<script>
+(function () {
+  const searchInput  = document.getElementById('student-search-input');
+  const searchRes    = document.getElementById('search-results');
+  const hiddenSid    = document.getElementById('hidden-student-id');
+  const submitBtn    = document.getElementById('submit-btn');
+
+  // Enable submit if student already pre-selected
+  if (hiddenSid && hiddenSid.value) {
+    submitBtn && (submitBtn.disabled = false);
+  }
+
+  if (!searchInput) return;
+
+  let debounceTimer;
+
+  searchInput.addEventListener('input', function () {
+    clearTimeout(debounceTimer);
+    const q = this.value.trim();
+    if (q.length < 1) { searchRes.style.display = 'none'; return; }
+    debounceTimer = setTimeout(() => doSearch(q), 280);
+  });
+
+  function doSearch(q) {
+    fetch(`{{ url_for('student_records.search_students') }}?q=${encodeURIComponent(q)}`)
+      .then(r => r.json())
+      .then(students => {
+        searchRes.innerHTML = '';
+        if (!students.length) {
+          searchRes.innerHTML = '<div class="list-group-item text-muted small">لا توجد نتائج</div>';
+        } else {
+          students.forEach(s => {
+            const a = document.createElement('a');
+            a.href = '#';
+            a.className = 'list-group-item list-group-item-action py-2';
+
+            let badge = '';
+            if (s.has_record) {
+              badge = ' <span class="badge bg-warning text-dark ms-1">يوجد سجل</span>';
+            }
+
+            a.innerHTML = `
+              <div class="d-flex justify-content-between align-items-center">
+                <div>
+                  <span class="fw-semibold">${s.full_name}</span>
+                  <small class="text-muted ms-2">${s.student_number || ''}</small>
+                  ${badge}
+                </div>
+                <small class="text-muted">${s.grade || ''} ${s.section ? '/ ' + s.section : ''}</small>
+              </div>`;
+            a.addEventListener('click', e => {
+              e.preventDefault();
+              selectStudent(s);
+            });
+            searchRes.appendChild(a);
+          });
+        }
+        searchRes.style.display = 'block';
+      });
+  }
+
+  function selectStudent(s) {
+    searchRes.style.display = 'none';
+    searchInput.value = s.full_name;
+
+    if (s.has_record) {
+      // Redirect to new page pre-selected with that student — server will show the warning
+      window.location.href = `{{ url_for('student_records.new') }}?student_id=${s.id}`;
+      return;
+    }
+
+    // Fetch full autofill data then fill form
+    fetch(`{{ url_for('student_records.get_student_data', student_id=0) }}`.replace('/0', `/${s.id}`))
+      .then(r => r.json())
+      .then(data => {
+        hiddenSid.value = s.id;
+        submitBtn.disabled = false;
+
+        const fmap = {
+          'snap_full_name':       'f-full-name',
+          'snap_student_number':  'f-student-number',
+          'snap_nationality':     'f-nationality',
+          'snap_address':         'f-address',
+          'snap_phone':           'f-phone',
+          'snap_date_of_birth':   'f-dob',
+          'snap_enrollment_date': 'f-enrollment-date',
+          'snap_guardian_name':   'f-gname',
+          'snap_guardian_phone':  'f-gphone',
+          'snap_guardian_email':  'f-gemail',
+          'snap_guardian_relation': 'f-grelation',
+          'snap_guardian_address':  'f-gaddress',
+          'snap_school_name':     'f-school-en',
+          'snap_school_name_ar':  'f-school-ar',
+          'snap_year_name':       'f-year',
+          'snap_grade_name':      'f-grade',
+          'snap_stage':           'f-stage',
+          'snap_section_name':    'f-section',
+          'admission_date':       'f-admission-date',
+        };
+        Object.entries(fmap).forEach(([key, id]) => {
+          const el = document.getElementById(id);
+          if (el && data[key] !== undefined) el.value = data[key];
+        });
+
+        // Gender select
+        const genderEl = document.getElementById('f-gender');
+        if (genderEl && data.snap_gender) genderEl.value = data.snap_gender;
+
+        // Status select
+        const statusEl = document.getElementById('f-status');
+        if (statusEl && data.snap_status) statusEl.value = data.snap_status;
+      });
+  }
+
+  // Close dropdown when clicking outside
+  document.addEventListener('click', e => {
+    if (!searchRes.contains(e.target) && e.target !== searchInput) {
+      searchRes.style.display = 'none';
+    }
+  });
+
+  // Academic history rows
+  const addBtn   = document.getElementById('add-history-row');
+  const histBody = document.getElementById('history-body');
+
+  if (addBtn && histBody) {
+    addBtn.addEventListener('click', () => {
+      const tpl = histBody.querySelector('.history-row');
+      const clone = tpl.cloneNode(true);
+      clone.querySelectorAll('input').forEach(inp => inp.value = '');
+      histBody.appendChild(clone);
+    });
+
+    histBody.addEventListener('click', e => {
+      if (e.target.closest('.remove-row')) {
+        const rows = histBody.querySelectorAll('.history-row');
+        if (rows.length > 1) {
+          e.target.closest('.history-row').remove();
+        } else {
+          e.target.closest('.history-row').querySelectorAll('input').forEach(i => i.value = '');
+        }
+      }
+    });
+  }
+})();
+</script>
+{% endblock %}

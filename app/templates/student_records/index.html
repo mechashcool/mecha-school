@@ -1,0 +1,143 @@
+{% extends "shared/base.html" %}
+{% block title %}سجلات قيد الطلاب{% endblock %}
+{% block page_title %}سجل قيد الطالب{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">سجل قيد الطالب</h1>
+    <p class="page-subtitle">السجلات الرسمية لقيد الطلاب في المدرسة</p>
+  </div>
+  <a href="{{ url_for('student_records.new') }}" class="btn btn-primary">
+    <i class="bi bi-plus-circle-fill me-1"></i>إضافة سجل جديد
+  </a>
+</div>
+
+{# ── Search ── #}
+<div class="card mb-4">
+  <div class="card-body">
+    <form method="GET" class="row g-3 align-items-end">
+      <div class="col-12 col-md-8">
+        <label class="form-label">بحث بالاسم أو رقم الطالب</label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="bi bi-search"></i></span>
+          <input type="text" name="q" class="form-control"
+                 placeholder="اكتب اسم الطالب أو رقمه…" value="{{ q }}" autofocus>
+        </div>
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-primary">بحث</button>
+        {% if q %}
+        <a href="{{ url_for('student_records.index') }}"
+           class="btn btn-outline-secondary ms-1">مسح</a>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ── Table ── #}
+{% if records.items %}
+<div class="card shadow-sm">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0 align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>#</th>
+            <th>اسم الطالب</th>
+            <th>رقم الطالب</th>
+            <th>الصف / الشعبة</th>
+            <th>العام الدراسي</th>
+            <th>تاريخ الإنشاء</th>
+            <th>آخر تحديث</th>
+            <th class="text-center">الإجراءات</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for rec in records.items %}
+          <tr>
+            <td class="text-muted small">{{ loop.index + (records.page - 1) * records.per_page }}</td>
+            <td class="fw-semibold">{{ rec.snap_full_name }}</td>
+            <td><code>{{ rec.snap_student_number or '—' }}</code></td>
+            <td>
+              {% if rec.snap_grade_name %}
+                {{ rec.snap_grade_name }}
+                {% if rec.snap_section_name %} / {{ rec.snap_section_name }}{% endif %}
+              {% else %}—{% endif %}
+            </td>
+            <td>{{ rec.snap_year_name or '—' }}</td>
+            <td class="text-muted small">{{ rec.created_at | to_baghdad('%Y-%m-%d') }}</td>
+            <td class="text-muted small">{{ rec.updated_at | to_baghdad('%Y-%m-%d') }}</td>
+            <td class="text-center">
+              <a href="{{ url_for('student_records.view', record_id=rec.id) }}"
+                 class="btn btn-sm btn-outline-primary me-1" title="عرض">
+                <i class="bi bi-eye-fill"></i>
+              </a>
+              <a href="{{ url_for('student_records.edit', record_id=rec.id) }}"
+                 class="btn btn-sm btn-outline-secondary me-1" title="تعديل">
+                <i class="bi bi-pencil-fill"></i>
+              </a>
+              <a href="{{ url_for('student_records.pdf', record_id=rec.id) }}"
+                 target="_blank"
+                 class="btn btn-sm btn-outline-danger" title="طباعة PDF">
+                <i class="bi bi-file-earmark-pdf-fill"></i>
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{# ── Pagination ── #}
+{% if records.pages > 1 %}
+<nav class="mt-3">
+  <ul class="pagination justify-content-center">
+    {% if records.has_prev %}
+    <li class="page-item">
+      <a class="page-link" href="{{ url_for('student_records.index', page=records.prev_num, q=q) }}">
+        السابق
+      </a>
+    </li>
+    {% endif %}
+    {% for p in records.iter_pages() %}
+      {% if p %}
+      <li class="page-item {{ 'active' if p == records.page }}">
+        <a class="page-link" href="{{ url_for('student_records.index', page=p, q=q) }}">{{ p }}</a>
+      </li>
+      {% else %}
+      <li class="page-item disabled"><span class="page-link">…</span></li>
+      {% endif %}
+    {% endfor %}
+    {% if records.has_next %}
+    <li class="page-item">
+      <a class="page-link" href="{{ url_for('student_records.index', page=records.next_num, q=q) }}">
+        التالي
+      </a>
+    </li>
+    {% endif %}
+  </ul>
+</nav>
+{% endif %}
+
+{% else %}
+<div class="text-center py-5 text-muted">
+  <i class="bi bi-card-text" style="font-size:3rem"></i>
+  {% if q %}
+  <p class="mt-3">لا توجد سجلات مطابقة للبحث.</p>
+  <a href="{{ url_for('student_records.index') }}" class="btn btn-outline-secondary mt-2">
+    <i class="bi bi-x-circle me-1"></i>مسح البحث
+  </a>
+  {% else %}
+  <p class="mt-3">لا توجد سجلات قيد بعد.</p>
+  <a href="{{ url_for('student_records.new') }}" class="btn btn-primary mt-2">
+    <i class="bi bi-plus-circle-fill me-1"></i>إضافة أول سجل
+  </a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% endblock %}

@@ -26,6 +26,11 @@
     <a href="{{ url_for('chat.room_schedule', room_id=room.id) }}" class="btn btn-outline-secondary btn-sm">
       <i class="bi bi-clock me-1"></i>الأوقات
     </a>
+    {% if room.type != 'private' %}
+    <a href="{{ url_for('chat.add_member', room_id=room.id) }}" class="btn btn-outline-success btn-sm">
+      <i class="bi bi-person-plus-fill me-1"></i>إضافة عضو
+    </a>
+    {% endif %}
     {% if room.scope != 'custom' %}
     <form method="POST" action="{{ url_for('chat.rebuild_members', room_id=room.id) }}" class="d-inline"
           onsubmit="return confirm('هل تريد إعادة توليد الأعضاء تلقائياً بناءً على نطاق المجموعة؟')">

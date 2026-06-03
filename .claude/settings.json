@@ -32,7 +32,12 @@
       "Bash(python -m flask cleanup-chat-test-schools)",
       "Bash(git push *)",
       "Bash(python -m pytest tests/test_parent_requests.py -v --tb=short)",
-      "Bash(Get-ChildItem -Path \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\app\\\\blueprints\\\\chat\" -Recurse -File)"
+      "Bash(Get-ChildItem -Path \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\app\\\\blueprints\\\\chat\" -Recurse -File)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\app\" -Directory)",
+      "Bash(python -m flask db heads)",
+      "Bash(python -m pytest tests/test_student_registration_records.py -v)",
+      "Bash(python -m pytest tests/test_student_registration_records.py::StudentRegistrationRecordTest::test_cross_school_view_blocked -v)",
+      "Bash(python -m pytest tests/test_student_registration_records.py::StudentRegistrationRecordTest::test_cross_school_view_blocked -v -s)"
     ]
   }
 }

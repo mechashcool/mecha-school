@@ -1,0 +1,215 @@
+{% extends "shared/base.html" %}
+{% block title %}سجل قيد — {{ record.snap_full_name }}{% endblock %}
+{% block page_title %}سجل قيد الطالب{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ record.snap_full_name }}</h1>
+    <p class="page-subtitle">رقم الطالب: {{ record.snap_student_number or '—' }}</p>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <a href="{{ url_for('student_records.index') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>القائمة
+    </a>
+    <a href="{{ url_for('student_records.edit', record_id=record.id) }}"
+       class="btn btn-outline-primary">
+      <i class="bi bi-pencil-fill me-1"></i>تعديل
+    </a>
+    <a href="{{ url_for('student_records.pdf', record_id=record.id) }}"
+       target="_blank" class="btn btn-danger">
+      <i class="bi bi-file-earmark-pdf-fill me-1"></i>طباعة PDF (A3)
+    </a>
+  </div>
+</div>
+
+{# ══ Student ══ #}
+<div class="card mb-4">
+  <div class="card-header fw-semibold text-primary">
+    <i class="bi bi-person-fill me-1"></i> بيانات الطالب
+  </div>
+  <div class="card-body">
+    <div class="row g-3">
+      {% macro field(label, val) %}
+      <div class="col-md-3">
+        <div class="text-muted small">{{ label }}</div>
+        <div class="fw-semibold">{{ val or '—' }}</div>
+      </div>
+      {% endmacro %}
+
+      {{ field('اسم الطالب',   record.snap_full_name) }}
+      {{ field('رقم الطالب',   record.snap_student_number) }}
+      {{ field('الجنس', {'male':'ذكر','female':'أنثى'}.get(record.snap_gender or '', record.snap_gender or '—')) }}
+      {{ field('تاريخ الميلاد', record.snap_date_of_birth) }}
+      {{ field('الجنسية',       record.snap_nationality) }}
+      {{ field('الهاتف',        record.snap_phone) }}
+      {{ field('العنوان',       record.snap_address) }}
+      {{ field('الحالة', {'active':'نشط','archived':'محفوظ','inactive':'غير نشط'}.get(record.snap_status or '', record.snap_status or '—')) }}
+      {{ field('تاريخ التسجيل', record.snap_enrollment_date) }}
+    </div>
+  </div>
+</div>
+
+{# ══ Guardian ══ #}
+<div class="card mb-4">
+  <div class="card-header fw-semibold text-warning">
+    <i class="bi bi-person-heart me-1"></i> بيانات ولي الأمر
+  </div>
+  <div class="card-body">
+    <div class="row g-3">
+      {% macro field2(label, val) %}
+      <div class="col-md-3">
+        <div class="text-muted small">{{ label }}</div>
+        <div class="fw-semibold">{{ val or '—' }}</div>
+      </div>
+      {% endmacro %}
+      {{ field2('الاسم',         record.snap_guardian_name) }}
+      {{ field2('صلة القرابة',  record.snap_guardian_relation) }}
+      {{ field2('الهاتف',       record.snap_guardian_phone) }}
+      {{ field2('البريد',       record.snap_guardian_email) }}
+      {{ field2('العنوان',      record.snap_guardian_address) }}
+    </div>
+  </div>
+</div>
+
+{# ══ Admission ══ #}
+<div class="card mb-4">
+  <div class="card-header fw-semibold text-success">
+    <i class="bi bi-building me-1"></i> بيانات القبول والتسجيل
+  </div>
+  <div class="card-body">
+    <div class="row g-3">
+      {% macro field3(label, val) %}
+      <div class="col-md-3">
+        <div class="text-muted small">{{ label }}</div>
+        <div class="fw-semibold">{{ val or '—' }}</div>
+      </div>
+      {% endmacro %}
+      {{ field3('المدرسة (عربي)',   record.snap_school_name_ar) }}
+      {{ field3('المدرسة (إنجليزي)', record.snap_school_name) }}
+      {{ field3('العام الدراسي',    record.snap_year_name) }}
+      {{ field3('المرحلة',          record.snap_stage) }}
+      {{ field3('الصف',             record.snap_grade_name) }}
+      {{ field3('الشعبة',           record.snap_section_name) }}
+      {{ field3('تاريخ القبول',     record.admission_date) }}
+      {{ field3('رقم الوثيقة',      record.document_number) }}
+      {{ field3('المدرسة السابقة',  record.previous_school) }}
+      {% if record.transfer_reason %}
+      <div class="col-md-6">
+        <div class="text-muted small">سبب التحويل</div>
+        <div>{{ record.transfer_reason }}</div>
+      </div>
+      {% endif %}
+      {% if record.admission_notes %}
+      <div class="col-md-6">
+        <div class="text-muted small">ملاحظات القبول</div>
+        <div>{{ record.admission_notes }}</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{# ══ Documents ══ #}
+<div class="card mb-4">
+  <div class="card-header fw-semibold text-info">
+    <i class="bi bi-folder-fill me-1"></i> الوثائق
+  </div>
+  <div class="card-body">
+    <div class="d-flex flex-wrap gap-3 mb-2">
+      <span class="badge {{ 'bg-success' if record.has_birth_cert else 'bg-light text-dark border' }} fs-6 py-2 px-3">
+        <i class="bi bi-{{ 'check-circle-fill' if record.has_birth_cert else 'x-circle' }} me-1"></i>
+        شهادة الميلاد
+      </span>
+      <span class="badge {{ 'bg-success' if record.has_id_card else 'bg-light text-dark border' }} fs-6 py-2 px-3">
+        <i class="bi bi-{{ 'check-circle-fill' if record.has_id_card else 'x-circle' }} me-1"></i>
+        بطاقة الهوية
+      </span>
+      <span class="badge {{ 'bg-success' if record.has_prev_certificate else 'bg-light text-dark border' }} fs-6 py-2 px-3">
+        <i class="bi bi-{{ 'check-circle-fill' if record.has_prev_certificate else 'x-circle' }} me-1"></i>
+        شهادة المدرسة السابقة
+      </span>
+      <span class="badge {{ 'bg-success' if record.has_photo else 'bg-light text-dark border' }} fs-6 py-2 px-3">
+        <i class="bi bi-{{ 'check-circle-fill' if record.has_photo else 'x-circle' }} me-1"></i>
+        صورة شخصية
+      </span>
+    </div>
+    {% if record.document_notes %}
+    <div class="text-muted small">{{ record.document_notes }}</div>
+    {% endif %}
+  </div>
+</div>
+
+{# ══ Academic history ══ #}
+<div class="card mb-4">
+  <div class="card-header fw-semibold text-secondary">
+    <i class="bi bi-table me-1"></i> سجل السنوات الدراسية
+  </div>
+  {% set hist = record.academic_history %}
+  {% if hist %}
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-bordered table-hover mb-0 align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>العام الدراسي</th>
+            <th>الصف</th>
+            <th>الشعبة</th>
+            <th>النتيجة</th>
+            <th>المعدل</th>
+            <th>الدور</th>
+            <th>الحالة</th>
+            <th>الملاحظات</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in hist %}
+          <tr>
+            <td>{{ row.year or '—' }}</td>
+            <td>{{ row.grade or '—' }}</td>
+            <td>{{ row.section or '—' }}</td>
+            <td>{{ row.result or '—' }}</td>
+            <td>{{ row.gpa or '—' }}</td>
+            <td>{{ row.round or '—' }}</td>
+            <td>{{ row.status or '—' }}</td>
+            <td>{{ row.notes or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="card-body text-muted">لم يُدخل أي سجل سنوي بعد.</div>
+  {% endif %}
+</div>
+
+{# ══ Notes & Signatures ══ #}
+{% if record.general_notes or record.signature_admin or record.signature_parent %}
+<div class="card mb-4">
+  <div class="card-header fw-semibold">
+    <i class="bi bi-pen-fill me-1"></i> الملاحظات والتواقيع
+  </div>
+  <div class="card-body">
+    {% if record.general_notes %}
+    <p>{{ record.general_notes }}</p>
+    {% endif %}
+    <div class="row mt-3">
+      <div class="col-md-4">
+        <div class="text-muted small">توقيع الإدارة</div>
+        <div class="fw-semibold">{{ record.signature_admin or '—' }}</div>
+      </div>
+      <div class="col-md-4">
+        <div class="text-muted small">توقيع ولي الأمر</div>
+        <div class="fw-semibold">{{ record.signature_parent or '—' }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="text-muted small text-end mb-4">
+  تاريخ الإنشاء: {{ record.created_at | to_baghdad }}
+  — آخر تحديث: {{ record.updated_at | to_baghdad }}
+</div>
+{% endblock %}

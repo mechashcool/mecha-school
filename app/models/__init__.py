@@ -2328,3 +2328,109 @@ class SchoolContentRead(db.Model):
 
     def __repr__(self):
         return f'<SchoolContentRead {self.content_type}={self.content_id} user={self.user_id}>'
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  STUDENT REGISTRATION RECORD  (سجل قيد الطالب)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class StudentRegistrationRecord(db.Model):
+    """
+    Official registration card (سجل القيد) for a student.
+    Stores a snapshot of the student, guardian and placement data so the
+    record remains stable even if the live student profile changes later.
+    One record per student per school (unique constraint).
+    """
+    __tablename__ = 'student_registration_records'
+    __school_scoped__ = True
+
+    id        = db.Column(db.Integer, primary_key=True)
+    school_id = db.Column(db.Integer, db.ForeignKey('schools.id'),
+                          nullable=False, index=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id'),
+                           nullable=False, index=True)
+
+    # ── Student snapshot ──────────────────────────────────────────────────────
+    snap_full_name       = db.Column(db.String(200), nullable=False)
+    snap_student_number  = db.Column(db.String(40),  nullable=True)
+    snap_gender          = db.Column(db.String(10),  nullable=True)
+    snap_date_of_birth   = db.Column(db.Date,        nullable=True)
+    snap_nationality     = db.Column(db.String(80),  nullable=True)
+    snap_address         = db.Column(db.Text,        nullable=True)
+    snap_phone           = db.Column(db.String(30),  nullable=True)
+    snap_status          = db.Column(db.String(20),  nullable=True)
+    snap_enrollment_date = db.Column(db.Date,        nullable=True)
+
+    # ── Guardian / parent snapshot ────────────────────────────────────────────
+    snap_guardian_name     = db.Column(db.String(200), nullable=True)
+    snap_guardian_phone    = db.Column(db.String(30),  nullable=True)
+    snap_guardian_email    = db.Column(db.String(180), nullable=True)
+    snap_guardian_relation = db.Column(db.String(50),  nullable=True)
+    snap_guardian_address  = db.Column(db.Text,        nullable=True)
+
+    # ── Academic placement snapshot ───────────────────────────────────────────
+    snap_school_name    = db.Column(db.String(200), nullable=True)
+    snap_school_name_ar = db.Column(db.String(200), nullable=True)
+    snap_year_name      = db.Column(db.String(50),  nullable=True)
+    snap_grade_name     = db.Column(db.String(100), nullable=True)
+    snap_stage          = db.Column(db.String(50),  nullable=True)
+    snap_section_name   = db.Column(db.String(50),  nullable=True)
+
+    # ── Admission information (user-editable) ─────────────────────────────────
+    admission_date  = db.Column(db.Date,        nullable=True)
+    document_number = db.Column(db.String(100), nullable=True)
+    previous_school = db.Column(db.String(200), nullable=True)
+    transfer_reason = db.Column(db.Text,        nullable=True)
+    admission_notes = db.Column(db.Text,        nullable=True)
+
+    # ── Document checklist ────────────────────────────────────────────────────
+    has_birth_cert       = db.Column(db.Boolean, default=False)
+    has_id_card          = db.Column(db.Boolean, default=False)
+    has_prev_certificate = db.Column(db.Boolean, default=False)
+    has_photo            = db.Column(db.Boolean, default=False)
+    document_notes       = db.Column(db.Text,    nullable=True)
+
+    # ── Academic history (editable JSON array) ────────────────────────────────
+    # Each entry: {year, grade, section, result, gpa, round, status, notes}
+    academic_history_json = db.Column(db.Text, nullable=True)
+
+    # ── Notes and signatures ──────────────────────────────────────────────────
+    general_notes    = db.Column(db.Text,        nullable=True)
+    signature_admin  = db.Column(db.String(200), nullable=True)
+    signature_parent = db.Column(db.String(200), nullable=True)
+
+    # ── Audit ─────────────────────────────────────────────────────────────────
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow,
+                           onupdate=datetime.utcnow)
+
+    student = db.relationship('Student', foreign_keys=[student_id],
+                              backref=db.backref('registration_record', uselist=False))
+    school  = db.relationship('School', foreign_keys=[school_id])
+    creator = db.relationship('User',   foreign_keys=[created_by])
+
+    __table_args__ = (
+        db.UniqueConstraint('school_id', 'student_id',
+                            name='uq_registration_record_school_student'),
+    )
+
+    @property
+    def academic_history(self):
+        import json
+        if self.academic_history_json:
+            try:
+                return json.loads(self.academic_history_json)
+            except Exception:
+                return []
+        return []
+
+    @academic_history.setter
+    def academic_history(self, value):
+        import json
+        self.academic_history_json = (
+            json.dumps(value, ensure_ascii=False) if value is not None else None
+        )
+
+    def __repr__(self):
+        return f'<StudentRegistrationRecord {self.id} student={self.student_id}>'

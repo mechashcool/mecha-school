@@ -534,5 +534,167 @@ class ChatAdminTest(unittest.TestCase):
         self._logout()
 
 
+    # ── Test: add_member page ─────────────────────────────────────────────
+
+    def test_add_member_page_loads_for_group(self):
+        """Admin can open the add-member picker for a group room."""
+        self._login(self.ids['admin_a_user'])
+        resp = self.client.get(
+            f'/chat/rooms/{self.ids["room_normal_id"]}/members/add',
+            follow_redirects=False,
+        )
+        self.assertEqual(resp.status_code, 200)
+        html = resp.data.decode()
+        self.assertIn('إضافة عضو', html)
+        self._logout()
+
+    def test_add_member_page_blocked_for_private_room(self):
+        """add_member returns 403 for private rooms."""
+        self._login(self.ids['admin_a_user'])
+
+        # Create a private room first.
+        with self.app.app_context():
+            priv = ChatRoom(
+                school_id=self.ids['school_a_id'],
+                name=f'Private {self.sfx}',
+                type='private', scope='custom',
+                created_by_user_id=self.ids['admin_a_id'],
+            )
+            db.session.add(priv)
+            db.session.flush()
+            db.session.add(ChatRoomMember(
+                room_id=priv.id, user_id=self.ids['admin_a_id'], role='owner'))
+            db.session.add(ChatRoomMember(
+                room_id=priv.id, user_id=self.ids['parent_a_id'], role='member'))
+            db.session.commit()
+            priv_id = priv.id
+
+        resp = self.client.get(
+            f'/chat/rooms/{priv_id}/members/add',
+            follow_redirects=False,
+        )
+        self.assertEqual(resp.status_code, 403)
+        self._logout()
+
+    def test_add_member_adds_same_school_user(self):
+        """POST to add_member adds a same-school user to the room."""
+        self._login(self.ids['admin_a_user'])
+
+        before_count = self._member_count(self.ids['room_normal_id'])
+
+        resp = self.client.post(
+            f'/chat/rooms/{self.ids["room_normal_id"]}/members/add',
+            data={'user_id': self.ids['parent_a_id']},
+            follow_redirects=False,
+        )
+        # Should redirect back to room detail on success.
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(f'/chat/rooms/{self.ids["room_normal_id"]}',
+                      resp.headers.get('Location', ''))
+
+        after_count = self._member_count(self.ids['room_normal_id'])
+        self.assertEqual(after_count, before_count + 1)
+        self._logout()
+
+    def test_add_member_duplicate_rejected(self):
+        """Adding the same user twice does not create a duplicate membership."""
+        self._login(self.ids['admin_a_user'])
+
+        # Add parent once.
+        self.client.post(
+            f'/chat/rooms/{self.ids["room_normal_id"]}/members/add',
+            data={'user_id': self.ids['parent_a_id']},
+            follow_redirects=False,
+        )
+        count_after_first = self._member_count(self.ids['room_normal_id'])
+
+        # Add same parent again.
+        self.client.post(
+            f'/chat/rooms/{self.ids["room_normal_id"]}/members/add',
+            data={'user_id': self.ids['parent_a_id']},
+            follow_redirects=False,
+        )
+        count_after_second = self._member_count(self.ids['room_normal_id'])
+
+        self.assertEqual(count_after_first, count_after_second,
+                         'Duplicate membership must not be created')
+        self._logout()
+
+    def test_add_member_cross_school_rejected(self):
+        """Cannot add a user from another school to a room."""
+        with self.app.app_context():
+            user_b = User(
+                username=f'add_b_{self.sfx}',
+                email=f'add_b_{self.sfx}@test.test',
+                full_name=f'Add School B {self.sfx}',
+                role_id=self.parent_role.id,
+                school_id=self.ids['school_b_id'],
+                is_active=True,
+            )
+            user_b.set_password('Test1234!')
+            db.session.add(user_b)
+            db.session.commit()
+            user_b_id = user_b.id
+
+        self._login(self.ids['admin_a_user'])
+        before_count = self._member_count(self.ids['room_normal_id'])
+
+        self.client.post(
+            f'/chat/rooms/{self.ids["room_normal_id"]}/members/add',
+            data={'user_id': user_b_id},
+            follow_redirects=False,
+        )
+        after_count = self._member_count(self.ids['room_normal_id'])
+        self.assertEqual(before_count, after_count,
+                         'Cross-school user must not be added')
+        self._logout()
+
+    def test_add_member_blocked_for_parent(self):
+        """A parent cannot access the add-member page (admin_required)."""
+        self._login(self.ids['parent_a_user'])
+        resp = self.client.get(
+            f'/chat/rooms/{self.ids["room_normal_id"]}/members/add',
+            follow_redirects=False,
+        )
+        self.assertIn(resp.status_code, (302, 403))
+        self._logout()
+
+    def test_add_member_picker_excludes_existing_members(self):
+        """The add-member picker must not list users already in the room."""
+        self._login(self.ids['admin_a_user'])
+
+        # Manually add parent_a to room_normal first.
+        with self.app.app_context():
+            if not ChatRoomMember.query.filter_by(
+                room_id=self.ids['room_normal_id'],
+                user_id=self.ids['parent_a_id'],
+            ).first():
+                db.session.add(ChatRoomMember(
+                    room_id=self.ids['room_normal_id'],
+                    user_id=self.ids['parent_a_id'],
+                    role='member',
+                ))
+                db.session.commit()
+
+        resp = self.client.get(
+            f'/chat/rooms/{self.ids["room_normal_id"]}/members/add',
+            follow_redirects=False,
+        )
+        html = resp.data.decode()
+        # parent_a is already a member — their add button must NOT appear
+        # (their name might appear elsewhere but the form with their user_id must be absent)
+        self.assertNotIn(
+            f'name="user_id" value="{self.ids["parent_a_id"]}"',
+            html,
+        )
+        self._logout()
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _member_count(self, room_id):
+        with self.app.app_context():
+            return ChatRoomMember.query.filter_by(room_id=room_id).count()
+
+
 if __name__ == '__main__':
     unittest.main()
