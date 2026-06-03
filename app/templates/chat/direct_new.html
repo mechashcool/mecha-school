@@ -1,0 +1,135 @@
+{% extends "shared/base.html" %}
+{% block title %}محادثة خاصة جديدة{% endblock %}
+{% block page_title %}محادثة خاصة جديدة{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">محادثة خاصة</h1>
+    <p class="page-subtitle">اختر مستخدماً لبدء أو فتح محادثة خاصة معه</p>
+  </div>
+  <a href="{{ url_for('chat.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>العودة
+  </a>
+</div>
+
+{# ── Search & role filter ── #}
+<div class="card mb-4">
+  <div class="card-body">
+    <form method="GET" action="{{ url_for('chat.direct_new') }}" class="row g-3 align-items-end">
+      <div class="col-12 col-md-6">
+        <label class="form-label">بحث بالاسم</label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="bi bi-search"></i></span>
+          <input type="text" name="q" class="form-control" placeholder="اكتب الاسم…"
+                 value="{{ q }}" autofocus>
+        </div>
+      </div>
+      <div class="col-12 col-md-4">
+        <label class="form-label">تصفية حسب الدور</label>
+        <select name="role" class="form-select" onchange="this.form.submit()">
+          <option value=""       {{ 'selected' if role_filter == '' }}>الكل</option>
+          <option value="parent" {{ 'selected' if role_filter == 'parent' }}>أولياء الأمور</option>
+          <option value="teacher"{{ 'selected' if role_filter == 'teacher' }}>التدريسيون</option>
+          <option value="admin"  {{ 'selected' if role_filter == 'admin' }}>الإدارة</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-primary">بحث</button>
+        {% if q or role_filter %}
+        <a href="{{ url_for('chat.direct_new') }}" class="btn btn-outline-secondary ms-1">مسح</a>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ── User list ── #}
+{% if users %}
+<div class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-3">
+  {% for user in users %}
+  {% set is_parent  = user.role and user.role.name == 'parent' %}
+  {% set is_teacher = user.role and user.role.name == 'teacher' %}
+  {% set children   = children_map.get(user.id, []) %}
+  {% set job        = job_titles.get(user.id) %}
+
+  <div class="col">
+    <a href="{{ url_for('chat.direct_chat', target_user_id=user.id) }}"
+       class="text-decoration-none user-card-link">
+      <div class="card h-100 border-0 shadow-sm user-picker-card">
+        <div class="card-body d-flex align-items-center gap-3 py-3">
+
+          {# Avatar #}
+          <div class="rounded-circle d-flex align-items-center justify-content-center flex-shrink-0
+                      {% if is_parent %}bg-warning bg-opacity-15{% elif is_teacher %}bg-info bg-opacity-15{% else %}bg-secondary bg-opacity-15{% endif %}"
+               style="width:48px;height:48px">
+            <i class="bi
+               {% if is_parent %}bi-person-heart text-warning
+               {% elif is_teacher %}bi-person-workspace text-info
+               {% else %}bi-person-badge text-secondary{% endif %} fs-4"></i>
+          </div>
+
+          {# Details #}
+          <div class="flex-grow-1 overflow-hidden">
+            <div class="fw-semibold text-dark text-truncate">{{ user.full_name }}</div>
+
+            {# Role label #}
+            <div class="small">
+              {% if is_parent %}
+                <span class="badge bg-warning text-dark">ولي أمر</span>
+              {% elif is_teacher %}
+                <span class="badge bg-info text-dark">مدرّس</span>
+              {% elif user.role and user.role.is_admin %}
+                <span class="badge bg-secondary">إدارة</span>
+              {% elif user.role %}
+                <span class="badge bg-light text-dark">{{ user.role.name }}</span>
+              {% endif %}
+              {% if job %}
+                <span class="text-muted ms-1">— {{ job }}</span>
+              {% endif %}
+            </div>
+
+            {# Parent: show linked children #}
+            {% if is_parent and children %}
+            <div class="small text-muted mt-1 text-truncate">
+              <i class="bi bi-people me-1"></i>{{ children | join('، ') }}
+            </div>
+            {% elif is_parent %}
+            <div class="small text-muted mt-1">
+              <i class="bi bi-dash me-1"></i>لا يوجد طلاب مرتبطون
+            </div>
+            {% endif %}
+          </div>
+
+          {# Arrow indicator #}
+          <div class="flex-shrink-0 text-muted">
+            <i class="bi bi-chat-fill text-primary opacity-50 fs-5"></i>
+          </div>
+        </div>
+      </div>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+
+<p class="text-muted small mt-3">
+  {{ users | length }} مستخدم — انقر على أي بطاقة لبدء أو فتح المحادثة الخاصة
+</p>
+
+{% else %}
+<div class="text-center py-5 text-muted">
+  <i class="bi bi-people" style="font-size:3rem"></i>
+  <p class="mt-3">لا يوجد مستخدمون مطابقون للبحث.</p>
+  {% if q or role_filter %}
+  <a href="{{ url_for('chat.direct_new') }}" class="btn btn-outline-secondary mt-2">
+    <i class="bi bi-x-circle me-1"></i>مسح الفلاتر
+  </a>
+  {% endif %}
+</div>
+{% endif %}
+
+<style>
+.user-picker-card { transition: box-shadow .15s, transform .15s; cursor: pointer; }
+.user-picker-card:hover { box-shadow: 0 4px 14px rgba(0,0,0,.13) !important; transform: translateY(-1px); }
+</style>
+{% endblock %}

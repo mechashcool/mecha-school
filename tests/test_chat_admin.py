@@ -407,6 +407,92 @@ class ChatAdminTest(unittest.TestCase):
         self.assertIn(resp.status_code, (403, 404))
         self._logout()
 
+    # ── Test: direct_new user-picker page ────────────────────────────────
+
+    def test_direct_new_shows_same_school_users(self):
+        """GET /chat/direct lists only same-school users."""
+        self._login(self.ids['admin_a_user'])
+        resp = self.client.get('/chat/direct', follow_redirects=False)
+        self.assertEqual(resp.status_code, 200)
+        html = resp.data.decode()
+        # parent_a from school A must appear
+        self.assertIn(f'Chat Parent A {self.sfx}', html)
+        self._logout()
+
+    def test_direct_new_excludes_other_school_users(self):
+        """GET /chat/direct must not expose users from other schools."""
+        with self.app.app_context():
+            user_b = User(
+                username=f'picker_b_{self.sfx}',
+                email=f'picker_b_{self.sfx}@test.test',
+                full_name=f'Picker School B {self.sfx}',
+                role_id=self.parent_role.id,
+                school_id=self.ids['school_b_id'],
+                is_active=True,
+            )
+            user_b.set_password('Test1234!')
+            db.session.add(user_b)
+            db.session.commit()
+
+        self._login(self.ids['admin_a_user'])
+        resp = self.client.get('/chat/direct', follow_redirects=False)
+        html = resp.data.decode()
+        self.assertNotIn(f'Picker School B {self.sfx}', html)
+        self._logout()
+
+    def test_direct_new_search_filter(self):
+        """GET /chat/direct?q=<name> filters by name."""
+        self._login(self.ids['admin_a_user'])
+        # Search for a unique fragment of parent_a's name
+        resp = self.client.get(
+            f'/chat/direct?q=Chat+Parent+A+{self.sfx}',
+            follow_redirects=False,
+        )
+        self.assertEqual(resp.status_code, 200)
+        html = resp.data.decode()
+        self.assertIn(f'Chat Parent A {self.sfx}', html)
+        self._logout()
+
+    def test_direct_new_role_filter_parent(self):
+        """GET /chat/direct?role=parent returns only parents."""
+        self._login(self.ids['admin_a_user'])
+        resp = self.client.get('/chat/direct?role=parent', follow_redirects=False)
+        self.assertEqual(resp.status_code, 200)
+        html = resp.data.decode()
+        self.assertIn(f'Chat Parent A {self.sfx}', html)
+        # admin_a himself must not appear (excluded as current_user)
+        self.assertNotIn(f'Chat Admin A {self.sfx}', html)
+        self._logout()
+
+    def test_direct_new_excludes_self(self):
+        """GET /chat/direct must not include the current admin in the list."""
+        self._login(self.ids['admin_a_user'])
+        resp = self.client.get('/chat/direct', follow_redirects=False)
+        html = resp.data.decode()
+        # admin_a should not appear as a selectable user (they are the logged-in user)
+        # We verify by checking the direct link is not present for their own ID
+        self.assertNotIn(
+            f'/chat/direct/{self.ids["admin_a_id"]}',
+            html,
+        )
+        self._logout()
+
+    def test_direct_new_private_room_visible_on_index(self):
+        """After creating a private room via direct_chat, index shows it in private section."""
+        self._login(self.ids['admin_a_user'])
+        # Create a private room
+        self.client.get(
+            f'/chat/direct/{self.ids["parent_a_id"]}',
+            follow_redirects=False,
+        )
+        # Index page should show the room under المحادثات الخاصة
+        resp = self.client.get('/chat/', follow_redirects=False)
+        self.assertEqual(resp.status_code, 200)
+        html = resp.data.decode()
+        self.assertIn('محادثة مع', html)
+        self.assertIn(f'Chat Parent A {self.sfx}', html)
+        self._logout()
+
     # ── Test: AJAX send in normal room ────────────────────────────────────
 
     def test_ajax_send_normal_group(self):

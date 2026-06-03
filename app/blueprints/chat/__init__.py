@@ -553,7 +553,7 @@ def index():
     q = (ChatRoom.query
          .execution_options(bypass_tenant_scope=True)
          .filter_by(school_id=school.id)
-         .order_by(ChatRoom.created_at.desc()))
+         .order_by(ChatRoom.updated_at.desc()))
 
     type_filter   = request.args.get('type', '')
     status_filter = request.args.get('status', '')
@@ -579,8 +579,30 @@ def index():
             'last_message':  last_msg,
         })
 
+    # Separate private (1-to-1) from group/announcement rooms.
+    private_stats = [s for s in room_stats if s['room'].type == 'private']
+    group_stats   = [s for s in room_stats if s['room'].type != 'private']
+
+    # For each private room, find the other participant so the template can
+    # show "محادثة مع <name>" instead of the raw stored room name.
+    private_other_user = {}  # room_id -> User
+    for stat in private_stats:
+        room = stat['room']
+        other_mem = (
+            ChatRoomMember.query
+            .filter(
+                ChatRoomMember.room_id == room.id,
+                ChatRoomMember.user_id != current_user.id,
+            )
+            .first()
+        )
+        if other_mem and other_mem.user:
+            private_other_user[room.id] = other_mem.user
+
     return render_template('chat/index.html',
-                           room_stats=room_stats,
+                           private_stats=private_stats,
+                           group_stats=group_stats,
+                           private_other_user=private_other_user,
                            type_filter=type_filter,
                            status_filter=status_filter,
                            school=school)
@@ -1514,6 +1536,90 @@ def user_room_poll(room_id: int):
 
 
 # ─── Admin direct messaging ───────────────────────────────────────────────────
+
+@chat_bp.route('/direct')
+@login_required
+@admin_required
+def direct_new():
+    """
+    User-picker page: choose a same-school user to start a private chat with.
+
+    GET /chat/direct?q=<search>&role=<parent|teacher|admin>
+    Security: only lists active users from the admin's own school.
+    """
+    _require_chat_module()
+    school = get_current_school()
+    if not school:
+        abort(404)
+
+    q_str       = request.args.get('q', '').strip()
+    role_filter = request.args.get('role', '')  # 'parent' | 'teacher' | 'admin' | ''
+
+    user_query = (
+        User.query
+        .execution_options(bypass_tenant_scope=True)
+        .join(User.role)
+        .filter(
+            User.school_id == school.id,
+            User.is_active == True,
+            User.id != current_user.id,
+        )
+    )
+    if role_filter == 'parent':
+        user_query = user_query.filter(Role.name == 'parent')
+    elif role_filter == 'teacher':
+        user_query = user_query.filter(Role.name == 'teacher')
+    elif role_filter == 'admin':
+        user_query = user_query.filter(Role.is_admin == True)
+
+    if q_str:
+        user_query = user_query.filter(User.full_name.ilike(f'%{q_str}%'))
+
+    users = user_query.order_by(Role.name, User.full_name).all()
+
+    # For parents: map user_id → [child_full_name, …]
+    parent_ids = [u.id for u in users if u.role and u.role.name == 'parent']
+    children_map: dict[int, list[str]] = {}
+    if parent_ids:
+        rows = (
+            db.session.query(parent_students.c.user_id, Student.full_name)
+            .join(Student, Student.id == parent_students.c.student_id)
+            .filter(parent_students.c.user_id.in_(parent_ids))
+            .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+            .all()
+        )
+        for uid, name in rows:
+            children_map.setdefault(uid, []).append(name)
+
+    # For employees: map user_id → job_title
+    user_ids = [u.id for u in users]
+    job_titles: dict[int, str] = {}
+    if user_ids:
+        emp_rows = (
+            Employee.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter(
+                Employee.school_id == school.id,
+                Employee.user_id.in_(user_ids),
+                Employee.job_title != None,
+            )
+            .with_entities(Employee.user_id, Employee.job_title)
+            .all()
+        )
+        for uid, title in emp_rows:
+            if uid and title:
+                job_titles[uid] = title
+
+    return render_template(
+        'chat/direct_new.html',
+        users=users,
+        children_map=children_map,
+        job_titles=job_titles,
+        q=q_str,
+        role_filter=role_filter,
+        school=school,
+    )
+
 
 @chat_bp.route('/direct/<int:target_user_id>')
 @login_required

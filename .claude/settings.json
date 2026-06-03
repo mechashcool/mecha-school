@@ -31,7 +31,8 @@
       "Bash(python -m pytest tests/test_chat_admin.py -v --tb=line)",
       "Bash(python -m flask cleanup-chat-test-schools)",
       "Bash(git push *)",
-      "Bash(python -m pytest tests/test_parent_requests.py -v --tb=short)"
+      "Bash(python -m pytest tests/test_parent_requests.py -v --tb=short)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\app\\\\blueprints\\\\chat\" -Recurse -File)"
     ]
   }
 }
