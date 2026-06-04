@@ -147,7 +147,7 @@
                  id="f-father-name" value="{{ prefill.get('father_name', '') }}">
         </div>
         <div class="col-md-3">
-          <label class="form-label small fw-semibold">صنعة الأب وعمله</label>
+          <label class="form-label small fw-semibold">صنعة الأب وعنوانه</label>
           <input type="text" name="father_occupation" class="form-control form-control-sm"
                  id="f-father-occ" value="{{ prefill.get('father_occupation', '') }}">
         </div>
@@ -534,17 +534,57 @@
   });
 })();
 
-// Auto-sum numeric grades into total_n for each year
+// Auto-fill Arabic written grades and recalculate totals
 (function () {
+  const ONES = [
+    '', 'واحد', 'اثنان', 'ثلاثة', 'أربعة', 'خمسة', 'ستة', 'سبعة', 'ثمانية', 'تسعة',
+    'عشرة', 'أحد عشر', 'اثنا عشر', 'ثلاثة عشر', 'أربعة عشر', 'خمسة عشر',
+    'ستة عشر', 'سبعة عشر', 'ثمانية عشر', 'تسعة عشر'
+  ];
+  const TENS     = ['', '', 'عشرون', 'ثلاثون', 'أربعون', 'خمسون', 'ستون', 'سبعون', 'ثمانون', 'تسعون'];
+  const HUNDREDS = ['', 'مئة', 'مئتان', 'ثلاثمئة', 'أربعمئة', 'خمسمئة', 'ستمئة', 'سبعمئة', 'ثمانمئة', 'تسعمئة'];
+
+  function numToArabicWords(val) {
+    if (val === '' || val === null || val === undefined) return '';
+    const n = parseInt(val, 10);
+    if (isNaN(n) || n < 0) return '';
+    if (n === 0) return 'صفر';
+    if (n < 20) return ONES[n];
+    if (n < 100) {
+      const t = Math.floor(n / 10), o = n % 10;
+      return o === 0 ? TENS[t] : ONES[o] + ' و' + TENS[t];
+    }
+    if (n < 1000) {
+      const h = Math.floor(n / 100), rem = n % 100;
+      if (rem === 0) return HUNDREDS[h];
+      return HUNDREDS[h] + ' و' + numToArabicWords(rem);
+    }
+    return '';
+  }
+
   for (let i = 0; i < 9; i++) {
-    const gradeInputs = document.querySelectorAll(`[name^="y${i}_s"][name$="_n"]`);
-    const totalInput  = document.querySelector(`[name="y${i}_total_n"]`);
-    if (!totalInput) continue;
-    gradeInputs.forEach(inp => {
-      inp.addEventListener('input', () => {
-        let sum = 0;
-        gradeInputs.forEach(g => { const v = parseInt(g.value, 10); if (!isNaN(v)) sum += v; });
-        totalInput.value = sum > 0 ? sum : '';
+    const allNumInputs = Array.from(document.querySelectorAll(
+      `[name^="y${i}_s"][name$="_n"], [name^="y${i}_ex"][name$="_n"]`
+    ));
+    const totalN = document.querySelector(`[name="y${i}_total_n"]`);
+    const totalT = document.querySelector(`[name="y${i}_total_t"]`);
+
+    const recalcTotal = () => {
+      let sum = 0, hasNum = false;
+      allNumInputs.forEach(g => {
+        const v = parseInt(g.value, 10);
+        if (!isNaN(v)) { sum += v; hasNum = true; }
+      });
+      if (totalN) totalN.value = hasNum ? sum : '';
+      if (totalT) totalT.value = hasNum ? numToArabicWords(sum) : '';
+    };
+
+    allNumInputs.forEach(inp => {
+      const writtenName = inp.name.replace(/_n$/, '_t');
+      const writtenField = document.querySelector(`[name="${writtenName}"]`);
+      inp.addEventListener('input', function () {
+        if (writtenField) writtenField.value = numToArabicWords(inp.value);
+        recalcTotal();
       });
     });
   }

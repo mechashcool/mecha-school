@@ -987,6 +987,7 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
+    from app.utils.arabic_numbers import num_to_arabic_words
 
     arabic_ok = _register_arabic_fonts(pdfmetrics, TTFont)
     fn   = 'Amiri'      if arabic_ok else 'Helvetica'
@@ -1089,7 +1090,7 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
         40,  # 10 مسكن ولي — المحلة
         40,  # 11 مسكن ولي — رقم الدار
         80,  # 12 اسم ولي أمر الطالب
-        65,  # 13 صنعة الأب وعمله
+        65,  # 13 صنعة الأب وعنوانه
         40,  # 14 مسكن الأب — المحلة
         40,  # 15 مسكن الأب — رقم الدار
         80,  # 16 اسم أبيه وشهرته
@@ -1117,7 +1118,7 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
         ph_('مسكن ولي أمره'),               # 10 colspan 2
         '',                                 # 11 spanned by 10
         ph_('اسم ولي أمر الطالب'),           # 12 rowspan 2
-        ph_('صنعة الأب وعمله'),              # 13 rowspan 2
+        ph_('صنعة الأب وعنوانه'),             # 13 rowspan 2
         ph_('مسكن الأب'),                   # 14 colspan 2
         '',                                 # 15 spanned by 14
         ph_('اسم أبيه وشهرته'),              # 16 rowspan 2
@@ -1263,8 +1264,10 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
         row[19] = Paragraph(ar(subj_label), subj_s)
         for yi in range(9):
             yr = sav[yi]
-            row[ytc(yi)] = p(yr.get(key_n, ''))   # right (tc) = رقماً = numeric value
-            row[ync(yi)] = p(yr.get(key_t, ''))   # left  (nc) = كتابة = text value
+            n_val = yr.get(key_n, '')
+            t_val = yr.get(key_t, '') or num_to_arabic_words(n_val)
+            row[ytc(yi)] = p(n_val)
+            row[ync(yi)] = p(t_val)
         return row
 
     for j, subj in enumerate(_SUBJECTS):
@@ -1279,10 +1282,10 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
             ex      = extras[k] if k < len(extras) else {}
             name    = ex.get('name', '')
             en_val  = ex.get('n', '')
-            et_val  = ex.get('t', '')
+            et_val  = ex.get('t', '') or num_to_arabic_words(en_val)
             row[19] = Paragraph(ar(name or ''), subj_s) if name else p('')
-            row[ytc(yi)] = p(en_val)   # right (tc) = رقماً = numeric
-            row[ync(yi)] = p(et_val)   # left  (nc) = كتابة = text
+            row[ytc(yi)] = p(en_val)
+            row[ync(yi)] = p(et_val)
         g_data.append(row)
 
     # Bottom section rows
@@ -1319,8 +1322,9 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
                 except (ValueError, TypeError):
                     pass
         total_n_val = str(auto_total) if has_num else yr.get('total_n', '')
+        total_t_val = yr.get('total_t', '') or num_to_arabic_words(total_n_val)
         total_row[ytc(yi)] = p(total_n_val)
-        total_row[ync(yi)] = p(yr.get('total_t', ''))
+        total_row[ync(yi)] = p(total_t_val)
     g_data.append(total_row)
 
     g_data.append(bottom_row('السلوك', 'behavior'))
