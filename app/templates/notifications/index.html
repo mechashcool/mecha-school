@@ -14,25 +14,48 @@
   {% endif %}
 </div>
 
+{# ── Tab nav ──────────────────────────────────────────────────────────────── #}
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item">
+    <a class="nav-link {{ 'active' if active_tab == 'all' }}"
+       href="{{ url_for('notifications.index', tab='all') }}">الكل</a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {{ 'active' if active_tab == 'admin' }}"
+       href="{{ url_for('notifications.index', tab='admin') }}">التبليغات</a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {{ 'active' if active_tab == 'system' }}"
+       href="{{ url_for('notifications.index', tab='system') }}">تنبيهات النظام</a>
+  </li>
+</ul>
+
 <div class="card">
   {% for n in notifs.items %}
   <div class="d-flex align-items-start gap-3 px-4 py-4 border-bottom">
     <div style="width:42px;height:42px;border-radius:12px;flex-shrink:0;
                 display:flex;align-items:center;justify-content:center;font-size:18px;
-                {% if n.ntype == 'absence' %}background:#fef0f0;color:#e03e3e;
-                {% elif n.ntype == 'payment' %}background:#e8f8f0;color:#1aab6d;
-                {% elif n.ntype == 'grade' %}background:#e8f4fd;color:#2196f3;
-                {% else %}background:#fff8ec;color:#e8a020;{% endif %}">
-      <i class="bi bi-{% if n.ntype == 'absence' %}person-x{% elif n.ntype == 'payment' %}cash{% elif n.ntype == 'grade' %}patch-check{% else %}megaphone{% endif %}-fill"></i>
+                {% if n.ntype == 'attendance' %}background:#fef0f0;color:#e03e3e;
+                {% elif n.ntype in ('fee_reminder',) %}background:#e8f8f0;color:#1aab6d;
+                {% elif n.ntype in ('homework',) %}background:#e8f4fd;color:#2196f3;
+                {% elif n.ntype == 'announcement' %}background:#fff8ec;color:#e8a020;
+                {% else %}background:#f3f0ff;color:#6c3fc8;{% endif %}">
+      <i class="bi bi-{% if n.ntype == 'attendance' %}person-check{% elif n.ntype == 'fee_reminder' %}cash{% elif n.ntype == 'homework' %}book{% elif n.ntype == 'announcement' %}megaphone{% else %}bell{% endif %}-fill"></i>
     </div>
     <div class="flex-grow-1">
       <div class="d-flex align-items-center gap-2 mb-1">
         <span style="font-size:14.5px;font-weight:700">{{ n.title }}</span>
         <span class="badge" style="background:#f0f4f8;color:#6b7a8d;font-size:10.5px">
-          {% if n.ntype == 'absence' %}غياب
-          {% elif n.ntype == 'payment' %}رسوم
-          {% elif n.ntype == 'grade' %}درجات
-          {% else %}إعلان{% endif %}
+          {% if n.ntype == 'attendance' %}حضور/غياب
+          {% elif n.ntype == 'fee_reminder' %}رسوم
+          {% elif n.ntype == 'homework' %}واجبات
+          {% elif n.ntype == 'rfid' %}بصمة
+          {% elif n.ntype == 'aiface' %}تعرف وجه
+          {% elif n.ntype == 'parent_request' %}طلب ولي أمر
+          {% elif n.ntype == 'chat_message' %}رسالة
+          {% elif n.ntype == 'school_announcement' %}إعلان قناة
+          {% elif n.ntype == 'announcement' %}تبليغ
+          {% else %}{{ n.ntype }}{% endif %}
         </span>
         {% if can_manage %}
         <span class="badge" style="background:#eef4ff;color:#1a3a5c;font-size:10.5px">

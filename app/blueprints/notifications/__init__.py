@@ -68,13 +68,23 @@ def _dispatch_fcm_push(title: str, body: str, ntype: str,
         _log.exception('[notifications] FCM dispatch failed title=%r', title)
 
 
+# ntype values that are always system-generated (never admin-issued).
+_SYSTEM_NTYPES = {
+    'attendance', 'fee_reminder', 'homework', 'rfid', 'aiface',
+    'parent_request', 'chat_message', 'school_announcement',
+}
+
+
 @notifications_bp.route('/')
 @login_required
 def index():
     school = get_current_school()
     school_id = school.id if school else None
 
-    page = request.args.get('page', 1, type=int)
+    page     = request.args.get('page', 1, type=int)
+    tab      = request.args.get('tab', 'all')
+    if tab not in ('all', 'admin', 'system'):
+        tab = 'all'
 
     can_manage = current_user.has_permission('manage_notifications')
     q = Notification.query
@@ -84,6 +94,11 @@ def index():
 
     if school_id:
         q = q.filter(Notification.school_id == school_id)
+
+    if tab == 'admin':
+        q = q.filter(Notification.ntype == 'announcement')
+    elif tab == 'system':
+        q = q.filter(Notification.ntype != 'announcement')
 
     notifs = q.paginate(page=page, per_page=20, error_out=False)
 
@@ -99,7 +114,8 @@ def index():
                 notification_id=n.id, user_id=current_user.id))
     db.session.commit()
     return render_template('notifications/index.html',
-                           notifs=notifs, can_manage=can_manage)
+                           notifs=notifs, can_manage=can_manage,
+                           active_tab=tab)
 
 
 @notifications_bp.route('/create', methods=['GET', 'POST'])
