@@ -5,16 +5,19 @@ All routes require:  Authorization: Bearer <access_token>   (role: teacher)
 
 Endpoint map
 ────────────
-GET  /teacher/profile                  teacher record + quick dashboard stats
-GET  /teacher/sections                 sections I teach (homeroom + subject)
+GET  /teacher/profile                  teacher record + quick dashboard stats + subjects
+GET  /teacher/subjects                 distinct subjects assigned to this teacher (primary Flutter source)
+GET  /teacher/sections                 sections I teach (homeroom + subject) with subjects per section
 GET  /teacher/sections/<id>/students   students in one of my sections
 GET  /teacher/students/<id>            student profile (only allowed sections)
-GET  /teacher/schedule                 my weekly timetable
-GET  /teacher/exams                    exams for my sections (paginated + filter)
-POST /teacher/exams                    create an exam in one of my sections
-GET  /teacher/exams/<id>               exam detail + entered results
-POST /teacher/exams/<id>/results       bulk-upsert grade entries
+GET  /teacher/schedule                 my weekly timetable (subject_id, section_id, day_label included)
+GET  /teacher/exams                    exams for my sections (subject_id, section_id, title, max_score)
+POST /teacher/exams                    create an exam — accepts title + max_score; validates subject assignment
+GET  /teacher/exams/<id>               exam detail + entered results (subject_id, section_id, title)
+POST /teacher/exams/<id>/results       bulk-upsert grade entries (accepts score/note or marks/notes)
 GET  /teacher/notifications            notifications feed (paginated)
+GET  /teacher/homework                 homework list (subject_id, section_id, grade_name)
+POST /teacher/homework                 create homework — subject_id required
 
 Security rules
 ──────────────
@@ -109,10 +112,43 @@ _DAY_NAMES = {
     0: 'الأحد', 1: 'الاثنين', 2: 'الثلاثاء',
     3: 'الأربعاء', 4: 'الخميس', 5: 'الجمعة', 6: 'السبت',
 }
+_DAY_NAMES_EN = {
+    0: 'sunday', 1: 'monday', 2: 'tuesday',
+    3: 'wednesday', 4: 'thursday', 5: 'friday', 6: 'saturday',
+}
 
 
 def _fmt_time(t) -> str | None:
     return t.strftime('%H:%M') if t else None
+
+
+def _teacher_subjects(emp: Employee) -> list[dict]:
+    """Return distinct subjects assigned to this teacher via teacher_subjects junction."""
+    rows = db.session.execute(
+        select(teacher_subjects.c.subject_id).where(
+            teacher_subjects.c.employee_id == emp.id
+        ).distinct()
+    ).fetchall()
+    subject_ids = {r.subject_id for r in rows}
+    if not subject_ids:
+        return []
+    subjects = Subject.query.filter(Subject.id.in_(subject_ids)).order_by(Subject.name).all()
+    return [{'id': s.id, 'name': s.name} for s in subjects]
+
+
+def _section_subjects(emp_id: int, section_id: int) -> list[dict]:
+    """Return subjects this teacher teaches in a specific section."""
+    rows = db.session.execute(
+        select(teacher_subjects.c.subject_id).where(
+            teacher_subjects.c.employee_id == emp_id,
+            teacher_subjects.c.section_id == section_id,
+        ).distinct()
+    ).fetchall()
+    subject_ids = [r.subject_id for r in rows]
+    if not subject_ids:
+        return []
+    subjects = Subject.query.filter(Subject.id.in_(subject_ids)).order_by(Subject.name).all()
+    return [{'id': s.id, 'name': s.name} for s in subjects]
 
 
 # ─── Profile / dashboard ──────────────────────────────────────────────────────
@@ -157,6 +193,7 @@ def teacher_profile():
             'student_count':       student_count,
             'upcoming_exams_14d':  upcoming_14d,
         },
+        subjects=_teacher_subjects(emp),
     )
 
 
@@ -183,15 +220,37 @@ def teacher_sections():
             {
                 'id':            sec.id,
                 'name':          sec.name,
+                'grade_name':    sec.grade.name  if sec.grade else None,
                 'grade':         sec.grade.name  if sec.grade else None,
                 'stage':         sec.grade.stage if sec.grade else None,
+                'display_name':  f"{sec.grade.name} - شعبة {sec.name}" if sec.grade else sec.name,
                 'capacity':      sec.capacity,
                 'student_count': Student.query.filter_by(section_id=sec.id, status='active').count(),
                 'is_homeroom':   sec.id in homeroom_ids,
+                'subjects':      _section_subjects(emp.id, sec.id),
             }
             for sec in sections
         ],
     )
+
+
+# ─── Subjects I teach ────────────────────────────────────────────────────────
+
+@mobile_api_bp.route('/teacher/subjects', methods=['GET'])
+@jwt_required()
+@role_required('teacher')
+def teacher_subjects_list():
+    """
+    Distinct subjects assigned to this teacher across all sections.
+    Primary endpoint Flutter should use to populate subject pickers (Create Exam, etc.).
+
+    Response:
+      { "ok": true, "subjects": [ {"id": 2, "name": "الرياضيات"} ] }
+    """
+    emp = _get_employee()
+    if not emp:
+        return err('employee_profile_not_found', 404)
+    return ok(subjects=_teacher_subjects(emp))
 
 
 # ─── Students in a section ───────────────────────────────────────────────────
@@ -331,10 +390,17 @@ def teacher_schedule():
             {
                 'id':           sch.id,
                 'day':          sch.day_of_week,
+                'day_en':       _DAY_NAMES_EN.get(sch.day_of_week, ''),
+                'day_label':    _DAY_NAMES.get(sch.day_of_week, ''),
                 'day_name':     _DAY_NAMES.get(sch.day_of_week, ''),
+                'subject_id':   sch.subject_id,
+                'subject_name': sch.subject.name       if sch.subject else None,
                 'subject':      sch.subject.name       if sch.subject else None,
                 'subject_code': sch.subject.code       if sch.subject else None,
+                'section_id':   sch.section_id,
+                'section_name': sch.section.name       if sch.section else None,
                 'section':      sch.section.name       if sch.section else None,
+                'grade_name':   sch.section.grade.name if sch.section and sch.section.grade else None,
                 'grade':        sch.section.grade.name if sch.section and sch.section.grade else None,
                 'start_time':   _fmt_time(sch.start_time),
                 'end_time':     _fmt_time(sch.end_time),
@@ -384,15 +450,24 @@ def teacher_exams():
         exams=[
             {
                 'id':            e.id,
+                'title':         e.display_name,
                 'name':          e.display_name,
+                'subject_id':    e.subject_id,
+                'subject_name':  e.subject.name       if e.subject else None,
                 'subject':       e.subject.name       if e.subject else None,
+                'section_id':    e.section_id,
+                'section_name':  e.section.name       if e.section else None,
                 'section':       e.section.name       if e.section else None,
+                'grade_name':    e.section.grade.name if e.section and e.section.grade else None,
                 'grade':         e.section.grade.name if e.section and e.section.grade else None,
                 'exam_date':     e.exam_date.isoformat() if e.exam_date else None,
+                'max_score':     float(e.max_marks),
                 'max_marks':     float(e.max_marks),
                 'pass_marks':    float(e.pass_marks),
+                'notes':         None,
                 'is_upcoming':   e.exam_date >= today if e.exam_date else None,
                 'result_count':  ExamResult.query.filter_by(exam_id=e.id).count(),
+                'created_at':    e.created_at.isoformat() if e.created_at else None,
             }
             for e in exams
         ],
@@ -424,22 +499,45 @@ def teacher_create_exam():
         return err('employee_profile_not_found', 404)
 
     payload      = request.get_json(silent=True) or {}
+    # Accept 'title' (Flutter spec) or legacy 'exam_name'
+    title        = (payload.get('title') or payload.get('exam_name') or '').strip() or None
     section_id   = payload.get('section_id')
     subject_id   = payload.get('subject_id')
     exam_date_s  = payload.get('exam_date')
-    max_marks    = payload.get('max_marks',  100)
-    pass_marks   = payload.get('pass_marks',  50)
-    exam_name    = (payload.get('exam_name') or '').strip() or None
+    # Accept 'max_score' (Flutter spec) or legacy 'max_marks'
+    max_marks    = payload.get('max_score') if payload.get('max_score') is not None else payload.get('max_marks', 100)
+    pass_marks   = payload.get('pass_marks', 50)
     exam_type_id = payload.get('exam_type_id')
 
-    if not section_id or not subject_id or not exam_date_s:
-        return err('section_id, subject_id, and exam_date are required')
+    # Per-field validation with spec-format errors
+    if not title:
+        return err('required_field_missing: title')
+    if not section_id:
+        return err('required_field_missing: section_id')
+    if not subject_id:
+        return err('required_field_missing: subject_id')
+    if not exam_date_s:
+        return err('required_field_missing: exam_date')
+    try:
+        max_marks_val = float(max_marks)
+        if max_marks_val <= 0:
+            return err('max_score must be greater than 0')
+    except (TypeError, ValueError):
+        return err('invalid value: max_score')
 
     # Security: teacher must have access to the section
     if section_id not in _teacher_section_ids(emp):
         return err('forbidden — section not assigned to you', 403)
 
-    # Validate subject belongs to the same school
+    # Validate subject is assigned to this teacher
+    allowed_subject_ids = {row.subject_id for row in db.session.execute(
+        select(teacher_subjects.c.subject_id).where(
+            teacher_subjects.c.employee_id == emp.id
+        ).distinct()
+    ).fetchall()}
+    if subject_id not in allowed_subject_ids:
+        return err('forbidden — subject not assigned to you', 403)
+
     subject = db.session.get(Subject, subject_id)
     if not subject or subject.school_id != emp.school_id:
         return err('subject_not_found', 404)
@@ -462,9 +560,9 @@ def teacher_create_exam():
         section_id       = section_id,
         subject_id       = subject_id,
         exam_date        = exam_date_obj,
-        max_marks        = max_marks,
-        pass_marks       = pass_marks,
-        exam_name        = exam_name,
+        max_marks        = max_marks_val,
+        pass_marks       = float(pass_marks),
+        exam_name        = title,
         exam_type_id     = exam_type_id,
     )
     db.session.add(new_exam)
@@ -473,13 +571,22 @@ def teacher_create_exam():
     return ok(
         message='exam_created',
         exam={
-            'id':         new_exam.id,
-            'name':       new_exam.display_name,
-            'subject':    new_exam.subject.name if new_exam.subject else None,
-            'section':    new_exam.section.name if new_exam.section else None,
-            'exam_date':  new_exam.exam_date.isoformat(),
-            'max_marks':  float(new_exam.max_marks),
-            'pass_marks': float(new_exam.pass_marks),
+            'id':           new_exam.id,
+            'title':        new_exam.display_name,
+            'name':         new_exam.display_name,
+            'subject_id':   new_exam.subject_id,
+            'subject_name': new_exam.subject.name if new_exam.subject else None,
+            'subject':      new_exam.subject.name if new_exam.subject else None,
+            'section_id':   new_exam.section_id,
+            'section_name': new_exam.section.name if new_exam.section else None,
+            'section':      new_exam.section.name if new_exam.section else None,
+            'grade_name':   new_exam.section.grade.name if new_exam.section and new_exam.section.grade else None,
+            'exam_date':    new_exam.exam_date.isoformat(),
+            'max_score':    float(new_exam.max_marks),
+            'max_marks':    float(new_exam.max_marks),
+            'pass_marks':   float(new_exam.pass_marks),
+            'notes':        None,
+            'created_at':   new_exam.created_at.isoformat() if new_exam.created_at else None,
         },
     ), 201
 
@@ -511,13 +618,22 @@ def teacher_exam_detail(exam_id):
     return ok(
         exam={
             'id':               exam.id,
+            'title':            exam.display_name,
             'name':             exam.display_name,
+            'subject_id':       exam.subject_id,
+            'subject_name':     exam.subject.name       if exam.subject else None,
             'subject':          exam.subject.name       if exam.subject else None,
+            'section_id':       exam.section_id,
+            'section_name':     exam.section.name       if exam.section else None,
             'section':          exam.section.name       if exam.section else None,
+            'grade_name':       exam.section.grade.name if exam.section and exam.section.grade else None,
             'grade':            exam.section.grade.name if exam.section and exam.section.grade else None,
             'exam_date':        exam.exam_date.isoformat() if exam.exam_date else None,
+            'max_score':        float(exam.max_marks),
             'max_marks':        float(exam.max_marks),
             'pass_marks':       float(exam.pass_marks),
+            'notes':            None,
+            'created_at':       exam.created_at.isoformat() if exam.created_at else None,
             'total_students':   len(section_students),
             'results_entered':  len(results),
             'results_missing':  len(missing),
@@ -585,7 +701,8 @@ def teacher_enter_results(exam_id):
             errors.append({'student_id': sid, 'error': 'not_in_section'})
             continue
 
-        raw_marks = entry.get('marks')
+        # Accept 'score' (Flutter spec) or legacy 'marks'
+        raw_marks = entry.get('score') if entry.get('score') is not None else entry.get('marks')
         if raw_marks is None:
             errors.append({'student_id': sid, 'error': 'marks_required'})
             continue
@@ -598,6 +715,8 @@ def teacher_enter_results(exam_id):
             errors.append({'student_id': sid, 'error': f'marks must be between 0 and {exam.max_marks}'})
             continue
 
+        # Accept 'note' (Flutter spec, singular) or legacy 'notes' (plural)
+        entry_notes = entry.get('note') if entry.get('note') is not None else entry.get('notes')
         is_pass = marks >= float(exam.pass_marks)
 
         existing = ExamResult.query.filter_by(exam_id=exam.id, student_id=sid).first()
@@ -605,7 +724,7 @@ def teacher_enter_results(exam_id):
             existing.marks        = marks
             existing.grade_letter = entry.get('grade_letter') or existing.grade_letter
             existing.is_pass      = is_pass
-            existing.notes        = entry.get('notes', existing.notes)
+            existing.notes        = entry_notes if entry_notes is not None else existing.notes
             existing.entered_by   = g.mobile_user.id
         else:
             new_result = ExamResult(
@@ -616,7 +735,7 @@ def teacher_enter_results(exam_id):
                 marks            = marks,
                 grade_letter     = entry.get('grade_letter'),
                 is_pass          = is_pass,
-                notes            = entry.get('notes'),
+                notes            = entry_notes,
                 entered_by       = g.mobile_user.id,
             )
             db.session.add(new_result)
@@ -722,16 +841,23 @@ def teacher_homework_list():
         offset=offset,
         homework=[
             {
-                'id':             hw.id,
-                'title':          hw.title,
-                'subject':        hw.subject.name if hw.subject else None,
-                'section':        hw.section.name if hw.section else None,
-                'grade':          hw.section.grade.name if hw.section and hw.section.grade else None,
-                'publish_date':   hw.publish_date.isoformat() if hw.publish_date else None,
-                'due_date':       hw.due_date.isoformat() if hw.due_date else None,
-                'description':    hw.description,
-                'attachment_url': _hw_attachment_url(hw),
+                'id':              hw.id,
+                'title':           hw.title,
+                'subject_id':      hw.subject_id,
+                'subject_name':    hw.subject.name if hw.subject else None,
+                'subject':         hw.subject.name if hw.subject else None,
+                'section_id':      hw.section_id,
+                'section_name':    hw.section.name if hw.section else None,
+                'section':         hw.section.name if hw.section else None,
+                'grade_name':      hw.section.grade.name if hw.section and hw.section.grade else None,
+                'grade':           hw.section.grade.name if hw.section and hw.section.grade else None,
+                'display_name':    f"{hw.section.grade.name} - شعبة {hw.section.name}" if hw.section and hw.section.grade else (hw.section.name if hw.section else None),
+                'publish_date':    hw.publish_date.isoformat() if hw.publish_date else None,
+                'due_date':        hw.due_date.isoformat() if hw.due_date else None,
+                'description':     hw.description,
+                'attachment_url':  _hw_attachment_url(hw),
                 'attachment_type': hw.attachment_type,
+                'created_at':      hw.created_at.isoformat() if hasattr(hw, 'created_at') and hw.created_at else None,
             }
             for hw in rows
         ],
@@ -777,37 +903,46 @@ def teacher_homework_create():
     description  = (data.get('description') or '').strip() or None
 
     if not title:
-        return err('title is required')
+        return err('required_field_missing: title')
     if not section_id:
-        return err('section_id is required')
-    if not publish_date or not due_date_str:
-        return err('publish_date and due_date are required')
+        return err('required_field_missing: section_id')
+    if not subject_id:
+        return err('required_field_missing: subject_id')
+    if not due_date_str:
+        return err('required_field_missing: due_date')
+
+    # publish_date defaults to today if not provided
+    if not publish_date:
+        from datetime import date as _date
+        pub_dt = _date.today()
+    else:
+        try:
+            pub_dt = _dt.strptime(publish_date, '%Y-%m-%d').date()
+        except ValueError:
+            return err('invalid publish_date — use YYYY-MM-DD')
 
     try:
-        pub_dt = _dt.strptime(publish_date, '%Y-%m-%d').date()
         due_dt = _dt.strptime(due_date_str, '%Y-%m-%d').date()
     except ValueError:
-        return err('invalid date format — use YYYY-MM-DD')
+        return err('invalid due_date — use YYYY-MM-DD')
 
     if due_dt < pub_dt:
         return err('due_date must not be before publish_date')
 
     allowed_sec_ids = _teacher_section_ids(emp)
     if section_id not in allowed_sec_ids:
-        return err('section not in teacher assignments', 403)
+        return err('forbidden — section not assigned to you', 403)
 
-    if subject_id:
-        from sqlalchemy import select as _sel
-        allowed_subj_ids = {
-            row.subject_id
-            for row in db.session.execute(
-                _sel(teacher_subjects.c.subject_id).where(
-                    teacher_subjects.c.employee_id == emp.id
-                )
-            ).fetchall()
-        }
-        if subject_id not in allowed_subj_ids:
-            return err('subject not in teacher assignments', 403)
+    allowed_subj_ids = {
+        row.subject_id
+        for row in db.session.execute(
+            select(teacher_subjects.c.subject_id).where(
+                teacher_subjects.c.employee_id == emp.id
+            )
+        ).fetchall()
+    }
+    if subject_id not in allowed_subj_ids:
+        return err('forbidden — subject not assigned to you', 403)
 
     from app.models import AcademicYear
     year = AcademicYear.query.filter_by(school_id=emp.school_id, is_current=True).first()
@@ -834,6 +969,11 @@ def teacher_homework_create():
         homework={
             'id':           hw.id,
             'title':        hw.title,
+            'subject_id':   hw.subject_id,
+            'subject_name': hw.subject.name if hw.subject else None,
+            'section_id':   hw.section_id,
+            'section_name': hw.section.name if hw.section else None,
+            'grade_name':   hw.section.grade.name if hw.section and hw.section.grade else None,
             'publish_date': hw.publish_date.isoformat(),
             'due_date':     hw.due_date.isoformat(),
         },
