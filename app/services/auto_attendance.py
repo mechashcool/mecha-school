@@ -113,8 +113,8 @@ def _check_school(school) -> None:
     cutoff = getattr(school, 'att_absence_threshold', None)
 
     if not cutoff:
-        _log.debug('[attendance] school_id=%s "%s" — no absence cutoff configured, skip',
-                   school.id, school_name)
+        _log.info('[attendance] school_id=%s "%s" — no absence cutoff configured, skip',
+                  school.id, school_name)
         return
 
     local_now  = get_local_now(school)

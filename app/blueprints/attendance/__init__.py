@@ -29,10 +29,13 @@ def _notify_absent_parents(student, school_id, today_str, source='manual'):
     title = 'تنبيه غياب'
     body  = f'تم تسجيل الطالب {student.full_name} غائباً بتاريخ {today_str}.'
     data  = {
-        'type':       'absent',
-        'student_id': str(student.id),
-        'date':       today_str,
-        'screen':     'attendance',
+        'ntype':        'attendance',
+        'action':       'absent',
+        'status':       'absent',
+        'student_id':   str(student.id),
+        'student_name': student.full_name,
+        'date':         today_str,
+        'screen':       'attendance',
     }
 
     parent_ids = [
@@ -76,9 +79,11 @@ def _notify_absent_parents(student, school_id, today_str, source='manual'):
     try:
         from app.services.fcm_service import is_enabled, send_push_to_user
         if not is_enabled():
+            _log.info('[attendance-notify] FCM disabled — absent push skipped student_id=%s', student.id)
             return
         for parent_id in parent_ids:
-            _log.info('[attendance-notify] dispatching absent push parent_user_id=%s', parent_id)
+            _log.info('[attendance-notify] dispatching absent FCM push parent_user_id=%s student_id=%s',
+                      parent_id, student.id)
             send_push_to_user(parent_id, title, body, data)
     except Exception:
         _log.exception('[attendance-notify] FCM push failed student_id=%s', student.id)
@@ -456,7 +461,7 @@ def take(section_id):
         # Check-out push notifications
         departure_str = now_time.strftime('%H:%M')
         for student in newly_checked_out:
-            _log.info('[attendance] check_out notification sent student_id=%s name=%s date=%s',
+            _log.info('[attendance-notify] source=manual action=check_out student_id=%s name=%s date=%s',
                       student.id, student.full_name, att_date)
             NotificationService.send_to_parents_of_student(
                 student.id,
@@ -464,7 +469,7 @@ def take(section_id):
                 f'طالبك {student.full_name} انصرف من المدرسة الساعة {departure_str}.',
                 ntype='attendance',
                 data={'action': 'check_out', 'at': now_time.isoformat(),
-                      'source': 'manual', 'date': att_date.isoformat()}
+                      'source': 'manual', 'date': att_date.isoformat(), 'screen': 'attendance'}
             )
 
         # Status-specific push notifications (use local time string)
@@ -476,13 +481,13 @@ def take(section_id):
             else:
                 title = 'تأخر الطالب عن موعد الحضور'
                 body  = f'طالبك {student.full_name} وصل متأخراً الساعة {arrival_str}.'
-            _log.info('[attendance] %s notification sent student_id=%s name=%s date=%s',
+            _log.info('[attendance-notify] source=manual action=check_in status=%s student_id=%s name=%s date=%s',
                       status, student.id, student.full_name, att_date)
             NotificationService.send_to_parents_of_student(
                 student.id, title, body, ntype='attendance',
                 data={'action': 'check_in', 'status': status,
                       'at': now_time.isoformat(), 'source': 'manual',
-                      'date': att_date.isoformat()}
+                      'date': att_date.isoformat(), 'screen': 'attendance'}
             )
 
         # Absent push notifications (new absent records only)

@@ -433,10 +433,12 @@ def _process_record_list(sn: str, device, school, records: list,
             try:
                 from app.services.notifications import NotificationService
                 NotificationService.send_to_parents_of_student(
-                    student.id, title, body, ntype='aiface',
+                    student.id, title, body, ntype='attendance',
                     data={'action': action, 'status': row.status,
                           'at': scan_time.strftime('%H:%M'),
-                          'source': 'aiface', 'device_sn': sn},
+                          'date': punch_dt.date().isoformat(),
+                          'source': 'aiface', 'device_sn': sn,
+                          'screen': 'attendance'},
                 )
                 log.info("  [aiface] parent notification sent: student_id=%d action=%s",
                          student.id, action)

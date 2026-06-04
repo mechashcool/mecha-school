@@ -153,7 +153,9 @@ class _NotificationService:
         try:
             from app.services.fcm_service import is_enabled, send_push_to_user
             if is_enabled():
-                send_push_to_user(user_id, title, body, data)
+                fcm_data = dict(data or {})
+                fcm_data.setdefault('ntype', ntype)  # Flutter needs this to route to the right screen
+                send_push_to_user(user_id, title, body, fcm_data)
         except Exception:
             log.exception('[FCM] multi-device push failed for user_id=%s', user_id)
 
@@ -180,8 +182,10 @@ class _NotificationService:
         try:
             from app.services.fcm_service import is_enabled, send_push_to_user
             if is_enabled():
+                fcm_data = dict(data or {})
+                fcm_data.setdefault('ntype', ntype)  # Flutter needs this to route to the right screen
                 for uid in unique_ids:
-                    send_push_to_user(uid, title, body, data)
+                    send_push_to_user(uid, title, body, fcm_data)
         except Exception:
             log.exception('[FCM] multi-device push failed for batch user_ids=%s', unique_ids)
 
@@ -202,6 +206,10 @@ class _NotificationService:
 
         parent_ids = [row[0] for row in db.session.query(parent_students.c.user_id)
                       .filter(parent_students.c.student_id == student_id).all()]
+
+        log.info('[attendance-notify] student_id=%s name=%s ntype=%s parents=%d',
+                 student_id, student.full_name, ntype, len(parent_ids))
+
         if not parent_ids:
             return []
 
