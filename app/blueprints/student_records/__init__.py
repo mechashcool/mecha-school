@@ -272,6 +272,51 @@ def get_student_data(student_id):
     return jsonify(_build_autofill(student, school))
 
 
+# ─── AJAX: records live search ───────────────────────────────────────────────
+
+@student_records_bp.route('/search')
+@login_required
+@permission_required('view_students')
+def search():
+    school = _school_or_404()
+    q = request.args.get('q', '').strip()
+
+    query = StudentRegistrationRecord.query.filter(
+        StudentRegistrationRecord.school_id == school.id
+    )
+    if q:
+        query = query.join(Student).filter(
+            db.or_(
+                Student.full_name.ilike(f'%{q}%'),
+                Student.student_id.ilike(f'%{q}%'),
+                StudentRegistrationRecord.snap_full_name.ilike(f'%{q}%'),
+                StudentRegistrationRecord.snap_student_number.ilike(f'%{q}%'),
+            )
+        )
+    rows = query.order_by(StudentRegistrationRecord.updated_at.desc()).limit(50).all()
+
+    def _gs(r):
+        if r.snap_grade_name:
+            return (f"{r.snap_grade_name} / {r.snap_section_name}"
+                    if r.snap_section_name else r.snap_grade_name)
+        return '—'
+
+    return jsonify({
+        'ok': True,
+        'records': [{
+            'student_name':   r.snap_full_name or '',
+            'student_number': r.snap_student_number or '',
+            'grade_section':  _gs(r),
+            'academic_year':  r.snap_year_name or '—',
+            'created_at':     r.created_at.strftime('%Y-%m-%d') if r.created_at else '',
+            'updated_at':     r.updated_at.strftime('%Y-%m-%d') if r.updated_at else '',
+            'view_url':  url_for('student_records.view', record_id=r.id),
+            'edit_url':  url_for('student_records.edit', record_id=r.id),
+            'pdf_url':   url_for('student_records.pdf',  record_id=r.id),
+        } for r in rows],
+    })
+
+
 # ─── INDEX ────────────────────────────────────────────────────────────────────
 
 @student_records_bp.route('/')
