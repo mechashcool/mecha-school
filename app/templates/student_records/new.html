@@ -14,7 +14,7 @@
 </div>
 
 {# ── Step 1: Student search ── #}
-<div class="card mb-4" id="student-search-card" style="position:relative;z-index:10">
+<div class="card mb-4" id="student-search-card">
   <div class="card-header fw-semibold">
     <i class="bi bi-search me-1"></i> الخطوة 1: اختيار الطالب
   </div>
@@ -52,9 +52,8 @@
                    autocomplete="off"
                    value="{{ pre_student.full_name if pre_student else '' }}">
           </div>
-          <div id="search-results" class="list-group mt-1 w-100"
-               style="position:absolute;top:100%;right:0;z-index:1055;display:none;
-                      max-height:300px;overflow-y:auto;
+          <div id="search-results" class="list-group"
+               style="display:none;max-height:300px;overflow-y:auto;
                       box-shadow:0 4px 16px rgba(0,0,0,.18)"></div>
         </div>
       </div>
@@ -403,6 +402,22 @@
 
   if (!searchInput) return;
 
+  // Move dropdown to <body> so no ancestor card overflow:hidden can clip it.
+  document.body.appendChild(searchRes);
+  searchRes.style.position = 'fixed';
+  searchRes.style.zIndex   = '9999';
+
+  function positionDropdown() {
+    // Anchor to the bottom edge of the input-group wrapper.
+    const anchor = searchInput.closest('[style*="position"]') || searchInput.parentElement;
+    const r = anchor.getBoundingClientRect();
+    searchRes.style.top   = (r.bottom + 2) + 'px';
+    searchRes.style.width = r.width + 'px';
+    // RTL: align right edge of dropdown with right edge of the anchor.
+    searchRes.style.right = (window.innerWidth - r.right) + 'px';
+    searchRes.style.left  = 'auto';
+  }
+
   let debounceTimer;
   searchInput.addEventListener('input', function () {
     clearTimeout(debounceTimer);
@@ -423,7 +438,7 @@
             const a = document.createElement('a');
             a.href = '#';
             a.className = 'list-group-item list-group-item-action py-2';
-            let badge = s.has_record
+            const badge = s.has_record
               ? ' <span class="badge bg-warning text-dark ms-1">يوجد سجل</span>' : '';
             a.innerHTML = `
               <div class="d-flex justify-content-between align-items-center">
@@ -435,13 +450,12 @@
             searchRes.appendChild(a);
           });
         }
+        positionDropdown();
         searchRes.style.display = 'block';
       });
   }
 
   function selectStudent(s) {
-    // Always redirect to the server-rendered pre-fill page — this is reliable
-    // whether or not the student already has a record.
     window.location.href = `{{ url_for('student_records.new') }}?student_id=${s.id}`;
   }
 
