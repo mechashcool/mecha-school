@@ -14,7 +14,7 @@
 </div>
 
 {# ── Step 1: Student search ── #}
-<div class="card mb-4" id="student-search-card">
+<div class="card mb-4" id="student-search-card" style="position:relative;z-index:10">
   <div class="card-header fw-semibold">
     <i class="bi bi-search me-1"></i> الخطوة 1: اختيار الطالب
   </div>
@@ -53,7 +53,9 @@
                    value="{{ pre_student.full_name if pre_student else '' }}">
           </div>
           <div id="search-results" class="list-group mt-1 w-100"
-               style="position:absolute;top:100%;right:0;z-index:1050;display:none"></div>
+               style="position:absolute;top:100%;right:0;z-index:1055;display:none;
+                      max-height:300px;overflow-y:auto;
+                      box-shadow:0 4px 16px rgba(0,0,0,.18)"></div>
         </div>
       </div>
     </div>
@@ -502,6 +504,15 @@
         recalcTotal();
       });
     });
+
+    // Auto-fill النتيجة النهائية كتابة
+    const finalN = document.querySelector(`[name="y${i}_final_result"]`);
+    const finalT = document.querySelector(`[name="y${i}_final_result_t"]`);
+    if (finalN && finalT) {
+      finalN.addEventListener('input', function () {
+        finalT.value = numToArabicWords(finalN.value);
+      });
+    }
   }
 })();
 </script>

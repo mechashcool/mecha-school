@@ -1301,9 +1301,11 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
         row = blank_row()
         row[19] = Paragraph(ar(label), subj_s)
         for yi in range(9):
-            yr = sav[yi]
-            row[ytc(yi)] = p(yr.get(key_n, ''))   # right (tc) = رقماً
-            row[ync(yi)] = p(yr.get(key_t, ''))   # left  (nc) = كتابة
+            yr    = sav[yi]
+            n_val = yr.get(key_n, '')
+            t_val = yr.get(key_t, '') or num_to_arabic_words(n_val)
+            row[ytc(yi)] = p(n_val)   # right (tc) = رقماً
+            row[ync(yi)] = p(t_val)   # left  (nc) = كتابة
         return row
 
     # المجموع — auto-sum numeric grades; fall back to stored total_n if no numeric entries

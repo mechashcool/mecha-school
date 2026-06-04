@@ -434,6 +434,15 @@
         recalcTotal();
       });
     });
+
+    // Auto-fill النتيجة النهائية كتابة
+    const finalN = document.querySelector(`[name="y${i}_final_result"]`);
+    const finalT = document.querySelector(`[name="y${i}_final_result_t"]`);
+    if (finalN && finalT) {
+      finalN.addEventListener('input', function () {
+        finalT.value = numToArabicWords(finalN.value);
+      });
+    }
   }
 })();
 </script>
