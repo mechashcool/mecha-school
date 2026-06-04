@@ -38,7 +38,9 @@
       "Bash(python -m pytest tests/test_student_registration_records.py -v)",
       "Bash(python -m pytest tests/test_student_registration_records.py::StudentRegistrationRecordTest::test_cross_school_view_blocked -v)",
       "Bash(python -m pytest tests/test_student_registration_records.py::StudentRegistrationRecordTest::test_cross_school_view_blocked -v -s)",
-      "Bash(grep -v \"^$\")"
+      "Bash(grep -v \"^$\")",
+      "Bash(python -c 'import re,glob,os; heads=set\\(\\); downs=set\\(\\); files=glob.glob\\('\\\\''migrations/versions/*.py'\\\\''\\); [None for f in files]; *)",
+      "Bash(python -m py_compile app/models/__init__.py app/utils/scoping.py app/utils/buildings.py app/blueprints/buildings/__init__.py app/blueprints/students/__init__.py app/blueprints/fees/__init__.py app/blueprints/schools/__init__.py app/blueprints/admin/__init__.py app/__init__.py migrations/versions/c4d5e6f7a8b9_add_school_buildings.py)"
     ]
   }
 }

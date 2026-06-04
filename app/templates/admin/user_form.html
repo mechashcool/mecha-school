@@ -324,6 +324,67 @@
     </div>
   </div>
 
+  {# ── Building access panel (optional buildings feature) ───────────────── #}
+  {% if buildings_access_enabled %}
+  {% set is_restricted = user_building_ids and user_building_ids|length > 0 %}
+  <div class="row g-4 mt-0" id="buildingAccessPanel">
+    <div class="col-12">
+      <div class="card border-secondary">
+        <div class="card-header" style="background:#eef6ee;color:#2e6b3e">
+          <i class="bi bi-building me-1"></i>
+          صلاحيات البنايات
+        </div>
+        <div class="card-body">
+          <p class="text-muted mb-3" style="font-size:13px">
+            تحكّم في البنايات التي يستطيع هذا المستخدم رؤية بياناتها (الطلاب والرسوم).
+            لا ينطبق على أولياء الأمور والمعلمين.
+          </p>
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="radio" name="building_access_mode"
+                   id="bamAll" value="all" {{ 'checked' if not is_restricted }}>
+            <label class="form-check-label" for="bamAll">
+              <b>الوصول إلى كل البنايات</b>
+              <span class="text-muted d-block" style="font-size:12px">يرى المستخدم جميع البنايات ضمن صلاحياته العادية.</span>
+            </label>
+          </div>
+          <div class="form-check mb-3">
+            <input class="form-check-input" type="radio" name="building_access_mode"
+                   id="bamRestricted" value="restricted" {{ 'checked' if is_restricted }}>
+            <label class="form-check-label" for="bamRestricted">
+              <b>تقييد المستخدم ببنايات محددة</b>
+              <span class="text-muted d-block" style="font-size:12px">يرى المستخدم بيانات البنايات المختارة فقط.</span>
+            </label>
+          </div>
+          <div id="buildingChecklist" style="{{ '' if is_restricted else 'display:none' }}">
+            {% if buildings_for_access %}
+            <div class="row g-2 ps-3">
+              {% for b in buildings_for_access %}
+              <div class="col-md-4">
+                <div class="form-check p-2 border rounded">
+                  <input class="form-check-input" type="checkbox"
+                         name="building_ids" value="{{ b.id }}"
+                         id="bldg_{{ b.id }}"
+                         {{ 'checked' if b.id in user_building_ids }}>
+                  <label class="form-check-label w-100" for="bldg_{{ b.id }}"
+                         style="cursor:pointer;font-size:13px">
+                    <b>{{ b.name }}</b>
+                  </label>
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+            {% else %}
+            <div class="alert alert-warning py-2 mb-0" style="font-size:13px">
+              لا توجد بنايات مفعّلة بعد. أنشئ بنايات من صفحة "إدارة البنايات" أولاً.
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   <!-- Submit -->
   <div class="mt-4 d-flex gap-3">
     <button type="submit" class="btn btn-primary px-5">
@@ -340,6 +401,7 @@
   const parentPanel       = document.getElementById('parentLinkPanel');
   const teacherPanel      = document.getElementById('teacherSectionPanel');
   const teacherSubjPanel  = document.getElementById('teacherSubjectPanel');
+  const buildingPanel     = document.getElementById('buildingAccessPanel');
   if (!roleSelect) return;
 
   const parentRoleIds = [
@@ -356,9 +418,23 @@
     if (parentPanel)      parentPanel.style.display      = isParent  ? '' : 'none';
     if (teacherPanel)     teacherPanel.style.display     = isTeacher ? '' : 'none';
     if (teacherSubjPanel) teacherSubjPanel.style.display = isTeacher ? '' : 'none';
+    // Building access does not apply to parents/teachers.
+    if (buildingPanel)    buildingPanel.style.display    = (isParent || isTeacher) ? 'none' : '';
   }
   roleSelect.addEventListener('change', togglePanels);
   togglePanels();
+
+  // Building access: show the checklist only when "restricted" is selected.
+  const bamAll        = document.getElementById('bamAll');
+  const bamRestricted = document.getElementById('bamRestricted');
+  const bldgChecklist = document.getElementById('buildingChecklist');
+  function toggleChecklist() {
+    if (!bldgChecklist) return;
+    bldgChecklist.style.display = (bamRestricted && bamRestricted.checked) ? '' : 'none';
+  }
+  if (bamAll)        bamAll.addEventListener('change', toggleChecklist);
+  if (bamRestricted) bamRestricted.addEventListener('change', toggleChecklist);
+  toggleChecklist();
 
   function normalize(value) {
     return (value || '')

@@ -65,10 +65,21 @@
       </div>
       {% endif %}
       {% endif %}
+      {% if buildings_enabled and buildings_list %}
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12px">البناية</label>
+        <select name="building_id" class="form-select" onchange="this.form.submit()">
+          <option value="">كل البنايات</option>
+          {% for b in buildings_list %}
+          <option value="{{ b.id }}" {{ 'selected' if building_id == b.id }}>{{ b.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
       <div class="col-md-1">
         <button class="btn btn-primary w-100"><i class="bi bi-search"></i></button>
       </div>
-      {% if search or status or grade_id or section_id %}
+      {% if search or status or grade_id or section_id or building_id %}
       <div class="col-md-1">
         <a href="{{ url_for('students.index') }}" class="btn btn-outline-secondary w-100">مسح</a>
       </div>
@@ -86,6 +97,7 @@
           <th>الاسم الكامل</th>
           <th>الجنس</th>
           <th>الصف / الشعبة</th>
+          {% if buildings_enabled %}<th>البناية</th>{% endif %}
           <th>ولي الأمر</th>
           <th>الحالة</th>
           <th>تاريخ التسجيل</th>
@@ -119,6 +131,15 @@
               </span>
             {% else %}<span class="text-muted">—</span>{% endif %}
           </td>
+          {% if buildings_enabled %}
+          <td>
+            {% if s.building %}
+              <span class="badge" style="background:#eef6ee;color:#2e6b3e;font-weight:600">
+                <i class="bi bi-building me-1"></i>{{ s.building.name }}
+              </span>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          {% endif %}
           <td>
             <div style="font-size:13px">{{ s.guardian_name or '—' }}</div>
             <div style="font-size:11.5px;color:#9aabb8">{{ s.guardian_phone or '' }}</div>
@@ -186,7 +207,7 @@
         </tr>
         {% else %}
         <tr>
-          <td colspan="8" class="text-center text-muted py-5">
+          <td colspan="{{ 9 if buildings_enabled else 8 }}" class="text-center text-muted py-5">
             <i class="bi bi-people" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
             لا يوجد طلاب
           </td>
@@ -204,7 +225,7 @@
         {% for p in students.iter_pages() %}
           {% if p %}
           <li class="page-item {{ 'active' if p == students.page }}">
-            <a class="page-link" href="{{ url_for('students.index', page=p, q=search, status=status, grade_id=grade_id or '', section_id=section_id or '') }}">{{ p }}</a>
+            <a class="page-link" href="{{ url_for('students.index', page=p, q=search, status=status, grade_id=grade_id or '', section_id=section_id or '', building_id=building_id or '') }}">{{ p }}</a>
           </li>
           {% else %}
           <li class="page-item disabled"><span class="page-link">…</span></li>

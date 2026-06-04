@@ -28,6 +28,7 @@ def _models():
         Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
         Subject, User,
         SchoolVideo, SchoolAnnouncement,
+        SchoolBuilding, UserBuildingAccess,
     )
 
     school_scoped = (
@@ -41,6 +42,7 @@ def _models():
         Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
         Subject, User,
         SchoolVideo, SchoolAnnouncement,
+        SchoolBuilding, UserBuildingAccess,
     )
     # Student, StudentDocument, StudentSuspension are school-scoped only —
     # they persist across academic years so that a year rollover does not

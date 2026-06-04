@@ -490,6 +490,16 @@
     {% endif %}
     {% endif %}{# not super_admin #}
 
+    {# Buildings management — only when this school has the buildings feature on #}
+    {% if school and school.enable_buildings and current_user.is_admin_user %}
+    <li class="nav-item">
+      <a href="{{ url_for('buildings.index') }}"
+         class="{{ 'active' if request.blueprint == 'buildings' }}">
+        <i class="bi bi-buildings"></i> إدارة البنايات
+      </a>
+    </li>
+    {% endif %}
+
     {# User management link — school managers see school-scoped label #}
     {% if current_user.school_id is not none %}
     <li class="nav-item">

@@ -14,6 +14,10 @@ from app.utils.decorators import (permission_required, get_current_school,
                                    admin_required)
 from app.utils.helpers import generate_receipt_no
 from app.utils.audit import log_action
+from app.utils.buildings import (
+    apply_building_scope_to_students, apply_building_scope_to_fees,
+    user_can_access_student,
+)
 
 fees_bp = Blueprint('fees', __name__, template_folder='../../templates/fees')
 _log = logging.getLogger('mecha.fees')
@@ -29,6 +33,8 @@ def _active_fee_student_query(school, year):
         query = query.filter(Student.school_id == school.id)
     if year:
         query = query.filter(Student.academic_year_id == year.id)
+    # Building scope — restricted users only act on their buildings' students.
+    query = apply_building_scope_to_students(query, current_user, school)
     return query
 
 
@@ -71,10 +77,13 @@ def index():
     if school:
         query = query.filter(FeeRecord.school_id == school.id)
 
+    # Building scope — restricted users only see fees of their buildings' students.
+    query = apply_building_scope_to_fees(query, current_user, school)
+
     if search:
         query = query.filter(Student.full_name.ilike(f'%{search}%') |
                              Student.student_id.ilike(f'%{search}%'))
-    
+
     if fee_type_filter != 'all':
         query = query.filter(FeeRecord.fee_type_id == int(fee_type_filter))
     
@@ -227,6 +236,12 @@ def pay_installment(inst_id):
     try:
         inst = FeeInstallment.query.get_or_404(inst_id)
 
+        # Building scope — restricted users cannot pay for students outside their buildings.
+        _student = inst.fee_record.student if inst.fee_record else None
+        if not user_can_access_student(current_user, get_current_school(), _student):
+            return jsonify({'status': 'error',
+                            'message': 'ليس لديك صلاحية الوصول إلى بيانات هذه البناية'}), 403
+
         raw_amount = request.form.get('received_amount', '').strip()
         if not raw_amount:
             return jsonify({'status': 'error', 'message': 'يرجى إدخال المبلغ المستلم.'}), 400
@@ -335,6 +350,11 @@ def generate_receipt(inst_id):
     if not inst.receipt_no:
         abort(404, "No receipt available for this installment")
 
+    # Building scope — restricted users cannot view receipts outside their buildings.
+    _student = inst.fee_record.student if inst.fee_record else None
+    if not user_can_access_student(current_user, get_current_school(), _student):
+        abort(403)
+
     school_settings = get_current_school() or SchoolSettings.get()
     pdf_bytes = generate_fee_receipt(inst, school_settings, print_date=date.today())
     
@@ -369,6 +389,9 @@ def export_excel():
     query = FeeRecord.query.join(Student).outerjoin(
         total_paid_sub, FeeRecord.id == total_paid_sub.c.fee_record_id
     )
+
+    # Building scope — restricted users only export their buildings' fees.
+    query = apply_building_scope_to_fees(query, current_user, get_current_school())
 
     if search:
         query = query.filter(Student.full_name.ilike(f'%{search}%') |

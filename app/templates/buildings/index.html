@@ -1,0 +1,91 @@
+{% extends "shared/base.html" %}
+{% block title %}إدارة البنايات{% endblock %}
+{% block page_title %}إدارة البنايات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">إدارة البنايات</h1>
+    <p class="page-subtitle">البنايات / الفروع داخل المدرسة — إجمالي {{ buildings|length }}</p>
+  </div>
+  {% if not is_historical_year %}
+  <a href="{{ url_for('buildings.new') }}" class="btn btn-primary">
+    <i class="bi bi-plus-lg me-2"></i>إضافة بناية
+  </a>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>اسم البناية</th>
+          <th>الوصف</th>
+          <th>عدد الطلاب</th>
+          <th>الحالة</th>
+          <th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for b in buildings %}
+        <tr>
+          <td class="fw-600">
+            <i class="bi bi-building me-1 text-primary-custom"></i>{{ b.name }}
+          </td>
+          <td style="font-size:13px;color:#6b7a8d">{{ b.description or '—' }}</td>
+          <td>
+            <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
+              {{ student_counts.get(b.id, 0) }}
+            </span>
+          </td>
+          <td>
+            {% if b.is_active %}
+            <span class="badge-status badge-active">مفعّلة</span>
+            {% else %}
+            <span class="badge-status badge-inactive">معطّلة</span>
+            {% endif %}
+          </td>
+          <td>
+            <div class="d-flex gap-1">
+              {% if not is_historical_year %}
+              <a href="{{ url_for('buildings.edit', building_id=b.id) }}"
+                 class="btn btn-sm btn-outline-secondary" title="تعديل">
+                <i class="bi bi-pencil"></i>
+              </a>
+              <form method="POST" action="{{ url_for('buildings.toggle_active', building_id=b.id) }}" class="d-inline">
+                {% if b.is_active %}
+                <button class="btn btn-sm btn-outline-warning" title="تعطيل"
+                        data-confirm="تعطيل البناية {{ b.name }}؟">
+                  <i class="bi bi-pause-circle"></i>
+                </button>
+                {% else %}
+                <button class="btn btn-sm btn-outline-success" title="تفعيل"
+                        data-confirm="تفعيل البناية {{ b.name }}؟">
+                  <i class="bi bi-play-circle"></i>
+                </button>
+                {% endif %}
+              </form>
+              <form method="POST" action="{{ url_for('buildings.delete', building_id=b.id) }}" class="d-inline">
+                <button class="btn btn-sm btn-outline-danger" title="حذف"
+                        data-confirm="حذف البناية {{ b.name }} نهائياً؟ لا يمكن الحذف إذا كان هناك طلاب مرتبطون بها.">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="5" class="text-center text-muted py-5">
+            <i class="bi bi-building" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا توجد بنايات بعد. ابدأ بإضافة بناية.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

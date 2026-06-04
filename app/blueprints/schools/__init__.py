@@ -301,6 +301,7 @@ def edit(school_id):
         school.timezone           = request.form.get('timezone', school.timezone).strip()
         school.locale             = request.form.get('locale', school.locale).strip()
         school.is_active          = bool(request.form.get('is_active'))
+        school.enable_buildings   = bool(request.form.get('enable_buildings'))
         school.governorate        = request.form.get('governorate', '').strip() or None
         school.price_per_student  = pps
 

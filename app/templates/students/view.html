@@ -103,6 +103,9 @@
           {{ info_row('الجنسية', student.nationality) }}
           {{ info_row('الهاتف', student.phone) }}
           {{ info_row('الصف', (student.section.grade.name + ' / شعبة ' + student.section.name) if student.section) }}
+          {% if school and school.enable_buildings and student.building %}
+          {{ info_row('البناية', student.building.name) }}
+          {% endif %}
           {{ info_row('تاريخ التسجيل', student.enrollment_date.strftime('%Y-%m-%d') if student.enrollment_date) }}
           {% if student.address %}
           <div class="col-12">

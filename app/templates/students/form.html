@@ -136,6 +136,24 @@
             </div>
             {% endif %}
 
+            {# building (only when the school has the buildings feature enabled) #}
+            {% if buildings_enabled %}
+            <div class="col-md-4">
+              <label class="form-label">
+                <i class="bi bi-building me-1"></i>البناية
+              </label>
+              <select name="building_id" class="form-select">
+                <option value="">— بدون بناية —</option>
+                {% for b in buildings_list %}
+                <option value="{{ b.id }}"
+                        {{ 'selected' if selected_building_id == b.id }}>
+                  {{ b.name }}
+                </option>
+                {% endfor %}
+              </select>
+            </div>
+            {% endif %}
+
             {# address #}
             {% if form_cfg.field_visible('address') %}
             <div class="col-12">

@@ -14,7 +14,8 @@ from app.models import (db, User, Role, Permission, Employee, Student, Subject,
                          FeeInstallment, StudentAttendance, Revenue, Expense,
                          Notification, AcademicYear, School, Section,
                          teacher_subjects, Complaint, LeaveRequest,
-                         SchoolVideo, SchoolAnnouncement, SchoolContentRead)
+                         SchoolVideo, SchoolAnnouncement, SchoolContentRead,
+                         SchoolBuilding, UserBuildingAccess)
 from app.utils.decorators import (admin_required, staff_required,
                                    get_current_school,
                                    get_active_year, get_view_year, super_admin_required)
@@ -153,6 +154,91 @@ def _subject_options(school, year):
             .filter_by(school_id=school.id, academic_year_id=year.id)
             .order_by(Subject.name)
             .all())
+
+
+# ── Building access helpers (optional per-school buildings feature) ───────────
+
+# Roles that never receive building restrictions (they use other scoping models).
+_BUILDING_EXEMPT_ROLES = frozenset({'parent', 'teacher', 'super_admin'})
+
+
+def _school_buildings_enabled(school_id):
+    """True when the given school has the buildings feature turned on."""
+    if not school_id:
+        return False
+    school = (School.query.execution_options(bypass_tenant_scope=True)
+              .get(school_id))
+    return bool(school and getattr(school, 'enable_buildings', False))
+
+
+def _active_buildings_for(school_id):
+    if not school_id:
+        return []
+    return (SchoolBuilding.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(school_id=school_id, is_active=True)
+            .order_by(SchoolBuilding.name)
+            .all())
+
+
+def _user_building_ids(user_id, school_id):
+    if not user_id or not school_id:
+        return set()
+    return {
+        r.building_id for r in
+        UserBuildingAccess.query.execution_options(bypass_tenant_scope=True)
+        .filter_by(user_id=user_id, school_id=school_id).all()
+    }
+
+
+def _save_user_building_access(user, school_id):
+    """
+    Persist building restrictions for a user from the submitted form.
+
+    Returns an error message (str) to abort with, or None on success.
+    Does NOT commit — the caller owns the transaction.
+
+    Behaviour:
+      * Feature off / no school        → ignored (no rows touched).
+      * Exempt role (parent/teacher)   → clears any stale rows, no restriction.
+      * mode 'all'                     → clears rows (unrestricted).
+      * mode 'restricted' + buildings  → replaces rows with the selected set.
+      * mode 'restricted' + none       → validation error.
+    """
+    if not _school_buildings_enabled(school_id):
+        return None
+
+    # Always clear existing rows first, then re-add as needed.
+    (UserBuildingAccess.query.execution_options(bypass_tenant_scope=True)
+     .filter_by(user_id=user.id).delete(synchronize_session=False))
+
+    role_name = user.role.name if user.role else ''
+    if role_name in _BUILDING_EXEMPT_ROLES:
+        return None
+
+    mode = request.form.get('building_access_mode', 'all')
+    if mode != 'restricted':
+        return None  # unrestricted — no rows
+
+    raw_ids = request.form.getlist('building_ids', type=int)
+    valid_ids = []
+    if raw_ids:
+        valid_ids = [
+            b.id for b in
+            SchoolBuilding.query.execution_options(bypass_tenant_scope=True)
+            .filter(SchoolBuilding.school_id == school_id,
+                    SchoolBuilding.id.in_(raw_ids),
+                    SchoolBuilding.is_active.is_(True))
+            .all()
+        ]
+    if not valid_ids:
+        return 'يجب اختيار بناية واحدة على الأقل عند تقييد المستخدم ببنايات محددة.'
+
+    for bid in valid_ids:
+        db.session.add(UserBuildingAccess(
+            school_id=school_id, user_id=user.id, building_id=bid,
+        ))
+    return None
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  DASHBOARD  (school-scoped)
@@ -459,6 +545,13 @@ def create_user():
                 if rows:
                     db.session.execute(teacher_subjects.insert(), rows)
 
+        # ── Building access restrictions (optional feature) ─────────────────
+        _berr = _save_user_building_access(user, assigned_school_id)
+        if _berr:
+            db.session.rollback()
+            flash(_berr, 'danger')
+            return redirect(url_for('admin.create_user'))
+
         import logging as _logging
         _log = _logging.getLogger(__name__)
         from sqlalchemy.exc import IntegrityError as _IntegrityError
@@ -481,6 +574,8 @@ def create_user():
         return redirect(url_for('admin.users_list'))
 
     preselect_school_id = request.args.get('school_id', type=int)
+    _access_school_id = school.id if school else None
+    _buildings_access_enabled = _school_buildings_enabled(_access_school_id)
     return render_template('admin/user_form.html',
                            roles=roles, user=None,
                            all_permissions=all_permissions,
@@ -489,7 +584,10 @@ def create_user():
                            teacher_section_ids=set(), teacher_subject_ids=set(),
                            is_school_manager=is_school_manager,
                            safe_permissions=[],
-                           preselect_school_id=preselect_school_id)
+                           preselect_school_id=preselect_school_id,
+                           buildings_access_enabled=_buildings_access_enabled,
+                           buildings_for_access=_active_buildings_for(_access_school_id),
+                           user_building_ids=set())
 
 
 @admin_bp.route('/users/<int:user_id>/edit', methods=['GET', 'POST'])
@@ -696,10 +794,18 @@ def edit_user(user_id):
                 if rows:
                     db.session.execute(teacher_subjects.insert(), rows)
 
+        # ── Building access restrictions (optional feature) ─────────────────
+        _berr = _save_user_building_access(user, user.school_id)
+        if _berr:
+            db.session.rollback()
+            flash(_berr, 'danger')
+            return redirect(url_for('admin.edit_user', user_id=user.id))
+
         db.session.commit()
         flash('تم تحديث بيانات المستخدم بنجاح.', 'success')
         return redirect(url_for('admin.users_list'))
 
+    _buildings_access_enabled = _school_buildings_enabled(user.school_id)
     return render_template('admin/user_form.html',
                            user=user, roles=roles,
                            all_permissions=all_permissions,
@@ -710,7 +816,10 @@ def edit_user(user_id):
                            all_sections=all_sections,
                            all_subjects=all_subjects,
                            teacher_section_ids=teacher_section_ids,
-                           teacher_subject_ids=teacher_subject_ids)
+                           teacher_subject_ids=teacher_subject_ids,
+                           buildings_access_enabled=_buildings_access_enabled,
+                           buildings_for_access=_active_buildings_for(user.school_id),
+                           user_building_ids=_user_building_ids(user.id, user.school_id))
 
 
 @admin_bp.route('/users/<int:user_id>/toggle', methods=['POST'])

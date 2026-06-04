@@ -12,6 +12,11 @@ from app.utils.helpers import save_uploaded_file
 from app.utils import code_generator
 from app.utils.features import feature_required, is_feature_enabled
 from app.utils.student_form_config import get_student_form_config
+from app.utils.buildings import (
+    school_buildings_enabled, get_active_buildings,
+    apply_building_scope_to_students, user_allowed_building_ids,
+    user_can_access_student, validate_building_for_school,
+)
 
 students_bp = Blueprint('students', __name__,
                          template_folder='../../templates/students')
@@ -32,6 +37,7 @@ def index():
     status     = request.args.get('status', '')
     grade_id   = request.args.get('grade_id', type=int)
     section_id = request.args.get('section_id', type=int)
+    building_id = request.args.get('building_id', type=int)
     school     = get_current_school()
     year       = get_view_year(school.id) if school else None
 
@@ -40,6 +46,12 @@ def index():
     # School scoping — always filter by current school
     if school:
         query = query.filter_by(school_id=school.id)
+
+    # Building scoping — second layer, only when the feature is on AND the user
+    # is restricted. No effect on schools/users without buildings.
+    buildings_on = school_buildings_enabled(school)
+    allowed_building_ids = user_allowed_building_ids(current_user, school)
+    query = apply_building_scope_to_students(query, current_user, school)
 
     if _is_teacher():
         teacher_sids = get_teacher_section_ids(current_user)
@@ -60,6 +72,12 @@ def index():
     else:
         # Archived students are hidden from the default list; use status=archived to view them
         query = query.filter(Student.status != 'archived')
+
+    # Optional building filter (only meaningful when buildings are enabled).
+    if buildings_on and building_id:
+        # A restricted user may only filter within their allowed buildings.
+        if allowed_building_ids is None or building_id in allowed_building_ids:
+            query = query.filter(Student.building_id == building_id)
 
     if section_id:
         query = query.filter_by(section_id=section_id)
@@ -99,6 +117,13 @@ def index():
             'at_limit': school.is_at_capacity,
         }
 
+    # Buildings for the filter dropdown / column (restricted users see only theirs).
+    buildings_list = []
+    if buildings_on:
+        buildings_list = get_active_buildings(school.id) if school else []
+        if allowed_building_ids is not None:
+            buildings_list = [b for b in buildings_list if b.id in allowed_building_ids]
+
     return render_template('students/index.html',
                            students=students, search=search, status=status,
                            capacity_info=capacity_info,
@@ -106,7 +131,10 @@ def index():
                            grades_list=grades_list,
                            sections_list=sections_list,
                            grade_id=grade_id,
-                           section_id=section_id)
+                           section_id=section_id,
+                           buildings_enabled=buildings_on,
+                           buildings_list=buildings_list,
+                           building_id=building_id)
 
 
 @students_bp.route('/create', methods=['GET', 'POST'])
@@ -182,6 +210,16 @@ def create():
 
     form_cfg = get_student_form_config(school.id)
 
+    # ── Buildings (optional feature) ─────────────────────────────────────────
+    buildings_on = school_buildings_enabled(school)
+    allowed_building_ids = user_allowed_building_ids(current_user, school)
+    buildings_for_form = []
+    if buildings_on:
+        buildings_for_form = get_active_buildings(school.id)
+        if allowed_building_ids is not None:
+            buildings_for_form = [b for b in buildings_for_form
+                                  if b.id in allowed_building_ids]
+
     if request.method == 'POST':
         # ── Pre-validate parent account and device mapping fields ────────────
         parent_username         = request.form.get('parent_username', '').strip()
@@ -200,7 +238,10 @@ def create():
                                    active_devices=active_devices,
                                    available_parents=available_parents,
                                    linked_parents=[], existing_device_mappings=[],
-                                   form_cfg=form_cfg)
+                                   form_cfg=form_cfg,
+                                   buildings_enabled=buildings_on,
+                                   buildings_list=buildings_for_form,
+                                   selected_building_id=request.form.get('building_id', type=int))
 
         # ── Backend enforcement of required fields per school config ─────────
         _cfg_errors = form_cfg.validate(request.form)
@@ -256,6 +297,16 @@ def create():
         if form_cfg.field_visible('gender') and form_cfg.field_required('gender') and not gender_val:
             return _re_render('الجنس مطلوب')
 
+        # ── Building assignment (only when feature enabled) ──────────────────
+        building_id_val = None
+        if buildings_on:
+            _raw_building = request.form.get('building_id', type=int)
+            building_id_val = validate_building_for_school(_raw_building, school.id)
+            # A restricted user can only assign students to their own buildings.
+            if (building_id_val and allowed_building_ids is not None
+                    and building_id_val not in allowed_building_ids):
+                return _re_render('ليس لديك صلاحية الوصول إلى بيانات هذه البناية')
+
         student = Student(
             student_id        = student_id,
             full_name         = request.form.get('full_name', '').strip(),
@@ -272,6 +323,7 @@ def create():
             guardian_relation = request.form.get('guardian_relation', '').strip(),
             photo             = photo_path,
             notes             = request.form.get('notes', '').strip(),
+            building_id       = building_id_val,
             # Multi-tenant fields
             school_id         = school.id if school else None,
             academic_year_id  = year.id   if year   else None,
@@ -388,7 +440,10 @@ def create():
                            active_devices=active_devices,
                            available_parents=available_parents,
                            linked_parents=[], existing_device_mappings=[],
-                           form_cfg=form_cfg)
+                           form_cfg=form_cfg,
+                           buildings_enabled=buildings_on,
+                           buildings_list=buildings_for_form,
+                           selected_building_id=None)
 
 
 @students_bp.route('/<int:student_id>/edit', methods=['GET', 'POST'])
@@ -403,6 +458,35 @@ def edit(student_id):
     # Prevent editing a student from another school
     if school and student.school_id and student.school_id != school.id:
         abort(403)
+
+    # Building scope — a restricted user cannot edit students outside their buildings.
+    if not user_can_access_student(current_user, school, student):
+        flash('ليس لديك صلاحية الوصول إلى بيانات هذه البناية', 'danger')
+        return redirect(url_for('students.index'))
+
+    buildings_on = school_buildings_enabled(school)
+    allowed_building_ids = user_allowed_building_ids(current_user, school)
+    buildings_for_form = []
+    if buildings_on:
+        buildings_for_form = get_active_buildings(school.id) if school else []
+        if allowed_building_ids is not None:
+            buildings_for_form = [b for b in buildings_for_form
+                                  if b.id in allowed_building_ids]
+        # Keep the student's current building selectable even if inactive, so the
+        # dropdown shows the real current value rather than losing it on save.
+        if (student.building_id
+                and student.building_id not in [b.id for b in buildings_for_form]):
+            cur = next((b for b in get_active_buildings(school.id)
+                        if b.id == student.building_id), None)
+            if cur is None:
+                from app.models import SchoolBuilding
+                cur = (SchoolBuilding.query
+                       .execution_options(bypass_tenant_scope=True)
+                       .filter_by(id=student.building_id, school_id=school.id)
+                       .first())
+            if cur and (allowed_building_ids is None
+                        or cur.id in allowed_building_ids):
+                buildings_for_form = buildings_for_form + [cur]
 
     # Always show sections/grades from the current active year so students
     # can be reassigned across year boundaries (e.g. during year rollover).
@@ -472,6 +556,9 @@ def edit(student_id):
                 linked_parents=linked_parents,
                 existing_device_mappings=existing_device_mappings,
                 form_cfg=form_cfg,
+                buildings_enabled=buildings_on,
+                buildings_list=buildings_for_form,
+                selected_building_id=student.building_id,
             )
 
         new_section_id = request.form.get('section_id', type=int)
@@ -516,6 +603,16 @@ def edit(student_id):
                 student.guardian_relation = request.form.get('guardian_relation', '').strip()
 
         student.status = request.form.get('status', student.status)
+
+        # ── Building assignment (only when feature enabled) ──────────────────
+        if buildings_on:
+            _raw_building = request.form.get('building_id', type=int)
+            _new_building = validate_building_for_school(_raw_building, school.id)
+            if (_new_building and allowed_building_ids is not None
+                    and _new_building not in allowed_building_ids):
+                flash('ليس لديك صلاحية الوصول إلى بيانات هذه البناية', 'danger')
+                return redirect(url_for('students.edit', student_id=student.id))
+            student.building_id = _new_building
 
         if form_cfg.section_visible('notes'):
             student.notes = request.form.get('notes', '').strip()
@@ -657,7 +754,10 @@ def edit(student_id):
                            available_parents=available_parents,
                            linked_parents=linked_parents,
                            existing_device_mappings=existing_device_mappings,
-                           form_cfg=form_cfg)
+                           form_cfg=form_cfg,
+                           buildings_enabled=buildings_on,
+                           buildings_list=buildings_for_form,
+                           selected_building_id=student.building_id)
 
 
 @students_bp.route('/<int:student_id>')
@@ -673,6 +773,11 @@ def view(student_id):
 
     if school and student.school_id and student.school_id != school.id:
         abort(403)
+
+    # Building scope — restricted users cannot view students outside their buildings.
+    if not user_can_access_student(current_user, school, student):
+        flash('ليس لديك صلاحية الوصول إلى بيانات هذه البناية', 'danger')
+        return redirect(url_for('students.index'))
 
     if _is_teacher():
         section_ids = get_teacher_section_ids(current_user)
@@ -697,6 +802,9 @@ def archive(student_id):
 
     if school and student.school_id and student.school_id != school.id:
         abort(403)
+    if not user_can_access_student(current_user, school, student):
+        flash('ليس لديك صلاحية الوصول إلى بيانات هذه البناية', 'danger')
+        return redirect(url_for('students.index'))
     if _is_teacher():
         flash('المعلمون لا يملكون صلاحية أرشفة الطلاب.', 'danger')
         return redirect(url_for('students.index'))
@@ -807,6 +915,8 @@ def export_excel():
         query = query.filter_by(school_id=school.id)
     if year and request.args.get('all_years', '0') != '1':
         query = query.filter_by(academic_year_id=year.id)
+    # Building scope — restricted users only export their own buildings' students.
+    query = apply_building_scope_to_students(query, current_user, school)
     if _is_teacher():
         section_ids = get_teacher_section_ids(current_user)
         query = query.filter(Student.section_id.in_(section_ids)) if section_ids \

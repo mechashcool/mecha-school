@@ -86,6 +86,12 @@ class School(db.Model):
     fee_reminder_before_value = db.Column(db.Integer,    default=3)
     fee_reminder_before_unit  = db.Column(db.String(10), default='days')  # 'days' | 'hours'
 
+    # Optional per-school feature: building-based data access (multiple
+    # branches/buildings inside one school account).  Default OFF so existing
+    # schools behave exactly as before.  See SchoolBuilding / UserBuildingAccess.
+    enable_buildings = db.Column(db.Boolean, default=False, nullable=False,
+                                 server_default=db.false())
+
     # Last applied feature package (nullable — no package = defaults apply)
     package_id  = db.Column(db.Integer, db.ForeignKey('feature_packages.id', ondelete='SET NULL'),
                             nullable=True)
@@ -170,6 +176,87 @@ class SchoolBilling(db.Model):
 
     def __repr__(self):
         return f'<SchoolBilling school={self.school_id} due={self.amount_due} status={self.status}>'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  SCHOOL BUILDINGS  (optional per-school branch/building data partitioning)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SchoolBuilding(db.Model):
+    """
+    A physical building / branch inside a single school account.
+
+    Only relevant when School.enable_buildings is True.  Adds an OPTIONAL second
+    isolation layer *below* school_id — never a replacement for it.  Students may
+    be assigned to a building; users may be restricted to one or more buildings
+    via UserBuildingAccess.
+    """
+    __tablename__ = 'school_buildings'
+    __school_scoped__ = True
+    # Not year-scoped: buildings are physical and persist across academic years.
+
+    id          = db.Column(db.Integer, primary_key=True)
+    school_id   = db.Column(db.Integer, db.ForeignKey('schools.id', ondelete='CASCADE'),
+                            nullable=False, index=True)
+    name        = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    is_active   = db.Column(db.Boolean, default=True, nullable=False,
+                            server_default=db.true())
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at  = db.Column(db.DateTime, default=datetime.utcnow,
+                            onupdate=datetime.utcnow)
+
+    school = db.relationship('School', foreign_keys=[school_id],
+                             backref=db.backref('buildings', lazy='dynamic'))
+
+    __table_args__ = (
+        # Building name unique within a school (case-sensitive at DB level).
+        db.UniqueConstraint('school_id', 'name', name='uq_building_school_name'),
+    )
+
+    def __repr__(self):
+        return f'<SchoolBuilding {self.id} – {self.name} (school={self.school_id})>'
+
+
+class UserBuildingAccess(db.Model):
+    """
+    Restricts a user to specific building(s) within their school.
+
+    Semantics:
+      * A user with NO rows here is UNRESTRICTED — sees all buildings within
+        their normal permissions (current behaviour).
+      * A user with one or more rows is RESTRICTED — sees only data belonging to
+        the listed building(s).
+
+    Always applied *after* school_id scoping, never instead of it.
+    """
+    __tablename__ = 'user_building_access'
+    __school_scoped__ = True
+
+    id          = db.Column(db.Integer, primary_key=True)
+    school_id   = db.Column(db.Integer, db.ForeignKey('schools.id', ondelete='CASCADE'),
+                            nullable=False, index=True)
+    user_id     = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'),
+                            nullable=False, index=True)
+    building_id = db.Column(db.Integer, db.ForeignKey('school_buildings.id', ondelete='CASCADE'),
+                            nullable=False, index=True)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user     = db.relationship('User', foreign_keys=[user_id],
+                               backref=db.backref('building_access',
+                                                  cascade='all, delete-orphan',
+                                                  lazy='dynamic'))
+    building = db.relationship('SchoolBuilding', foreign_keys=[building_id],
+                               backref=db.backref('user_access',
+                                                  cascade='all, delete-orphan',
+                                                  lazy='dynamic'))
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'building_id', name='uq_user_building'),
+    )
+
+    def __repr__(self):
+        return f'<UserBuildingAccess user={self.user_id} building={self.building_id}>'
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -600,6 +687,12 @@ class Student(db.Model):
 
     section_id    = db.Column(db.Integer, db.ForeignKey('sections.id'), nullable=True)
 
+    # Optional building/branch assignment — only used when the school has
+    # School.enable_buildings=True.  NULL means "no building" (default for all
+    # existing students; the column stays unused when the feature is off).
+    building_id   = db.Column(db.Integer, db.ForeignKey('school_buildings.id'),
+                              nullable=True, index=True)
+
     guardian_name     = db.Column(db.String(200), nullable=True)
     guardian_phone    = db.Column(db.String(30),  nullable=True)
     guardian_email    = db.Column(db.String(180), nullable=True)
@@ -627,6 +720,7 @@ class Student(db.Model):
                                    backref=db.backref('students', lazy='dynamic'))
     academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id],
                                     backref=db.backref('students', lazy='dynamic'))
+    building     = db.relationship('SchoolBuilding', foreign_keys=[building_id])
 
     __table_args__ = (
         # student_id is unique per school regardless of year (students persist).
