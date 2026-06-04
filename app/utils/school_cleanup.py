@@ -7,14 +7,16 @@ from collections import OrderedDict
 from sqlalchemy import or_
 
 from app.models import (
-    db, AcademicYear, Announcement, AnnouncementTarget, AuditLog, Complaint,
-    Device, Employee, EmployeeAttendance, EmployeeDocument, EmployeeEvaluation,
-    Exam, ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord,
-    FeeType, Grade, LeaveRequest, Notification, NotificationRead,
-    PushNotification, Revenue, RevenueCategory, SalaryRecord, Schedule, School,
-    Section, Student, StudentAttendance, StudentDocument, StudentRegistrationRecord,
-    StudentSuspension, Subject, User, parent_students, teacher_subjects,
-    user_permissions,
+    db, AcademicYear, Announcement, AnnouncementTarget, AttendanceDevice,
+    AuditLog, Complaint, Device, Employee, EmployeeAttendance, EmployeeDocument,
+    EmployeeEvaluation, Exam, ExamResult, Expense, ExpenseCategory,
+    FeeInstallment, FeeRecord, FeeReminderLog, FeeType, Grade,
+    InventoryCategory, InventoryCount, InventoryItem, InventoryMovement,
+    LeaveRequest, Notification, NotificationRead, PushNotification, Revenue,
+    RevenueCategory, SalaryRecord, Schedule, School, Section, Student,
+    StudentAttendance, StudentDocument, StudentRegistrationRecord,
+    StudentSuspension, StudentTransport, Subject, TransportRoute, User,
+    parent_students, teacher_subjects, user_permissions,
 )
 
 
@@ -50,6 +52,7 @@ LINKED_SCHOOL_MODELS = (
     (FeeType, 'أنواع الرسوم'),
     (FeeRecord, 'سجلات الرسوم'),
     (FeeInstallment, 'أقساط الرسوم'),
+    (FeeReminderLog, 'سجلات تذكير الرسوم'),
     (RevenueCategory, 'تصنيفات الإيرادات'),
     (Revenue, 'الإيرادات'),
     (ExpenseCategory, 'تصنيفات المصروفات'),
@@ -66,12 +69,24 @@ LINKED_SCHOOL_MODELS = (
     (PushNotification, 'سجل الإشعارات الفورية'),
     (Schedule, 'الجداول'),
     (AuditLog, 'سجل التدقيق'),
+    (StudentTransport, 'نقل الطلاب'),
+    (TransportRoute, 'مسارات النقل'),
+    (InventoryCategory, 'تصنيفات المخزون'),
+    (InventoryItem, 'مواد المخزون'),
+    (InventoryMovement, 'حركات المخزون'),
+    (InventoryCount, 'جرد المخزون'),
+    (AttendanceDevice, 'أجهزة الحضور'),
 )
 
 
 SCHOOL_DELETE_ORDER = (
+    # ── Leaf tables with no outgoing FKs to school-owned rows ──────────────────
     (PushNotification, 'سجل الإشعارات الفورية'),
     (AuditLog, 'سجل التدقيق'),
+    # FeeReminderLog must precede FeeInstallment (installment_id FK) and
+    # Student (student_id FK) and User (parent_user_id FK).
+    (FeeReminderLog, 'سجلات تذكير الرسوم'),
+    # ── Student child tables (must precede Student) ────────────────────────────
     (StudentDocument, 'مستندات الطلاب'),
     (StudentSuspension, 'إيقافات الطلاب'),
     (FeeInstallment, 'أقساط الرسوم'),
@@ -81,6 +96,9 @@ SCHOOL_DELETE_ORDER = (
     (Exam, 'الاختبارات'),
     (StudentRegistrationRecord, 'سجلات القيد'),
     (StudentAttendance, 'حضور الطلاب'),
+    # StudentTransport.student_id → students.id  (no ondelete)
+    (StudentTransport, 'نقل الطلاب'),
+    # ── Employee / finance child tables ────────────────────────────────────────
     (EmployeeAttendance, 'حضور الموظفين'),
     (EmployeeDocument, 'مستندات الموظفين'),
     (EmployeeEvaluation, 'تقييمات الموظفين'),
@@ -95,12 +113,28 @@ SCHOOL_DELETE_ORDER = (
     (ExpenseCategory, 'تصنيفات المصروفات'),
     (Complaint, 'الشكاوى'),
     (LeaveRequest, 'طلبات الغياب'),
+    # ── Core school-year structure ─────────────────────────────────────────────
     (Student, 'الطلاب'),
     (Section, 'الشُعب'),
     (Subject, 'المواد'),
     (Grade, 'المراحل'),
     (Employee, 'الموظفون/التدريسيون'),
     (User, 'المستخدمون'),
+    # ── Inventory (must precede AcademicYear) ──────────────────────────────────
+    # InventoryMovement/Count.item_id → inventory_items.id  (no ondelete)
+    (InventoryMovement, 'حركات المخزون'),
+    (InventoryCount, 'جرد المخزون'),
+    # InventoryItem.category_id → inventory_categories.id  (no ondelete)
+    (InventoryItem, 'مواد المخزون'),
+    # InventoryCategory.academic_year_id → academic_years.id  (no ondelete)
+    (InventoryCategory, 'تصنيفات المخزون'),
+    # ── Transport (must precede school deletion) ───────────────────────────────
+    # StudentTransport already deleted above; no FK blocks TransportRoute now.
+    (TransportRoute, 'مسارات النقل'),
+    # ── Attendance devices (academic_year_id FK, nullable but RESTRICT) ────────
+    # DeviceEventLog + DeviceStudentMapping auto-cascade via DB ondelete='CASCADE'.
+    (AttendanceDevice, 'أجهزة الحضور'),
+    # ── Must be last among year-scoped tables ──────────────────────────────────
     (AcademicYear, 'الأعوام الدراسية'),
 )
 
