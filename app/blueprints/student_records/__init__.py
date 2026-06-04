@@ -97,6 +97,7 @@ def _build_autofill(student: Student, school: School) -> dict:
         # Admission
         'admission_date': student.enrollment_date.isoformat() if student.enrollment_date else '',
         # Extra fields (mostly blank — entered manually on the official form)
+        'general_registry':   '',
         'record_number':      '',
         'father_name':        '',
         'father_house_num':   '',
@@ -124,7 +125,8 @@ def _parse_date(val):
 def _parse_extra_fields(form) -> dict:
     """Extract the extra official-form fields from POST data."""
     keys = [
-        'record_number', 'father_name', 'father_house_num', 'father_mahalla',
+        'general_registry', 'record_number',
+        'father_name', 'father_house_num', 'father_mahalla',
         'father_occupation', 'guardian_house_num', 'guardian_mahalla',
         'civil_registry_num', 'birth_place', 'religion',
         'departure_date', 'departure_reason',
@@ -157,7 +159,8 @@ def _parse_grades_from_form(form) -> dict:
             for k in range(3)
         ]
         for fld in ['total_n', 'total_t', 'behavior', 'result',
-                    'notes_results', 'final_result', 'principal_sig', 'col_notes']:
+                    'notes_results', 'final_result', 'final_result_t',
+                    'principal_sig', 'col_notes']:
             row[fld] = form.get(f'y{i}_{fld}', '').strip()
 
         years.append(row)  # Always keep all 9 slots — preserves slot↔PDF-column mapping

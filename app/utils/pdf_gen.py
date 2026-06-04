@@ -1052,31 +1052,20 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
         record.snap_gender or '', record.snap_gender or '')
 
     # ── 1. TITLE ROW ─────────────────────────────────────────────────────────
-    rec_num = ef.get('record_number', '')
-    school_ar = (school.school_name_ar if school and school.school_name_ar
-                 else record.snap_school_name_ar or record.snap_school_name or '')
-
-    logo_el = None
-    if school and school.logo_path:
-        lp = _resolve_logo_for_pdf(school.logo_path)
-        if lp:
-            try:
-                logo_el = Image(lp, width=1.5*cm, height=1.5*cm)
-            except Exception:
-                pass
+    rec_num  = ef.get('record_number', '')
+    gen_reg  = ef.get('general_registry', '')
 
     title_row = [[
-        Paragraph(ar(f'رقم الصحيفة   {rec_num}  ..................'),
-                  ps('TL', fn, 9, 0, BLACK)),
-        logo_el or Paragraph('', cell_s),
-        Paragraph(ar(f'{school_ar}'), ps('TSC', fn_b, 10, 1, NAVY)),
-        Paragraph(ar('سجل القيد العام'), ps('TR', fn_b, 14, 2, NAVY)),
+        Paragraph(ar(f'رقم الصحيفة  :  {rec_num}  ............'),
+                  ps('TL', fn, 10, 0, BLACK)),
+        Paragraph(ar(f'سجل القيد العام  :  {gen_reg}  ............'),
+                  ps('TR', fn_b, 13, 2, NAVY)),
     ]]
-    title_tbl = Table(title_row, colWidths=[AW*0.28, AW*0.07, AW*0.35, AW*0.30])
+    title_tbl = Table(title_row, colWidths=[AW * 0.40, AW * 0.60])
     title_tbl.setStyle(TableStyle([
-        ('VALIGN',        (0,0), (-1,-1), 'MIDDLE'),
-        ('TOPPADDING',    (0,0), (-1,-1), 4),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+        ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING',    (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
     ]))
     elements.append(title_tbl)
     elements.append(Spacer(1, 3))
@@ -1115,23 +1104,23 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
 
     # Row 0: main headers (some spanning 2 rows, some spanning 2 cols)
     R0 = [
-        ph_('سبب المغادرة\nوالملاحظات'),  # 0  rowspan 2
-        ph_('تاريخ\nالمغادرة'),            # 1  rowspan 2
-        ph_('آخر مدرسة\nكان فيها'),        # 2  rowspan 2
-        ph_('الصف الذي\nقبل فيه'),         # 3  rowspan 2
-        ph_('تاريخ دخول\nالمدرسة'),        # 4  rowspan 2
+        ph_('سبب المغادرة والملاحظات'),     # 0  rowspan 2
+        ph_('تاريخ المغادرة'),              # 1  rowspan 2
+        ph_('آخر مدرسة كان فيها'),          # 2  rowspan 2
+        ph_('الصف الذي قبل فيه'),           # 3  rowspan 2
+        ph_('تاريخ دخول المدرسة'),          # 4  rowspan 2
         ph_('ديانته'),                      # 5  rowspan 2
-        ph_('جنسه'),                        # 6  rowspan 2
-        ph_('تاريخ\nولادته'),               # 7  rowspan 2
-        ph_('مسقط\nرأسه'),                  # 8  rowspan 2
-        ph_('رقم دفتر\nنفوس الطالب'),       # 9  rowspan 2
+        ph_('جنسيته'),                      # 6  rowspan 2
+        ph_('تاريخ ولادته'),                # 7  rowspan 2
+        ph_('مسقط رأسه'),                   # 8  rowspan 2
+        ph_('رقم دفتر نفوس الطالب'),        # 9  rowspan 2
         ph_('مسكن ولي أمره'),               # 10 colspan 2
         '',                                 # 11 spanned by 10
-        ph_('اسم ولي\nأمر الطالب'),          # 12 rowspan 2
-        ph_('صنعة الأب\nوعمله'),             # 13 rowspan 2
+        ph_('اسم ولي أمر الطالب'),           # 12 rowspan 2
+        ph_('صنعة الأب وعمله'),              # 13 rowspan 2
         ph_('مسكن الأب'),                   # 14 colspan 2
         '',                                 # 15 spanned by 14
-        ph_('اسم أبيه\nوشهرته'),             # 16 rowspan 2
+        ph_('اسم أبيه وشهرته'),              # 16 rowspan 2
         ph_('الطالب'),                       # 17 colspan 2
         '',                                 # 18 spanned by 17
     ]
@@ -1148,15 +1137,15 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
         '',        # 7
         '',        # 8
         '',        # 9
-        ph_('المحلة', shdr_s),   # 10
-        ph_('رقم\nالدار', shdr_s),  # 11
+        ph_('المحلة', shdr_s),      # 10
+        ph_('رقم الدار', shdr_s),   # 11
         '',        # 12 spanned
         '',        # 13 spanned
-        ph_('المحلة', shdr_s),   # 14
-        ph_('رقم\nالدار', shdr_s),  # 15
+        ph_('المحلة', shdr_s),      # 14
+        ph_('رقم الدار', shdr_s),   # 15
         '',        # 16 spanned
-        ph_('اسمه', shdr_s),    # 17
-        ph_('رقمه', shdr_s),    # 18
+        ph_('اسمه', shdr_s),        # 17
+        ph_('رقم قيده', shdr_s),    # 18
     ]
 
     # Row 2: data values
@@ -1263,8 +1252,8 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
         GHR0[nc] = ph_(clas or YEAR_LABELS[yi])
         GHR1[nc] = ph_(f'السنة\n{year}' if year else 'السنة\n........')
         GHR2[nc] = ph_('الدرجة')
-        GHR3[nc] = ph_('رقماً', shdr_s)
-        GHR3[tc] = ph_('كتابة', shdr_s)
+        GHR3[tc] = ph_('رقماً', shdr_s)   # tc = higher index = more right = read first in Arabic
+        GHR3[nc] = ph_('كتابة', shdr_s)   # nc = lower index = more left
 
     g_data = [GHR0, GHR1, GHR2, GHR3]
 
@@ -1274,8 +1263,8 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
         row[19] = Paragraph(ar(subj_label), subj_s)
         for yi in range(9):
             yr = sav[yi]
-            row[ync(yi)] = p(yr.get(key_n, ''))
-            row[ytc(yi)] = p(yr.get(key_t, ''))
+            row[ytc(yi)] = p(yr.get(key_n, ''))   # right (tc) = رقماً = numeric value
+            row[ync(yi)] = p(yr.get(key_t, ''))   # left  (nc) = كتابة = text value
         return row
 
     for j, subj in enumerate(_SUBJECTS):
@@ -1292,8 +1281,8 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
             en_val  = ex.get('n', '')
             et_val  = ex.get('t', '')
             row[19] = Paragraph(ar(name or ''), subj_s) if name else p('')
-            row[ync(yi)] = p(en_val)
-            row[ytc(yi)] = p(et_val)
+            row[ytc(yi)] = p(en_val)   # right (tc) = رقماً = numeric
+            row[ync(yi)] = p(et_val)   # left  (nc) = كتابة = text
         g_data.append(row)
 
     # Bottom section rows
@@ -1310,16 +1299,35 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
         row[19] = Paragraph(ar(label), subj_s)
         for yi in range(9):
             yr = sav[yi]
-            row[ync(yi)] = p(yr.get(key_n, ''))
-            row[ytc(yi)] = p(yr.get(key_t, ''))
+            row[ytc(yi)] = p(yr.get(key_n, ''))   # right (tc) = رقماً
+            row[ync(yi)] = p(yr.get(key_t, ''))   # left  (nc) = كتابة
         return row
 
-    g_data.append(bottom_row2('المجموع', 'total_n', 'total_t'))
+    # المجموع — auto-sum numeric grades; fall back to stored total_n if no numeric entries
+    total_row = blank_row()
+    total_row[19] = Paragraph(ar('المجموع'), subj_s)
+    for yi in range(9):
+        yr = sav[yi]
+        auto_total = 0
+        has_num = False
+        for j in range(len(_SUBJECTS)):
+            v = yr.get(f's{j}_n', '')
+            if v:
+                try:
+                    auto_total += int(v)
+                    has_num = True
+                except (ValueError, TypeError):
+                    pass
+        total_n_val = str(auto_total) if has_num else yr.get('total_n', '')
+        total_row[ytc(yi)] = p(total_n_val)
+        total_row[ync(yi)] = p(yr.get('total_t', ''))
+    g_data.append(total_row)
+
     g_data.append(bottom_row('السلوك', 'behavior'))
     g_data.append(bottom_row('النتيجة', 'result'))
-    g_data.append(bottom_row('ملاحظات عن\nنتائج الدروس', 'notes_results'))
-    g_data.append(bottom_row('النتيجة النهائية', 'final_result'))
-    g_data.append(bottom_row('توقيع مدير\nالمدرسة', 'principal_sig'))
+    g_data.append(bottom_row('ملاحظات عن نتائج الدروس المكمل فيها', 'notes_results'))
+    g_data.append(bottom_row2('النتيجة النهائية', 'final_result', 'final_result_t'))
+    g_data.append(bottom_row('توقيع مدير المدرسة', 'principal_sig'))
 
     NROWS = len(g_data)
 
@@ -1336,8 +1344,8 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
             ('SPAN', (nc, 1), (tc, 1)),   # السنة spans n+t
             ('SPAN', (nc, 2), (tc, 2)),   # الدرجة spans n+t
         ]
-        # Bottom rows: السلوك, النتيجة, ملاحظات, النتيجة النهائية, توقيع — span n+t
-        for roff in [NROWS-5, NROWS-4, NROWS-3, NROWS-2, NROWS-1]:
+        # Bottom rows span both sub-cols except النتيجة النهائية (NROWS-2) which keeps divider
+        for roff in [NROWS-5, NROWS-4, NROWS-3, NROWS-1]:
             grid_spans.append(('SPAN', (nc, roff), (tc, roff)))
 
     HDR_ROWS = 4
@@ -1368,30 +1376,10 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
 
     # ── 4. BOTTOM NOTE ───────────────────────────────────────────────────────
     note_text = ar(
-        'ملاحظة: الدرجة الكبرى في الصفوف الأربعة الأولى (100) ، '
-        'الدرجة الصغرى في الصفين الخامس والسادس (50)'
+        'ملاحظة: الدرجة الكبرى في الصفوف الأربعة الأولى(10) '
+        'الدرجة الصغرى (5) وللصفين الخامس والسادس(100)و(50)'
     )
     elements.append(Paragraph(note_text, foot_s))
-    elements.append(Spacer(1, 4))
-
-    # Signatures / footer
-    school_display = (school.school_name_ar or school.school_name) if school else ''
-    foot_row = [[
-        p(ef.get('departure_date', '') and ar('تاريخ المغادرة: ' + ef.get('departure_date', ''))),
-        p(record.signature_admin and ar('توقيع المدير: ' + record.signature_admin) or ''),
-        p(record.signature_parent and ar('توقيع ولي الأمر: ' + record.signature_parent) or ''),
-        Paragraph(ar(f'{school_display}   |   {datetime.utcnow().strftime("%Y-%m-%d")}'),
-                  foot_s),
-    ]]
-    foot_tbl = Table(foot_row, colWidths=[AW*0.22, AW*0.28, AW*0.28, AW*0.22])
-    foot_tbl.setStyle(TableStyle([
-        ('GRID',          (0,0), (-1,-1), 0.4, HexColor('#aaaaaa')),
-        ('VALIGN',        (0,0), (-1,-1), 'MIDDLE'),
-        ('TOPPADDING',    (0,0), (-1,-1), 3),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 3),
-        ('FONTSIZE',      (0,0), (-1,-1), 7),
-    ]))
-    elements.append(foot_tbl)
 
     doc.build(elements)
     return buf.getvalue()

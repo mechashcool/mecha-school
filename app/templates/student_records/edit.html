@@ -33,6 +33,11 @@
 
       <div class="row g-2 mb-2">
         <div class="col-md-2">
+          <label class="form-label small fw-semibold">سجل القيد العام</label>
+          <input type="text" name="general_registry" class="form-control form-control-sm"
+                 value="{{ ef.get('general_registry', '') }}">
+        </div>
+        <div class="col-md-2">
           <label class="form-label small fw-semibold">رقم الصحيفة</label>
           <input type="text" name="record_number" class="form-control form-control-sm"
                  value="{{ ef.get('record_number', '') }}">
@@ -382,16 +387,19 @@
                                             value="{{ yr.get('result', '') }}"></td>
                     </tr>
                     <tr>
-                      <td>ملاحظات عن النتائج</td>
+                      <td>ملاحظات عن نتائج الدروس المكمل فيها</td>
                       <td colspan="2"><input type="text" name="y{{ i }}_notes_results"
                                             class="form-control form-control-sm"
                                             value="{{ yr.get('notes_results', '') }}"></td>
                     </tr>
                     <tr>
                       <td>النتيجة النهائية</td>
-                      <td colspan="2"><input type="text" name="y{{ i }}_final_result"
-                                            class="form-control form-control-sm"
-                                            value="{{ yr.get('final_result', '') }}"></td>
+                      <td><input type="text" name="y{{ i }}_final_result"
+                                 class="form-control form-control-sm" placeholder="رقماً"
+                                 value="{{ yr.get('final_result', '') }}"></td>
+                      <td><input type="text" name="y{{ i }}_final_result_t"
+                                 class="form-control form-control-sm" placeholder="كتابة"
+                                 value="{{ yr.get('final_result_t', '') }}"></td>
                     </tr>
                     <tr>
                       <td>توقيع مدير المدرسة</td>
@@ -446,4 +454,21 @@
     </button>
   </div>
 </form>
+
+<script>
+(function () {
+  for (let i = 0; i < 9; i++) {
+    const gradeInputs = document.querySelectorAll(`[name^="y${i}_s"][name$="_n"]`);
+    const totalInput  = document.querySelector(`[name="y${i}_total_n"]`);
+    if (!totalInput) continue;
+    gradeInputs.forEach(inp => {
+      inp.addEventListener('input', () => {
+        let sum = 0;
+        gradeInputs.forEach(g => { const v = parseInt(g.value, 10); if (!isNaN(v)) sum += v; });
+        totalInput.value = sum > 0 ? sum : '';
+      });
+    });
+  }
+})();
+</script>
 {% endblock %}
