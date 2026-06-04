@@ -12,8 +12,9 @@ from app.models import (
     Exam, ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord,
     FeeType, Grade, LeaveRequest, Notification, NotificationRead,
     PushNotification, Revenue, RevenueCategory, SalaryRecord, Schedule, School,
-    Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
-    Subject, User, parent_students, teacher_subjects, user_permissions,
+    Section, Student, StudentAttendance, StudentDocument, StudentRegistrationRecord,
+    StudentSuspension, Subject, User, parent_students, teacher_subjects,
+    user_permissions,
 )
 
 
@@ -25,7 +26,8 @@ _TEST_SCHOOL_RE = re.compile(
     r'Notify Other|Grade Filter School|Delete Guard School|'
     r'Demo School|Test School|'
     r'Chat Admin School A|Chat Admin School B|'
-    r'Parent Request A|Parent Request B'
+    r'Parent Request A|Parent Request B|'
+    r'RegRec School A|RegRec School B'
     r') [0-9a-f]{6,32}$',
     re.IGNORECASE,
 )
@@ -38,6 +40,7 @@ LINKED_SCHOOL_MODELS = (
     (Section, 'الشُعب'),
     (Subject, 'المواد'),
     (Student, 'الطلاب'),
+    (StudentRegistrationRecord, 'سجلات القيد'),
     (StudentDocument, 'مستندات الطلاب'),
     (StudentSuspension, 'إيقافات الطلاب'),
     (Complaint, 'الشكاوى'),
@@ -76,6 +79,7 @@ SCHOOL_DELETE_ORDER = (
     (ExamResult, 'نتائج الاختبارات'),
     (Schedule, 'الجداول'),
     (Exam, 'الاختبارات'),
+    (StudentRegistrationRecord, 'سجلات القيد'),
     (StudentAttendance, 'حضور الطلاب'),
     (EmployeeAttendance, 'حضور الموظفين'),
     (EmployeeDocument, 'مستندات الموظفين'),

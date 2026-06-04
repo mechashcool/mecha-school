@@ -686,7 +686,7 @@ def register_commands(app):
         from app.models import (
             ChatRoom, User, Student, Employee,
             FeeRecord, StudentAttendance, Complaint, LeaveRequest,
-            Exam, Notification,
+            Exam, Notification, StudentRegistrationRecord,
         )
 
         _SCHOOL_PATTERNS = [
@@ -694,6 +694,8 @@ def register_commands(app):
             'Chat Admin School B %',
             'Parent Request A %',
             'Parent Request B %',
+            'RegRec School A %',
+            'RegRec School B %',
         ]
         _STUDENT_NAME_PREFIXES = ('Own Student ', 'Other Student ')
         _STUDENT_CODE_PREFIXES = ('PRA-', 'PRB-')
@@ -747,6 +749,7 @@ def register_commands(app):
             click.echo(f'  Created    : {school.created_at or "unknown"}')
             click.echo(f'  Users      : {_count(User, sid)}')
             click.echo(f'  Students   : {len(students)}  (real-looking: {len(real_students)})')
+            click.echo(f'  Reg records: {_count(StudentRegistrationRecord, sid)}')
             click.echo(f'  Employees  : {_count(Employee, sid)}')
             click.echo(f'  Chat rooms : {_count(ChatRoom, sid)}')
             click.echo(f'  Complaints : {_count(Complaint, sid)}')
