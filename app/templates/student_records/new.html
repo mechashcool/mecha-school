@@ -44,15 +44,17 @@
     <div class="row g-3">
       <div class="col-12 col-md-8">
         <label class="form-label fw-semibold">البحث عن طالب</label>
-        <div class="input-group">
-          <span class="input-group-text"><i class="bi bi-person-search"></i></span>
-          <input type="text" id="student-search-input" class="form-control"
-                 placeholder="اكتب الاسم أو رقم الطالب للبحث…"
-                 autocomplete="off"
-                 value="{{ pre_student.full_name if pre_student else '' }}">
+        <div style="position:relative">
+          <div class="input-group">
+            <span class="input-group-text"><i class="bi bi-person-search"></i></span>
+            <input type="text" id="student-search-input" class="form-control"
+                   placeholder="اكتب الاسم أو رقم الطالب للبحث…"
+                   autocomplete="off"
+                   value="{{ pre_student.full_name if pre_student else '' }}">
+          </div>
+          <div id="search-results" class="list-group mt-1 w-100"
+               style="position:absolute;top:100%;right:0;z-index:1050;display:none"></div>
         </div>
-        <div id="search-results" class="list-group mt-1 position-absolute z-3"
-             style="max-width:500px;display:none"></div>
       </div>
     </div>
     {% if pre_student %}
@@ -171,37 +173,15 @@
           <input type="text" name="snap_guardian_name" class="form-control form-control-sm"
                  id="f-gname" value="{{ prefill.get('snap_guardian_name', '') }}">
         </div>
-        <div class="col-md-2">
-          <label class="form-label small fw-semibold">صلة القرابة</label>
-          <input type="text" name="snap_guardian_relation" class="form-control form-control-sm"
-                 id="f-grelation" value="{{ prefill.get('snap_guardian_relation', '') }}">
-        </div>
-        <div class="col-md-2">
-          <label class="form-label small fw-semibold">هاتف ولي الأمر</label>
-          <input type="text" name="snap_guardian_phone" class="form-control form-control-sm"
-                 id="f-gphone" value="{{ prefill.get('snap_guardian_phone', '') }}">
-        </div>
-        <div class="col-md-2">
+        <div class="col-md-4">
           <label class="form-label small fw-semibold">رقم الدار (ولي)</label>
           <input type="text" name="guardian_house_num" class="form-control form-control-sm"
                  id="f-guardian-house" value="{{ prefill.get('guardian_house_num', '') }}">
         </div>
-        <div class="col-md-2">
+        <div class="col-md-4">
           <label class="form-label small fw-semibold">المحلة (ولي)</label>
           <input type="text" name="guardian_mahalla" class="form-control form-control-sm"
                  id="f-guardian-mahalla" value="{{ prefill.get('guardian_mahalla', '') }}">
-        </div>
-      </div>
-      <div class="row g-2 mb-2">
-        <div class="col-md-4">
-          <label class="form-label small fw-semibold">البريد الإلكتروني</label>
-          <input type="email" name="snap_guardian_email" class="form-control form-control-sm"
-                 id="f-gemail" value="{{ prefill.get('snap_guardian_email', '') }}">
-        </div>
-        <div class="col-md-4">
-          <label class="form-label small fw-semibold">عنوان ولي الأمر</label>
-          <input type="text" name="snap_guardian_address" class="form-control form-control-sm"
-                 id="f-gaddress" value="{{ prefill.get('snap_guardian_address', '') }}">
         </div>
       </div>
 
@@ -209,54 +189,15 @@
       <div class="small fw-semibold text-secondary mb-2">بيانات القبول والمدرسة</div>
       <div class="row g-2 mb-2">
         <div class="col-md-3">
-          <label class="form-label small fw-semibold">المدرسة (عربي)</label>
-          <input type="text" name="snap_school_name_ar" class="form-control form-control-sm"
-                 id="f-school-ar" value="{{ prefill.get('snap_school_name_ar', '') }}">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label small fw-semibold">المدرسة (إنجليزي)</label>
-          <input type="text" name="snap_school_name" class="form-control form-control-sm"
-                 id="f-school-en" value="{{ prefill.get('snap_school_name', '') }}">
-        </div>
-        <div class="col-md-2">
           <label class="form-label small fw-semibold">العام الدراسي</label>
           <input type="text" name="snap_year_name" class="form-control form-control-sm"
                  id="f-year" value="{{ prefill.get('snap_year_name', '') }}">
         </div>
-        <div class="col-md-2">
+        <div class="col-md-3">
           <label class="form-label small fw-semibold">الصف المقبول فيه</label>
           <input type="text" name="snap_grade_name" class="form-control form-control-sm"
                  id="f-grade" value="{{ prefill.get('snap_grade_name', '') }}">
         </div>
-        <div class="col-md-2">
-          <label class="form-label small fw-semibold">الشعبة</label>
-          <input type="text" name="snap_section_name" class="form-control form-control-sm"
-                 id="f-section" value="{{ prefill.get('snap_section_name', '') }}">
-        </div>
-      </div>
-      <div class="row g-2 mb-2">
-        <div class="col-md-3">
-          <label class="form-label small fw-semibold">تاريخ دخول المدرسة</label>
-          <input type="date" name="snap_enrollment_date" class="form-control form-control-sm"
-                 id="f-enrollment-date" value="{{ prefill.get('snap_enrollment_date', '') }}">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label small fw-semibold">تاريخ القبول الرسمي</label>
-          <input type="date" name="admission_date" class="form-control form-control-sm"
-                 id="f-admission-date" value="{{ prefill.get('admission_date', '') }}">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label small fw-semibold">آخر مدرسة كان فيها</label>
-          <input type="text" name="previous_school" class="form-control form-control-sm"
-                 value="{{ prefill.get('previous_school', '') }}">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label small fw-semibold">رقم الوثيقة</label>
-          <input type="text" name="document_number" class="form-control form-control-sm"
-                 value="{{ prefill.get('document_number', '') }}">
-        </div>
-      </div>
-      <div class="row g-2 mb-2">
         <div class="col-md-3">
           <label class="form-label small fw-semibold">المرحلة</label>
           <input type="text" name="snap_stage" class="form-control form-control-sm"
@@ -270,63 +211,37 @@
             <option value="inactive" {{ 'selected' if prefill.get('snap_status') == 'inactive' }}>غير نشط</option>
           </select>
         </div>
+      </div>
+      <div class="row g-2 mb-2">
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">تاريخ دخول المدرسة</label>
+          <input type="date" name="snap_enrollment_date" class="form-control form-control-sm"
+                 id="f-enrollment-date" value="{{ prefill.get('snap_enrollment_date', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">آخر مدرسة كان فيها</label>
+          <input type="text" name="previous_school" class="form-control form-control-sm"
+                 value="{{ prefill.get('previous_school', '') }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">رقم الوثيقة</label>
+          <input type="text" name="document_number" class="form-control form-control-sm"
+                 value="{{ prefill.get('document_number', '') }}">
+        </div>
         <div class="col-md-3">
           <label class="form-label small fw-semibold">تاريخ المغادرة</label>
           <input type="text" name="departure_date" class="form-control form-control-sm"
                  placeholder="يُكمل عند المغادرة">
         </div>
-        <div class="col-md-3">
-          <label class="form-label small fw-semibold">سبب المغادرة والملاحظات</label>
-          <input type="text" name="departure_reason" class="form-control form-control-sm">
-        </div>
       </div>
       <div class="row g-2 mb-2">
         <div class="col-md-6">
-          <label class="form-label small fw-semibold">سبب التحويل</label>
-          <textarea name="transfer_reason" class="form-control form-control-sm" rows="2"></textarea>
+          <label class="form-label small fw-semibold">سبب المغادرة والملاحظات</label>
+          <input type="text" name="departure_reason" class="form-control form-control-sm">
         </div>
         <div class="col-md-6">
-          <label class="form-label small fw-semibold">ملاحظات القبول</label>
-          <textarea name="admission_notes" class="form-control form-control-sm" rows="2"></textarea>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  {# ══ القسم الثاني: الوثائق ══ #}
-  <div class="card mb-3">
-    <div class="card-header fw-semibold text-info">
-      <i class="bi bi-folder-fill me-1"></i> الوثائق المرفقة
-    </div>
-    <div class="card-body">
-      <div class="row g-2 align-items-center">
-        <div class="col-auto">
-          <div class="form-check form-switch">
-            <input class="form-check-input" type="checkbox" name="has_birth_cert" value="1" id="hbc">
-            <label class="form-check-label" for="hbc">شهادة الميلاد</label>
-          </div>
-        </div>
-        <div class="col-auto">
-          <div class="form-check form-switch">
-            <input class="form-check-input" type="checkbox" name="has_id_card" value="1" id="hic">
-            <label class="form-check-label" for="hic">بطاقة الهوية</label>
-          </div>
-        </div>
-        <div class="col-auto">
-          <div class="form-check form-switch">
-            <input class="form-check-input" type="checkbox" name="has_prev_certificate" value="1" id="hpc">
-            <label class="form-check-label" for="hpc">شهادة المدرسة السابقة</label>
-          </div>
-        </div>
-        <div class="col-auto">
-          <div class="form-check form-switch">
-            <input class="form-check-input" type="checkbox" name="has_photo" value="1" id="hph">
-            <label class="form-check-label" for="hph">صورة شخصية</label>
-          </div>
-        </div>
-        <div class="col-md-5">
-          <input type="text" name="document_notes" class="form-control form-control-sm"
-                 placeholder="ملاحظات الوثائق">
+          <label class="form-label small fw-semibold">سبب التحويل / ملاحظات القبول</label>
+          <textarea name="transfer_reason" class="form-control form-control-sm" rows="2"></textarea>
         </div>
       </div>
     </div>
