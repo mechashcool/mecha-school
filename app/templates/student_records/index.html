@@ -140,4 +140,18 @@
 </div>
 {% endif %}
 
+<script>
+(function () {
+  const input = document.querySelector('input[name="q"]');
+  if (!input) return;
+  let timer;
+  input.addEventListener('input', function () {
+    clearTimeout(timer);
+    timer = setTimeout(function () {
+      input.closest('form').submit();
+    }, 350);
+  });
+})();
+</script>
+
 {% endblock %}
