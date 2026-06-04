@@ -13,11 +13,17 @@ ALLOWED_DOC_EXTENSIONS   = {'pdf', 'doc', 'docx', 'xls', 'xlsx'}
 LOGO_IMAGE_EXTENSIONS    = {'png', 'jpg', 'jpeg', 'webp', 'svg'}
 LOGO_MAX_BYTES           = 2 * 1024 * 1024  # 2 MB
 
+ALLOWED_BOARD_IMAGE_EXTENSIONS = {'jpg', 'jpeg', 'png', 'webp'}
+ALLOWED_BOARD_VIDEO_EXTENSIONS = {'mp4', 'mov', 'webm'}
+BOARD_IMAGE_MAX_BYTES          = 5  * 1024 * 1024   # 5 MB
+BOARD_VIDEO_MAX_BYTES          = 50 * 1024 * 1024   # 50 MB
+
 _CONTENT_TYPES = {
     'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
     'gif': 'image/gif', 'webp': 'image/webp',
     'pdf': 'application/pdf', 'doc': 'application/msword',
     'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'mp4': 'video/mp4', 'mov': 'video/quicktime', 'webm': 'video/webm',
 }
 
 

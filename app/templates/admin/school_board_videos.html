@@ -1,19 +1,19 @@
 {% extends "shared/base.html" %}
-{% block title %}فيديوهات لوحة المدرسة{% endblock %}
-{% block page_title %}فيديوهات لوحة المدرسة{% endblock %}
+{% block title %}وسائط لوحة المدرسة{% endblock %}
+{% block page_title %}وسائط لوحة المدرسة{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">فيديوهات لوحة المدرسة</h1>
-    <p class="page-subtitle">إدارة الفيديوهات المعروضة في تطبيق الجوال للأهالي والمعلمين</p>
+    <h1 class="page-title">وسائط لوحة المدرسة</h1>
+    <p class="page-subtitle">إدارة الصور والفيديوهات المعروضة في تطبيق الجوال للأهالي والمعلمين</p>
   </div>
   <div>
     <a href="{{ url_for('admin.school_board_announcements') }}" class="btn btn-outline-secondary me-2">
       <i class="bi bi-megaphone-fill"></i> الإعلانات
     </a>
     <a href="{{ url_for('admin.school_board_video_create') }}" class="btn btn-primary">
-      <i class="bi bi-plus-lg"></i> إضافة فيديو
+      <i class="bi bi-plus-lg"></i> إضافة وسائط
     </a>
   </div>
 </div>
@@ -34,7 +34,9 @@
     <table class="table table-hover mb-0">
       <thead>
         <tr>
+          <th>معاينة</th>
           <th>العنوان</th>
+          <th>النوع</th>
           <th>الجمهور</th>
           <th>مميز</th>
           <th>الحالة</th>
@@ -46,12 +48,31 @@
       <tbody>
         {% for video in videos %}
         <tr>
+          <td style="width:72px">
+            {% set mt = video.media_type or 'video' %}
+            {% if mt == 'image' and video.video_url %}
+              <img src="{{ video.video_url }}" alt=""
+                   style="width:60px;height:44px;object-fit:cover;border-radius:4px;border:1px solid #dee2e6">
+            {% else %}
+              <span class="text-muted" style="font-size:1.6rem">
+                <i class="bi bi-play-circle-fill"></i>
+              </span>
+            {% endif %}
+          </td>
           <td>
             <div class="fw-600">{{ video.title }}</div>
             {% if video.description %}
             <div class="text-muted" style="font-size:.8rem">
               {{ video.description[:80] }}{% if video.description|length > 80 %}…{% endif %}
             </div>
+            {% endif %}
+          </td>
+          <td>
+            {% set mt = video.media_type or 'video' %}
+            {% if mt == 'image' %}
+            <span class="badge bg-info text-dark">صورة</span>
+            {% else %}
+            <span class="badge bg-primary">فيديو</span>
             {% endif %}
           </td>
           <td>{{ audience_labels.get(video.audience, video.audience) }}</td>
@@ -92,7 +113,7 @@
             <form method="POST"
                   action="{{ url_for('admin.school_board_video_delete', video_id=video.id) }}"
                   style="display:inline"
-                  onsubmit="return confirm('هل أنت متأكد من حذف هذا الفيديو؟')">
+                  onsubmit="return confirm('هل أنت متأكد من الحذف؟')">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
               <button type="submit" class="btn btn-sm btn-outline-danger" title="حذف">
                 <i class="bi bi-trash"></i>
@@ -102,11 +123,11 @@
         </tr>
         {% else %}
         <tr>
-          <td colspan="7" class="text-center text-muted py-5">
+          <td colspan="9" class="text-center text-muted py-5">
             <i class="bi bi-play-circle"
                style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-            لا توجد فيديوهات بعد.
-            <a href="{{ url_for('admin.school_board_video_create') }}">أضف أول فيديو</a>
+            لا توجد وسائط بعد.
+            <a href="{{ url_for('admin.school_board_video_create') }}">أضف أول وسيط</a>
           </td>
         </tr>
         {% endfor %}

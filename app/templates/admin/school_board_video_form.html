@@ -1,14 +1,14 @@
 {% extends "shared/base.html" %}
 {% set is_edit = video is not none %}
-{% block title %}{{ 'تعديل فيديو' if is_edit else 'إضافة فيديو' }}{% endblock %}
-{% block page_title %}{{ 'تعديل فيديو' if is_edit else 'إضافة فيديو' }}{% endblock %}
+{% block title %}{{ 'تعديل وسائط' if is_edit else 'إضافة وسائط' }}{% endblock %}
+{% block page_title %}{{ 'تعديل وسائط' if is_edit else 'إضافة وسائط' }}{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">{{ 'تعديل فيديو' if is_edit else 'إضافة فيديو جديد' }}</h1>
+    <h1 class="page-title">{{ 'تعديل وسائط' if is_edit else 'إضافة وسائط جديدة' }}</h1>
     <p class="page-subtitle">
-      <a href="{{ url_for('admin.school_board_videos') }}">فيديوهات لوحة المدرسة</a>
+      <a href="{{ url_for('admin.school_board_videos') }}">وسائط لوحة المدرسة</a>
     </p>
   </div>
 </div>
@@ -24,37 +24,85 @@
 {% endif %}
 {% endwith %}
 
-<div class="card" style="max-width:680px">
+{% set sel_type = form_data.get('media_type', video.media_type if is_edit else 'video') %}
+
+<div class="card" style="max-width:720px">
   <div class="card-body p-4">
-    <form method="POST">
+    <form method="POST" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
 
+      {# ── Title ─────────────────────────────────────────────────────── #}
       <div class="mb-3">
         <label class="form-label">العنوان <span class="text-danger">*</span></label>
         <input type="text" name="title" class="form-control" required
                value="{{ form_data.get('title', video.title if is_edit else '') }}">
       </div>
 
+      {# ── Description ───────────────────────────────────────────────── #}
       <div class="mb-3">
-        <label class="form-label">وصف الفيديو</label>
+        <label class="form-label">الوصف</label>
         <textarea name="description" class="form-control" rows="2">{{ form_data.get('description', video.description if is_edit else '') }}</textarea>
       </div>
 
+      {# ── Media type selector ───────────────────────────────────────── #}
       <div class="mb-3">
-        <label class="form-label">رابط الفيديو <span class="text-danger">*</span></label>
-        <input type="url" name="video_url" class="form-control" required
-               placeholder="https://..."
-               value="{{ form_data.get('video_url', video.video_url if is_edit else '') }}">
-        <div class="form-text">رابط URL كامل لملف الفيديو أو منصة استضافة خارجية.</div>
+        <label class="form-label">نوع الوسائط <span class="text-danger">*</span></label>
+        <div class="d-flex gap-4">
+          {% for val, lbl in media_labels.items() %}
+          <div class="form-check">
+            <input class="form-check-input" type="radio" name="media_type"
+                   id="type_{{ val }}" value="{{ val }}"
+                   {{ 'checked' if sel_type == val }}>
+            <label class="form-check-label" for="type_{{ val }}">{{ lbl }}</label>
+          </div>
+          {% endfor %}
+        </div>
       </div>
 
+      {# ── Current media preview (edit only) ─────────────────────────── #}
+      {% if is_edit and video.video_url %}
+      <div class="mb-3" id="current-media-wrap">
+        <label class="form-label">الوسائط الحالية</label>
+        {% if video.media_type == 'image' %}
+        <div>
+          <img src="{{ video.video_url }}" alt="{{ video.title }}"
+               style="max-height:160px;max-width:100%;border-radius:6px;border:1px solid #dee2e6">
+        </div>
+        {% else %}
+        <div>
+          <video src="{{ video.video_url }}" controls
+                 style="max-height:160px;max-width:100%;border-radius:6px"></video>
+        </div>
+        {% endif %}
+        <div class="form-text mt-1">
+          <a href="{{ video.video_url }}" target="_blank" rel="noopener">فتح في تبويب جديد</a>
+        </div>
+      </div>
+      {% endif %}
+
+      {# ── File upload ───────────────────────────────────────────────── #}
       <div class="mb-3">
-        <label class="form-label">رابط الصورة المصغرة</label>
-        <input type="url" name="thumbnail_url" class="form-control"
-               placeholder="https://..."
-               value="{{ form_data.get('thumbnail_url', video.thumbnail_url if is_edit else '') }}">
+        <label class="form-label" id="file-upload-label">
+          رفع ملف {{ 'جديد' if is_edit else '' }} <span id="file-req-star" class="text-danger">{{ '' if is_edit else '*' }}</span>
+        </label>
+        <input type="file" name="media_file" class="form-control" id="media-file-input"
+               accept="video/mp4,video/quicktime,video/webm">
+        <div class="form-text" id="file-hint">
+          <span id="hint-video">الأنواع المقبولة: mp4، mov، webm — الحد الأقصى: 50 MB</span>
+          <span id="hint-image" style="display:none">الأنواع المقبولة: jpg، jpeg، png، webp — الحد الأقصى: 5 MB</span>
+        </div>
       </div>
 
+      {# ── External URL fallback ─────────────────────────────────────── #}
+      <div class="mb-3">
+        <label class="form-label">رابط خارجي (بديل عن رفع ملف)</label>
+        <input type="url" name="video_url" class="form-control"
+               placeholder="https://..."
+               value="{{ form_data.get('video_url', '') }}">
+        <div class="form-text">أو أدخل رابطاً خارجياً (YouTube، Vimeo، رابط مباشر…)</div>
+      </div>
+
+      {# ── Audience ──────────────────────────────────────────────────── #}
       <div class="mb-3">
         <label class="form-label">الجمهور المستهدف</label>
         <select name="audience" class="form-select">
@@ -65,6 +113,7 @@
         </select>
       </div>
 
+      {# ── Publish / expires ─────────────────────────────────────────── #}
       <div class="row g-3 mb-3">
         <div class="col-md-6">
           <label class="form-label">تاريخ النشر</label>
@@ -82,6 +131,7 @@
         </div>
       </div>
 
+      {# ── Flags ─────────────────────────────────────────────────────── #}
       <div class="mb-4 d-flex gap-4">
         <div class="form-check">
           <input type="checkbox" name="is_featured" class="form-check-input" id="is_featured"
@@ -99,11 +149,37 @@
 
       <div class="d-flex gap-2">
         <button type="submit" class="btn btn-primary">
-          {{ 'حفظ التعديلات' if is_edit else 'إنشاء الفيديو' }}
+          {{ 'حفظ التعديلات' if is_edit else 'إضافة' }}
         </button>
         <a href="{{ url_for('admin.school_board_videos') }}" class="btn btn-outline-secondary">إلغاء</a>
       </div>
     </form>
   </div>
 </div>
+
+<script>
+(function () {
+  var radios   = document.querySelectorAll('input[name="media_type"]');
+  var fileInput = document.getElementById('media-file-input');
+  var hintVideo = document.getElementById('hint-video');
+  var hintImage = document.getElementById('hint-image');
+
+  function applyType(val) {
+    if (val === 'image') {
+      fileInput.accept = 'image/jpeg,image/png,image/webp';
+      hintVideo.style.display = 'none';
+      hintImage.style.display = '';
+    } else {
+      fileInput.accept = 'video/mp4,video/quicktime,video/webm';
+      hintVideo.style.display = '';
+      hintImage.style.display = 'none';
+    }
+  }
+
+  radios.forEach(function (r) {
+    r.addEventListener('change', function () { applyType(this.value); });
+    if (r.checked) applyType(r.value);
+  });
+})();
+</script>
 {% endblock %}

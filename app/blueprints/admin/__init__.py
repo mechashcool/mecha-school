@@ -1338,6 +1338,11 @@ MEDIA_TYPES = {
     'image': 'صورة',
 }
 
+VIDEO_MEDIA_TYPES = {
+    'video': 'فيديو',
+    'image': 'صورة',
+}
+
 
 def _parse_dt(value):
     """Parse a datetime-local form field; return datetime or None."""
@@ -1429,37 +1434,83 @@ def school_board_video_create():
         return redirect(url_for('admin.school_board_videos'))
 
     if request.method == 'POST':
+        from app.utils.helpers import (save_uploaded_file,
+                                       ALLOWED_BOARD_IMAGE_EXTENSIONS,
+                                       ALLOWED_BOARD_VIDEO_EXTENSIONS,
+                                       BOARD_IMAGE_MAX_BYTES, BOARD_VIDEO_MAX_BYTES)
+
         title         = request.form.get('title', '').strip()
         description   = request.form.get('description', '').strip() or None
-        video_url     = request.form.get('video_url', '').strip()
+        media_type    = request.form.get('media_type', 'video').strip()
+        fallback_url  = request.form.get('video_url', '').strip()
         thumbnail_url = request.form.get('thumbnail_url', '').strip() or None
         audience      = request.form.get('audience', 'all').strip()
         is_featured   = 'is_featured' in request.form
-        is_active     = 'is_active' in request.form
+        is_active     = 'is_active'   in request.form
         publish_at    = _parse_dt(request.form.get('publish_at', ''))
         expires_at    = _parse_dt(request.form.get('expires_at', ''))
+
+        if media_type not in VIDEO_MEDIA_TYPES:
+            media_type = 'video'
+        is_image    = media_type == 'image'
+        allowed_ext = ALLOWED_BOARD_IMAGE_EXTENSIONS if is_image else ALLOWED_BOARD_VIDEO_EXTENSIONS
+        max_bytes   = BOARD_IMAGE_MAX_BYTES           if is_image else BOARD_VIDEO_MAX_BYTES
+        type_label  = 'الصورة' if is_image else 'الفيديو'
+
+        final_url = None
+        upload_file = request.files.get('media_file')
+
+        if upload_file and upload_file.filename:
+            ext = (upload_file.filename.rsplit('.', 1)[-1].lower()
+                   if '.' in upload_file.filename else '')
+            if ext not in allowed_ext:
+                flash(f'نوع الملف غير مدعوم. الأنواع المقبولة: {", ".join(sorted(allowed_ext))}.', 'danger')
+                return render_template('admin/school_board_video_form.html',
+                                       video=None, audience_labels=BOARD_AUDIENCES,
+                                       media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
+            raw = upload_file.read()
+            if len(raw) > max_bytes:
+                flash(f'حجم {type_label} أكبر من الحد المسموح ({max_bytes // (1024 * 1024)} MB).', 'danger')
+                return render_template('admin/school_board_video_form.html',
+                                       video=None, audience_labels=BOARD_AUDIENCES,
+                                       media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
+            upload_file.stream.seek(0)
+            result = save_uploaded_file(
+                upload_file,
+                subfolder=f'schools/{school_id}/board/media',
+                bucket='school-media',
+                allowed_exts=allowed_ext,
+                max_size=max_bytes,
+            )
+            if not result:
+                flash('فشل رفع الملف إلى التخزين. تحقق من الإعدادات أو حاول مجدداً.', 'danger')
+                return render_template('admin/school_board_video_form.html',
+                                       video=None, audience_labels=BOARD_AUDIENCES,
+                                       media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
+            final_url = result
+        elif fallback_url and fallback_url.startswith(('http://', 'https://')):
+            final_url = fallback_url
 
         errors = []
         if not title:
             errors.append('العنوان مطلوب.')
-        if not video_url or not video_url.startswith(('http://', 'https://')):
-            errors.append('رابط الفيديو مطلوب ويجب أن يبدأ بـ http:// أو https://.')
+        if not final_url:
+            errors.append('يرجى رفع ملف أو إدخال رابط خارجي.')
         if audience not in BOARD_AUDIENCES:
             errors.append('الجمهور المستهدف غير صالح.')
-        if thumbnail_url and not thumbnail_url.startswith(('http://', 'https://')):
-            errors.append('رابط الصورة المصغرة يجب أن يبدأ بـ http:// أو https://.')
 
         if errors:
             for e in errors:
                 flash(e, 'danger')
             return render_template('admin/school_board_video_form.html',
                                    video=None, audience_labels=BOARD_AUDIENCES,
-                                   form_data=request.form)
+                                   media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
 
         try:
             db.session.add(SchoolVideo(
                 school_id=school_id, title=title, description=description,
-                video_url=video_url, thumbnail_url=thumbnail_url,
+                media_type=media_type, video_url=final_url,
+                thumbnail_url=thumbnail_url,
                 audience=audience, is_featured=is_featured, is_active=is_active,
                 publish_at=publish_at, expires_at=expires_at,
                 created_by=current_user.id,
@@ -1471,12 +1522,13 @@ def school_board_video_create():
             flash('حدث خطأ أثناء الحفظ — تأكّد من تطبيق migration على قاعدة البيانات.', 'danger')
             return render_template('admin/school_board_video_form.html',
                                    video=None, audience_labels=BOARD_AUDIENCES,
-                                   form_data=request.form)
-        flash('تم إنشاء الفيديو بنجاح.', 'success')
+                                   media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
+        flash('تمت الإضافة بنجاح.', 'success')
         return redirect(url_for('admin.school_board_videos'))
 
     return render_template('admin/school_board_video_form.html',
-                           video=None, audience_labels=BOARD_AUDIENCES, form_data={})
+                           video=None, audience_labels=BOARD_AUDIENCES,
+                           media_labels=VIDEO_MEDIA_TYPES, form_data={})
 
 
 @admin_bp.route('/school-board/videos/<int:video_id>/edit', methods=['GET', 'POST'])
@@ -1490,36 +1542,82 @@ def school_board_video_edit(video_id):
     video = q.first_or_404()
 
     if request.method == 'POST':
+        from app.utils.helpers import (save_uploaded_file,
+                                       ALLOWED_BOARD_IMAGE_EXTENSIONS,
+                                       ALLOWED_BOARD_VIDEO_EXTENSIONS,
+                                       BOARD_IMAGE_MAX_BYTES, BOARD_VIDEO_MAX_BYTES)
+
         title         = request.form.get('title', '').strip()
         description   = request.form.get('description', '').strip() or None
-        video_url     = request.form.get('video_url', '').strip()
+        media_type    = request.form.get('media_type', video.media_type).strip()
+        fallback_url  = request.form.get('video_url', '').strip()
         thumbnail_url = request.form.get('thumbnail_url', '').strip() or None
         audience      = request.form.get('audience', 'all').strip()
         is_featured   = 'is_featured' in request.form
-        is_active     = 'is_active' in request.form
+        is_active     = 'is_active'   in request.form
         publish_at    = _parse_dt(request.form.get('publish_at', ''))
         expires_at    = _parse_dt(request.form.get('expires_at', ''))
+
+        if media_type not in VIDEO_MEDIA_TYPES:
+            media_type = video.media_type
+        is_image    = media_type == 'image'
+        allowed_ext = ALLOWED_BOARD_IMAGE_EXTENSIONS if is_image else ALLOWED_BOARD_VIDEO_EXTENSIONS
+        max_bytes   = BOARD_IMAGE_MAX_BYTES           if is_image else BOARD_VIDEO_MAX_BYTES
+        type_label  = 'الصورة' if is_image else 'الفيديو'
+
+        final_url   = video.video_url  # keep existing unless replaced
+        upload_file = request.files.get('media_file')
+
+        if upload_file and upload_file.filename:
+            ext = (upload_file.filename.rsplit('.', 1)[-1].lower()
+                   if '.' in upload_file.filename else '')
+            if ext not in allowed_ext:
+                flash(f'نوع الملف غير مدعوم. الأنواع المقبولة: {", ".join(sorted(allowed_ext))}.', 'danger')
+                return render_template('admin/school_board_video_form.html',
+                                       video=video, audience_labels=BOARD_AUDIENCES,
+                                       media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
+            raw = upload_file.read()
+            if len(raw) > max_bytes:
+                flash(f'حجم {type_label} أكبر من الحد المسموح ({max_bytes // (1024 * 1024)} MB).', 'danger')
+                return render_template('admin/school_board_video_form.html',
+                                       video=video, audience_labels=BOARD_AUDIENCES,
+                                       media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
+            upload_file.stream.seek(0)
+            result = save_uploaded_file(
+                upload_file,
+                subfolder=f'schools/{school_id}/board/media',
+                bucket='school-media',
+                allowed_exts=allowed_ext,
+                max_size=max_bytes,
+            )
+            if not result:
+                flash('فشل رفع الملف إلى التخزين. تحقق من الإعدادات أو حاول مجدداً.', 'danger')
+                return render_template('admin/school_board_video_form.html',
+                                       video=video, audience_labels=BOARD_AUDIENCES,
+                                       media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
+            final_url = result
+        elif fallback_url and fallback_url.startswith(('http://', 'https://')):
+            final_url = fallback_url
 
         errors = []
         if not title:
             errors.append('العنوان مطلوب.')
-        if not video_url or not video_url.startswith(('http://', 'https://')):
-            errors.append('رابط الفيديو مطلوب ويجب أن يبدأ بـ http:// أو https://.')
+        if not final_url:
+            errors.append('يرجى رفع ملف أو إدخال رابط خارجي.')
         if audience not in BOARD_AUDIENCES:
             errors.append('الجمهور المستهدف غير صالح.')
-        if thumbnail_url and not thumbnail_url.startswith(('http://', 'https://')):
-            errors.append('رابط الصورة المصغرة يجب أن يبدأ بـ http:// أو https://.')
 
         if errors:
             for e in errors:
                 flash(e, 'danger')
             return render_template('admin/school_board_video_form.html',
                                    video=video, audience_labels=BOARD_AUDIENCES,
-                                   form_data=request.form)
+                                   media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
 
         video.title         = title
         video.description   = description
-        video.video_url     = video_url
+        video.media_type    = media_type
+        video.video_url     = final_url
         video.thumbnail_url = thumbnail_url
         video.audience      = audience
         video.is_featured   = is_featured
@@ -1534,12 +1632,13 @@ def school_board_video_edit(video_id):
             flash('حدث خطأ أثناء الحفظ.', 'danger')
             return render_template('admin/school_board_video_form.html',
                                    video=video, audience_labels=BOARD_AUDIENCES,
-                                   form_data=request.form)
-        flash('تم تحديث الفيديو بنجاح.', 'success')
+                                   media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
+        flash('تم التحديث بنجاح.', 'success')
         return redirect(url_for('admin.school_board_videos'))
 
     return render_template('admin/school_board_video_form.html',
-                           video=video, audience_labels=BOARD_AUDIENCES, form_data={})
+                           video=video, audience_labels=BOARD_AUDIENCES,
+                           media_labels=VIDEO_MEDIA_TYPES, form_data={})
 
 
 @admin_bp.route('/school-board/videos/<int:video_id>/toggle', methods=['POST'])

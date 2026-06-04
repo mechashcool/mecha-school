@@ -109,11 +109,14 @@ def _fmt_dt(dt):
 
 
 def _video_dict(v, is_read=False):
+    mt = getattr(v, 'media_type', None) or 'video'
     return {
         'id':            v.id,
         'title':         v.title,
         'description':   v.description,
-        'video_url':     v.video_url,
+        'media_type':    mt,
+        'media_url':     v.video_url,   # canonical field for both images and videos
+        'video_url':     v.video_url,   # kept for Flutter backward compatibility
         'thumbnail_url': v.thumbnail_url,
         'audience':      v.audience,
         'is_featured':   bool(v.is_featured),
