@@ -202,8 +202,10 @@
     const q = this.value.trim();
 
     if (q.length === 0) {
-      // Restore server-rendered paginated view.
-      window.location.href = '{{ url_for("student_records.index") }}';
+      // Empty — fetch default list immediately, no debounce.
+      fetch(SEARCH_URL + '?q=')
+        .then(function (r) { return r.json(); })
+        .then(function (data) { if (data.ok) renderRows(data.records); });
       return;
     }
 
