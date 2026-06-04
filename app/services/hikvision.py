@@ -399,6 +399,45 @@ def sync_device(device: AttendanceDevice, target_date: date = None) -> dict:
             detail['status'] = 'processed'
             detail['reason'] = ('تم تسجيل الحضور'
                                 if action == 'check_in' else 'تم تسجيل الانصراف')
+            # Notify linked parents — mirrors the AI Face WebSocket path
+            try:
+                from app.services.notifications import NotificationService
+                att_status = result.get('status', 'present')
+                if action == 'check_in':
+                    scan_at = result.get('check_in') or (local_dt.strftime('%H:%M') if local_dt else '')
+                    if att_status == 'present':
+                        ntitle = 'حضور الطالب في الوقت المحدد'
+                        nbody  = (f'طالبك {student.full_name} وصل في الوقت المحدد '
+                                  f'الساعة {scan_at}.')
+                    else:
+                        ntitle = 'تأخر الطالب عن موعد الحضور'
+                        nbody  = (f'طالبك {student.full_name} وصل متأخراً '
+                                  f'الساعة {scan_at}.')
+                else:
+                    scan_at = result.get('check_out') or (local_dt.strftime('%H:%M') if local_dt else '')
+                    ntitle = 'خروج الطالب من المدرسة'
+                    nbody  = (f'طالبك {student.full_name} غادر المدرسة '
+                              f'الساعة {scan_at}.')
+                NotificationService.send_to_parents_of_student(
+                    student.id, ntitle, nbody, ntype='attendance',
+                    data={
+                        'action': action,
+                        'status': att_status,
+                        'at':     scan_at,
+                        'source': 'hikvision',
+                        'date':   result.get('date', ''),
+                        'screen': 'attendance',
+                    },
+                )
+                logger.info(
+                    '[attendance-notify] hikvision student_id=%s student=%s action=%s sent',
+                    student.id, student.full_name, action,
+                )
+            except Exception:
+                logger.exception(
+                    '[attendance-notify] hikvision notification failed student_id=%s action=%s',
+                    student.id, action,
+                )
         elif action == 'already_checked_in':
             log.status       = 'processed'
             summary["already_attended"] += 1
