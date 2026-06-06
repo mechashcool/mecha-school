@@ -157,6 +157,35 @@ def delete_grade(grade_id):
     return redirect(url_for('sections.index', year_id=year_id))
 
 
+@sections_bp.route('/grades/setup-iraqi', methods=['POST'])
+@login_required
+@historical_guard
+@admin_required
+def setup_iraqi_grades():
+    """Create missing standard Iraqi grades for the selected academic year."""
+    from app.utils.iraqi_grades import ensure_iraqi_standard_grades
+
+    year_id = request.form.get('academic_year_id', type=int)
+    if not year_id:
+        flash('يرجى اختيار العام الدراسي أولاً.', 'warning')
+        return redirect(url_for('sections.index'))
+
+    year = AcademicYear.query.get_or_404(year_id)
+    result = ensure_iraqi_standard_grades(year.school_id, year.id)
+    db.session.commit()
+
+    if result['created']:
+        skipped_note = (f' (موجود مسبقاً: {result["skipped"]})'
+                        if result['skipped'] else '')
+        flash(f'تمت تهيئة الصفوف الدراسية العراقية بنجاح — '
+              f'تم إضافة {result["created"]} صف{skipped_note}.',
+              'success')
+    else:
+        flash('الصفوف الدراسية العراقية موجودة مسبقاً — لا يوجد شيء لإضافته.', 'info')
+
+    return redirect(url_for('sections.index', year_id=year_id))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  SECTIONS
 # ─────────────────────────────────────────────────────────────────────────────

@@ -211,18 +211,25 @@ def create():
             db.session.flush()
 
             year_name = request.form.get('year_name', '').strip()
+            new_ay = None
             if year_name:
                 start_raw = request.form.get('year_start')
                 end_raw = request.form.get('year_end')
                 if start_raw and end_raw:
-                    ay = AcademicYear(
+                    new_ay = AcademicYear(
                         school_id=school.id,
                         name=year_name,
                         start_date=dt.strptime(start_raw, '%Y-%m-%d').date(),
                         end_date=dt.strptime(end_raw, '%Y-%m-%d').date(),
                         is_current=True,
                     )
-                    db.session.add(ay)
+                    db.session.add(new_ay)
+                    db.session.flush()  # assign new_ay.id before grade creation
+
+            # Auto-create standard Iraqi grades when a year is created with the school.
+            if new_ay:
+                from app.utils.iraqi_grades import ensure_iraqi_standard_grades
+                ensure_iraqi_standard_grades(school.id, new_ay.id)
 
             # Save module selections (empty list = all disabled is intentional;
             # caller must check at least one box, or leave all unchecked to mean

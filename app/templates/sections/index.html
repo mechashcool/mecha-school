@@ -8,9 +8,20 @@
     <h1 class="page-title">الصفوف والشعب الدراسية</h1>
     <p class="page-subtitle">إدارة الهيكل الأكاديمي للمدرسة</p>
   </div>
-  <a href="{{ url_for('sections.subjects') }}" class="btn btn-outline-primary">
-    <i class="bi bi-book-fill me-1"></i>إدارة المواد
-  </a>
+  <div class="d-flex gap-2 align-items-center flex-wrap">
+    {% if year_id and not is_historical_year %}
+    <form method="POST" action="{{ url_for('sections.setup_iraqi_grades') }}">
+      <input type="hidden" name="academic_year_id" value="{{ year_id }}">
+      <button type="submit" class="btn btn-outline-success"
+              data-confirm="تهيئة الصفوف الدراسية العراقية الاثني عشر للعام المحدد؟">
+        <i class="bi bi-flag-fill me-1"></i>تهيئة الصفوف العراقية
+      </button>
+    </form>
+    {% endif %}
+    <a href="{{ url_for('sections.subjects') }}" class="btn btn-outline-primary">
+      <i class="bi bi-book-fill me-1"></i>إدارة المواد
+    </a>
+  </div>
 </div>
 
 <!-- Year filter -->
