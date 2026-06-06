@@ -44,7 +44,12 @@
       "Bash(Select-Object -First 50)",
       "Bash(Format-Table FullName)",
       "Bash(xargs grep -l \"@.*\\\\.command\\\\|@click.command\")",
-      "Bash(python -c \"from app.models import db, Subject, Grade; print\\('Subject fields:', [c.name for c in Subject.__table__.columns]\\); print\\('Grade fields:', [c.name for c in Grade.__table__.columns]\\)\")"
+      "Bash(python -c \"from app.models import db, Subject, Grade; print\\('Subject fields:', [c.name for c in Subject.__table__.columns]\\); print\\('Grade fields:', [c.name for c in Grade.__table__.columns]\\)\")",
+      "Bash(Get-ChildItem -Path \"migrations\" -File -Name)",
+      "Bash(Sort-Object -Descending)",
+      "Bash(Select-Object -First 5)",
+      "Bash(grep -E \"\\\\.\\(html|py\\)$\")",
+      "PowerShell(Get-ChildItem -Path \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\migrations\" -File | Sort-Object LastWriteTime -Descending | ForEach-Object { $_.Name })"
     ]
   }
 }

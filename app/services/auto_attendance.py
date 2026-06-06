@@ -111,11 +111,21 @@ def _run_check() -> None:
 
 def _check_school(school) -> None:
     """Per-school check: fire _run_auto_absent if cutoff has passed."""
-    from app.utils.decorators import get_active_year
-    from app.blueprints.attendance import _run_auto_absent
     from app.utils.attendance_helpers import get_local_now, get_local_date
 
     school_name = getattr(school, 'name', f'school_{school.id}')
+    local_now   = get_local_now(school)
+    local_date  = get_local_date(school)
+
+    # Branch: shifts mode vs. standard single-cutoff mode
+    if getattr(school, 'enable_attendance_shifts', False):
+        _check_school_shifts(school, school_name, local_now, local_date)
+        return
+
+    # ── Standard single-cutoff mode (existing behaviour, unchanged) ──────────
+    from app.utils.decorators import get_active_year
+    from app.blueprints.attendance import _run_auto_absent
+
     cutoff = getattr(school, 'att_absence_threshold', None)
 
     if not cutoff:
@@ -123,10 +133,8 @@ def _check_school(school) -> None:
                   school.id, school_name)
         return
 
-    local_now  = get_local_now(school)
-    local_date = get_local_date(school)
-    now_time   = local_now.time()
-    passed     = now_time >= cutoff
+    now_time = local_now.time()
+    passed   = now_time >= cutoff
 
     _log.info(
         '[attendance] school_id=%s "%s" local_now=%s cutoff=%s passed=%s',
@@ -135,8 +143,6 @@ def _check_school(school) -> None:
 
     if not passed:
         _log.info('[attendance] school_id=%s — absence time not yet reached, skip', school.id)
-        # Still attempt catch-up: if we're just past midnight the previous day's
-        # cutoff may have been missed (e.g. cutoff=23:59, server restarted at 00:01).
         _catchup_previous_day(school, school_name, local_now, local_date)
         return
 
@@ -152,8 +158,6 @@ def _check_school(school) -> None:
     result = _run_auto_absent(school, year, school)
 
     if result.get('too_early'):
-        # Should not normally happen since we already checked passed=True above,
-        # but _run_auto_absent also checks internally with a fresh clock read.
         _log.info('[attendance] school_id=%s — _run_auto_absent says too_early '
                   '(clock skew?), will retry next tick', school.id)
         return
@@ -169,8 +173,203 @@ def _check_school(school) -> None:
         school.id, school_name, local_date, count,
     )
 
-    # After running today, also attempt catch-up in case yesterday was missed.
     _catchup_previous_day(school, school_name, local_now, local_date)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  SHIFTS MODE — per-shift auto-absence
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _check_school_shifts(school, school_name: str, local_now, local_date) -> None:
+    """Per-school check when enable_attendance_shifts=True. Runs each active shift."""
+    from app.models import AttendanceShift
+    from app.utils.attendance_helpers import is_holiday_date
+    from app.utils.decorators import get_active_year
+
+    now_time = local_now.time()
+
+    if is_holiday_date(local_date, school.id, school):
+        _log.info('[attendance-shift] school_id=%s date=%s — holiday, skip all shifts',
+                  school.id, local_date)
+        _catchup_previous_day_shifts(school, school_name, local_now, local_date)
+        return
+
+    year = get_active_year(school.id)
+    if not year:
+        _log.info('[attendance-shift] school_id=%s — no active academic year, skip',
+                  school.id)
+        return
+
+    active_shifts = (
+        AttendanceShift.query
+        .execution_options(bypass_tenant_scope=True)
+        .filter_by(school_id=school.id, is_active=True)
+        .all()
+    )
+
+    if not active_shifts:
+        _log.info('[attendance-shift] school_id=%s "%s" — no active shifts configured, skip',
+                  school.id, school_name)
+        return
+
+    for shift in active_shifts:
+        cutoff = shift.absent_after_time
+        passed = now_time >= cutoff
+        _log.info(
+            '[attendance-shift] school_id=%s shift_id=%s "%s" cutoff=%s passed=%s',
+            school.id, shift.id, shift.name, cutoff, passed,
+        )
+        if passed:
+            _run_auto_absent_for_shift(school, year, shift, local_date)
+
+    _catchup_previous_day_shifts(school, school_name, local_now, local_date)
+
+
+def _run_auto_absent_for_shift(school, year, shift, target_date) -> dict:
+    """
+    Mark absent all active students in sections assigned to `shift` who have
+    no attendance record for `target_date`.
+
+    Fully idempotent — safe to call multiple times for the same shift/date.
+    Does NOT check holidays; caller handles that.
+    """
+    from app.models import db, Student, StudentAttendance, Section
+    from app.blueprints.attendance import _notify_absent_parents
+
+    school_id = school.id
+
+    # Find active sections assigned to this shift
+    shift_section_ids = {
+        row.id for row in
+        Section.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(school_id=school_id, shift_id=shift.id)
+            .with_entities(Section.id)
+            .all()
+    }
+
+    if not shift_section_ids:
+        _log.info('[attendance-shift] shift_id=%s "%s" — no sections assigned, skip',
+                  shift.id, shift.name)
+        return {'count': 0}
+
+    all_students = (
+        Student.query
+        .execution_options(bypass_tenant_scope=True)
+        .filter_by(status='active', school_id=school_id)
+        .filter(Student.section_id.in_(shift_section_ids))
+        .all()
+    )
+    student_ids = [s.id for s in all_students]
+
+    _log.info(
+        '[attendance-shift] shift_id=%s "%s" date=%s active_students=%d',
+        shift.id, shift.name, target_date, len(student_ids),
+    )
+
+    if not student_ids:
+        return {'count': 0}
+
+    already_ids = {
+        row.student_id for row in
+        StudentAttendance.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(date=target_date)
+            .filter(StudentAttendance.student_id.in_(student_ids))
+            .with_entities(StudentAttendance.student_id)
+            .all()
+    }
+    unmarked = [s for s in all_students if s.id not in already_ids]
+
+    _log.info(
+        '[attendance-shift] shift_id=%s date=%s existing=%d missing=%d',
+        shift.id, target_date, len(already_ids), len(unmarked),
+    )
+
+    for student in unmarked:
+        db.session.add(StudentAttendance(
+            student_id       = student.id,
+            school_id        = school_id,
+            academic_year_id = year.id if year else None,
+            date             = target_date,
+            status           = 'absent',
+            source           = 'automatic',
+            shift_id         = shift.id,
+        ))
+
+    if unmarked:
+        db.session.commit()
+        _log.info(
+            '[attendance-shift] shift_id=%s "%s" date=%s absent_created=%d',
+            shift.id, shift.name, target_date, len(unmarked),
+        )
+
+    notified = 0
+    for student in unmarked:
+        try:
+            _notify_absent_parents(
+                student, school_id, target_date.isoformat(),
+                source='automatic',
+                shift_name=shift.name,
+            )
+            notified += 1
+        except Exception:
+            _log.exception('[attendance-shift] notification failed student_id=%s', student.id)
+
+    _log.info(
+        '[attendance-shift] shift_id=%s "%s" date=%s absent_created=%d notifications_sent=%d',
+        shift.id, shift.name, target_date, len(unmarked), notified,
+    )
+    return {'count': len(unmarked)}
+
+
+def _catchup_previous_day_shifts(school, school_name: str, local_now, local_date) -> None:
+    """
+    Within _CATCHUP_WINDOW_HOURS after midnight: re-run per-shift auto-absence for
+    yesterday so a near-midnight absent_after_time is never permanently missed.
+    """
+    if local_now.hour >= _CATCHUP_WINDOW_HOURS:
+        return
+
+    from app.models import AttendanceShift
+    from app.utils.attendance_helpers import is_holiday_date
+    from app.utils.decorators import get_active_year
+
+    yesterday = local_date - timedelta(days=1)
+
+    try:
+        if is_holiday_date(yesterday, school.id, school):
+            _log.info('[attendance-shift] catch-up school_id=%s date=%s — holiday, skip',
+                      school.id, yesterday)
+            return
+    except Exception:
+        _log.exception('[attendance-shift] catch-up holiday check failed school_id=%s date=%s',
+                       school.id, yesterday)
+        return
+
+    year = get_active_year(school.id)
+    if not year:
+        _log.info('[attendance-shift] catch-up school_id=%s date=%s — no_active_year, skip',
+                  school.id, yesterday)
+        return
+
+    active_shifts = (
+        AttendanceShift.query
+        .execution_options(bypass_tenant_scope=True)
+        .filter_by(school_id=school.id, is_active=True)
+        .all()
+    )
+
+    for shift in active_shifts:
+        _log.info('[attendance-shift] catch-up check school_id=%s shift_id=%s "%s" date=%s',
+                  school.id, shift.id, shift.name, yesterday)
+        try:
+            result = _run_auto_absent_for_shift(school, year, shift, yesterday)
+            _log.info('[attendance-shift] catch-up absent_created=%d school_id=%s shift_id=%s date=%s',
+                      result.get('count', 0), school.id, shift.id, yesterday)
+        except Exception:
+            _log.exception('[attendance-shift] catch-up failed school_id=%s shift_id=%s date=%s',
+                           school.id, shift.id, yesterday)
 
 
 def _catchup_previous_day(school, school_name: str, local_now, local_date) -> None:

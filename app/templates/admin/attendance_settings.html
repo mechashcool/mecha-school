@@ -174,6 +174,36 @@
         </div>
       </div>
 
+      {# ── Attendance shifts feature toggle ──────────────────────────────────── #}
+      {% if is_school_obj %}
+      <div class="card mb-4">
+        <div class="card-header">
+          <i class="bi bi-layers-half text-accent"></i>نظام الشفتات للحضور والغياب
+        </div>
+        <div class="card-body">
+          <p class="text-muted mb-3" style="font-size:13px">
+            عند التفعيل، يستخدم النظام الشفت المعيَّن للشعبة (صباحي / ظهري) بدلاً من الأوقات العامة أعلاه.
+            يتيح هذا تشغيل جهاز واحد لكلا الدوامين وتسجيل الغياب التلقائي لكل شفت بشكل مستقل.
+          </p>
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch"
+                   name="enable_attendance_shifts" id="shiftsSwitch"
+                   {{ 'checked' if settings.enable_attendance_shifts }}>
+            <label class="form-check-label fw-600" for="shiftsSwitch">
+              تفعيل نظام الشفتات للحضور والغياب
+            </label>
+          </div>
+          {% if settings.enable_attendance_shifts %}
+          <div class="alert alert-info mt-3 mb-0 py-2" style="font-size:12px">
+            <i class="bi bi-info-circle me-1"></i>
+            الأوقات العامة أعلاه تُستخدم فقط للشعب التي لا يوجد لها شفت معيَّن.
+            يُنصح بتعيين شفت لكل شعبة لضمان دقة الغياب التلقائي.
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+
       <button type="submit" class="btn btn-primary btn-lg px-5">
         <i class="bi bi-check-circle-fill me-2"></i>حفظ الإعدادات
       </button>
@@ -208,4 +238,189 @@
     </div>
   </div>
 </div>
+
+{# ── Shifts management — shown only for school objects (not global settings) ── #}
+{% if is_school_obj %}
+<div class="mt-4">
+  <div class="d-flex align-items-center gap-3 mb-3">
+    <h5 class="mb-0 fw-700">
+      <i class="bi bi-layers-half text-accent me-1"></i>إدارة الشفتات
+    </h5>
+    {% if not settings.enable_attendance_shifts %}
+    <span class="badge bg-secondary">معطَّل — فعِّل نظام الشفتات أعلاه لاستخدامه</span>
+    {% endif %}
+  </div>
+
+  {# Shifts table #}
+  {% if active_shifts or inactive_shifts %}
+  <div class="card mb-4">
+    <div class="card-header">الشفتات الحالية</div>
+    <div class="table-wrapper">
+      <table class="table table-sm mb-0">
+        <thead>
+          <tr>
+            <th>الاسم</th>
+            <th>بداية الدوام</th>
+            <th>حد التأخر</th>
+            <th>حد الغياب</th>
+            <th>وقت الانصراف</th>
+            <th>الحالة</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for shift in active_shifts + inactive_shifts %}
+          <tr class="{{ '' if shift.is_active else 'text-muted' }}">
+            <td class="fw-600">{{ shift.name }}</td>
+            <td>{{ shift.start_time.strftime('%H:%M') if shift.start_time }}</td>
+            <td>{{ shift.late_after_time.strftime('%H:%M') if shift.late_after_time }}</td>
+            <td>{{ shift.absent_after_time.strftime('%H:%M') if shift.absent_after_time }}</td>
+            <td>{{ shift.dismissal_time.strftime('%H:%M') if shift.dismissal_time else '—' }}</td>
+            <td>
+              {% if shift.is_active %}
+              <span class="badge-status badge-active">مفعَّل</span>
+              {% else %}
+              <span class="badge bg-secondary">معطَّل</span>
+              {% endif %}
+            </td>
+            <td>
+              <div class="d-flex gap-1">
+                <button class="btn btn-sm btn-outline-secondary"
+                        data-shift-id="{{ shift.id }}"
+                        data-shift-name="{{ shift.name }}"
+                        data-start="{{ shift.start_time.strftime('%H:%M') if shift.start_time else '' }}"
+                        data-late="{{ shift.late_after_time.strftime('%H:%M') if shift.late_after_time else '' }}"
+                        data-absent="{{ shift.absent_after_time.strftime('%H:%M') if shift.absent_after_time else '' }}"
+                        data-dismissal="{{ shift.dismissal_time.strftime('%H:%M') if shift.dismissal_time else '' }}"
+                        onclick="showEditShift(this)">
+                  <i class="bi bi-pencil"></i>
+                </button>
+                <form method="POST"
+                      action="{{ url_for('shifts.toggle_shift', shift_id=shift.id) }}"
+                      class="d-inline">
+                  <button class="btn btn-sm {{ 'btn-outline-warning' if shift.is_active else 'btn-outline-success' }}"
+                          title="{{ 'تعطيل' if shift.is_active else 'تفعيل' }}">
+                    <i class="bi {{ 'bi-pause-circle' if shift.is_active else 'bi-play-circle' }}"></i>
+                  </button>
+                </form>
+                <form method="POST"
+                      action="{{ url_for('shifts.delete_shift', shift_id=shift.id) }}"
+                      class="d-inline">
+                  <button class="btn btn-sm btn-outline-danger"
+                          data-confirm="حذف الشفت '{{ shift.name }}'؟ لا يمكن حذفه إذا كانت شعب مرتبطة به.">
+                    <i class="bi bi-trash"></i>
+                  </button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="alert alert-light border mb-4" style="font-size:13px">
+    <i class="bi bi-info-circle me-1"></i>
+    لا توجد شفتات مضافة بعد. أضف شفتاً من النموذج أدناه.
+  </div>
+  {% endif %}
+
+  {# Add shift form #}
+  <div class="card">
+    <div class="card-header">
+      <i class="bi bi-plus-circle-fill text-accent"></i>إضافة شفت جديد
+    </div>
+    <div class="card-body">
+      <form method="POST" action="{{ url_for('shifts.create_shift') }}" class="row g-3">
+        <div class="col-md-3">
+          <label class="form-label fw-600">اسم الشفت <span class="text-danger">*</span></label>
+          <input type="text" name="name" class="form-control"
+                 placeholder="مثال: الدوام الصباحي" required>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label fw-600"><i class="bi bi-door-open text-accent me-1"></i>بداية الدوام <span class="text-danger">*</span></label>
+          <input type="time" name="start_time" class="form-control" required>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label fw-600"><i class="bi bi-clock text-warning me-1"></i>حد التأخر <span class="text-danger">*</span></label>
+          <input type="time" name="late_after_time" class="form-control" style="border-color:#e8a020" required>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label fw-600"><i class="bi bi-x-circle text-danger me-1"></i>حد الغياب <span class="text-danger">*</span></label>
+          <input type="time" name="absent_after_time" class="form-control" style="border-color:#e03e3e" required>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label fw-600"><i class="bi bi-door-closed text-secondary me-1"></i>وقت الانصراف</label>
+          <input type="time" name="dismissal_time" class="form-control">
+          <small class="text-muted">اختياري</small>
+        </div>
+        <div class="col-md-1 d-flex align-items-end">
+          <button type="submit" class="btn btn-primary w-100">
+            <i class="bi bi-plus-circle-fill"></i>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{# Edit shift modal #}
+<div class="modal fade" id="editShiftModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title fw-700">تعديل الشفت</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="POST" id="editShiftForm">
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label fw-600">اسم الشفت <span class="text-danger">*</span></label>
+            <input type="text" name="name" id="editShiftName" class="form-control" required>
+          </div>
+          <div class="row g-3">
+            <div class="col-6">
+              <label class="form-label fw-600">بداية الدوام <span class="text-danger">*</span></label>
+              <input type="time" name="start_time" id="editShiftStart" class="form-control" required>
+            </div>
+            <div class="col-6">
+              <label class="form-label fw-600">حد التأخر <span class="text-danger">*</span></label>
+              <input type="time" name="late_after_time" id="editShiftLate" class="form-control" required>
+            </div>
+            <div class="col-6">
+              <label class="form-label fw-600">حد الغياب التلقائي <span class="text-danger">*</span></label>
+              <input type="time" name="absent_after_time" id="editShiftAbsent" class="form-control" required>
+            </div>
+            <div class="col-6">
+              <label class="form-label fw-600">وقت الانصراف</label>
+              <input type="time" name="dismissal_time" id="editShiftDismissal" class="form-control">
+              <small class="text-muted">اختياري</small>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">إلغاء</button>
+          <button type="submit" class="btn btn-primary">حفظ التغييرات</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function showEditShift(btn) {
+  document.getElementById('editShiftName').value     = btn.dataset.shiftName;
+  document.getElementById('editShiftStart').value    = btn.dataset.start;
+  document.getElementById('editShiftLate').value     = btn.dataset.late;
+  document.getElementById('editShiftAbsent').value   = btn.dataset.absent;
+  document.getElementById('editShiftDismissal').value = btn.dataset.dismissal;
+  document.getElementById('editShiftForm').action    =
+    '/attendance-shifts/' + btn.dataset.shiftId + '/edit';
+  new bootstrap.Modal(document.getElementById('editShiftModal')).show();
+}
+</script>
 {% endblock %}

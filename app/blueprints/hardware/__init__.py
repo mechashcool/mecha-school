@@ -23,7 +23,8 @@ from app.models import (db, Device, Student, StudentAttendance,
 from app.services.notifications import NotificationService
 from app.utils.audit import log_action
 from app.utils.attendance_helpers import (determine_check_in_status,
-                                           get_local_now, utc_to_local)
+                                           get_local_now, utc_to_local,
+                                           get_student_shift)
 from app.utils.scoping import set_hardware_scope
 
 hardware_bp = Blueprint('hardware', __name__)
@@ -138,7 +139,8 @@ def record_attendance():
 
     if row is None:
         # First scan → determine status from time thresholds
-        status = determine_check_in_status(scan_time, settings)
+        _shift = get_student_shift(student, settings)
+        status = determine_check_in_status(scan_time, settings, shift=_shift)
         row = StudentAttendance(
             student_id = student.id,
             school_id  = student.school_id,
@@ -149,6 +151,7 @@ def record_attendance():
             source     = 'rfid',
             device_id  = device.id,
             notes      = f'RFID {tag} @ {device.device_id}',
+            shift_id   = _shift.id if _shift else None,
         )
         db.session.add(row)
         action = 'check_in'
@@ -253,7 +256,8 @@ def hardware_sync():
 
     if row is None:
         # First scan → check_in with smart status
-        status = determine_check_in_status(scan_time, settings)
+        _shift = get_student_shift(student, settings)
+        status = determine_check_in_status(scan_time, settings, shift=_shift)
         row = StudentAttendance(
             student_id = student.id,
             school_id  = student.school_id,
@@ -264,6 +268,7 @@ def hardware_sync():
             source     = 'rfid',
             device_id  = device.id,
             notes      = f'{scan_src.upper()} {tag} @ {device.device_id}',
+            shift_id   = _shift.id if _shift else None,
         )
         db.session.add(row)
         action = 'check_in'

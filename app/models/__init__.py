@@ -92,6 +92,11 @@ class School(db.Model):
     enable_buildings = db.Column(db.Boolean, default=False, nullable=False,
                                  server_default=db.false())
 
+    # Optional per-school feature: two-shift attendance (morning/afternoon).
+    # Default OFF so existing schools behave exactly as before.
+    enable_attendance_shifts = db.Column(db.Boolean, default=False, nullable=False,
+                                         server_default=db.false())
+
     # Last applied feature package (nullable — no package = defaults apply)
     package_id  = db.Column(db.Integer, db.ForeignKey('feature_packages.id', ondelete='SET NULL'),
                             nullable=True)
@@ -257,6 +262,42 @@ class UserBuildingAccess(db.Model):
 
     def __repr__(self):
         return f'<UserBuildingAccess user={self.user_id} building={self.building_id}>'
+
+
+class AttendanceShift(db.Model):
+    """
+    A named attendance shift (e.g. الدوام الصباحي / الدوام الظهري).
+
+    Only relevant when School.enable_attendance_shifts is True.
+    Sections are linked to a shift via Section.shift_id.
+    Auto-absence checks each shift's absent_after_time independently so morning
+    students are never marked absent by an afternoon cutoff and vice-versa.
+    """
+    __tablename__ = 'attendance_shifts'
+    __school_scoped__ = True
+
+    id                = db.Column(db.Integer, primary_key=True)
+    school_id         = db.Column(db.Integer, db.ForeignKey('schools.id', ondelete='CASCADE'),
+                                  nullable=False, index=True)
+    name              = db.Column(db.String(100), nullable=False)
+    start_time        = db.Column(db.Time, nullable=False)
+    late_after_time   = db.Column(db.Time, nullable=False)
+    absent_after_time = db.Column(db.Time, nullable=False)
+    dismissal_time    = db.Column(db.Time, nullable=True)
+    is_active         = db.Column(db.Boolean, default=True, nullable=False,
+                                  server_default=db.true())
+    created_at        = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at        = db.Column(db.DateTime, default=datetime.utcnow,
+                                  onupdate=datetime.utcnow)
+
+    school   = db.relationship('School', foreign_keys=[school_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('school_id', 'name', name='uq_shift_school_name'),
+    )
+
+    def __repr__(self):
+        return f'<AttendanceShift {self.name} school={self.school_id}>'
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -598,6 +639,8 @@ class Section(db.Model):
     teacher_id = db.Column(db.Integer, db.ForeignKey('employees.id'), nullable=True)
     capacity   = db.Column(db.Integer, default=30)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Optional shift assignment — only used when School.enable_attendance_shifts=True.
+    shift_id   = db.Column(db.Integer, db.ForeignKey('attendance_shifts.id'), nullable=True)
 
     students = db.relationship('Student', backref='section', lazy='dynamic')
     school   = db.relationship('School', foreign_keys=[school_id],
@@ -1226,12 +1269,16 @@ class StudentAttendance(db.Model):
     device_id        = db.Column(db.Integer, db.ForeignKey('devices.id'), nullable=True)
     recorded_by      = db.Column(db.Integer, db.ForeignKey('users.id'),   nullable=True)
     notes            = db.Column(db.Text, nullable=True)
+    # Shift that determined this record's absence/status — NULL for non-shift schools
+    # and for records created before shifts were enabled.
+    shift_id         = db.Column(db.Integer, db.ForeignKey('attendance_shifts.id'), nullable=True)
     created_at       = db.Column(db.DateTime, default=datetime.utcnow)
 
     recorder      = db.relationship('User',   foreign_keys=[recorded_by])
     device        = db.relationship('Device', foreign_keys=[device_id])
     school        = db.relationship('School', foreign_keys=[school_id])
     academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    shift         = db.relationship('AttendanceShift', foreign_keys=[shift_id])
 
     __table_args__ = (
         db.UniqueConstraint('student_id', 'date', name='uq_student_date'),

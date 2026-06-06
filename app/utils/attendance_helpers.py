@@ -46,15 +46,51 @@ def utc_to_local(utc_dt, settings=None):
     return utc_dt.astimezone(tz).replace(tzinfo=None)
 
 
-def determine_check_in_status(check_in_time, settings):
+def determine_check_in_status(check_in_time, settings, shift=None):
     """
-    Return 'present' or 'late' based on check_in_time vs SchoolSettings thresholds.
-    Falls back to 'present' when no late threshold is configured.
+    Return 'present' or 'late' based on check_in_time vs time thresholds.
+
+    If `shift` is provided (AttendanceShift), its late_after_time is used.
+    Otherwise falls back to settings.att_late_threshold (existing behaviour).
+    Passing shift=None is fully backwards-compatible with all existing callers.
     """
-    if settings and settings.att_late_threshold:
-        if check_in_time >= settings.att_late_threshold:
-            return 'late'
+    threshold = None
+    if shift is not None:
+        threshold = getattr(shift, 'late_after_time', None)
+    if threshold is None and settings:
+        threshold = getattr(settings, 'att_late_threshold', None)
+    if threshold and check_in_time >= threshold:
+        return 'late'
     return 'present'
+
+
+def get_student_shift(student, school):
+    """
+    Return the AttendanceShift for `student` when shifts are enabled, else None.
+
+    Rules:
+    - Returns None if school.enable_attendance_shifts is False/absent.
+    - Returns None if the student has no section or the section has no shift.
+    - Logs a warning and returns None if the shift is inactive (so inactive
+      shifts don't accidentally change late/present thresholds).
+    """
+    if not school or not getattr(school, 'enable_attendance_shifts', False):
+        return None
+    section_id = getattr(student, 'section_id', None)
+    if not section_id:
+        return None
+    from app.models import Section, AttendanceShift
+    section = (Section.query
+               .execution_options(bypass_tenant_scope=True)
+               .get(section_id))
+    if not section or not section.shift_id:
+        return None
+    shift = (AttendanceShift.query
+             .execution_options(bypass_tenant_scope=True)
+             .get(section.shift_id))
+    if shift and not shift.is_active:
+        return None
+    return shift
 
 
 def is_holiday_date(check_date, school_id, school=None):

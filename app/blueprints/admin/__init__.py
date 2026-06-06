@@ -1373,6 +1373,8 @@ def attendance_settings():
             settings_row.emp_absence_limit = int(raw_limit) if raw_limit.isdigit() and int(raw_limit) > 0 else None
             settings_row.emp_absence_period = request.form.get('emp_absence_period', 'monthly') or 'monthly'
             settings_row.emp_absence_alert_enabled = bool(request.form.get('emp_absence_alert_enabled'))
+            # Attendance shifts feature toggle
+            settings_row.enable_attendance_shifts = bool(request.form.get('enable_attendance_shifts'))
 
         db.session.commit()
         resource_id = school.id if is_school_obj else getattr(settings_row, 'id', None)
@@ -1381,7 +1383,34 @@ def attendance_settings():
         flash('تم حفظ إعدادات الحضور بنجاح.', 'success')
         return redirect(url_for('admin.attendance_settings'))
 
-    return render_template('admin/attendance_settings.html', settings=settings_row)
+    # Load shifts for the shift management section
+    active_shifts = []
+    inactive_shifts = []
+    if is_school_obj and getattr(settings_row, 'enable_attendance_shifts', False):
+        from app.models import AttendanceShift
+        all_shifts = (AttendanceShift.query
+                      .execution_options(bypass_tenant_scope=True)
+                      .filter_by(school_id=school.id)
+                      .order_by(AttendanceShift.start_time)
+                      .all())
+        active_shifts   = [s for s in all_shifts if s.is_active]
+        inactive_shifts = [s for s in all_shifts if not s.is_active]
+    elif is_school_obj:
+        # Load all shifts regardless (so the list shows even after toggling off)
+        from app.models import AttendanceShift
+        all_shifts = (AttendanceShift.query
+                      .execution_options(bypass_tenant_scope=True)
+                      .filter_by(school_id=school.id)
+                      .order_by(AttendanceShift.start_time)
+                      .all())
+        active_shifts   = [s for s in all_shifts if s.is_active]
+        inactive_shifts = [s for s in all_shifts if not s.is_active]
+
+    return render_template('admin/attendance_settings.html',
+                           settings=settings_row,
+                           is_school_obj=is_school_obj,
+                           active_shifts=active_shifts,
+                           inactive_shifts=inactive_shifts)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

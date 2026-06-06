@@ -399,6 +399,22 @@
             <label class="form-label">السعة القصوى</label>
             <input type="number" name="capacity" class="form-control" value="30" min="1">
           </div>
+          {% if shifts_enabled %}
+          <div class="mb-3">
+            <label class="form-label">
+              <i class="bi bi-layers-half text-accent me-1"></i>الشفت
+            </label>
+            <select name="shift_id" class="form-select">
+              <option value="">— بدون شفت —</option>
+              {% for shift in active_shifts %}
+              <option value="{{ shift.id }}">
+                {{ shift.name }}
+                ({{ shift.start_time.strftime('%H:%M') }}–{{ shift.absent_after_time.strftime('%H:%M') }})
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          {% endif %}
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-outline-secondary"

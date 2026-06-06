@@ -4,7 +4,7 @@ Extracted here so both the REST API endpoint and the Hikvision sync service
 can reuse the same check-in / check-out logic without circular imports.
 """
 from app.models import db, Device, Student, StudentAttendance, StudentSuspension
-from app.utils.attendance_helpers import get_local_now, determine_check_in_status
+from app.utils.attendance_helpers import get_local_now, determine_check_in_status, get_student_shift
 
 
 def process_attendance_punch(student, school, punch_dt, source='api', dedup_tag=None):
@@ -48,7 +48,8 @@ def process_attendance_punch(student, school, punch_dt, source='api', dedup_tag=
 
     # New check-in — academic_year_id auto-derived from punch date by scoping system
     from sqlalchemy.exc import IntegrityError
-    status = determine_check_in_status(now_time, school)
+    _shift = get_student_shift(student, school)
+    status = determine_check_in_status(now_time, school, shift=_shift)
     row = StudentAttendance(
         student_id = student.id,
         school_id  = student.school_id,
@@ -57,6 +58,7 @@ def process_attendance_punch(student, school, punch_dt, source='api', dedup_tag=
         check_in   = now_time,
         source     = source,
         notes      = dedup_tag,
+        shift_id   = _shift.id if _shift else None,
     )
     db.session.add(row)
     try:
@@ -170,7 +172,8 @@ def process_student_scan(student_id_str, device_sn_str=None,
         }, 200
 
     # ── Check-in path ──────────────────────────────────────────────────────────
-    status = determine_check_in_status(now_time, school)
+    _shift = get_student_shift(student, school)
+    status = determine_check_in_status(now_time, school, shift=_shift)
     attendance = StudentAttendance(
         student_id = student.id,
         school_id  = student.school_id,
@@ -179,6 +182,7 @@ def process_student_scan(student_id_str, device_sn_str=None,
         check_in   = now_time,
         source     = src,
         notes      = f'hik:sn={hik_serial_no}' if hik_serial_no is not None else None,
+        shift_id   = _shift.id if _shift else None,
     )
     db.session.add(attendance)
     db.session.commit()

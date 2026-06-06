@@ -7,7 +7,7 @@ from flask import (Blueprint, render_template, redirect, url_for,
 from flask_login import login_required
 from app.models import (
     db, Grade, Section, Subject, AcademicYear, Employee, Student,
-    Exam, Schedule, teacher_subjects,
+    Exam, Schedule, teacher_subjects, AttendanceShift,
 )
 from app.utils.decorators import (admin_required, get_current_school, get_active_year,
                                    historical_guard, module_required, action_required)
@@ -77,9 +77,20 @@ def index():
         grades = Grade.query.execution_options(include_all_years=True)\
             .filter_by(academic_year_id=year_id).all()
 
+    # Load active shifts for the shift assignment dropdown (only if feature enabled)
+    active_shifts = []
+    if school and getattr(school, 'enable_attendance_shifts', False):
+        active_shifts = (AttendanceShift.query
+                         .execution_options(bypass_tenant_scope=True)
+                         .filter_by(school_id=school.id, is_active=True)
+                         .order_by(AttendanceShift.start_time)
+                         .all())
+
     return render_template('sections/index.html',
                            years=years, grades=grades,
-                           year_id=year_id)
+                           year_id=year_id,
+                           active_shifts=active_shifts,
+                           shifts_enabled=bool(active_shifts or (school and getattr(school, 'enable_attendance_shifts', False))))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -228,11 +239,13 @@ def create_section(grade_id):
     name       = request.form.get('name', '').strip()
     capacity   = request.form.get('capacity', 30, type=int)
     teacher_id = request.form.get('teacher_id', type=int) or None
+    shift_id   = request.form.get('shift_id', type=int) or None
     if name:
         s = Section(name=name, grade_id=grade_id,
                     school_id=grade.school_id,
                     academic_year_id=grade.academic_year_id,
-                    capacity=capacity, teacher_id=teacher_id)
+                    capacity=capacity, teacher_id=teacher_id,
+                    shift_id=shift_id)
         db.session.add(s)
         db.session.commit()
         flash('تم إضافة الشعبة.', 'success')
@@ -246,16 +259,29 @@ def create_section(grade_id):
 def edit_section(sec_id):
     section   = Section.query.execution_options(include_all_years=True).get_or_404(sec_id)
     teachers  = Employee.query.filter_by(status='active').all()
+    # Load active shifts for section's school (for the shift dropdown)
+    school = get_current_school()
+    active_shifts = []
+    if school and getattr(school, 'enable_attendance_shifts', False):
+        active_shifts = (AttendanceShift.query
+                         .execution_options(bypass_tenant_scope=True)
+                         .filter_by(school_id=school.id, is_active=True)
+                         .order_by(AttendanceShift.start_time)
+                         .all())
     if request.method == 'POST':
         section.name       = request.form.get('name', section.name).strip()
         section.capacity   = request.form.get('capacity', section.capacity, type=int)
         section.teacher_id = request.form.get('teacher_id', type=int) or None
+        section.shift_id   = request.form.get('shift_id', type=int) or None
         db.session.commit()
         flash('تم تحديث الشعبة.', 'success')
         return redirect(url_for('sections.index',
                                 year_id=section.grade.academic_year_id))
+    shifts_enabled = bool(school and getattr(school, 'enable_attendance_shifts', False))
     return render_template('sections/edit_section.html',
-                           section=section, teachers=teachers)
+                           section=section, teachers=teachers,
+                           active_shifts=active_shifts,
+                           shifts_enabled=shifts_enabled)
 
 
 @sections_bp.route('/sections/<int:sec_id>/delete', methods=['POST'])

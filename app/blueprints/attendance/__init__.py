@@ -8,7 +8,7 @@ from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    historical_guard)
 from app.utils.attendance_helpers import (determine_check_in_status,
                                            get_local_now, get_local_date,
-                                           is_holiday_date)
+                                           is_holiday_date, get_student_shift)
 from app.services.notifications import NotificationService
 
 import logging
@@ -18,10 +18,11 @@ attendance_bp = Blueprint('attendance', __name__,
                            template_folder='../../templates/attendance')
 
 
-def _notify_absent_parents(student, school_id, today_str, source='manual'):
+def _notify_absent_parents(student, school_id, today_str, source='manual', shift_name=None):
     """
     Create in-app Notification row + send FCM push to all parents of an absent student.
     Always persists the Notification row first; FCM failure is logged but does not raise.
+    Optional shift_name is included in the FCM data payload when available.
     """
     if not school_id:
         return
@@ -37,6 +38,8 @@ def _notify_absent_parents(student, school_id, today_str, source='manual'):
         'date':         today_str,
         'screen':       'attendance',
     }
+    if shift_name:
+        data['shift_name'] = shift_name
 
     parent_ids = [
         row[0] for row in
@@ -421,7 +424,8 @@ def take(section_id):
                     continue
                 # Record exists but no check_in yet — allow update
                 if status_choice == 'present':
-                    actual_status = determine_check_in_status(now_time, settings)
+                    _shift = get_student_shift(student, school)
+                    actual_status = determine_check_in_status(now_time, settings, shift=_shift)
                     rec.check_in  = now_time
                 elif status_choice == 'late':
                     actual_status = 'late'
@@ -433,8 +437,9 @@ def take(section_id):
                 if actual_status in ('present', 'late') and prev not in ('present', 'late'):
                     newly_checked_in.append((student, actual_status))
             else:
+                _shift = get_student_shift(student, school)
                 if status_choice == 'present':
-                    actual_status = determine_check_in_status(now_time, settings)
+                    actual_status = determine_check_in_status(now_time, settings, shift=_shift)
                     check_in_val  = now_time
                 elif status_choice == 'late':
                     actual_status = 'late'
@@ -450,6 +455,7 @@ def take(section_id):
                     status           = actual_status,
                     check_in         = check_in_val,
                     recorded_by      = current_user.id,
+                    shift_id         = _shift.id if _shift else None,
                 ))
                 if actual_status in ('present', 'late'):
                     newly_checked_in.append((student, actual_status))

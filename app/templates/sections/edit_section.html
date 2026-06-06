@@ -40,6 +40,24 @@
             <input type="number" name="capacity" class="form-control"
                    value="{{ section.capacity }}" min="1">
           </div>
+          {% if shifts_enabled %}
+          <div class="mb-3">
+            <label class="form-label">
+              <i class="bi bi-layers-half text-accent me-1"></i>الشفت
+            </label>
+            <select name="shift_id" class="form-select">
+              <option value="">— بدون شفت —</option>
+              {% for shift in active_shifts %}
+              <option value="{{ shift.id }}"
+                      {{ 'selected' if section.shift_id == shift.id }}>
+                {{ shift.name }}
+                ({{ shift.start_time.strftime('%H:%M') }}–{{ shift.absent_after_time.strftime('%H:%M') }})
+              </option>
+              {% endfor %}
+            </select>
+            <small class="text-muted">الشفت يحدد أوقات التأخر والغياب التلقائي لهذه الشعبة.</small>
+          </div>
+          {% endif %}
           <div class="d-flex gap-3 mt-4">
             <button type="submit" class="btn btn-primary px-5">حفظ</button>
             <a href="{{ url_for('sections.index', year_id=section.grade.academic_year_id) }}"
