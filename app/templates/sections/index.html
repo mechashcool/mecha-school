@@ -13,8 +13,15 @@
     <form method="POST" action="{{ url_for('sections.setup_iraqi_grades') }}">
       <input type="hidden" name="academic_year_id" value="{{ year_id }}">
       <button type="submit" class="btn btn-outline-success"
-              data-confirm="تهيئة الصفوف الدراسية العراقية الاثني عشر للعام المحدد؟">
+              data-confirm="تهيئة الصفوف الدراسية العراقية الخمسة عشر للعام المحدد؟">
         <i class="bi bi-flag-fill me-1"></i>تهيئة الصفوف العراقية
+      </button>
+    </form>
+    <form method="POST" action="{{ url_for('sections.setup_standard_subjects') }}">
+      <input type="hidden" name="academic_year_id" value="{{ year_id }}">
+      <button type="submit" class="btn btn-outline-info"
+              data-confirm="تهيئة المواد الدراسية القياسية للعام المحدد؟">
+        <i class="bi bi-book-half me-1"></i>تهيئة المواد الدراسية
       </button>
     </form>
     {% endif %}

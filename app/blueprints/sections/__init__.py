@@ -186,6 +186,35 @@ def setup_iraqi_grades():
     return redirect(url_for('sections.index', year_id=year_id))
 
 
+@sections_bp.route('/subjects/setup-standard', methods=['POST'])
+@login_required
+@historical_guard
+@admin_required
+def setup_standard_subjects():
+    """Create missing standard subjects (linked to grades) for the selected academic year."""
+    from app.utils.iraqi_subjects import ensure_standard_subjects
+
+    year_id = request.form.get('academic_year_id', type=int)
+    if not year_id:
+        flash('يرجى اختيار العام الدراسي أولاً.', 'warning')
+        return redirect(url_for('sections.index'))
+
+    year = AcademicYear.query.get_or_404(year_id)
+    result = ensure_standard_subjects(year.school_id, year.id)
+    db.session.commit()
+
+    if result['created_subjects']:
+        skipped_note = (f' (موجود مسبقاً: {result["skipped_subjects"]})'
+                        if result['skipped_subjects'] else '')
+        flash(f'تمت تهيئة المواد الدراسية بنجاح — '
+              f'تم إضافة {result["created_subjects"]} مادة{skipped_note}.',
+              'success')
+    else:
+        flash('المواد الدراسية موجودة مسبقاً — لا يوجد شيء لإضافته.', 'info')
+
+    return redirect(url_for('sections.index', year_id=year_id))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  SECTIONS
 # ─────────────────────────────────────────────────────────────────────────────

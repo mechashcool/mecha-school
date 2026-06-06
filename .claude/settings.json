@@ -43,7 +43,8 @@
       "Bash(python -m py_compile app/models/__init__.py app/utils/scoping.py app/utils/buildings.py app/blueprints/buildings/__init__.py app/blueprints/students/__init__.py app/blueprints/fees/__init__.py app/blueprints/schools/__init__.py app/blueprints/admin/__init__.py app/__init__.py migrations/versions/c4d5e6f7a8b9_add_school_buildings.py)",
       "Bash(Select-Object -First 50)",
       "Bash(Format-Table FullName)",
-      "Bash(xargs grep -l \"@.*\\\\.command\\\\|@click.command\")"
+      "Bash(xargs grep -l \"@.*\\\\.command\\\\|@click.command\")",
+      "Bash(python -c \"from app.models import db, Subject, Grade; print\\('Subject fields:', [c.name for c in Subject.__table__.columns]\\); print\\('Grade fields:', [c.name for c in Grade.__table__.columns]\\)\")"
     ]
   }
 }

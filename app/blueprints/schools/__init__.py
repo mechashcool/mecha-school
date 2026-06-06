@@ -226,10 +226,13 @@ def create():
                     db.session.add(new_ay)
                     db.session.flush()  # assign new_ay.id before grade creation
 
-            # Auto-create standard Iraqi grades when a year is created with the school.
+            # Auto-create standard Iraqi grades and subjects when a year is created with the school.
             if new_ay:
                 from app.utils.iraqi_grades import ensure_iraqi_standard_grades
+                from app.utils.iraqi_subjects import ensure_standard_subjects
                 ensure_iraqi_standard_grades(school.id, new_ay.id)
+                db.session.flush()  # assign grade IDs so subjects can reference them
+                ensure_standard_subjects(school.id, new_ay.id)
 
             # Save module selections (empty list = all disabled is intentional;
             # caller must check at least one box, or leave all unchecked to mean

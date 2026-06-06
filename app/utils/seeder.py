@@ -906,7 +906,7 @@ def register_commands(app):
                   help='Academic year ID (default: current active year for the school).')
     @with_appcontext
     def setup_iraqi_grades_cmd(school_id, year_id):
-        """Create the 12 standard Iraqi school grades for a school's academic year."""
+        """Create the 15 standard Iraqi school grades for a school's academic year."""
         from app.utils.iraqi_grades import ensure_iraqi_standard_grades
 
         school = (School.query
@@ -945,6 +945,56 @@ def register_commands(app):
 
         click.echo(f'✓ Created : {result["created"]}')
         click.echo(f'  Skipped : {result["skipped"]} (already existed)')
+
+    @app.cli.command('setup-standard-subjects')
+    @click.option('--school-id', required=True, type=int,
+                  help='School ID to create standard subjects for.')
+    @click.option('--year-id', default=None, type=int,
+                  help='Academic year ID (default: current active year for the school).')
+    @with_appcontext
+    def setup_standard_subjects_cmd(school_id, year_id):
+        """Create standard subjects linked to grades for a school's academic year."""
+        from app.utils.iraqi_subjects import ensure_standard_subjects
+
+        school = (School.query
+                  .execution_options(bypass_tenant_scope=True)
+                  .get(school_id))
+        if not school:
+            click.echo(f'✗ School id={school_id} not found.')
+            return
+
+        if year_id:
+            year = (AcademicYear.query
+                    .execution_options(bypass_tenant_scope=True)
+                    .get(year_id))
+        else:
+            year = (AcademicYear.query
+                    .execution_options(bypass_tenant_scope=True)
+                    .filter_by(school_id=school_id, is_current=True)
+                    .first())
+            if not year:
+                year = (AcademicYear.query
+                        .execution_options(bypass_tenant_scope=True)
+                        .filter_by(school_id=school_id)
+                        .order_by(AcademicYear.start_date.desc())
+                        .first())
+
+        if not year:
+            click.echo(f'✗ No academic year found for school_id={school_id}. '
+                       f'Create one first or pass --year-id.')
+            return
+
+        click.echo(f'School : {school.school_name} (id={school_id})')
+        click.echo(f'Year   : {year.name} (id={year.id})')
+
+        result = ensure_standard_subjects(school_id, year.id)
+        db.session.commit()
+
+        click.echo(f'✓ Created subjects : {result["created_subjects"]}')
+        click.echo(f'  Skipped subjects : {result["skipped_subjects"]} (already existed)')
+        if result['skipped_grades']:
+            click.echo(f'  Skipped grades   : {len(result["skipped_grades"])} not found '
+                       f'(run setup-iraqi-grades first)')
 
     @app.cli.command('rotate-device-key')
     @click.argument('device_id')
