@@ -23,9 +23,15 @@ import logging
 import os
 import threading
 import time
+from datetime import timedelta
 
 _log = logging.getLogger(__name__)
 _scheduler_thread: threading.Thread | None = None
+
+# If local time is before this hour (exclusive), the previous day's catch-up runs.
+# Covers the window where a 23:59 cutoff tick was missed and the next tick fires
+# after midnight (e.g., 00:01–00:59).
+_CATCHUP_WINDOW_HOURS = 1
 
 
 def start_auto_attendance_scheduler(app) -> None:
@@ -129,6 +135,9 @@ def _check_school(school) -> None:
 
     if not passed:
         _log.info('[attendance] school_id=%s — absence time not yet reached, skip', school.id)
+        # Still attempt catch-up: if we're just past midnight the previous day's
+        # cutoff may have been missed (e.g. cutoff=23:59, server restarted at 00:01).
+        _catchup_previous_day(school, school_name, local_now, local_date)
         return
 
     year = get_active_year(school.id)
@@ -159,3 +168,59 @@ def _check_school(school) -> None:
         '[attendance] school_id=%s "%s" date=%s — absent created=%d',
         school.id, school_name, local_date, count,
     )
+
+    # After running today, also attempt catch-up in case yesterday was missed.
+    _catchup_previous_day(school, school_name, local_now, local_date)
+
+
+def _catchup_previous_day(school, school_name: str, local_now, local_date) -> None:
+    """
+    If the scheduler is running within _CATCHUP_WINDOW_HOURS after midnight,
+    process the previous calendar day to recover absences that were missed when
+    the server restarted around the cutoff time (e.g., cutoff=23:59, next tick=00:01).
+
+    Fully idempotent: _run_auto_absent skips students who already have a record.
+    Only runs once per tick per school; the caller controls when this is invoked.
+    """
+    if local_now.hour >= _CATCHUP_WINDOW_HOURS:
+        return  # not in the midnight catch-up window
+
+    from app.utils.decorators import get_active_year
+    from app.blueprints.attendance import _run_auto_absent
+    from app.utils.attendance_helpers import is_holiday_date
+
+    yesterday = local_date - timedelta(days=1)
+
+    try:
+        if is_holiday_date(yesterday, school.id, school):
+            _log.info('[attendance] catch-up school_id=%s date=%s — skipped_reason=holiday',
+                      school.id, yesterday)
+            return
+    except Exception:
+        _log.exception('[attendance] catch-up holiday check failed school_id=%s date=%s',
+                       school.id, yesterday)
+        return
+
+    year = get_active_year(school.id)
+    if not year:
+        _log.info('[attendance] catch-up school_id=%s date=%s — skipped_reason=no_active_year',
+                  school.id, yesterday)
+        return
+
+    _log.info('[attendance] catch-up check school_id=%s "%s" date=%s',
+              school.id, school_name, yesterday)
+
+    try:
+        result = _run_auto_absent(school, year, school, target_date=yesterday)
+    except Exception:
+        _log.exception('[attendance] catch-up failed school_id=%s date=%s', school.id, yesterday)
+        return
+
+    if result.get('holiday'):
+        _log.info('[attendance] catch-up school_id=%s date=%s — skipped_reason=holiday',
+                  school.id, yesterday)
+        return
+
+    count = result.get('count', 0)
+    _log.info('[attendance] catch-up absent_created=%d school_id=%s date=%s',
+              count, school.id, yesterday)

@@ -104,20 +104,22 @@ def _get_settings():
     return SchoolSettings.get()
 
 
-def _run_auto_absent(school, year, settings, recorded_by_id=None):
+def _run_auto_absent(school, year, settings, recorded_by_id=None, target_date=None):
     """
-    Mark all active students who have no attendance record for today as absent.
+    Mark all active students who have no attendance record for `target_date` as absent.
     Sets source='automatic'. Blocked if current time is before att_absence_threshold,
-    or if today is a weekly holiday / named school holiday.
+    or if the target date is a weekly holiday / named school holiday.
     Sends parent notifications for newly marked students.
     Returns {'too_early': bool, 'holiday': bool, 'count': int, 'students': list}.
 
     recorded_by_id — pass current_user.id from web requests; None from background jobs.
+    target_date    — specific date to process; defaults to today. When provided the
+                     too_early clock check is skipped (caller guarantees cutoff passed).
     Fully idempotent: calling multiple times per day is safe (won't create duplicates).
     """
     school_id   = school.id if school else None
     school_name = getattr(school, 'name', f'school_{school_id}')
-    today       = get_local_date(settings)
+    today       = target_date if target_date is not None else get_local_date(settings)
     now_local   = get_local_now(settings)
     now_time    = now_local.time()
     cutoff      = getattr(settings, 'att_absence_threshold', None)
@@ -130,7 +132,8 @@ def _run_auto_absent(school, year, settings, recorded_by_id=None):
         year.id if year else None,
     )
 
-    if cutoff and now_time < cutoff:
+    # Skip too_early check for explicit target_date (catch-up path — cutoff already passed)
+    if target_date is None and cutoff and now_time < cutoff:
         _log.info('[attendance] school_id=%s — absence time not yet reached '
                   '(now=%s < cutoff=%s) — skipped', school_id, now_time, cutoff)
         return {'too_early': True, 'holiday': False, 'count': 0, 'students': []}
