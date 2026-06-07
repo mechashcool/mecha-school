@@ -37,7 +37,13 @@ def process_attendance_punch(student, school, punch_dt, source='api', dedup_tag=
         return 'duplicate', existing
 
     if existing:
-        departure = getattr(school, 'att_departure_time', None)
+        # Checkout cutoff: prefer the student's shift dismissal_time when shift
+        # mode is on and a shift resolves; otherwise fall back to the school
+        # default att_departure_time (normal mode — unchanged behaviour).
+        _co_shift = get_student_shift(student, school)
+        departure = (_co_shift.dismissal_time
+                     if _co_shift and getattr(_co_shift, 'dismissal_time', None)
+                     else getattr(school, 'att_departure_time', None))
         if departure and now_time >= departure and existing.check_out is None:
             existing.check_out = now_time
             if dedup_tag:
@@ -141,7 +147,12 @@ def process_student_scan(student_id_str, device_sn_str=None,
     src = 'hikvision' if hik_serial_no is not None else 'api'
 
     if existing:
-        departure = getattr(school, 'att_departure_time', None)
+        # Checkout cutoff: prefer shift dismissal_time when in shift mode with a
+        # resolved shift; otherwise the school default att_departure_time.
+        _co_shift = get_student_shift(student, school)
+        departure = (_co_shift.dismissal_time
+                     if _co_shift and getattr(_co_shift, 'dismissal_time', None)
+                     else getattr(school, 'att_departure_time', None))
         if departure and now_time >= departure:
             if existing.check_out is None:
                 existing.check_out = now_time

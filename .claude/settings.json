@@ -50,7 +50,10 @@
       "Bash(Select-Object -First 5)",
       "Bash(grep -E \"\\\\.\\(html|py\\)$\")",
       "PowerShell(Get-ChildItem -Path \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\migrations\" -File | Sort-Object LastWriteTime -Descending | ForEach-Object { $_.Name })",
-      "Bash(xargs grep -l \"homework\\\\|attachment\")"
+      "Bash(xargs grep -l \"homework\\\\|attachment\")",
+      "Bash(awk -F: '$1>700 && $1<1300')",
+      "Bash(python -m py_compile app/services/auto_attendance.py app/services/attendance_service.py app/blueprints/attendance/__init__.py app/utils/attendance_helpers.py)",
+      "Bash(python -m py_compile app/services/auto_attendance.py)"
     ]
   }
 }

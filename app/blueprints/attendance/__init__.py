@@ -268,7 +268,13 @@ def index():
     if sel_date == today and school and not _is_teacher():
         _auto_year = get_active_year(school.id)
         if _auto_year:
-            _run_auto_absent(school, _auto_year, settings, recorded_by_id=current_user.id)
+            if getattr(school, 'enable_attendance_shifts', False):
+                # Shift mode: respect per-shift cutoffs (+ shiftless default fallback)
+                from app.services.auto_attendance import run_school_shift_auto_absent_now
+                run_school_shift_auto_absent_now(school, _auto_year, settings)
+            else:
+                # Normal mode — unchanged behaviour
+                _run_auto_absent(school, _auto_year, settings, recorded_by_id=current_user.id)
 
     # Attendance records for the selected date
     filtered_section_ids = [s.id for s in filtered_sections]
@@ -535,6 +541,22 @@ def mark_absent_today():
     settings = _get_settings()
     year     = get_active_year(school.id) if school else None
 
+    # Shift mode: run each shift whose cutoff has passed + shiftless default fallback.
+    if school and year and getattr(school, 'enable_attendance_shifts', False):
+        from app.services.auto_attendance import run_school_shift_auto_absent_now
+        summary = run_school_shift_auto_absent_now(school, year, settings)
+        if summary.get('holiday'):
+            flash('هذا اليوم عطلة، لا يتم تسجيل الغياب التلقائي.', 'info')
+            return redirect(url_for('attendance.index'))
+        count = summary.get('count', 0)
+        if count == 0:
+            flash('لا يوجد طلاب لتسجيل غيابهم الآن (إما لم يحن وقت الغياب لأي دوام أو أن '
+                  'جميع الطلاب لديهم سجلات بالفعل).', 'info')
+        else:
+            flash(f'تم تسجيل غياب {count} طالب تلقائياً حسب توقيت الدوام.', 'success')
+        return redirect(url_for('attendance.index'))
+
+    # ── Normal mode (unchanged behaviour) ────────────────────────────────────
     result = _run_auto_absent(school, year, settings, recorded_by_id=current_user.id)
 
     if result['too_early']:

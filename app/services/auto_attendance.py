@@ -228,6 +228,9 @@ def _check_school_shifts(school, school_name: str, local_now, local_date) -> Non
         if passed:
             _run_auto_absent_for_shift(school, year, shift, local_date)
 
+    # Case 4 — students with no shift fall back to the school default cutoff.
+    _run_auto_absent_shiftless(school, year, school, local_date, now_time=now_time)
+
     _catchup_previous_day_shifts(school, school_name, local_now, local_date)
 
 
@@ -397,6 +400,227 @@ def _run_auto_absent_for_shift(school, year, shift, target_date) -> dict:
     return {'count': len(unmarked)}
 
 
+def _shift_covered_section_ids(school_id: int) -> set[int]:
+    """
+    Return the set of section IDs whose EFFECTIVE shift is an ACTIVE shift.
+
+    Mirrors get_student_shift() resolution exactly:
+      * section.shift_id points to an active shift, OR
+      * section.shift_id IS NULL but the section's grade.shift_id points to an
+        active shift (grade-level fallback).
+
+    Sections pointing at an inactive shift are intentionally NOT covered — those
+    students fall back to the school default settings, just like get_student_shift
+    returns None for an inactive shift.
+    """
+    from app.models import AttendanceShift, Section, Grade
+
+    active_shift_ids = {
+        row.id for row in
+        AttendanceShift.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(school_id=school_id, is_active=True)
+            .with_entities(AttendanceShift.id)
+            .all()
+    }
+    if not active_shift_ids:
+        return set()
+
+    covered = {
+        row.id for row in
+        Section.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter(Section.school_id == school_id,
+                    Section.shift_id.in_(active_shift_ids))
+            .with_entities(Section.id)
+            .all()
+    }
+    grade_ids = {
+        row.id for row in
+        Grade.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter(Grade.school_id == school_id,
+                    Grade.shift_id.in_(active_shift_ids))
+            .with_entities(Grade.id)
+            .all()
+    }
+    if grade_ids:
+        covered |= {
+            row.id for row in
+            Section.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter(Section.school_id == school_id,
+                        Section.grade_id.in_(grade_ids),
+                        Section.shift_id.is_(None))
+                .with_entities(Section.id)
+                .all()
+        }
+    return covered
+
+
+def _run_auto_absent_shiftless(school, year, settings, target_date,
+                               now_time=None, force=False) -> dict:
+    """
+    Case 4 fallback: in SHIFT mode, mark absent the active students who have NO
+    effective shift (neither a section shift nor a grade shift), using the school
+    DEFAULT att_absence_threshold cutoff — exactly as normal mode would.
+
+    Gated on the default cutoff having passed (unless force=True for past-day
+    catch-up). Fully idempotent. Holiday is checked by the caller.
+    """
+    from app.models import db, Student, StudentAttendance
+    from app.blueprints.attendance import _notify_absent_parents
+
+    school_id = school.id
+    cutoff = getattr(settings, 'att_absence_threshold', None)
+
+    if cutoff is None:
+        _log.info(
+            '[attendance-shift-fallback] school_id=%s date=%s — no default cutoff '
+            'configured, shiftless students skipped',
+            school_id, target_date,
+        )
+        return {'count': 0}
+
+    passed = True if force else (now_time is not None and now_time >= cutoff)
+    _log.info(
+        '[attendance-shift-fallback] school_id=%s date=%s default_cutoff=%s '
+        'local_now=%s passed=%s force=%s',
+        school_id, target_date, cutoff,
+        now_time.strftime('%H:%M:%S') if now_time else None, passed, force,
+    )
+    if not passed:
+        return {'count': 0}
+
+    covered_section_ids = _shift_covered_section_ids(school_id)
+
+    # Active students NOT covered by any active shift (incl. students with no section).
+    q = (Student.query
+         .execution_options(bypass_tenant_scope=True)
+         .filter_by(status='active', school_id=school_id))
+    if covered_section_ids:
+        q = q.filter(db.or_(
+            Student.section_id.is_(None),
+            Student.section_id.notin_(covered_section_ids),
+        ))
+    shiftless = q.all()
+    ids = [s.id for s in shiftless]
+
+    _log.info(
+        '[attendance-shift-fallback] school_id=%s date=%s covered_sections=%d '
+        'active_shiftless_students=%d ids=%s',
+        school_id, target_date, len(covered_section_ids), len(ids), ids,
+    )
+
+    if not ids:
+        return {'count': 0}
+
+    already_ids = {
+        row.student_id for row in
+        StudentAttendance.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(date=target_date)
+            .filter(StudentAttendance.student_id.in_(ids))
+            .with_entities(StudentAttendance.student_id)
+            .all()
+    }
+    unmarked = [s for s in shiftless if s.id not in already_ids]
+
+    _log.info(
+        '[attendance-shift-fallback] school_id=%s date=%s students_with_attendance=%d '
+        'missing_students=%d ids=%s',
+        school_id, target_date, len(already_ids), len(unmarked),
+        [s.id for s in unmarked],
+    )
+
+    if not unmarked:
+        return {'count': 0}
+
+    for student in unmarked:
+        db.session.add(StudentAttendance(
+            student_id       = student.id,
+            school_id        = school_id,
+            academic_year_id = year.id if year else None,
+            date             = target_date,
+            status           = 'absent',
+            source           = 'automatic',
+            shift_id         = None,
+        ))
+    db.session.commit()
+
+    _log.info(
+        '[attendance-shift-fallback] school_id=%s date=%s inserted_absences=%d',
+        school_id, target_date, len(unmarked),
+    )
+
+    for student in unmarked:
+        try:
+            _notify_absent_parents(student, school_id, target_date.isoformat(),
+                                   source='automatic')
+        except Exception:
+            _log.exception('[attendance-shift-fallback] notification failed student_id=%s',
+                           student.id)
+
+    return {'count': len(unmarked)}
+
+
+def run_school_shift_auto_absent_now(school, year, settings) -> dict:
+    """
+    Public, web-triggerable shift-aware auto-absence for TODAY.
+
+    Used by the attendance index page and the manual "mark absent today" button
+    so those flows respect shift timings instead of the default cutoff. Mirrors
+    the scheduler's per-tick shift logic (without the previous-day catch-up).
+
+    Returns {'holiday': bool, 'count': int} where count is total absences created
+    across all shifts plus the shiftless fallback.
+    """
+    from app.models import AttendanceShift
+    from app.utils.attendance_helpers import (
+        get_local_now, get_local_date, is_holiday_date,
+    )
+
+    local_now  = get_local_now(school)
+    local_date = get_local_date(school)
+    now_time   = local_now.time()
+
+    if is_holiday_date(local_date, school.id, school):
+        _log.info('[attendance-shift] web-trigger school_id=%s date=%s — holiday, skip',
+                  school.id, local_date)
+        return {'holiday': True, 'count': 0}
+
+    active_shifts = (
+        AttendanceShift.query
+        .execution_options(bypass_tenant_scope=True)
+        .filter_by(school_id=school.id, is_active=True)
+        .all()
+    )
+    _log.info(
+        '[attendance-shift] web-trigger school_id=%s active_shifts=%d local_now=%s',
+        school.id, len(active_shifts), local_now.strftime('%H:%M:%S'),
+    )
+
+    total = 0
+    for shift in active_shifts:
+        passed = now_time >= shift.absent_after_time
+        _log.info(
+            '[attendance-shift] web-trigger school_id=%s shift_id=%s "%s" '
+            'cutoff=%s local_now=%s passed=%s',
+            school.id, shift.id, shift.name, shift.absent_after_time,
+            now_time.strftime('%H:%M:%S'), passed,
+        )
+        if passed:
+            result = _run_auto_absent_for_shift(school, year, shift, local_date)
+            total += result.get('count', 0)
+
+    # Case 4 — students without any shift use the default school settings.
+    fallback = _run_auto_absent_shiftless(school, year, school, local_date,
+                                          now_time=now_time)
+    total += fallback.get('count', 0)
+
+    return {'holiday': False, 'count': total}
+
+
 def _catchup_previous_day_shifts(school, school_name: str, local_now, local_date) -> None:
     """
     Within _CATCHUP_WINDOW_HOURS after midnight: re-run per-shift auto-absence for
@@ -444,6 +668,13 @@ def _catchup_previous_day_shifts(school, school_name: str, local_now, local_date
         except Exception:
             _log.exception('[attendance-shift] catch-up failed school_id=%s shift_id=%s date=%s',
                            school.id, shift.id, yesterday)
+
+    # Case 4 catch-up — shiftless students for yesterday (force: cutoff already passed).
+    try:
+        _run_auto_absent_shiftless(school, year, school, yesterday, force=True)
+    except Exception:
+        _log.exception('[attendance-shift] catch-up shiftless failed school_id=%s date=%s',
+                       school.id, yesterday)
 
 
 def _catchup_previous_day(school, school_name: str, local_now, local_date) -> None:
