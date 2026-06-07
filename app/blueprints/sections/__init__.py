@@ -86,11 +86,15 @@ def index():
                          .order_by(AttendanceShift.start_time)
                          .all())
 
+    from app.utils.scoping import is_historical_view
+    is_hist = is_historical_view() if year_id else False
+
     return render_template('sections/index.html',
                            years=years, grades=grades,
                            year_id=year_id,
                            active_shifts=active_shifts,
-                           shifts_enabled=bool(active_shifts or (school and getattr(school, 'enable_attendance_shifts', False))))
+                           shifts_enabled=bool(active_shifts or (school and getattr(school, 'enable_attendance_shifts', False))),
+                           is_historical_year=is_hist)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -102,12 +106,14 @@ def index():
 @historical_guard
 @admin_required
 def create_grade():
-    name    = request.form.get('name', '').strip()
-    stage   = request.form.get('stage', '').strip() or None
-    year_id = request.form.get('academic_year_id', type=int)
+    name     = request.form.get('name', '').strip()
+    stage    = request.form.get('stage', '').strip() or None
+    year_id  = request.form.get('academic_year_id', type=int)
+    shift_id = request.form.get('shift_id', type=int) or None
     if name and year_id:
         year = AcademicYear.query.get_or_404(year_id)
-        g = Grade(name=name, stage=stage, school_id=year.school_id, academic_year_id=year.id)
+        g = Grade(name=name, stage=stage, school_id=year.school_id,
+                  academic_year_id=year.id, shift_id=shift_id)
         db.session.add(g)
         db.session.commit()
         flash('تم إضافة الصف.', 'success')
@@ -140,8 +146,9 @@ def edit_grade(grade_id):
         flash('يوجد صف بنفس الاسم في هذا العام الدراسي.', 'danger')
         return redirect(url_for('sections.index', year_id=year_id))
 
-    grade.name  = name
-    grade.stage = stage
+    grade.name     = name
+    grade.stage    = stage
+    grade.shift_id = request.form.get('shift_id', type=int) or None
     db.session.commit()
     flash('تم تحديث الصف.', 'success')
     return redirect(url_for('sections.index', year_id=year_id))

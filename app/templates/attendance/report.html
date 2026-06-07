@@ -12,98 +12,325 @@
 
 {# ── Filters ───────────────────────────────────────────────────────────── #}
 <div class="card mb-4">
+  <div class="card-header fw-700">
+    <i class="bi bi-funnel-fill text-accent me-1"></i>فلاتر التقرير
+  </div>
   <div class="card-body py-3">
-    <form method="GET" class="row g-2 align-items-end" id="report-filter-form">
+    <form method="GET" id="report-filter-form">
 
-      {# Student name #}
-      <div class="col-md-3">
-        <label class="form-label mb-1 fw-600">
-          <i class="bi bi-search me-1"></i>اسم الطالب
-        </label>
-        <input type="text" name="q" class="form-control"
-               placeholder="ابحث بالاسم أو الرقم..."
-               value="{{ q }}">
+      {# Report type #}
+      <div class="row g-2 mb-3">
+        <div class="col-12">
+          <label class="form-label fw-600 mb-1">نوع التقرير</label>
+          <div class="d-flex gap-2 flex-wrap">
+            {% set types = [
+              ('detail',  'bi-table',        'تقرير تفصيلي عام'),
+              ('grade',   'bi-building',     'حسب الصف'),
+              ('section', 'bi-door-open',    'حسب الشعبة'),
+              ('student', 'bi-person-lines-fill', 'حسب الطالب'),
+              ('shift',   'bi-layers-half',  'حسب الشفت'),
+            ] %}
+            {% for val, icon, label in types %}
+            <div>
+              <input type="radio" class="btn-check" name="report_type"
+                     id="rt_{{ val }}" value="{{ val }}" autocomplete="off"
+                     {{ 'checked' if report_type == val }}>
+              <label class="btn btn-outline-primary btn-sm" for="rt_{{ val }}">
+                <i class="bi {{ icon }} me-1"></i>{{ label }}
+              </label>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
       </div>
 
-      {# Stage #}
-      <div class="col-md-2">
-        <label class="form-label mb-1 fw-600">المرحلة الدراسية</label>
-        <select name="stage" class="form-select" id="rpt-stage">
-          <option value="">كل المراحل</option>
-          <option value="ابتدائية"  {% if stage == 'ابتدائية'  %}selected{% endif %}>الابتدائية</option>
-          <option value="متوسطة"    {% if stage == 'متوسطة'    %}selected{% endif %}>المتوسطة</option>
-          <option value="إعدادية"   {% if stage == 'إعدادية'   %}selected{% endif %}>الإعدادية</option>
-        </select>
-      </div>
+      <div class="row g-2 align-items-end">
 
-      {# Grade #}
-      <div class="col-md-2">
-        <label class="form-label mb-1 fw-600">الصف</label>
-        <select name="grade_id" class="form-select" id="rpt-grade">
-          <option value="">كل الصفوف</option>
-          {% for g in all_grades %}
-          <option value="{{ g.id }}" data-stage="{{ g.stage or '' }}"
-                  {% if grade_id == g.id %}selected{% endif %}>
-            {{ g.name }}
-          </option>
-          {% endfor %}
-        </select>
-      </div>
+        {# Stage #}
+        <div class="col-md-2">
+          <label class="form-label mb-1 fw-600">المرحلة</label>
+          <select name="stage" class="form-select" id="rpt-stage">
+            <option value="">كل المراحل</option>
+            <option value="ابتدائية"  {% if stage == 'ابتدائية'  %}selected{% endif %}>الابتدائية</option>
+            <option value="متوسطة"    {% if stage == 'متوسطة'    %}selected{% endif %}>المتوسطة</option>
+            <option value="إعدادية"   {% if stage == 'إعدادية'   %}selected{% endif %}>الإعدادية</option>
+          </select>
+        </div>
 
-      {# Section #}
-      <div class="col-md-2">
-        <label class="form-label mb-1 fw-600">الشعبة</label>
-        <select name="section_id" class="form-select" id="rpt-section">
-          <option value="">كل الشعب</option>
-          {% for sec in all_sections %}
-          <option value="{{ sec.id }}"
-                  data-grade="{{ sec.grade_id }}"
-                  {% if section_id == sec.id %}selected{% endif %}>
-            {{ sec.grade.name }} — شعبة {{ sec.name }}
-          </option>
-          {% endfor %}
-        </select>
-      </div>
+        {# Grade #}
+        <div class="col-md-2">
+          <label class="form-label mb-1 fw-600">الصف</label>
+          <select name="grade_id" class="form-select" id="rpt-grade">
+            <option value="">كل الصفوف</option>
+            {% for g in all_grades %}
+            <option value="{{ g.id }}" data-stage="{{ g.stage or '' }}"
+                    {% if grade_id == g.id %}selected{% endif %}>
+              {{ g.name }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
 
-      {# Date range #}
-      <div class="col-md-1">
-        <label class="form-label mb-1 fw-600">من</label>
-        <input type="date" name="start" class="form-control" value="{{ start }}">
-      </div>
-      <div class="col-md-1">
-        <label class="form-label mb-1 fw-600">إلى</label>
-        <input type="date" name="end" class="form-control" value="{{ end }}">
-      </div>
+        {# Section #}
+        <div class="col-md-2">
+          <label class="form-label mb-1 fw-600">الشعبة</label>
+          <select name="section_id" class="form-select" id="rpt-section">
+            <option value="">كل الشعب</option>
+            {% for sec in all_sections %}
+            <option value="{{ sec.id }}"
+                    data-grade="{{ sec.grade_id }}"
+                    {% if section_id == sec.id %}selected{% endif %}>
+              {{ sec.grade.name if sec.grade else '?' }} — شعبة {{ sec.name }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
 
-      {# Buttons #}
-      <div class="col-md-1 d-flex gap-2">
-        <button class="btn btn-primary flex-grow-1">
-          <i class="bi bi-search me-1"></i>عرض
-        </button>
-        {% if submitted %}
-        <a href="{{ url_for('attendance.report') }}" class="btn btn-outline-secondary"
-           title="مسح الفلاتر"><i class="bi bi-x-lg"></i></a>
+        {# Shift (only when shifts enabled) #}
+        {% if shifts_enabled %}
+        <div class="col-md-2">
+          <label class="form-label mb-1 fw-600">
+            <i class="bi bi-layers-half me-1"></i>الشفت
+          </label>
+          <select name="shift_id" class="form-select">
+            <option value="">كل الشفتات</option>
+            {% for sh in all_shifts %}
+            <option value="{{ sh.id }}" {% if shift_id == sh.id %}selected{% endif %}>
+              {{ sh.name }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
         {% endif %}
-      </div>
 
+        {# Status filter #}
+        <div class="col-md-1">
+          <label class="form-label mb-1 fw-600">الحالة</label>
+          <select name="status" class="form-select">
+            <option value="" {% if not status_f %}selected{% endif %}>الكل</option>
+            <option value="present" {% if status_f == 'present' %}selected{% endif %}>حاضر</option>
+            <option value="late"    {% if status_f == 'late'    %}selected{% endif %}>متأخر</option>
+            <option value="absent"  {% if status_f == 'absent'  %}selected{% endif %}>غائب</option>
+          </select>
+        </div>
+
+        {# Student name search #}
+        <div class="col-md-2">
+          <label class="form-label mb-1 fw-600">الطالب</label>
+          <input type="text" name="q" class="form-control"
+                 placeholder="ابحث بالاسم أو الرقم..."
+                 value="{{ q }}">
+        </div>
+
+        {# Date range #}
+        <div class="col-md-1">
+          <label class="form-label mb-1 fw-600">من</label>
+          <input type="date" name="start" class="form-control" value="{{ start }}">
+        </div>
+        <div class="col-md-1">
+          <label class="form-label mb-1 fw-600">إلى</label>
+          <input type="date" name="end" class="form-control" value="{{ end }}">
+        </div>
+
+        {# Buttons #}
+        <div class="col-md-auto d-flex gap-2 align-items-end">
+          <button class="btn btn-primary">
+            <i class="bi bi-search me-1"></i>عرض
+          </button>
+          {% if submitted %}
+          <a href="{{ url_for('attendance.report') }}" class="btn btn-outline-secondary"
+             title="مسح الفلاتر"><i class="bi bi-x-lg"></i></a>
+          {% endif %}
+        </div>
+
+      </div>
     </form>
   </div>
 </div>
 
-{# ── Results ───────────────────────────────────────────────────────────── #}
+{# ── Export buttons (shown after submit) ──────────────────────────────── #}
+{% if submitted and (records or grade_summary or section_summary or shift_summary) %}
+<div class="d-flex gap-2 mb-3 justify-content-end">
+  <a href="{{ url_for('attendance.report_export_pdf', **request.args) }}"
+     class="btn btn-danger btn-sm" target="_blank">
+    <i class="bi bi-file-earmark-pdf me-1"></i>تصدير PDF
+  </a>
+  <a href="{{ url_for('attendance.report_export_excel', **request.args) }}"
+     class="btn btn-success btn-sm">
+    <i class="bi bi-file-earmark-excel me-1"></i>تصدير Excel
+  </a>
+</div>
+{% endif %}
+
+{# ══════════════════════════════════════════════════════════════════════════ #}
+{#  GRADE SUMMARY                                                             #}
+{# ══════════════════════════════════════════════════════════════════════════ #}
+{% if grade_summary %}
+<div class="card mb-4">
+  <div class="card-header fw-600">
+    <i class="bi bi-building text-accent me-1"></i>تقرير حسب الصف
+    <small class="text-muted fw-400 me-2">{{ start }} – {{ end }}</small>
+  </div>
+  <div class="table-wrapper">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>الصف</th><th>عدد الطلاب</th>
+          <th class="text-success">حاضر</th>
+          <th class="text-warning">متأخر</th>
+          <th class="text-danger">غائب</th>
+          <th>إجمالي السجلات</th>
+          <th>نسبة الحضور</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in grade_summary %}
+        <tr>
+          <td class="fw-600">{{ row.grade.name if row.grade else '—' }}</td>
+          <td>{{ row.total_students }}</td>
+          <td class="text-success fw-700">{{ row.present }}</td>
+          <td class="text-warning fw-700">{{ row.late }}</td>
+          <td class="text-danger fw-700">{{ row.absent }}</td>
+          <td>{{ row.total }}</td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div style="flex:1;height:8px;background:#f0f4f8;border-radius:4px;overflow:hidden">
+                <div style="width:{{ row.pct }}%;height:100%;background:
+                  {% if row.pct >= 85 %}#1aab6d{% elif row.pct >= 70 %}#e8a020{% else %}#e03e3e{% endif %};
+                  border-radius:4px"></div>
+              </div>
+              <span style="font-size:13px;font-weight:700;min-width:40px;
+                color:{% if row.pct >= 85 %}#1aab6d{% elif row.pct >= 70 %}#e8a020{% else %}#e03e3e{% endif %}">
+                {{ row.pct }}%
+              </span>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{# ══════════════════════════════════════════════════════════════════════════ #}
+{#  SECTION SUMMARY                                                           #}
+{# ══════════════════════════════════════════════════════════════════════════ #}
+{% if section_summary %}
+<div class="card mb-4">
+  <div class="card-header fw-600">
+    <i class="bi bi-door-open text-accent me-1"></i>تقرير حسب الشعبة
+    <small class="text-muted fw-400 me-2">{{ start }} – {{ end }}</small>
+  </div>
+  <div class="table-wrapper">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>الصف</th><th>الشعبة</th>
+          {% if shifts_enabled %}<th>الشفت</th>{% endif %}
+          <th>عدد الطلاب</th>
+          <th class="text-success">حاضر</th>
+          <th class="text-warning">متأخر</th>
+          <th class="text-danger">غائب</th>
+          <th>إجمالي</th>
+          <th>نسبة الحضور</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in section_summary %}
+        {% set sec = row.section %}
+        <tr>
+          <td class="fw-600">{{ sec.grade.name if sec and sec.grade else '—' }}</td>
+          <td>شعبة {{ sec.name if sec else '—' }}</td>
+          {% if shifts_enabled %}
+          <td style="font-size:12px;color:#666">
+            {% if sec and sec.shift %}
+              {{ sec.shift.name }}
+            {% elif sec and sec.grade and sec.grade.shift %}
+              {{ sec.grade.shift.name }} <span class="text-muted">(صف)</span>
+            {% else %}—{% endif %}
+          </td>
+          {% endif %}
+          <td>{{ row.total_students }}</td>
+          <td class="text-success fw-700">{{ row.present }}</td>
+          <td class="text-warning fw-700">{{ row.late }}</td>
+          <td class="text-danger fw-700">{{ row.absent }}</td>
+          <td>{{ row.total }}</td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div style="flex:1;height:8px;background:#f0f4f8;border-radius:4px;overflow:hidden">
+                <div style="width:{{ row.pct }}%;height:100%;background:
+                  {% if row.pct >= 85 %}#1aab6d{% elif row.pct >= 70 %}#e8a020{% else %}#e03e3e{% endif %};
+                  border-radius:4px"></div>
+              </div>
+              <span style="font-size:13px;font-weight:700;min-width:40px">{{ row.pct }}%</span>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{# ══════════════════════════════════════════════════════════════════════════ #}
+{#  SHIFT SUMMARY                                                             #}
+{# ══════════════════════════════════════════════════════════════════════════ #}
+{% if shift_summary %}
+<div class="card mb-4">
+  <div class="card-header fw-600">
+    <i class="bi bi-layers-half text-accent me-1"></i>تقرير حسب الشفت
+    <small class="text-muted fw-400 me-2">{{ start }} – {{ end }}</small>
+  </div>
+  <div class="table-wrapper">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>الشفت</th><th>عدد الطلاب</th>
+          <th class="text-success">حاضر</th>
+          <th class="text-warning">متأخر</th>
+          <th class="text-danger">غائب</th>
+          <th>إجمالي</th>
+          <th>نسبة الحضور</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in shift_summary %}
+        <tr>
+          <td class="fw-600">{{ row.shift.name if row.shift else '— بدون شفت —' }}</td>
+          <td>{{ row.total_students }}</td>
+          <td class="text-success fw-700">{{ row.present }}</td>
+          <td class="text-warning fw-700">{{ row.late }}</td>
+          <td class="text-danger fw-700">{{ row.absent }}</td>
+          <td>{{ row.total }}</td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div style="flex:1;height:8px;background:#f0f4f8;border-radius:4px;overflow:hidden">
+                <div style="width:{{ row.pct }}%;height:100%;background:
+                  {% if row.pct >= 85 %}#1aab6d{% elif row.pct >= 70 %}#e8a020{% else %}#e03e3e{% endif %};
+                  border-radius:4px"></div>
+              </div>
+              <span style="font-size:13px;font-weight:700;min-width:40px">{{ row.pct }}%</span>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{# ══════════════════════════════════════════════════════════════════════════ #}
+{#  DETAIL / STUDENT TABLE                                                    #}
+{# ══════════════════════════════════════════════════════════════════════════ #}
 {% if records %}
 <div class="card mb-4">
   <div class="card-header d-flex align-items-center justify-content-between fw-600">
     <span>
-      <i class="bi bi-bar-chart-fill text-accent me-1"></i>ملخص الحضور
-      {% if q or stage or grade_id or section_id %}
-      <small class="text-muted fw-400 me-2">
-        ({% if q %}بحث: "{{ q }}"{% endif %}
-        {% if stage %} · المرحلة: {{ stage }}{% endif %}
-        {% if grade_id %} · الصف{% endif %}
-        {% if section_id %} · الشعبة{% endif %})
-      </small>
-      {% endif %}
+      <i class="bi bi-bar-chart-fill text-accent me-1"></i>
+      {% if report_type == 'student' %}تقرير حسب الطالب{% else %}ملخص الحضور{% endif %}
     </span>
     <small class="text-muted">{{ records|length }} طالب · {{ start }} إلى {{ end }}</small>
   </div>
@@ -113,9 +340,10 @@
         <tr>
           <th>الطالب</th><th>رقمه</th>
           <th>الصف / الشعبة</th>
+          {% if shifts_enabled %}<th>الشفت</th>{% endif %}
           <th class="text-success">حاضر</th>
-          <th class="text-danger">غائب</th>
           <th class="text-warning">متأخر</th>
+          <th class="text-danger">غائب</th>
           <th>الإجمالي</th>
           <th>نسبة الحضور</th>
           <th></th>
@@ -133,9 +361,21 @@
               {{ r.student.section.grade.name }} / {{ r.student.section.name }}
             {% else %}—{% endif %}
           </td>
+          {% if shifts_enabled %}
+          <td style="font-size:12px;color:#555">
+            {% if r.student.section %}
+              {% if r.student.section.shift %}
+                {{ r.student.section.shift.name }}
+              {% elif r.student.section.grade and r.student.section.grade.shift %}
+                {{ r.student.section.grade.shift.name }}
+                <span class="text-muted" style="font-size:11px">(صف)</span>
+              {% else %}—{% endif %}
+            {% else %}—{% endif %}
+          </td>
+          {% endif %}
           <td class="text-success fw-700">{{ r.present }}</td>
-          <td class="text-danger fw-700">{{ r.absent }}</td>
           <td class="text-warning fw-700">{{ r.late }}</td>
+          <td class="text-danger fw-700">{{ r.absent }}</td>
           <td>{{ total }}</td>
           <td>
             <div class="d-flex align-items-center gap-2">
@@ -159,7 +399,7 @@
         </tr>
         {# ── Per-day detail row ── #}
         <tr id="det_{{ r.student.id }}" style="display:none;background:#f8fbff">
-          <td colspan="9" class="p-0">
+          <td colspan="{{ 10 if shifts_enabled else 9 }}" class="p-0">
             <div class="px-4 py-3">
               {% if r.details %}
               <table class="table table-sm mb-0">
@@ -169,6 +409,8 @@
                     <th>وقت الحضور</th>
                     <th>وقت الانصراف</th>
                     <th>الحالة</th>
+                    <th>المصدر</th>
+                    {% if shifts_enabled %}<th>الشفت</th>{% endif %}
                     <th>ملاحظات</th>
                   </tr>
                 </thead>
@@ -188,6 +430,12 @@
                         {% else %}غائب{% endif %}
                       </span>
                     </td>
+                    <td style="font-size:12px">{{ att.source or '—' }}</td>
+                    {% if shifts_enabled %}
+                    <td style="font-size:12px;color:#6b7a8d">
+                      {{ att.shift.name if att.shift else '—' }}
+                    </td>
+                    {% endif %}
                     <td style="font-size:12px;color:#6b7a8d">{{ att.notes or '—' }}</td>
                   </tr>
                   {% endfor %}
@@ -217,7 +465,7 @@
 {% else %}
 <div class="alert alert-info d-flex align-items-center gap-2 py-3" style="font-size:14px">
   <i class="bi bi-info-circle-fill flex-shrink-0" style="font-size:18px"></i>
-  اختر الفلاتر المناسبة ثم اضغط <strong class="mx-1">عرض</strong> للحصول على تقرير الحضور.
+  اختر نوع التقرير والفلاتر المناسبة ثم اضغط <strong class="mx-1">عرض</strong>.
 </div>
 {% endif %}
 
@@ -265,7 +513,6 @@
     rebuildSections();
   });
 
-  /* Restore cascade state on page load (when server-side values are set) */
   rebuildGrades();
 })();
 </script>

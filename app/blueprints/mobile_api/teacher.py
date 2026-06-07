@@ -176,17 +176,25 @@ def teacher_profile():
                       .filter(Exam.exam_date <= today + timedelta(days=14))
                       .count()) if section_ids else 0
 
+    school = emp.school
     return ok(
         employee={
             'id':          emp.id,
             'employee_id': emp.employee_id,
+            'user_id':     emp.user_id,
             'name':        emp.full_name,
+            'full_name':   emp.full_name,
             'job_title':   emp.job_title,
             'department':  emp.department,
             'phone':       emp.phone,
             'email':       emp.email,
-            'photo':       emp.photo,
+            'photo':       photo_url(emp.photo),
+            'photo_url':   photo_url(emp.photo),
             'hire_date':   emp.hire_date.isoformat() if emp.hire_date else None,
+            'status':      emp.status,
+            'school_id':   emp.school_id,
+            'school_name': school.school_name if school else None,
+            'role':        g.mobile_user.role.name if g.mobile_user.role else None,
         },
         stats={
             'sections_count':      sections_count,

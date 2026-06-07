@@ -68,26 +68,41 @@ def get_student_shift(student, school):
     """
     Return the AttendanceShift for `student` when shifts are enabled, else None.
 
-    Rules:
-    - Returns None if school.enable_attendance_shifts is False/absent.
-    - Returns None if the student has no section or the section has no shift.
-    - Logs a warning and returns None if the shift is inactive (so inactive
-      shifts don't accidentally change late/present thresholds).
+    Priority:
+      1. section.shift_id  — explicit section-level override
+      2. section.grade.shift_id — grade-level fallback (for schools without
+         per-section assignments, or sections that inherit the grade shift)
+      3. None — student will check in without shift-specific thresholds
+
+    Returns None when:
+      - school.enable_attendance_shifts is False/absent
+      - the resolved shift is inactive
     """
     if not school or not getattr(school, 'enable_attendance_shifts', False):
         return None
     section_id = getattr(student, 'section_id', None)
     if not section_id:
         return None
-    from app.models import Section, AttendanceShift
+    from app.models import Section, Grade, AttendanceShift
     section = (Section.query
                .execution_options(bypass_tenant_scope=True)
                .get(section_id))
-    if not section or not section.shift_id:
+    if not section:
+        return None
+    # 1. Section-level shift
+    shift_id = section.shift_id
+    # 2. Grade-level fallback
+    if not shift_id:
+        grade = (Grade.query
+                 .execution_options(bypass_tenant_scope=True)
+                 .get(section.grade_id))
+        if grade:
+            shift_id = grade.shift_id
+    if not shift_id:
         return None
     shift = (AttendanceShift.query
              .execution_options(bypass_tenant_scope=True)
-             .get(section.shift_id))
+             .get(shift_id))
     if shift and not shift.is_active:
         return None
     return shift

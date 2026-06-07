@@ -963,6 +963,150 @@ _SUBJECTS = [
 ]
 
 
+# ─── STUDENT ATTENDANCE REPORT PDF ───────────────────────────────────────────
+
+def generate_attendance_report_pdf(rows, report_type='detail', date_from='', date_to='',
+                                   school=None, grade_map=None) -> bytes | None:
+    """
+    Generate an Arabic RTL attendance report PDF.
+
+    rows: list of dicts with keys: student, present, absent, late, checkout, details
+    Returns bytes or None if ReportLab is unavailable.
+    """
+    if not _get_rl():
+        return None
+
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.units import cm
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.colors import HexColor
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    arabic_ok = _register_arabic_fonts(pdfmetrics, TTFont)
+    fn   = 'Amiri'      if arabic_ok else 'Helvetica'
+    fn_b = 'Amiri-Bold' if arabic_ok else 'Helvetica-Bold'
+    ar   = _shape_arabic_text
+
+    HEADER_BG = HexColor('#1a3a5c')
+    ALT_BG    = HexColor('#f0f4f8')
+    WHITE     = colors.white
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+                            leftMargin=1.5*cm, rightMargin=1.5*cm,
+                            topMargin=1.5*cm, bottomMargin=1.5*cm)
+
+    title_s = ParagraphStyle('at',  fontName=fn_b, fontSize=14,
+                              alignment=1, textColor=HexColor('#1a3a5c'))
+    sub_s   = ParagraphStyle('as2', fontName=fn,   fontSize=10,
+                              alignment=1, textColor=HexColor('#555555'))
+    th_s    = ParagraphStyle('ath', fontName=fn_b, fontSize=8,
+                              alignment=1, textColor=WHITE)
+    td_s    = ParagraphStyle('atd', fontName=fn,   fontSize=8, alignment=1)
+
+    elements = []
+
+    school_name = ''
+    if school:
+        school_name = getattr(school, 'school_name_ar', '') or getattr(school, 'school_name', '')
+    if school_name:
+        elements.append(Paragraph(ar(school_name), title_s))
+        elements.append(Spacer(1, 0.2*cm))
+
+    type_labels = {
+        'detail':  'تقرير تفصيلي عام',
+        'grade':   'تقرير حسب الصف',
+        'section': 'تقرير حسب الشعبة',
+        'student': 'تقرير حسب الطالب',
+        'shift':   'تقرير حسب الشفت',
+    }
+    elements.append(Paragraph(ar(type_labels.get(report_type, 'تقرير الحضور')), title_s))
+    elements.append(Paragraph(ar(f'الفترة: {date_from}  —  {date_to}'), sub_s))
+    elements.append(Spacer(1, 0.4*cm))
+
+    def p(t):
+        return Paragraph(ar(str(t or '—')), td_s)
+
+    def ph(t):
+        return Paragraph(ar(str(t or '')), th_s)
+
+    # Summary row
+    total_present = sum(r['present'] for r in rows)
+    total_absent  = sum(r['absent']  for r in rows)
+    total_late    = sum(r['late']    for r in rows)
+    grand_total   = total_present + total_absent + total_late
+    grand_pct     = round((total_present + total_late) / grand_total * 100, 1) if grand_total > 0 else 0
+
+    sum_data = [
+        [ph('عدد الطلاب'), ph('حاضر'), ph('متأخر'), ph('غائب'), ph('إجمالي'), ph('نسبة الحضور')],
+        [p(len(rows)), p(total_present), p(total_late), p(total_absent), p(grand_total), p(f'{grand_pct}%')],
+    ]
+    s_tbl = Table(sum_data, colWidths=[3*cm]*6)
+    s_tbl.setStyle(TableStyle([
+        ('BACKGROUND',    (0, 0), (-1, 0), HEADER_BG),
+        ('FONTNAME',      (0, 0), (-1, -1), fn),
+        ('ALIGN',         (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING',    (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('GRID',          (0, 0), (-1, -1), 0.3, HexColor('#cccccc')),
+    ]))
+    elements.append(s_tbl)
+    elements.append(Spacer(1, 0.5*cm))
+
+    # Main detail table
+    col_h = [ph('#'), ph('اسم الطالب'), ph('الرقم'), ph('الصف'), ph('الشعبة'),
+             ph('حاضر'), ph('متأخر'), ph('غائب'), ph('إجمالي'), ph('نسبة الحضور')]
+    col_w = [0.8*cm, 4.5*cm, 2*cm, 3.5*cm, 2*cm,
+             1.5*cm, 1.5*cm, 1.5*cm, 1.8*cm, 2.5*cm]
+
+    table_data = [col_h]
+    row_bgs    = []
+    for i, row in enumerate(rows, 1):
+        s       = row['student']
+        grade_n = s.section.grade.name if s.section and s.section.grade else '—'
+        sec_n   = s.section.name       if s.section else '—'
+        total   = row['present'] + row['absent'] + row['late']
+        pct_val = round((row['present'] + row['late']) / total * 100, 1) if total else 0
+        table_data.append([
+            p(i), p(s.full_name), p(s.student_id),
+            p(grade_n), p(sec_n),
+            p(row['present']), p(row['late']), p(row['absent']),
+            p(total), p(f'{pct_val}%'),
+        ])
+        if i % 2 == 0:
+            row_bgs.append(i)
+
+    style_cmds = [
+        ('BACKGROUND',    (0, 0), (-1, 0), HEADER_BG),
+        ('FONTNAME',      (0, 0), (-1, -1), fn),
+        ('ALIGN',         (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID',          (0, 0), (-1, -1), 0.3, HexColor('#cccccc')),
+        ('TOPPADDING',    (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]
+    for ri in row_bgs:
+        style_cmds.append(('BACKGROUND', (0, ri), (-1, ri), ALT_BG))
+
+    tbl = Table(table_data, colWidths=col_w, repeatRows=1)
+    tbl.setStyle(TableStyle(style_cmds))
+    elements.append(tbl)
+
+    elements.append(Spacer(1, 0.4*cm))
+    foot_s = ParagraphStyle('af2', fontName=fn, fontSize=8,
+                             alignment=1, textColor=HexColor('#9aabb8'))
+    elements.append(Paragraph(
+        ar(f'تم الإنشاء: {datetime.utcnow().strftime("%Y-%m-%d %H:%M")} | نظام المهندس'),
+        foot_s))
+
+    doc.build(elements)
+    return buf.getvalue()
+
+
 def generate_registration_record_pdf(record, school=None) -> bytes | None:
     """Generate official A3-landscape سجل القيد العام matching the paper form.
 

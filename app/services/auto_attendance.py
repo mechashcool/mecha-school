@@ -207,6 +207,11 @@ def _check_school_shifts(school, school_name: str, local_now, local_date) -> Non
         .all()
     )
 
+    _log.info(
+        '[attendance-shift] school_id=%s shifts_enabled=True active_shifts=%d',
+        school.id, len(active_shifts),
+    )
+
     if not active_shifts:
         _log.info('[attendance-shift] school_id=%s "%s" — no active shifts configured, skip',
                   school.id, school_name)
@@ -216,8 +221,9 @@ def _check_school_shifts(school, school_name: str, local_now, local_date) -> Non
         cutoff = shift.absent_after_time
         passed = now_time >= cutoff
         _log.info(
-            '[attendance-shift] school_id=%s shift_id=%s "%s" cutoff=%s passed=%s',
-            school.id, shift.id, shift.name, cutoff, passed,
+            '[attendance-shift] school_id=%s shift_id=%s "%s" cutoff=%s local_now=%s passed=%s',
+            school.id, shift.id, shift.name, cutoff,
+            local_now.strftime('%H:%M:%S'), passed,
         )
         if passed:
             _run_auto_absent_for_shift(school, year, shift, local_date)
@@ -227,19 +233,29 @@ def _check_school_shifts(school, school_name: str, local_now, local_date) -> Non
 
 def _run_auto_absent_for_shift(school, year, shift, target_date) -> dict:
     """
-    Mark absent all active students in sections assigned to `shift` who have
-    no attendance record for `target_date`.
+    Mark absent all active students whose EFFECTIVE shift matches `shift` and
+    who have no attendance record for `target_date`.
+
+    Effective shift priority:
+      1. student.section.shift_id  — explicit section assignment
+      2. student.section.grade.shift_id — grade fallback (schools without
+         per-section shift assignment)
 
     Fully idempotent — safe to call multiple times for the same shift/date.
     Does NOT check holidays; caller handles that.
     """
-    from app.models import db, Student, StudentAttendance, Section
+    from app.models import db, Student, StudentAttendance, Section, Grade
     from app.blueprints.attendance import _notify_absent_parents
 
     school_id = school.id
 
-    # Find active sections assigned to this shift
-    shift_section_ids = {
+    _log.info(
+        '[attendance-shift] school_id=%s shift_id=%s "%s" date=%s year_id=%s — collecting students',
+        school_id, shift.id, shift.name, target_date, year.id if year else None,
+    )
+
+    # ── 1. Sections explicitly assigned to this shift ─────────────────────────
+    explicit_section_ids = {
         row.id for row in
         Section.query
             .execution_options(bypass_tenant_scope=True)
@@ -247,29 +263,73 @@ def _run_auto_absent_for_shift(school, year, shift, target_date) -> dict:
             .with_entities(Section.id)
             .all()
     }
+    _log.info(
+        '[attendance-shift] shift_id=%s explicit_sections=%d ids=%s',
+        shift.id, len(explicit_section_ids), sorted(explicit_section_ids),
+    )
 
-    if not shift_section_ids:
-        _log.info('[attendance-shift] shift_id=%s "%s" — no sections assigned, skip',
-                  shift.id, shift.name)
+    # ── 2. Grades assigned to this shift (for sections that have no shift_id) ─
+    grade_shift_ids = {
+        row.id for row in
+        Grade.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(school_id=school_id, shift_id=shift.id)
+            .with_entities(Grade.id)
+            .all()
+    }
+    # Sections under those grades that have NO explicit shift_id override
+    fallback_section_ids: set[int] = set()
+    if grade_shift_ids:
+        fallback_section_ids = {
+            row.id for row in
+            Section.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter(
+                    Section.school_id == school_id,
+                    Section.grade_id.in_(grade_shift_ids),
+                    Section.shift_id.is_(None),
+                )
+                .with_entities(Section.id)
+                .all()
+        }
+    _log.info(
+        '[attendance-shift] shift_id=%s grade_shift_ids=%d fallback_sections=%d ids=%s',
+        shift.id, len(grade_shift_ids), len(fallback_section_ids),
+        sorted(fallback_section_ids),
+    )
+
+    all_shift_section_ids = explicit_section_ids | fallback_section_ids
+
+    if not all_shift_section_ids:
+        _log.info(
+            '[attendance-shift] shift_id=%s "%s" — no sections (explicit or via grade), skip',
+            shift.id, shift.name,
+        )
         return {'count': 0}
 
+    # ── 3. Active students in those sections ──────────────────────────────────
     all_students = (
         Student.query
         .execution_options(bypass_tenant_scope=True)
         .filter_by(status='active', school_id=school_id)
-        .filter(Student.section_id.in_(shift_section_ids))
+        .filter(Student.section_id.in_(all_shift_section_ids))
         .all()
     )
     student_ids = [s.id for s in all_students]
 
     _log.info(
-        '[attendance-shift] shift_id=%s "%s" date=%s active_students=%d',
-        shift.id, shift.name, target_date, len(student_ids),
+        '[attendance-shift] shift_id=%s "%s" date=%s active_students=%d ids=%s',
+        shift.id, shift.name, target_date, len(student_ids), student_ids,
     )
 
     if not student_ids:
+        _log.info(
+            '[attendance-shift] skipped shift_id=%s — no active students in assigned sections',
+            shift.id,
+        )
         return {'count': 0}
 
+    # ── 4. Students who already have any attendance row for target_date ────────
     already_ids = {
         row.student_id for row in
         StudentAttendance.query
@@ -279,13 +339,27 @@ def _run_auto_absent_for_shift(school, year, shift, target_date) -> dict:
             .with_entities(StudentAttendance.student_id)
             .all()
     }
+
+    for sid in already_ids:
+        _log.debug(
+            '[attendance-shift] skipped student_id=%s reason=already_has_attendance date=%s',
+            sid, target_date,
+        )
+
     unmarked = [s for s in all_students if s.id not in already_ids]
 
     _log.info(
-        '[attendance-shift] shift_id=%s date=%s existing=%d missing=%d',
+        '[attendance-shift] shift_id=%s date=%s existing_attendance=%d missing_students=%d ids=%s',
         shift.id, target_date, len(already_ids), len(unmarked),
+        [s.id for s in unmarked],
     )
 
+    if not unmarked:
+        _log.info('[attendance-shift] shift_id=%s date=%s — all students already have records',
+                  shift.id, target_date)
+        return {'count': 0}
+
+    # ── 5. Create absent records ───────────────────────────────────────────────
     for student in unmarked:
         db.session.add(StudentAttendance(
             student_id       = student.id,
@@ -297,13 +371,13 @@ def _run_auto_absent_for_shift(school, year, shift, target_date) -> dict:
             shift_id         = shift.id,
         ))
 
-    if unmarked:
-        db.session.commit()
-        _log.info(
-            '[attendance-shift] shift_id=%s "%s" date=%s absent_created=%d',
-            shift.id, shift.name, target_date, len(unmarked),
-        )
+    db.session.commit()
+    _log.info(
+        '[attendance-shift] shift_id=%s "%s" date=%s absent_created=%d',
+        shift.id, shift.name, target_date, len(unmarked),
+    )
 
+    # ── 6. Notify parents ─────────────────────────────────────────────────────
     notified = 0
     for student in unmarked:
         try:

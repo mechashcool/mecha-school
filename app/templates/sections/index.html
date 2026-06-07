@@ -75,6 +75,21 @@
         <input type="text" name="name" class="form-control"
                placeholder="مثال: الأول الابتدائي..." required>
       </div>
+      {% if shifts_enabled %}
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">
+          <i class="bi bi-layers-half text-accent me-1"></i>الشفت الافتراضي للصف
+        </label>
+        <select name="shift_id" class="form-select" style="min-width:170px">
+          <option value="">— بدون شفت —</option>
+          {% for shift in active_shifts %}
+          <option value="{{ shift.id }}">
+            {{ shift.name }} ({{ shift.start_time.strftime('%H:%M') }})
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
       <button type="submit" class="btn btn-primary align-self-end">
         <i class="bi bi-plus-circle-fill me-1"></i>إضافة صف
       </button>
@@ -129,6 +144,7 @@
                       data-grade-id="{{ grade.id }}"
                       data-grade-name="{{ grade.name }}"
                       data-grade-stage="{{ grade.stage or '' }}"
+                      data-grade-shift="{{ grade.shift_id or '' }}"
                       onclick="showEditGrade(this)">
                 <i class="bi bi-pencil"></i>
               </button>
@@ -237,6 +253,7 @@
                     data-grade-id="{{ grade.id }}"
                     data-grade-name="{{ grade.name }}"
                     data-grade-stage="{{ grade.stage or '' }}"
+                    data-grade-shift="{{ grade.shift_id or '' }}"
                     onclick="showEditGrade(this)">
               <i class="bi bi-pencil"></i>
             </button>
@@ -361,6 +378,24 @@
             <label class="form-label">اسم الصف <span class="text-danger">*</span></label>
             <input type="text" name="name" id="editGradeName" class="form-control" required>
           </div>
+          {% if shifts_enabled %}
+          <div class="mb-3">
+            <label class="form-label">
+              <i class="bi bi-layers-half text-accent me-1"></i>الشفت الافتراضي للصف
+            </label>
+            <select name="shift_id" id="editGradeShift" class="form-select">
+              <option value="">— بدون شفت —</option>
+              {% for shift in active_shifts %}
+              <option value="{{ shift.id }}">
+                {{ shift.name }} ({{ shift.start_time.strftime('%H:%M') }})
+              </option>
+              {% endfor %}
+            </select>
+            <small class="text-muted">
+              الشعب التي ليس لها شفت محدد ترث شفت الصف هذا.
+            </small>
+          </div>
+          {% endif %}
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-outline-secondary"
@@ -441,6 +476,8 @@ function showEditGrade(btn) {
   document.getElementById('editGradeStage').value = btn.dataset.gradeStage;
   document.getElementById('editGradeForm').action =
     '/sections/grades/' + btn.dataset.gradeId + '/edit';
+  var shiftEl = document.getElementById('editGradeShift');
+  if (shiftEl) shiftEl.value = btn.dataset.gradeShift || '';
   new bootstrap.Modal(document.getElementById('editGradeModal')).show();
 }
 </script>

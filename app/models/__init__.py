@@ -609,11 +609,16 @@ class Grade(db.Model):
                                  nullable=False, index=True)
     academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'),
                                  nullable=False)
+    # Optional shift fallback — used when a student's section has no shift_id.
+    # Section.shift_id always takes priority.
+    shift_id         = db.Column(db.Integer, db.ForeignKey('attendance_shifts.id'),
+                                 nullable=True)
     created_at       = db.Column(db.DateTime, default=datetime.utcnow)
 
     sections = db.relationship('Section', backref='grade', lazy='dynamic')
     school   = db.relationship('School', foreign_keys=[school_id],
                                backref=db.backref('grades', lazy='dynamic'))
+    shift    = db.relationship('AttendanceShift', foreign_keys=[shift_id])
 
     __table_args__ = (
         db.UniqueConstraint('school_id', 'academic_year_id', 'name',

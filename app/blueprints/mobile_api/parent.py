@@ -518,21 +518,41 @@ def parent_child_homework(student_id):
             return path
         return photo_url(path)
 
+    def _hw_file_name(path):
+        if not path:
+            return None
+        import os
+        from urllib.parse import urlparse
+        if path.startswith(('http://', 'https://')):
+            return os.path.basename(urlparse(path).path) or None
+        return os.path.basename(path) or None
+
     return ok(
         student_id=s.id,
         section=s.section.name if s.section else None,
         count=len(rows),
         homework=[
             {
-                'id':             hw.id,
-                'title':          hw.title,
-                'subject':        hw.subject.name if hw.subject else None,
-                'teacher_name':   hw.teacher.full_name if hw.teacher else None,
-                'publish_date':   hw.publish_date.isoformat() if hw.publish_date else None,
-                'due_date':       hw.due_date.isoformat() if hw.due_date else None,
-                'description':    hw.description,
-                'attachment_url': _hw_url(hw),
+                'id':              hw.id,
+                'homework_id':     hw.id,
+                'title':           hw.title,
+                'subject':         hw.subject.name if hw.subject else None,
+                'subject_name':    hw.subject.name if hw.subject else None,
+                'teacher_name':    hw.teacher.full_name if hw.teacher else None,
+                'grade_name':      (hw.section.grade.name
+                                    if hw.section and hw.section.grade else None),
+                'section_name':    hw.section.name if hw.section else None,
+                'assigned_at':     hw.publish_date.isoformat() if hw.publish_date else None,
+                'publish_date':    hw.publish_date.isoformat() if hw.publish_date else None,
+                'due_date':        hw.due_date.isoformat() if hw.due_date else None,
+                'description':     hw.description,
+                'status':          'active' if hw.is_active else 'inactive',
+                'attachment_url':  _hw_url(hw),
                 'attachment_type': hw.attachment_type,
+                'file_name':       _hw_file_name(hw.attachment_path),
+                'file_size':       None,
+                'is_pdf':          hw.attachment_type == 'pdf',
+                'submitted_status': 'not_submitted',
             }
             for hw in rows
         ],
