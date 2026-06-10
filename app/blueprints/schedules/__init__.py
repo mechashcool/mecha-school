@@ -18,6 +18,9 @@ schedules_bp = Blueprint('schedules', __name__,
 
 DAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت']
 
+# Educational stages, used for the Stage → Grade → Section → Subject guided flow.
+STAGES = ['ابتدائية', 'متوسطة', 'إعدادية']
+
 
 def _build_grid(entries):
     """Group a flat list of Schedule rows into {day_of_week: [sorted entries]}."""
@@ -27,6 +30,35 @@ def _build_grid(entries):
     for day in grid:
         grid[day].sort(key=lambda x: x.start_time)
     return grid
+
+
+def _subjects_for_grade(grade):
+    """
+    Return the subjects that belong to a grade, for the schedule subject dropdown.
+
+    Includes:
+      * subjects explicitly assigned to this grade (subject.grade_id == grade.id)
+      * stage-level subjects of the grade's stage that are not bound to any grade
+        (grade_id IS NULL and stage == grade.stage)
+      * general subjects bound to neither a grade nor a stage (both NULL)
+
+    Excludes subjects bound to a DIFFERENT grade or a different stage — this is
+    what stops subjects from other grades/stages leaking into the timetable form.
+
+    Returns [] when no grade is given (no grade selected → empty dropdown).
+    """
+    if not grade:
+        return []
+    stage_clause = [Subject.stage.is_(None)]
+    if grade.stage:
+        stage_clause.append(Subject.stage == grade.stage)
+    return (Subject.query
+            .filter(db.or_(
+                Subject.grade_id == grade.id,
+                db.and_(Subject.grade_id.is_(None), db.or_(*stage_clause)),
+            ))
+            .order_by(Subject.name)
+            .all())
 
 
 @schedules_bp.route('/')
@@ -66,7 +98,19 @@ def index():
             Schedule.query.filter_by(grade_id=grade_id, section_id=None).all()
         )
 
-    subjects  = Subject.query.order_by(Subject.name).all()
+    # ── Resolve the effective grade and filter subjects to it ────────────────
+    # Subject dropdown must only show subjects of the grade being managed:
+    #   grade mode   → the selected grade
+    #   section mode → the selected section's grade
+    #   no target    → no subjects (empty dropdown)
+    effective_grade = None
+    if target_mode == 'grade' and grade_id:
+        effective_grade = next((g for g in grades if g.id == grade_id), None)
+    elif target_mode == 'section' and sec_id:
+        _sec = next((s for s in sections if s.id == sec_id), None)
+        effective_grade = _sec.grade if _sec else None
+
+    subjects  = _subjects_for_grade(effective_grade)
     teachers  = Employee.query.filter_by(status='active').order_by(Employee.full_name).all()
 
     # Display days: Sun-Thu only
@@ -77,6 +121,10 @@ def index():
                            sections=sections, grades=grades,
                            sec_id=sec_id, grade_id=grade_id,
                            target_mode=target_mode,
+                           effective_grade=effective_grade,
+                           effective_grade_id=(effective_grade.id if effective_grade else None),
+                           effective_stage=(effective_grade.stage if effective_grade else None),
+                           stages=STAGES,
                            schedule_grid=schedule_grid,
                            subjects=subjects, teachers=teachers,
                            days=display_days, day_indices=display_day_indices)
@@ -124,11 +172,25 @@ def create():
         parent = Section.query.get_or_404(sec_id)
         overlap_filter = Schedule.query.filter_by(section_id=sec_id, day_of_week=day)
         target_label = 'هذه الشعبة'
+        target_grade_id = parent.grade_id
     else:
         parent = Grade.query.get_or_404(grade_id)
         overlap_filter = Schedule.query.filter_by(grade_id=grade_id, section_id=None,
                                                   day_of_week=day)
         target_label = 'هذا الصف'
+        target_grade_id = parent.id
+
+    # Guard: the chosen subject must not belong to a DIFFERENT grade. Subjects
+    # with no grade (stage-level or general) are allowed. This stops a subject
+    # from another grade being saved if it ever reaches the form.
+    subject = Subject.query.filter_by(id=subject_id).first()
+    if subject is None:
+        flash('المادة المختارة غير صالحة.', 'danger')
+        return _redirect_to_target(sec_id, grade_id)
+    if subject.grade_id and target_grade_id and subject.grade_id != target_grade_id:
+        flash('المادة المختارة لا تنتمي إلى هذا الصف. يرجى اختيار مادة من مواد الصف.',
+              'danger')
+        return _redirect_to_target(sec_id, grade_id)
 
     # Check for an overlapping time slot in the same section/grade and day.
     existing = overlap_filter.filter(

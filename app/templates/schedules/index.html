@@ -21,22 +21,41 @@
   {% endif %}
 </div>
 
-<!-- Grade / Section selector -->
+<!-- Stage → Grade → Section guided selector -->
 <div class="card mb-4">
   <div class="card-body py-3">
     <div class="d-flex gap-4 align-items-center flex-wrap">
+      {# 1) Stage filter — narrows the grade (and section) lists. Client-side only. #}
       {% if grades %}
-      {# Grade schedule selector — for schools that manage timetables by grade #}
+      <div class="d-flex align-items-center gap-2">
+        <label class="form-label mb-0" style="font-size:13px;font-weight:600">
+          المرحلة:
+        </label>
+        <select id="schedStage" class="form-select d-inline-block" style="width:auto">
+          <option value="">— كل المراحل —</option>
+          {% for st in stages %}
+          <option value="{{ st }}" {{ 'selected' if effective_stage == st }}>
+            {% if st == 'ابتدائية' %}المرحلة الابتدائية
+            {% elif st == 'متوسطة' %}المرحلة المتوسطة
+            {% else %}المرحلة الإعدادية{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+
+      {# 2) Grade selector — managing a grade schedule. Filtered by stage. #}
+      {% if grades %}
       <form method="GET" class="d-flex align-items-center gap-2">
         <label class="form-label mb-0" style="font-size:13px;font-weight:600">
           الصف:
         </label>
-        <select name="grade_id" class="form-select d-inline-block" style="width:auto"
+        <select name="grade_id" id="schedGrade" class="form-select d-inline-block" style="width:auto"
                 onchange="this.form.submit()">
           <option value="">— اختر الصف —</option>
           {% for g in grades %}
-          <option value="{{ g.id }}"
-                  {{ 'selected' if target_mode == 'grade' and g.id == grade_id }}>
+          <option value="{{ g.id }}" data-stage="{{ g.stage or '' }}"
+                  {{ 'selected' if g.id == effective_grade_id }}>
             {{ g.name }}
           </option>
           {% endfor %}
@@ -44,17 +63,19 @@
       </form>
       {% endif %}
 
+      {# 3) Section selector — managing a section schedule. Filtered by stage/grade. #}
       {% if sections %}
-      {# Section schedule selector — original behaviour #}
       <form method="GET" class="d-flex align-items-center gap-2">
         <label class="form-label mb-0" style="font-size:13px;font-weight:600">
           الشعبة:
         </label>
-        <select name="section_id" class="form-select d-inline-block" style="width:auto"
+        <select name="section_id" id="schedSection" class="form-select d-inline-block" style="width:auto"
                 onchange="this.form.submit()">
           <option value="">— اختر الشعبة —</option>
           {% for sec in sections %}
           <option value="{{ sec.id }}"
+                  data-grade-id="{{ sec.grade_id }}"
+                  data-stage="{{ sec.grade.stage or '' if sec.grade else '' }}"
                   {{ 'selected' if target_mode == 'section' and sec.id == sec_id }}>
             {{ sec.grade.name }} / شعبة {{ sec.name }}
           </option>
@@ -70,7 +91,8 @@
       {% endif %}
     </div>
     <div class="form-text mt-2">
-      اختر صفاً لإدارة جدول الصف، أو شعبة لإدارة جدول الشعبة.
+      اختر المرحلة ثم الصف{% if sections %} ثم الشعبة إن وُجدت{% endif %} لإدارة الجدول.
+      تظهر المواد الخاصة بالصف المحدد فقط.
     </div>
   </div>
 </div>
@@ -100,12 +122,22 @@
       </div>
       <div class="col-md-3">
         <label class="form-label">المادة <span class="text-danger">*</span></label>
-        <select name="subject_id" class="form-select" required>
+        <select name="subject_id" class="form-select" required
+                {{ 'disabled' if not subjects }}>
+          {% if subjects %}
           <option value="">— اختر —</option>
           {% for s in subjects %}
           <option value="{{ s.id }}">{{ s.name }}</option>
           {% endfor %}
+          {% else %}
+          <option value="">— لا توجد مواد لهذا الصف —</option>
+          {% endif %}
         </select>
+        {% if not subjects %}
+        <small class="text-muted d-block mt-1">
+          لا توجد مواد مرتبطة بهذا الصف. أضف مواد للصف من صفحة المواد أولاً.
+        </small>
+        {% endif %}
       </div>
       <div class="col-md-2">
         <label class="form-label">المعلم</label>
@@ -242,4 +274,57 @@
   </div>
 </div>
 {% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+/* Stage → Grade → Section guided filtering.
+   Stage narrows the grade list; the grade narrows the section list. Selecting a
+   grade or a section still reloads the page (server resolves the subjects for
+   that grade). Stage filtering is purely client-side and never submits. */
+(function () {
+  const stageEl   = document.getElementById('schedStage');
+  const gradeEl   = document.getElementById('schedGrade');
+  const sectionEl = document.getElementById('schedSection');
+
+  const gradeOpts   = gradeEl   ? Array.from(gradeEl.options).slice(1)   : [];
+  const sectionOpts = sectionEl ? Array.from(sectionEl.options).slice(1) : [];
+
+  function applyFilters() {
+    const stage = stageEl ? stageEl.value.trim() : '';
+
+    // Grades visible for the chosen stage.
+    for (const opt of gradeOpts) {
+      opt.hidden = stage ? (opt.dataset.stage || '').trim() !== stage : false;
+    }
+    // If the currently selected grade is now hidden, clear the visible selection.
+    if (gradeEl) {
+      const selG = gradeEl.selectedOptions[0];
+      if (selG && selG.hidden) gradeEl.value = '';
+    }
+
+    // Sections: prefer filtering by the selected grade; otherwise by stage.
+    const gradeId = gradeEl ? gradeEl.value : '';
+    for (const opt of sectionOpts) {
+      let show = true;
+      if (gradeId) {
+        show = opt.dataset.gradeId === gradeId;
+      } else if (stage) {
+        show = (opt.dataset.stage || '').trim() === stage;
+      }
+      opt.hidden = !show;
+    }
+    if (sectionEl) {
+      const selS = sectionEl.selectedOptions[0];
+      if (selS && selS.hidden) sectionEl.value = '';
+    }
+  }
+
+  stageEl?.addEventListener('change', applyFilters);
+  gradeEl?.addEventListener('change', function () { this.form.submit(); });
+  sectionEl?.addEventListener('change', function () { this.form.submit(); });
+
+  applyFilters();
+})();
+</script>
 {% endblock %}
