@@ -33,9 +33,9 @@ def generate_attendance_excel(rows, report_type='detail', date_from='', date_to=
     BOLD_FONT   = Font(name='Arial', bold=True, size=10)
     NORMAL_FONT = Font(name='Arial', size=10)
     CENTER_ALIGN = Alignment(horizontal='center', vertical='center',
-                              wrap_text=True, reading_order=2)
+                              wrap_text=True, readingOrder=2)
     RIGHT_ALIGN  = Alignment(horizontal='right', vertical='center',
-                              wrap_text=True, reading_order=2)
+                              wrap_text=True, readingOrder=2)
     THIN = Border(
         left=Side(style='thin', color='FFCCCCCC'),
         right=Side(style='thin', color='FFCCCCCC'),
