@@ -655,6 +655,23 @@ def edit_user(user_id):
 
     if request.method == 'POST':
         user.full_name = request.form.get('full_name', user.full_name).strip()
+
+        # Super admin can change the username
+        if current_user.is_super_admin:
+            new_username = request.form.get('username', '').strip()
+            if not new_username:
+                flash('اسم المستخدم مطلوب.', 'danger')
+                return redirect(url_for('admin.edit_user', user_id=user.id))
+            if new_username != user.username:
+                clash = (User.query
+                         .execution_options(bypass_tenant_scope=True)
+                         .filter(User.username == new_username, User.id != user.id)
+                         .first())
+                if clash:
+                    flash('اسم المستخدم مستخدم بالفعل من قِبل مستخدم آخر.', 'danger')
+                    return redirect(url_for('admin.edit_user', user_id=user.id))
+                user.username = new_username
+
         new_email = request.form.get('email', '').strip()
         if new_email and not _valid_email(new_email):
             flash('Invalid email address.', 'danger')

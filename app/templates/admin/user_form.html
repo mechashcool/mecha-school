@@ -39,8 +39,14 @@
               <label class="form-label">اسم المستخدم <span class="text-danger">*</span></label>
               <input type="text" name="username" class="form-control"
                      value="{{ user.username if user else '' }}"
-                     {{ 'readonly' if user }} required>
-              {% if user %}<small class="text-muted">لا يمكن تغيير اسم المستخدم</small>{% endif %}
+                     {{ 'readonly' if user and not current_user.is_super_admin }} required>
+              {% if user %}
+                {% if current_user.is_super_admin %}
+                <small class="text-muted"><i class="bi bi-shield-check me-1"></i>يمكن للمشرف العام تعديل اسم المستخدم مع مراعاة عدم التكرار</small>
+                {% else %}
+                <small class="text-muted">لا يمكن تغيير اسم المستخدم</small>
+                {% endif %}
+              {% endif %}
             </div>
             <div class="col-md-6">
               <label class="form-label">البريد الإلكتروني</label>
