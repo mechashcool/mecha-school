@@ -84,7 +84,7 @@
         {% for item in items %}
         <tr>
           <td>
-            <div class="fw-700">{{ item.name }}</div>
+            <div class="fw-700">{{ item.name }}{% if item.size %} <span class="badge bg-secondary" style="font-size:11px">{{ item.size }}</span>{% endif %}</div>
             <div class="text-muted" style="font-size:12px">{{ item.item_code or 'بدون رمز' }}</div>
           </td>
           <td>{{ item.category.name if item.category else '-' }}</td>

@@ -1800,6 +1800,7 @@ class InventoryItem(db.Model):
     purchase_price = db.Column(db.Numeric(12, 2), nullable=True)
     supplier = db.Column(db.String(200), nullable=True)
     notes = db.Column(db.Text, nullable=True)
+    size = db.Column(db.String(20), nullable=True)
     image_path = db.Column(db.String(500), nullable=True)
     is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)

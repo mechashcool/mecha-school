@@ -18,13 +18,18 @@ from app.utils.decorators import admin_required, get_active_year, get_current_sc
 inventory_bp = Blueprint('inventory', __name__, template_folder='../../templates/inventory')
 
 
-CATEGORY_NAMES = ['قرطاسية', 'كتب', 'زي مدرسي', 'مواد تنظيف', 'أجهزة', 'أثاث', 'أخرى']
+CATEGORY_NAMES = ['قرطاسية', 'كتب', 'زي مدرسي', 'ملابس', 'مواد تنظيف', 'أجهزة', 'أثاث', 'أخرى']
 MOVEMENT_TYPES = {'in': 'إدخال', 'out': 'إخراج'}
 MOVEMENT_REASONS = [
     'شراء جديد', 'تبرع', 'مرتجع', 'تسليم للطلاب', 'تسليم للمدرسين',
     'صرف للإدارة', 'تلف', 'فقدان', 'استخدام داخلي',
 ]
 COUNT_STATUS = {'match': 'مطابق', 'shortage': 'نقص', 'surplus': 'زيادة'}
+
+# Categories that require a size field (clothing / uniform items).
+CLOTHING_CATEGORIES = {'زي مدرسي', 'ملابس', 'uniforms', 'clothing', 'school uniform'}
+CLOTHING_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL',
+                  '4', '6', '8', '10', '12', '14', '16']
 
 
 def _school_year_or_redirect():
@@ -76,6 +81,12 @@ def _categories(school, year):
             .filter_by(school_id=school.id, academic_year_id=year.id)
             .order_by(InventoryCategory.name)
             .all())
+
+
+def _clothing_category_ids(categories):
+    """Return IDs of categories whose names match the clothing set."""
+    lower_names = {n.lower() for n in CLOTHING_CATEGORIES}
+    return [c.id for c in categories if c.name.strip().lower() in lower_names]
 
 
 def _items_query(school, year):
@@ -142,7 +153,10 @@ def create_item():
         flash('تمت إضافة المادة بنجاح.', 'success')
         return redirect(url_for('inventory.index'))
 
-    return render_template('inventory/item_form.html', item=None, categories=categories)
+    clothing_ids = _clothing_category_ids(categories)
+    return render_template('inventory/item_form.html', item=None, categories=categories,
+                           clothing_category_ids=clothing_ids,
+                           clothing_sizes=CLOTHING_SIZES)
 
 
 @inventory_bp.route('/items/<int:item_id>/edit', methods=['GET', 'POST'])
@@ -162,7 +176,10 @@ def edit_item(item_id):
         flash('تم تحديث المادة بنجاح.', 'success')
         return redirect(url_for('inventory.index'))
 
-    return render_template('inventory/item_form.html', item=item, categories=categories)
+    clothing_ids = _clothing_category_ids(categories)
+    return render_template('inventory/item_form.html', item=item, categories=categories,
+                           clothing_category_ids=clothing_ids,
+                           clothing_sizes=CLOTHING_SIZES)
 
 
 def _populate_item(item):
@@ -170,6 +187,7 @@ def _populate_item(item):
     item.category_id = request.form.get('category_id', type=int)
     item.item_code = request.form.get('item_code', '').strip() or None
     item.unit = request.form.get('unit', '').strip() or 'قطعة'
+    item.size = request.form.get('size', '').strip() or None
     item.current_quantity = _decimal_value('current_quantity')
     item.minimum_quantity = _decimal_value('minimum_quantity')
     item.purchase_price = _decimal_value('purchase_price') if request.form.get('purchase_price') else None
@@ -580,3 +598,164 @@ def export_pdf():
     doc.build([Paragraph('تقرير المخزون الحالي', styles['Title']), Spacer(1, 12), table])
     buffer.seek(0)
     return send_file(buffer, as_attachment=True, download_name='inventory.pdf', mimetype='application/pdf')
+
+
+@inventory_bp.route('/reports/export_annual.xlsx')
+@login_required
+@admin_required
+def export_annual_excel():
+    school, year, response = _school_year_or_redirect()
+    if response:
+        return response
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+    except Exception:
+        flash('مكتبة Excel غير متاحة.', 'warning')
+        return redirect(url_for('inventory.reports'))
+
+    counts = (InventoryCount.query
+              .options(joinedload(InventoryCount.item).joinedload(InventoryItem.category))
+              .filter_by(school_id=school.id, academic_year_id=year.id)
+              .order_by(InventoryCount.count_date.asc())
+              .all())
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'الجرد السنوي'
+    ws.sheet_view.rightToLeft = True
+
+    ws.append([school.school_name if school else '', '', f'السنة: {year.name if year else ""}'])
+    ws.append(['الجرد السنوي', '', f'تاريخ التقرير: {date.today().strftime("%Y-%m-%d")}'])
+    ws.append([])
+
+    headers = ['التاريخ', 'المادة', 'التصنيف', 'الحجم', 'كمية النظام', 'الكمية الفعلية', 'الفرق', 'الحالة']
+    ws.append(headers)
+
+    status_map = {'match': 'مطابق', 'shortage': 'نقص', 'surplus': 'زيادة'}
+    for row in counts:
+        item = row.item
+        ws.append([
+            row.count_date.strftime('%Y-%m-%d') if row.count_date else '',
+            item.name if item else '',
+            item.category.name if item and item.category else '',
+            item.size or '' if item else '',
+            float(row.system_quantity or 0),
+            float(row.actual_quantity or 0),
+            float(row.difference or 0),
+            status_map.get(row.status, row.status or ''),
+        ])
+
+    for cell in ws[4]:
+        cell.font = Font(bold=True, color='FFFFFF')
+        cell.fill = PatternFill('solid', fgColor='1A3A5C')
+        cell.alignment = Alignment(horizontal='center')
+
+    for col in ws.columns:
+        max_len = max((len(str(cell.value or '')) for cell in col), default=10)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 40)
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return Response(
+        output.getvalue(),
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename=annual_inventory.xlsx'},
+    )
+
+
+@inventory_bp.route('/reports/export_annual.pdf')
+@login_required
+@admin_required
+def export_annual_pdf():
+    school, year, response = _school_year_or_redirect()
+    if response:
+        return response
+    try:
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib import colors
+        from reportlab.lib.styles import ParagraphStyle
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        from app.utils.pdf_gen import _register_arabic_fonts, _shape_arabic_text, generate_error_pdf
+    except Exception:
+        flash('مكتبة PDF غير متاحة.', 'warning')
+        return redirect(url_for('inventory.reports'))
+
+    arabic_font_registered = _register_arabic_fonts(pdfmetrics, TTFont)
+    if not arabic_font_registered:
+        pdf_bytes = generate_error_pdf(
+            'خطأ في تحميل الخط العربي',
+            'يرجى التحقق من وجود ملفات الخط العربي في مجلد static/fonts/'
+        )
+        if not pdf_bytes:
+            flash('تعذر تحميل الخط العربي لتوليد PDF.', 'danger')
+            return redirect(url_for('inventory.reports'))
+        return Response(pdf_bytes, mimetype='application/pdf')
+
+    title_style = ParagraphStyle('annual_title', fontName='Amiri-Bold', fontSize=16,
+                                 alignment=1, textColor=colors.HexColor('#1a3a5c'), spaceAfter=6)
+    sub_style = ParagraphStyle('annual_sub', fontName='Amiri', fontSize=10,
+                               alignment=1, textColor=colors.HexColor('#555555'), spaceAfter=12)
+    header_style = ParagraphStyle('annual_hdr', fontName='Amiri-Bold', fontSize=9,
+                                  alignment=1, textColor=colors.white)
+    cell_style = ParagraphStyle('annual_cell', fontName='Amiri', fontSize=8,
+                                alignment=1, leading=11)
+
+    def ar(text, style=cell_style):
+        return Paragraph(_shape_arabic_text(str(text)), style)
+
+    counts = (InventoryCount.query
+              .options(joinedload(InventoryCount.item).joinedload(InventoryItem.category))
+              .filter_by(school_id=school.id, academic_year_id=year.id)
+              .order_by(InventoryCount.count_date.asc())
+              .all())
+
+    status_map = {'match': 'مطابق', 'shortage': 'نقص', 'surplus': 'زيادة'}
+    table_data = [[
+        ar('التاريخ', header_style), ar('المادة', header_style),
+        ar('التصنيف', header_style), ar('الحجم', header_style),
+        ar('كمية النظام', header_style), ar('الكمية الفعلية', header_style),
+        ar('الفرق', header_style), ar('الحالة', header_style),
+    ]]
+    for row in counts:
+        item = row.item
+        table_data.append([
+            ar(row.count_date.strftime('%Y-%m-%d') if row.count_date else '-'),
+            ar(item.name if item else '-'),
+            ar(item.category.name if item and item.category else '-'),
+            ar(item.size if item and item.size else '-'),
+            ar(str(row.system_quantity or 0)),
+            ar(str(row.actual_quantity or 0)),
+            ar(str(row.difference or 0)),
+            ar(status_map.get(row.status, row.status or '-')),
+        ])
+
+    col_widths = [65, 100, 80, 45, 65, 65, 45, 55]
+    table = Table(table_data, repeatRows=1, colWidths=col_widths)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a3a5c')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f7f9fb')]),
+    ]))
+
+    school_name = school.school_name if school else ''
+    year_name = year.name if year else ''
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4),
+                            rightMargin=20, leftMargin=20, topMargin=25, bottomMargin=25)
+    doc.build([
+        ar(school_name, title_style),
+        ar(f'الجرد السنوي — {year_name}', title_style),
+        Spacer(1, 4),
+        ar(f'تاريخ التقرير: {date.today().strftime("%Y-%m-%d")}', sub_style),
+        table,
+    ])
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True,
+                     download_name='annual_inventory.pdf', mimetype='application/pdf')

@@ -34,6 +34,15 @@
         <label class="form-label">وحدة القياس <span class="text-danger">*</span></label>
         <input type="text" name="unit" class="form-control" value="{{ item.unit if item else 'قطعة' }}" required>
       </div>
+      <div class="col-md-4" id="sizeRow" style="display:none">
+        <label class="form-label">الحجم (المقاس)</label>
+        <select name="size" class="form-select">
+          <option value="">— بدون حجم —</option>
+          {% for sz in clothing_sizes %}
+          <option value="{{ sz }}" {% if item and item.size == sz %}selected{% endif %}>{{ sz }}</option>
+          {% endfor %}
+        </select>
+      </div>
       <div class="col-md-4">
         <label class="form-label">سعر الشراء</label>
         <input type="number" name="purchase_price" class="form-control" step="0.01" min="0" value="{{ item.purchase_price if item and item.purchase_price is not none else '' }}">
@@ -67,4 +76,22 @@
     </form>
   </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const clothingIds = {{ clothing_category_ids | tojson }};
+  const sizeRow = document.getElementById('sizeRow');
+  const catSel = document.querySelector('select[name="category_id"]');
+  if (!catSel || !sizeRow) return;
+
+  function toggle() {
+    const id = parseInt(catSel.value) || 0;
+    sizeRow.style.display = clothingIds.includes(id) ? '' : 'none';
+  }
+  catSel.addEventListener('change', toggle);
+  toggle();
+})();
+</script>
 {% endblock %}

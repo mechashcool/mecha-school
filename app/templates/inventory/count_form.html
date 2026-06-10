@@ -17,7 +17,7 @@
         <select name="item_id" class="form-select" required>
           <option value="">اختر المادة</option>
           {% for item in items %}
-          <option value="{{ item.id }}">{{ item.name }} - كمية النظام: {{ item.current_quantity }}</option>
+          <option value="{{ item.id }}">{{ item.name }}{% if item.size %} [{{ item.size }}]{% endif %} - كمية النظام: {{ item.current_quantity }}</option>
           {% endfor %}
         </select>
       </div>

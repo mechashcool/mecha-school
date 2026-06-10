@@ -139,21 +139,39 @@
 </div>
 
 <div class="card mt-4">
-  <div class="card-header">الجرد السنوي</div>
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>الجرد السنوي</span>
+    <div class="d-flex gap-2">
+      <a href="{{ url_for('inventory.export_annual_excel') }}" class="btn btn-sm btn-outline-success">
+        <i class="bi bi-file-earmark-excel me-1"></i>تنزيل Excel
+      </a>
+      <a href="{{ url_for('inventory.export_annual_pdf') }}" class="btn btn-sm btn-outline-danger">
+        <i class="bi bi-file-earmark-pdf me-1"></i>تنزيل PDF
+      </a>
+    </div>
+  </div>
   <div class="table-wrapper">
     <table class="table table-hover mb-0">
-      <thead><tr><th>التاريخ</th><th>المادة</th><th>كمية النظام</th><th>الكمية الفعلية</th><th>الحالة</th></tr></thead>
+      <thead>
+        <tr>
+          <th>التاريخ</th><th>المادة</th><th>التصنيف</th><th>الحجم</th>
+          <th>كمية النظام</th><th>الكمية الفعلية</th><th>الفرق</th><th>الحالة</th>
+        </tr>
+      </thead>
       <tbody>
         {% for row in counts %}
         <tr>
           <td>{{ row.count_date.strftime('%Y-%m-%d') if row.count_date else '-' }}</td>
           <td>{{ row.item.name if row.item else '-' }}</td>
+          <td>{{ row.item.category.name if row.item and row.item.category else '-' }}</td>
+          <td>{{ row.item.size if row.item and row.item.size else '-' }}</td>
           <td>{{ row.system_quantity }}</td>
           <td>{{ row.actual_quantity }}</td>
+          <td>{{ row.difference }}</td>
           <td>{{ count_status.get(row.status, row.status) }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="5" class="text-center text-muted py-4">لا توجد سجلات جرد.</td></tr>
+        <tr><td colspan="8" class="text-center text-muted py-4">لا توجد سجلات جرد.</td></tr>
         {% endfor %}
       </tbody>
     </table>
