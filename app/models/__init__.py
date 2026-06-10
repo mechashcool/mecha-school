@@ -1632,7 +1632,12 @@ class Schedule(db.Model):
                             nullable=False, index=True)
     academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'),
                                  nullable=False, index=True)
-    section_id  = db.Column(db.Integer, db.ForeignKey('sections.id'), nullable=False)
+    # A schedule entry targets EITHER a section (section-based, the original
+    # behaviour) OR a grade (grade-based, for schools that do not use sections).
+    # Exactly one of section_id / grade_id is set; both are nullable so either
+    # mode works. Enforced in the schedules blueprint.
+    section_id  = db.Column(db.Integer, db.ForeignKey('sections.id'), nullable=True)
+    grade_id    = db.Column(db.Integer, db.ForeignKey('grades.id'), nullable=True, index=True)
     subject_id  = db.Column(db.Integer, db.ForeignKey('subjects.id'), nullable=False)
     teacher_id  = db.Column(db.Integer, db.ForeignKey('employees.id'), nullable=True)
     day_of_week = db.Column(db.Integer, nullable=False)
@@ -1642,14 +1647,21 @@ class Schedule(db.Model):
     created_at  = db.Column(db.DateTime, default=datetime.utcnow)
 
     section = db.relationship('Section', backref='schedules')
+    grade   = db.relationship('Grade', foreign_keys=[grade_id], backref='schedules')
     subject = db.relationship('Subject', backref='schedules')
     teacher = db.relationship('Employee', backref='schedules', foreign_keys=[teacher_id])
     school = db.relationship('School', foreign_keys=[school_id])
     academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
 
     __table_args__ = (
+        # Section-based uniqueness (original). NULL section_id rows (grade-based)
+        # are treated as distinct by the DB, so they never collide here.
         db.UniqueConstraint('section_id', 'subject_id', 'day_of_week', 'start_time',
                             name='uq_schedule_section_subject_day_start'),
+        # Grade-based uniqueness (parallel). NULL grade_id rows (section-based)
+        # are distinct, so this never collides with section schedules.
+        db.UniqueConstraint('grade_id', 'subject_id', 'day_of_week', 'start_time',
+                            name='uq_schedule_grade_subject_day_start'),
     )
 
 

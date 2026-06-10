@@ -6,40 +6,76 @@
 <div class="page-header">
   <div>
     <h1 class="page-title">الجداول الدراسية</h1>
-    <p class="page-subtitle">بناء وإدارة الجدول الأسبوعي لكل شعبة</p>
+    <p class="page-subtitle">بناء وإدارة الجدول الأسبوعي لكل صف أو شعبة</p>
   </div>
-  {% if sec_id %}
+  {% if target_mode == 'section' and sec_id %}
   <a href="{{ url_for('schedules.print_pdf', section_id=sec_id) }}"
+     target="_blank" class="btn btn-outline-primary">
+    <i class="bi bi-printer-fill me-1"></i>طباعة الجدول (PDF)
+  </a>
+  {% elif target_mode == 'grade' and grade_id %}
+  <a href="{{ url_for('schedules.print_grade_pdf', grade_id=grade_id) }}"
      target="_blank" class="btn btn-outline-primary">
     <i class="bi bi-printer-fill me-1"></i>طباعة الجدول (PDF)
   </a>
   {% endif %}
 </div>
 
-<!-- Section selector -->
+<!-- Grade / Section selector -->
 <div class="card mb-4">
   <div class="card-body py-3">
-    <form method="GET" class="d-flex gap-3 align-items-center flex-wrap">
-      <div>
-        <label class="form-label mb-0 me-2" style="font-size:13px;font-weight:600">
+    <div class="d-flex gap-4 align-items-center flex-wrap">
+      {% if grades %}
+      {# Grade schedule selector — for schools that manage timetables by grade #}
+      <form method="GET" class="d-flex align-items-center gap-2">
+        <label class="form-label mb-0" style="font-size:13px;font-weight:600">
+          الصف:
+        </label>
+        <select name="grade_id" class="form-select d-inline-block" style="width:auto"
+                onchange="this.form.submit()">
+          <option value="">— اختر الصف —</option>
+          {% for g in grades %}
+          <option value="{{ g.id }}"
+                  {{ 'selected' if target_mode == 'grade' and g.id == grade_id }}>
+            {{ g.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </form>
+      {% endif %}
+
+      {% if sections %}
+      {# Section schedule selector — original behaviour #}
+      <form method="GET" class="d-flex align-items-center gap-2">
+        <label class="form-label mb-0" style="font-size:13px;font-weight:600">
           الشعبة:
         </label>
         <select name="section_id" class="form-select d-inline-block" style="width:auto"
                 onchange="this.form.submit()">
           <option value="">— اختر الشعبة —</option>
           {% for sec in sections %}
-          <option value="{{ sec.id }}" {{ 'selected' if sec.id == sec_id }}>
+          <option value="{{ sec.id }}"
+                  {{ 'selected' if target_mode == 'section' and sec.id == sec_id }}>
             {{ sec.grade.name }} / شعبة {{ sec.name }}
           </option>
           {% endfor %}
         </select>
-      </div>
+      </form>
+      {% endif %}
 
-    </form>
+      {% if not sections and not grades %}
+      <span class="text-muted" style="font-size:13px">
+        لا توجد صفوف بعد. أضف صفوفاً أولاً من صفحة الصفوف والشعب.
+      </span>
+      {% endif %}
+    </div>
+    <div class="form-text mt-2">
+      اختر صفاً لإدارة جدول الصف، أو شعبة لإدارة جدول الشعبة.
+    </div>
   </div>
 </div>
 
-{% if sec_id and not is_historical_year %}
+{% if (sec_id or grade_id) and not is_historical_year %}
 <!-- Add entry form -->
 <div class="card mb-4">
   <div class="card-header">
@@ -48,7 +84,11 @@
   <div class="card-body">
     <form method="POST" action="{{ url_for('schedules.create') }}"
           class="row g-3 align-items-end">
+      {% if target_mode == 'grade' %}
+      <input type="hidden" name="grade_id" value="{{ grade_id }}">
+      {% else %}
       <input type="hidden" name="section_id" value="{{ sec_id }}">
+      {% endif %}
 
       <div class="col-md-2">
         <label class="form-label">اليوم <span class="text-danger">*</span></label>
@@ -198,7 +238,7 @@
 {% else %}
 <div class="card">
   <div class="card-body text-center text-muted py-5">
-    اختر شعبة من القائمة أعلاه لعرض جدولها أو إنشائه
+    اختر صفاً أو شعبة من القائمة أعلاه لعرض الجدول أو إنشائه
   </div>
 </div>
 {% endif %}

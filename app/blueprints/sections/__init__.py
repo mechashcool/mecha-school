@@ -169,6 +169,17 @@ def delete_grade(grade_id):
         )
         return redirect(url_for('sections.index', year_id=year_id))
 
+    # Block deletion when grade-based schedule entries still reference this grade
+    # (the FK has no cascade) — mirror the section dependency guard.
+    if (Schedule.query.execution_options(include_all_years=True)
+            .filter_by(grade_id=grade.id).count()):
+        flash(
+            'لا يمكن حذف هذا الصف لأنه يحتوي على جدول دراسي. '
+            'احذف حصص الجدول الخاصة بالصف أولاً.',
+            'warning',
+        )
+        return redirect(url_for('sections.index', year_id=year_id))
+
     db.session.delete(grade)
     db.session.commit()
     flash('تم حذف الصف.', 'success')

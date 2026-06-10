@@ -201,6 +201,13 @@ def child_overview(student_id):
                     .filter_by(section_id=s.section_id)
                     .order_by(Schedule.day_of_week, Schedule.start_time)
                     .all())
+    # Grade fallback: schools that manage timetables at the grade level (no
+    # per-section schedule) — show the grade schedule for the student's grade.
+    if not schedule and s.section and s.section.grade_id:
+        schedule = (Schedule.query
+                    .filter_by(grade_id=s.section.grade_id, section_id=None)
+                    .order_by(Schedule.day_of_week, Schedule.start_time)
+                    .all())
 
     return render_template('parent/child.html',
                            s=s, atts=atts, att_stats=att_stats,

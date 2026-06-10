@@ -405,6 +405,13 @@ def parent_child_schedule(student_id):
                  .filter_by(section_id=s.section_id)
                  .order_by(Schedule.day_of_week, Schedule.start_time)
                  .all())
+    # Grade fallback: when the school manages timetables by grade (no per-section
+    # schedule), return the grade-level schedule for the student's grade.
+    if not schedules and s.section and s.section.grade_id:
+        schedules = (Schedule.query
+                     .filter_by(grade_id=s.section.grade_id, section_id=None)
+                     .order_by(Schedule.day_of_week, Schedule.start_time)
+                     .all())
 
     return ok(
         student_id=s.id,

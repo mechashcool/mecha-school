@@ -365,7 +365,11 @@ def _inherit_scope(session_, obj):
             )
             obj.academic_year_id = ay.id if ay else current_academic_year_id()
     elif isinstance(obj, Schedule):
-        copy_scope(obj.section or load(Section, obj.section_id))
+        # Schedule targets a section OR a grade — inherit scope from whichever is set.
+        if obj.section_id:
+            copy_scope(obj.section or load(Section, obj.section_id))
+        elif obj.grade_id:
+            copy_scope(obj.grade or load(Grade, obj.grade_id))
     elif isinstance(obj, StudentSuspension):
         student = obj.student or load(Student, obj.student_id)
         if student and getattr(obj, 'school_id', None) is None:
@@ -513,10 +517,19 @@ def _validate_relationship_scope(session_, obj):
             require(obj.target_role is None,
                     'Notification cannot target both a user and a role')
     elif isinstance(obj, Schedule):
-        section = obj.section or load(Section, obj.section_id)
-        require(section and section.school_id == obj.school_id
-                and section.academic_year_id == obj.academic_year_id,
-                'Schedule must match section school/year')
+        # Schedule targets a section OR a grade — validate whichever is set.
+        if obj.section_id:
+            section = obj.section or load(Section, obj.section_id)
+            require(section and section.school_id == obj.school_id
+                    and section.academic_year_id == obj.academic_year_id,
+                    'Schedule must match section school/year')
+        elif obj.grade_id:
+            grade = obj.grade or load(Grade, obj.grade_id)
+            require(grade and grade.school_id == obj.school_id
+                    and grade.academic_year_id == obj.academic_year_id,
+                    'Schedule must match grade school/year')
+        else:
+            require(False, 'Schedule must reference a section or a grade')
     elif isinstance(obj, StudentSuspension):
         student = obj.student or load(Student, obj.student_id)
         require(student and student.school_id == obj.school_id,
