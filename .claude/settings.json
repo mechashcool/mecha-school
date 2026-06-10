@@ -53,7 +53,17 @@
       "Bash(xargs grep -l \"homework\\\\|attachment\")",
       "Bash(awk -F: '$1>700 && $1<1300')",
       "Bash(python -m py_compile app/services/auto_attendance.py app/services/attendance_service.py app/blueprints/attendance/__init__.py app/utils/attendance_helpers.py)",
-      "Bash(python -m py_compile app/services/auto_attendance.py)"
+      "Bash(python -m py_compile app/services/auto_attendance.py)",
+      "Bash(awk 'NR>=459 && NR<=520 && /section/' app/utils/pdf_gen.py)",
+      "Bash(awk -F: '$1>=359 && $1<=560')",
+      "Bash(awk -F: '$1>=459 && $1<=560')",
+      "Bash(python -m py_compile app/models/__init__.py app/utils/scoping.py app/blueprints/schedules/__init__.py app/blueprints/sections/__init__.py app/blueprints/parent/__init__.py app/blueprints/mobile_api/parent.py migrations/versions/f5a6b7c8d9e0_add_grade_id_to_schedules.py)",
+      "Bash(python -m py_compile app/blueprints/schedules/__init__.py)",
+      "Bash(python -c \"import app; a=app.create_app\\('development'\\); print\\('APP OK'\\); print\\('routes:', len\\([r for r in a.url_map.iter_rules\\(\\) if r.endpoint.startswith\\('salaries'\\)]\\)\\)\")",
+      "Bash(python -m py_compile migrations/versions/h7i8j9k0l1m2_professional_payroll.py app/services/payroll.py app/blueprints/salaries/__init__.py app/utils/scoping.py app/utils/school_cleanup.py app/models/__init__.py)",
+      "Bash(python -m py_compile migrations/versions/h7i8j9k0l1m2_professional_payroll.py)",
+      "Bash(Get-ChildItem -Path . -Name)",
+      "Bash(powershell -Command \"Get-ChildItem 'app\\\\templates\\\\employees' -Name\")"
     ]
   }
 }

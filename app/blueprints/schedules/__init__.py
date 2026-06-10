@@ -177,13 +177,36 @@ def create():
     # Resolve the parent (section or grade) for school/year scoping.
     if sec_id:
         parent = Section.query.get_or_404(sec_id)
-        overlap_filter = Schedule.query.filter_by(section_id=sec_id, day_of_week=day)
+        # Overlap filter is intentionally fully explicit (bypass ORM middleware)
+        # so it is never silently unscoped when current_view_year_id() is None.
+        # grade_id=None ensures section-based entries never mix with grade-based ones.
+        overlap_filter = (
+            Schedule.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(
+                section_id=sec_id,
+                grade_id=None,
+                school_id=parent.school_id,
+                academic_year_id=parent.academic_year_id,
+                day_of_week=day,
+            )
+        )
         target_label = 'هذه الشعبة'
         target_grade_id = parent.grade_id
     else:
         parent = Grade.query.get_or_404(grade_id)
-        overlap_filter = Schedule.query.filter_by(grade_id=grade_id, section_id=None,
-                                                  day_of_week=day)
+        # Same principle: fully explicit so the check is never year-unscoped.
+        overlap_filter = (
+            Schedule.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(
+                grade_id=grade_id,
+                section_id=None,
+                school_id=parent.school_id,
+                academic_year_id=parent.academic_year_id,
+                day_of_week=day,
+            )
+        )
         target_label = 'هذا الصف'
         target_grade_id = parent.id
 
