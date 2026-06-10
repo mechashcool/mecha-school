@@ -63,35 +63,45 @@
       </form>
       {% endif %}
 
-      {# 3) Section selector — managing a section schedule. Filtered by stage/grade. #}
-      {% if sections %}
+      {# 3) Section selector — OPTIONAL. Scoped to the selected grade. Leaving it
+            on "بدون شعبة" manages the whole-grade schedule. The hidden grade_id
+            keeps us on the same grade when no section is chosen. #}
+      {% if effective_grade_id and effective_grade_sections %}
       <form method="GET" class="d-flex align-items-center gap-2">
+        <input type="hidden" name="grade_id" value="{{ effective_grade_id }}">
         <label class="form-label mb-0" style="font-size:13px;font-weight:600">
-          الشعبة:
+          الشعبة <span class="text-muted" style="font-weight:400">(اختياري):</span>
         </label>
         <select name="section_id" id="schedSection" class="form-select d-inline-block" style="width:auto"
                 onchange="this.form.submit()">
-          <option value="">— اختر الشعبة —</option>
-          {% for sec in sections %}
+          <option value="">بدون شعبة — جدول للصف كامل</option>
+          {% for sec in effective_grade_sections %}
           <option value="{{ sec.id }}"
-                  data-grade-id="{{ sec.grade_id }}"
-                  data-stage="{{ sec.grade.stage or '' if sec.grade else '' }}"
                   {{ 'selected' if target_mode == 'section' and sec.id == sec_id }}>
-            {{ sec.grade.name }} / شعبة {{ sec.name }}
+            شعبة {{ sec.name }}
           </option>
           {% endfor %}
         </select>
       </form>
       {% endif %}
 
-      {% if not sections and not grades %}
+      {% if not grades %}
       <span class="text-muted" style="font-size:13px">
         لا توجد صفوف بعد. أضف صفوفاً أولاً من صفحة الصفوف والشعب.
       </span>
       {% endif %}
     </div>
     <div class="form-text mt-2">
-      اختر المرحلة ثم الصف{% if sections %} ثم الشعبة إن وُجدت{% endif %} لإدارة الجدول.
+      {% if target_mode == 'section' %}
+      <i class="bi bi-info-circle me-1"></i>سيتم إنشاء الجدول لهذه الشعبة فقط.
+      {% elif target_mode == 'grade' %}
+      <i class="bi bi-info-circle me-1"></i>سيتم إنشاء الجدول للصف كامل.
+      {% if effective_grade_id and not effective_grade_sections %}
+      (لا توجد شعب لهذا الصف.)
+      {% endif %}
+      {% else %}
+      اختر المرحلة ثم الصف لإدارة الجدول. اختيار الشعبة اختياري.
+      {% endif %}
       تظهر المواد الخاصة بالصف المحدد فقط.
     </div>
   </div>
@@ -278,53 +288,36 @@
 
 {% block extra_js %}
 <script>
-/* Stage → Grade → Section guided filtering.
-   Stage narrows the grade list; the grade narrows the section list. Selecting a
-   grade or a section still reloads the page (server resolves the subjects for
-   that grade). Stage filtering is purely client-side and never submits. */
+/* Stage → Grade filtering (client-side only).
+   The stage selector narrows the grade list. Selecting a grade submits and
+   reloads (server resolves that grade's sections + subjects). The section
+   dropdown is OPTIONAL and already scoped server-side to the selected grade,
+   so it needs no client-side filtering. */
 (function () {
   const stageEl   = document.getElementById('schedStage');
   const gradeEl   = document.getElementById('schedGrade');
   const sectionEl = document.getElementById('schedSection');
 
-  const gradeOpts   = gradeEl   ? Array.from(gradeEl.options).slice(1)   : [];
-  const sectionOpts = sectionEl ? Array.from(sectionEl.options).slice(1) : [];
+  const gradeOpts = gradeEl ? Array.from(gradeEl.options).slice(1) : [];
 
-  function applyFilters() {
+  function filterGrades() {
     const stage = stageEl ? stageEl.value.trim() : '';
-
-    // Grades visible for the chosen stage.
     for (const opt of gradeOpts) {
       opt.hidden = stage ? (opt.dataset.stage || '').trim() !== stage : false;
     }
-    // If the currently selected grade is now hidden, clear the visible selection.
     if (gradeEl) {
       const selG = gradeEl.selectedOptions[0];
       if (selG && selG.hidden) gradeEl.value = '';
     }
-
-    // Sections: prefer filtering by the selected grade; otherwise by stage.
-    const gradeId = gradeEl ? gradeEl.value : '';
-    for (const opt of sectionOpts) {
-      let show = true;
-      if (gradeId) {
-        show = opt.dataset.gradeId === gradeId;
-      } else if (stage) {
-        show = (opt.dataset.stage || '').trim() === stage;
-      }
-      opt.hidden = !show;
-    }
-    if (sectionEl) {
-      const selS = sectionEl.selectedOptions[0];
-      if (selS && selS.hidden) sectionEl.value = '';
-    }
   }
 
-  stageEl?.addEventListener('change', applyFilters);
+  stageEl?.addEventListener('change', filterGrades);
+  // Changing the grade resets to the whole-grade schedule (grade_id only).
   gradeEl?.addEventListener('change', function () { this.form.submit(); });
+  // Choosing a section (or "بدون شعبة") submits its form.
   sectionEl?.addEventListener('change', function () { this.form.submit(); });
 
-  applyFilters();
+  filterGrades();
 })();
 </script>
 {% endblock %}

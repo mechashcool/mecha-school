@@ -72,18 +72,17 @@ def index():
     grade_id = request.args.get('grade_id', type=int)
 
     # ── Resolve which target we are managing ─────────────────────────────────
-    # Section takes precedence if both are passed. Default preserves the original
-    # behaviour: first section when sections exist; otherwise first grade so that
-    # schools without sections still land on a usable schedule.
+    # Flow: Grade (required) → optional Section.
+    #   * section_id present → manage that section's schedule (section-based)
+    #   * grade_id only      → manage the whole-grade schedule (grade-based)
+    #   * nothing            → default to the first grade (whole grade)
+    # Section takes precedence so an explicit section selection always wins.
     target_mode = None   # 'section' | 'grade' | None
     if sec_id:
         target_mode = 'section'
         grade_id = None
     elif grade_id:
         target_mode = 'grade'
-    elif sections:
-        sec_id = sections[0].id
-        target_mode = 'section'
     elif grades:
         grade_id = grades[0].id
         target_mode = 'grade'
@@ -113,6 +112,13 @@ def index():
     subjects  = _subjects_for_grade(effective_grade)
     teachers  = Employee.query.filter_by(status='active').order_by(Employee.full_name).all()
 
+    # Sections of the effective grade — used to populate the OPTIONAL section
+    # dropdown (admin may leave it on "بدون شعبة" to manage the whole grade).
+    effective_grade_sections = [
+        s for s in sections
+        if effective_grade and s.grade_id == effective_grade.id
+    ]
+
     # Display days: Sun-Thu only
     display_days = DAYS[:5]  # Sun-Thu
     display_day_indices = list(range(5))  # 0-4 for Sun-Thu
@@ -124,6 +130,7 @@ def index():
                            effective_grade=effective_grade,
                            effective_grade_id=(effective_grade.id if effective_grade else None),
                            effective_stage=(effective_grade.stage if effective_grade else None),
+                           effective_grade_sections=effective_grade_sections,
                            stages=STAGES,
                            schedule_grid=schedule_grid,
                            subjects=subjects, teachers=teachers,
