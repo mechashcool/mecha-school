@@ -6,362 +6,505 @@
 <div class="page-header">
   <div>
     <h1 class="page-title">إعدادات الحضور والغياب</h1>
-    <p class="page-subtitle">تحديد أوقات الدوام وحدود التأخر والغياب التلقائي</p>
+    <p class="page-subtitle">تحكم في أوقات الدوام وطريقة تسجيل الحضور والغياب التلقائي</p>
   </div>
   <a href="{{ url_for('attendance.index') }}" class="btn btn-outline-secondary">
     <i class="bi bi-arrow-right me-1"></i>سجل الحضور
   </a>
 </div>
 
-<div class="row g-4">
-  <div class="col-md-8">
-    <form method="POST">
+<form method="POST">
+
+  {# ─── 1. Attendance Mode Selector ─────────────────────────────────────── #}
+  <div class="mb-4">
+    <p class="fw-700 mb-3" style="font-size:15px">
+      <i class="bi bi-toggles text-accent me-1"></i>نوع نظام تسجيل الحضور
+    </p>
+    <div class="row g-3">
+
+      <div class="col-md-6">
+        <div id="modeNormalCard"
+             class="att-mode-card{{ '' if settings.enable_attendance_shifts else ' att-mode-active' }}"
+             onclick="selectAttMode('normal')">
+          <div class="d-flex align-items-start gap-3">
+            <div class="rounded-3 d-flex align-items-center justify-content-center flex-shrink-0"
+                 style="width:44px;height:44px;background:#eef2ff">
+              <i class="bi bi-clock-fill text-primary fs-5"></i>
+            </div>
+            <div>
+              <div class="d-flex align-items-center gap-2 mb-1">
+                <span class="fw-700">وضع الحضور الموحَّد</span>
+                {% if not settings.enable_attendance_shifts %}
+                <span class="badge bg-success">مفعَّل الآن</span>
+                {% endif %}
+              </div>
+              <p class="text-muted mb-0" style="font-size:12px;line-height:1.7">
+                جميع الطلاب يتبعون أوقات الدوام العامة للمدرسة.
+                مناسب للمدارس ذات دوام موحَّد واحد.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-md-6">
+        <div id="modeShiftsCard"
+             class="att-mode-card{{ ' att-mode-active' if settings.enable_attendance_shifts else '' }}"
+             onclick="selectAttMode('shifts')">
+          <div class="d-flex align-items-start gap-3">
+            <div class="rounded-3 d-flex align-items-center justify-content-center flex-shrink-0"
+                 style="width:44px;height:44px;background:#e8f6ff">
+              <i class="bi bi-layers-half text-info fs-5"></i>
+            </div>
+            <div>
+              <div class="d-flex align-items-center gap-2 mb-1">
+                <span class="fw-700">وضع الشفتات المتعددة</span>
+                {% if settings.enable_attendance_shifts %}
+                <span class="badge bg-success">مفعَّل الآن</span>
+                {% endif %}
+              </div>
+              <p class="text-muted mb-0" style="font-size:12px;line-height:1.7">
+                كل شعبة تتبع شفتها بأوقاته المستقلة.
+                الشعب بدون شفت تستخدم الأوقات العامة كإعداد احتياطي.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+    {# hidden checkbox — the only field the backend reads for shifts toggle #}
+    {% if is_school_obj %}
+    <input type="checkbox" name="enable_attendance_shifts" id="shiftsToggle"
+           class="d-none" {{ 'checked' if settings.enable_attendance_shifts }}>
+    {% endif %}
+  </div>
+
+  <div class="row g-4">
+    <div class="col-lg-8">
+
+      {# ─── 2. Default School Timings ─────────────────────────────────────── #}
       <div class="card mb-4">
         <div class="card-header">
-          <i class="bi bi-clock-history text-accent"></i>أوقات الدوام والحدود الزمنية
+          <i class="bi bi-clock-history text-accent me-1"></i>الأوقات الافتراضية للمدرسة
         </div>
         <div class="card-body">
-          <p class="text-muted mb-4" style="font-size:13px">
-            يحدد النظام تلقائياً حالة الطالب بناءً على وقت الدخول:
-            <br>• الدخول قبل <b>حد التأخر</b> → <span class="text-success fw-600">حاضر</span>
-            <br>• الدخول بعد <b>حد التأخر</b> → <span style="color:#e8a020" class="fw-600">متأخر</span>
-            <br>• بدون حضور بحلول <b>حد الغياب</b> → <span class="text-danger fw-600">غائب تلقائياً</span> (عند الضغط على زر التسجيل التلقائي)
-          </p>
 
-          <div class="row g-3">
-            <div class="col-md-3">
-              <label class="form-label fw-600">
-                <i class="bi bi-door-open text-accent me-1"></i>وقت بدء الدوام
+          {# Context note — toggles with mode selection #}
+          <div id="shiftModeNote"
+               class="alert alert-info py-2 mb-3"
+               style="font-size:12px;{{ '' if settings.enable_attendance_shifts else 'display:none' }}">
+            <i class="bi bi-layers-half me-1"></i>
+            <b>وضع الشفتات مفعَّل:</b>
+            هذه الأوقات هي الإعداد الاحتياطي للشعب التي لم يُعيَّن لها شفت.
+            الشعب المرتبطة بشفت تتبع أوقات شفتها.
+          </div>
+          <div id="normalModeNote"
+               class="alert alert-light border py-2 mb-3"
+               style="font-size:12px;{{ 'display:none' if settings.enable_attendance_shifts else '' }}">
+            <i class="bi bi-clock me-1"></i>
+            هذه الأوقات تُطبَّق على جميع الطلاب في المدرسة.
+          </div>
+
+          {# 4 time inputs #}
+          <div class="row g-3 mb-3">
+            <div class="col-6 col-md-3">
+              <label class="form-label fw-600 small">
+                <span class="att-dot" style="background:#1a3a5c"></span>بدء الدوام
               </label>
               <input type="time" name="att_start_time"
                      value="{{ settings.att_start_time.strftime('%H:%M') if settings.att_start_time else '' }}"
-                     class="form-control form-control-lg">
-              <small class="text-muted">وقت فتح أبواب المدرسة</small>
+                     class="form-control text-center fw-600">
+              <small class="text-muted">فتح الأبواب</small>
             </div>
-
-            <div class="col-md-3">
-              <label class="form-label fw-600">
-                <i class="bi bi-clock text-warning me-1"></i>حد التأخر
+            <div class="col-6 col-md-3">
+              <label class="form-label fw-600 small">
+                <span class="att-dot" style="background:#e8a020"></span>حد التأخر
               </label>
               <input type="time" name="att_late_threshold"
                      value="{{ settings.att_late_threshold.strftime('%H:%M') if settings.att_late_threshold else '' }}"
-                     class="form-control form-control-lg" style="border-color:#e8a020">
-              <small class="text-muted">الدخول بعد هذا الوقت → <b style="color:#e8a020">متأخر</b></small>
+                     class="form-control text-center fw-600" style="border-color:#e8a020">
+              <small class="text-muted">الدخول بعده → <b style="color:#e8a020">متأخر</b></small>
             </div>
-
-            <div class="col-md-3">
-              <label class="form-label fw-600">
-                <i class="bi bi-x-circle text-danger me-1"></i>حد الغياب التلقائي
+            <div class="col-6 col-md-3">
+              <label class="form-label fw-600 small">
+                <span class="att-dot" style="background:#e03e3e"></span>حد الغياب التلقائي
               </label>
               <input type="time" name="att_absence_threshold"
                      value="{{ settings.att_absence_threshold.strftime('%H:%M') if settings.att_absence_threshold else '' }}"
-                     class="form-control form-control-lg" style="border-color:#e03e3e">
-              <small class="text-muted">بدون حضور بحلول هذا الوقت → <b class="text-danger">غائب تلقائياً</b></small>
+                     class="form-control text-center fw-600" style="border-color:#e03e3e">
+              <small class="text-muted">بدون حضور بحلوله → <b class="text-danger">غائب</b></small>
             </div>
-
-            <div class="col-md-3">
-              <label class="form-label fw-600">
-                <i class="bi bi-door-closed text-secondary me-1"></i>وقت الانصراف
+            <div class="col-6 col-md-3">
+              <label class="form-label fw-600 small">
+                <span class="att-dot" style="background:#6c757d"></span>وقت الانصراف
               </label>
               <input type="time" name="att_departure_time"
                      value="{{ settings.att_departure_time.strftime('%H:%M') if settings.att_departure_time else '' }}"
-                     class="form-control form-control-lg" style="border-color:#6c757d">
-              <small class="text-muted">المسح بعد هذا الوقت → تسجيل <b>وقت الخروج</b></small>
+                     class="form-control text-center fw-600" style="border-color:#6c757d">
+              <small class="text-muted">المسح بعده → <b>خروج</b></small>
             </div>
           </div>
 
-          <div class="alert alert-warning mt-4 mb-0 py-2" style="font-size:13px">
+          <div class="alert alert-warning py-2 mb-0" style="font-size:12px">
             <i class="bi bi-info-circle me-1"></i>
-            اتركها فارغةً لتعطيل المنطق الزمني التلقائي — سيُعامَل كل حضور مسجَّل كـ "حاضر".
+            اتركها فارغةً لتعطيل المنطق الزمني التلقائي — كل حضور مسجَّل يُعامَل كـ"حاضر".
           </div>
         </div>
       </div>
 
-      {% if settings.att_start_time or settings.att_late_threshold or settings.att_absence_threshold or settings.att_departure_time %}
+      {# ─── 3. How Auto-Absence Works ────────────────────────────────────── #}
       <div class="card mb-4">
-        <div class="card-header">
-          <i class="bi bi-diagram-3 text-accent"></i>الإعدادات النشطة حالياً
+        <div class="card-header d-flex align-items-center"
+             role="button" data-bs-toggle="collapse"
+             data-bs-target="#autoAbsenceHelp" aria-expanded="false">
+          <i class="bi bi-question-circle text-accent me-1"></i>
+          كيف يعمل الغياب التلقائي وزر "تسجيل الغياب"؟
+          <i class="bi bi-chevron-down collapse-chevron ms-auto"></i>
         </div>
-        <div class="card-body py-3">
-          <div class="d-flex gap-4 flex-wrap">
-            {% if settings.att_start_time %}
-            <div class="text-center px-3 py-2 rounded" style="background:#f0f4ff;border:1px solid #c7d5f5">
-              <div style="font-size:22px;font-weight:800;color:#1a3a5c">
-                {{ settings.att_start_time.strftime('%H:%M') }}
+        <div class="collapse" id="autoAbsenceHelp">
+          <div class="card-body" style="font-size:13px;line-height:1.9">
+            <div class="row g-3 mb-3">
+              <div class="col-md-6">
+                <div class="p-3 rounded-3" style="background:#f8f9ff;border:1px solid #d5ddf5">
+                  <div class="fw-700 mb-2">
+                    <i class="bi bi-clock-fill text-primary me-1"></i>وضع الحضور الموحَّد
+                  </div>
+                  <p class="text-muted mb-0">
+                    عند الضغط على "تسجيل الغياب"، يُحدَّد كل طالب لم يُسجَّل حضوره حتى
+                    <b>حد الغياب التلقائي</b> كغائب لهذا اليوم.
+                  </p>
+                </div>
               </div>
-              <div style="font-size:12px;color:#555">بدء الدوام</div>
-            </div>
-            {% endif %}
-            {% if settings.att_late_threshold %}
-            <div class="text-center px-3 py-2 rounded" style="background:#fff8ec;border:1px solid #f0c060">
-              <div style="font-size:22px;font-weight:800;color:#e8a020">
-                {{ settings.att_late_threshold.strftime('%H:%M') }}
+              <div class="col-md-6">
+                <div class="p-3 rounded-3" style="background:#f0faff;border:1px solid #b8e0f5">
+                  <div class="fw-700 mb-2">
+                    <i class="bi bi-layers-half text-info me-1"></i>وضع الشفتات
+                  </div>
+                  <p class="text-muted mb-0">
+                    يعمل تسجيل الغياب لكل شفت بشكل مستقل — باستخدام
+                    <b>حد الغياب الخاص بذلك الشفت</b>.
+                    الشعب بدون شفت تستخدم حد الغياب الافتراضي.
+                  </p>
+                </div>
               </div>
-              <div style="font-size:12px;color:#555">حد التأخر</div>
             </div>
-            {% endif %}
-            {% if settings.att_absence_threshold %}
-            <div class="text-center px-3 py-2 rounded" style="background:#fff0f0;border:1px solid #f0b0b0">
-              <div style="font-size:22px;font-weight:800;color:#e03e3e">
-                {{ settings.att_absence_threshold.strftime('%H:%M') }}
-              </div>
-              <div style="font-size:12px;color:#555">حد الغياب</div>
-            </div>
-            {% endif %}
-            {% if settings.att_departure_time %}
-            <div class="text-center px-3 py-2 rounded" style="background:#f4f4f4;border:1px solid #bbb">
-              <div style="font-size:22px;font-weight:800;color:#444">
-                {{ settings.att_departure_time.strftime('%H:%M') }}
-              </div>
-              <div style="font-size:12px;color:#555">وقت الانصراف</div>
-            </div>
-            {% endif %}
-          </div>
-        </div>
-      </div>
-      {% endif %}
-
-      {# ── Employee absence limit ──────────────────────────────────────────── #}
-      <div class="card mb-4">
-        <div class="card-header">
-          <i class="bi bi-person-x text-danger"></i> حد غياب الموظفين (HR)
-        </div>
-        <div class="card-body">
-          <p class="text-muted mb-3" style="font-size:13px">
-            عند تجاوز الموظف الحد المسموح، يظهر تحذير في تقرير حضور الموظفين.
-          </p>
-          <div class="row g-3">
-            <div class="col-md-3">
-              <label class="form-label fw-600">
-                <i class="bi bi-123 text-danger me-1"></i>الحد المسموح (أيام)
-              </label>
-              <input type="number" name="emp_absence_limit" min="1" max="365"
-                     class="form-control"
-                     value="{{ settings.emp_absence_limit if settings.emp_absence_limit else '' }}"
-                     placeholder="مثال: 5">
-              <small class="text-muted">اتركه فارغاً لتعطيل التحذير</small>
-            </div>
-            <div class="col-md-3">
-              <label class="form-label fw-600">
-                <i class="bi bi-calendar-range text-warning me-1"></i>نوع الفترة
-              </label>
-              <select name="emp_absence_period" class="form-select">
-                <option value="monthly"
-                  {{ 'selected' if not settings.emp_absence_period or settings.emp_absence_period == 'monthly' }}>
-                  شهرياً
-                </option>
-                <option value="yearly"
-                  {{ 'selected' if settings.emp_absence_period == 'yearly' }}>
-                  سنوياً
-                </option>
-                <option value="range"
-                  {{ 'selected' if settings.emp_absence_period == 'range' }}>
-                  في الفترة المحددة في التقرير
-                </option>
-              </select>
-            </div>
-            <div class="col-md-3 d-flex align-items-end">
-              <div class="form-check form-switch mt-2">
-                <input class="form-check-input" type="checkbox" role="switch"
-                       name="emp_absence_alert_enabled" id="empAlertSwitch"
-                       {{ 'checked' if settings.emp_absence_alert_enabled is not defined or settings.emp_absence_alert_enabled }}>
-                <label class="form-check-label fw-600" for="empAlertSwitch">
-                  تفعيل تحذيرات الغياب
-                </label>
-              </div>
+            <div class="border-top pt-3" style="font-size:12px">
+              <p class="text-muted mb-1">
+                <i class="bi bi-door-closed me-1"></i>
+                <b>وقت الانصراف:</b>
+                مسح بطاقة الطالب بعد هذا الوقت يُسجِّل وقت الخروج بدلاً من وقت الدخول.
+                إذا تُرك فارغاً لا يُسجَّل أي وقت خروج.
+              </p>
+              <p class="text-muted mb-0">
+                <i class="bi bi-x-circle text-danger me-1"></i>
+                <b>حد الغياب التلقائي:</b>
+                الطالب الذي لم يُسجَّل له حضور بحلول هذا الوقت يُعدُّ غائباً عند الضغط على زر التسجيل التلقائي.
+              </p>
             </div>
           </div>
         </div>
       </div>
 
-      {# ── Attendance shifts feature toggle ──────────────────────────────────── #}
-      {% if is_school_obj %}
+      {# ─── 4. Employee Absence (HR) — collapsible secondary section ──────── #}
       <div class="card mb-4">
-        <div class="card-header">
-          <i class="bi bi-layers-half text-accent"></i>نظام الشفتات للحضور والغياب
+        <div class="card-header d-flex align-items-center"
+             role="button" data-bs-toggle="collapse"
+             data-bs-target="#empAbsenceCard" aria-expanded="false">
+          <i class="bi bi-person-x text-danger me-1"></i>حد غياب الموظفين (إعدادات HR)
+          <span class="badge bg-secondary ms-2" style="font-size:10px">تقارير الموظفين</span>
+          <i class="bi bi-chevron-down collapse-chevron ms-auto"></i>
         </div>
-        <div class="card-body">
-          <p class="text-muted mb-3" style="font-size:13px">
-            عند التفعيل، يستخدم النظام الشفت المعيَّن للشعبة (صباحي / ظهري) بدلاً من الأوقات العامة أعلاه.
-            يتيح هذا تشغيل جهاز واحد لكلا الدوامين وتسجيل الغياب التلقائي لكل شفت بشكل مستقل.
-          </p>
-          <div class="form-check form-switch">
-            <input class="form-check-input" type="checkbox" role="switch"
-                   name="enable_attendance_shifts" id="shiftsSwitch"
-                   {{ 'checked' if settings.enable_attendance_shifts }}>
-            <label class="form-check-label fw-600" for="shiftsSwitch">
-              تفعيل نظام الشفتات للحضور والغياب
-            </label>
+        <div class="collapse" id="empAbsenceCard">
+          <div class="card-body">
+            <p class="text-muted mb-3" style="font-size:13px">
+              عند تجاوز الموظف الحد المسموح، يظهر تحذير في تقرير حضور الموظفين.
+              هذا الإعداد لا يؤثر على تسجيل حضور الطلاب.
+            </p>
+            <div class="row g-3">
+              <div class="col-md-4">
+                <label class="form-label fw-600">الحد المسموح (أيام)</label>
+                <input type="number" name="emp_absence_limit" min="1" max="365"
+                       class="form-control"
+                       value="{{ settings.emp_absence_limit if settings.emp_absence_limit else '' }}"
+                       placeholder="مثال: 5">
+                <small class="text-muted">اتركه فارغاً لتعطيل التحذير</small>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label fw-600">نوع الفترة</label>
+                <select name="emp_absence_period" class="form-select">
+                  <option value="monthly" {{ 'selected' if not settings.emp_absence_period or settings.emp_absence_period == 'monthly' }}>شهرياً</option>
+                  <option value="yearly"  {{ 'selected' if settings.emp_absence_period == 'yearly' }}>سنوياً</option>
+                  <option value="range"   {{ 'selected' if settings.emp_absence_period == 'range' }}>في الفترة المحددة بالتقرير</option>
+                </select>
+              </div>
+              <div class="col-md-4 d-flex align-items-end">
+                <div class="form-check form-switch mt-2">
+                  <input class="form-check-input" type="checkbox" role="switch"
+                         name="emp_absence_alert_enabled" id="empAlertSwitch"
+                         {{ 'checked' if settings.emp_absence_alert_enabled is not defined or settings.emp_absence_alert_enabled }}>
+                  <label class="form-check-label fw-600" for="empAlertSwitch">تفعيل تحذيرات الغياب</label>
+                </div>
+              </div>
+            </div>
           </div>
-          {% if settings.enable_attendance_shifts %}
-          <div class="alert alert-info mt-3 mb-0 py-2" style="font-size:12px">
-            <i class="bi bi-info-circle me-1"></i>
-            الأوقات العامة أعلاه تُستخدم فقط للشعب التي لا يوجد لها شفت معيَّن.
-            يُنصح بتعيين شفت لكل شعبة لضمان دقة الغياب التلقائي.
-          </div>
-          {% endif %}
         </div>
       </div>
-      {% endif %}
 
       <button type="submit" class="btn btn-primary btn-lg px-5">
         <i class="bi bi-check-circle-fill me-2"></i>حفظ الإعدادات
       </button>
-    </form>
-  </div>
 
-  <div class="col-md-4">
-    <div class="card">
-      <div class="card-header">
-        <i class="bi bi-question-circle text-accent"></i>دليل الإعدادات
+    </div>{# /col-lg-8 #}
+
+    {# ─── Right sidebar ──────────────────────────────────────────────────── #}
+    <div class="col-lg-4">
+
+      {# Active settings at a glance #}
+      <div class="card mb-4">
+        <div class="card-header">
+          <i class="bi bi-activity text-accent me-1"></i>الإعدادات النشطة
+        </div>
+        <div class="card-body p-0">
+          {% if settings.att_start_time or settings.att_late_threshold or settings.att_absence_threshold or settings.att_departure_time %}
+          <div class="list-group list-group-flush" style="font-size:13px">
+            {% if settings.att_start_time %}
+            <div class="list-group-item d-flex justify-content-between align-items-center">
+              <span class="text-muted"><span class="att-dot" style="background:#1a3a5c"></span>بدء الدوام</span>
+              <span class="fw-700" style="color:#1a3a5c">{{ settings.att_start_time.strftime('%H:%M') }}</span>
+            </div>
+            {% endif %}
+            {% if settings.att_late_threshold %}
+            <div class="list-group-item d-flex justify-content-between align-items-center">
+              <span class="text-muted"><span class="att-dot" style="background:#e8a020"></span>حد التأخر</span>
+              <span class="fw-700" style="color:#e8a020">{{ settings.att_late_threshold.strftime('%H:%M') }}</span>
+            </div>
+            {% endif %}
+            {% if settings.att_absence_threshold %}
+            <div class="list-group-item d-flex justify-content-between align-items-center">
+              <span class="text-muted"><span class="att-dot" style="background:#e03e3e"></span>حد الغياب</span>
+              <span class="fw-700 text-danger">{{ settings.att_absence_threshold.strftime('%H:%M') }}</span>
+            </div>
+            {% endif %}
+            {% if settings.att_departure_time %}
+            <div class="list-group-item d-flex justify-content-between align-items-center">
+              <span class="text-muted"><span class="att-dot" style="background:#6c757d"></span>وقت الانصراف</span>
+              <span class="fw-700 text-secondary">{{ settings.att_departure_time.strftime('%H:%M') }}</span>
+            </div>
+            {% endif %}
+          </div>
+          {% else %}
+          <div class="p-3 text-muted text-center" style="font-size:13px">
+            <i class="bi bi-dash-circle me-1"></i>لم تُضبَط أوقات بعد
+          </div>
+          {% endif %}
+        </div>
       </div>
-      <div class="card-body" style="font-size:13px;line-height:1.8">
-        <p><b>مثال عملي:</b></p>
-        <ul class="text-muted ps-3">
-          <li>بدء الدوام: <b>08:00</b></li>
-          <li>حد التأخر: <b>08:15</b></li>
-          <li>حد الغياب: <b>09:00</b></li>
-          <li>وقت الانصراف: <b>13:00</b></li>
-        </ul>
-        <p class="text-muted">
-          → الدخول قبل 08:15 → <b class="text-success">حاضر</b>.<br>
-          → الدخول بعد 08:15 → <b style="color:#e8a020">متأخر</b>.<br>
-          → بدون حضور بحلول 09:00 → <b class="text-danger">غائب تلقائياً</b>.<br>
-          → مسح البطاقة بعد 13:00 → تسجيل <b>وقت الخروج</b>.
-        </p>
-        <hr>
-        <p class="text-muted mb-0">
-          <i class="bi bi-globe me-1"></i>المنطقة الزمنية المستخدمة: <b>{{ settings.timezone or 'Asia/Baghdad' }}</b>
-          <br><small>يمكن تغييرها من <a href="{{ url_for('admin.school_settings') }}">هوية المدرسة</a>.</small>
-        </p>
+
+      {# Timezone #}
+      <div class="card mb-4">
+        <div class="card-body py-3" style="font-size:13px">
+          <div class="d-flex align-items-center gap-2">
+            <i class="bi bi-globe text-accent fs-5 flex-shrink-0"></i>
+            <div class="flex-grow-1">
+              <div class="fw-600">المنطقة الزمنية</div>
+              <div class="text-muted">{{ settings.timezone or 'Asia/Baghdad' }}</div>
+            </div>
+            <a href="{{ url_for('admin.school_settings') }}"
+               class="btn btn-sm btn-outline-secondary">تغيير</a>
+          </div>
+        </div>
       </div>
-    </div>
-  </div>
+
+      {# Mode summary #}
+      <div class="card mb-4">
+        <div class="card-body py-3" style="font-size:13px">
+          <div class="fw-700 mb-2"><i class="bi bi-toggles text-accent me-1"></i>الوضع النشط</div>
+          {% if settings.enable_attendance_shifts %}
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge bg-info text-white">وضع الشفتات</span>
+            <span class="text-muted">الشعب تتبع شفتاتها المعيَّنة</span>
+          </div>
+          {% else %}
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge bg-primary">وضع الحضور الموحَّد</span>
+            <span class="text-muted">أوقات عامة لجميع الطلاب</span>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      {# Quick example guide #}
+      <div class="card">
+        <div class="card-header d-flex align-items-center"
+             role="button" data-bs-toggle="collapse"
+             data-bs-target="#settingsGuide" aria-expanded="false">
+          <i class="bi bi-book text-accent me-1"></i>مثال توضيحي
+          <i class="bi bi-chevron-down collapse-chevron ms-auto"></i>
+        </div>
+        <div class="collapse" id="settingsGuide">
+          <div class="card-body" style="font-size:13px;line-height:1.9">
+            <ul class="text-muted ps-3 mb-2">
+              <li>بدء الدوام: <b>08:00</b></li>
+              <li>حد التأخر: <b>08:15</b></li>
+              <li>حد الغياب: <b>09:00</b></li>
+              <li>وقت الانصراف: <b>13:00</b></li>
+            </ul>
+            <p class="text-muted mb-0">
+              → الدخول قبل 08:15 → <b class="text-success">حاضر</b><br>
+              → الدخول بعد 08:15 → <b style="color:#e8a020">متأخر</b><br>
+              → بدون حضور بحلول 09:00 → <b class="text-danger">غائب تلقائياً</b><br>
+              → مسح البطاقة بعد 13:00 → <b>وقت الخروج</b>
+            </p>
+          </div>
+        </div>
+      </div>
+
+    </div>{# /col-lg-4 #}
+  </div>{# /row #}
+
+</form>
+
+{# ─── Shifts Management — outside main form ─────────────────────────────── #}
+{% if is_school_obj %}
+<hr class="my-4">
+<div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
+  <h5 class="mb-0 fw-700">
+    <i class="bi bi-layers-half text-accent me-1"></i>إدارة الشفتات
+  </h5>
+  {% if settings.enable_attendance_shifts %}
+  <span class="badge bg-success">نظام الشفتات مفعَّل</span>
+  {% else %}
+  <span class="badge bg-secondary">نظام الشفتات معطَّل</span>
+  <span class="text-muted small">فعِّل وضع الشفتات من الأعلى لتطبيقها</span>
+  {% endif %}
 </div>
 
-{# ── Shifts management — shown only for school objects (not global settings) ── #}
-{% if is_school_obj %}
-<div class="mt-4">
-  <div class="d-flex align-items-center gap-3 mb-3">
-    <h5 class="mb-0 fw-700">
-      <i class="bi bi-layers-half text-accent me-1"></i>إدارة الشفتات
-    </h5>
-    {% if not settings.enable_attendance_shifts %}
-    <span class="badge bg-secondary">معطَّل — فعِّل نظام الشفتات أعلاه لاستخدامه</span>
-    {% endif %}
-  </div>
+{% if not settings.enable_attendance_shifts %}
+<div class="alert alert-light border mb-4" style="font-size:13px">
+  <i class="bi bi-info-circle me-1"></i>
+  يمكنك إضافة الشفتات وتعديلها الآن، لكنها لن تُفعَّل حتى تختار <b>وضع الشفتات المتعددة</b> من الأعلى وتحفظ الإعدادات.
+</div>
+{% endif %}
 
-  {# Shifts table #}
-  {% if active_shifts or inactive_shifts %}
-  <div class="card mb-4">
-    <div class="card-header">الشفتات الحالية</div>
-    <div class="table-wrapper">
-      <table class="table table-sm mb-0">
-        <thead>
-          <tr>
-            <th>الاسم</th>
-            <th>بداية الدوام</th>
-            <th>حد التأخر</th>
-            <th>حد الغياب</th>
-            <th>وقت الانصراف</th>
-            <th>الحالة</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for shift in active_shifts + inactive_shifts %}
-          <tr class="{{ '' if shift.is_active else 'text-muted' }}">
-            <td class="fw-600">{{ shift.name }}</td>
-            <td>{{ shift.start_time.strftime('%H:%M') if shift.start_time }}</td>
-            <td>{{ shift.late_after_time.strftime('%H:%M') if shift.late_after_time }}</td>
-            <td>{{ shift.absent_after_time.strftime('%H:%M') if shift.absent_after_time }}</td>
-            <td>{{ shift.dismissal_time.strftime('%H:%M') if shift.dismissal_time else '—' }}</td>
-            <td>
-              {% if shift.is_active %}
-              <span class="badge-status badge-active">مفعَّل</span>
-              {% else %}
-              <span class="badge bg-secondary">معطَّل</span>
-              {% endif %}
-            </td>
-            <td>
-              <div class="d-flex gap-1">
-                <button class="btn btn-sm btn-outline-secondary"
-                        data-shift-id="{{ shift.id }}"
-                        data-shift-name="{{ shift.name }}"
-                        data-start="{{ shift.start_time.strftime('%H:%M') if shift.start_time else '' }}"
-                        data-late="{{ shift.late_after_time.strftime('%H:%M') if shift.late_after_time else '' }}"
-                        data-absent="{{ shift.absent_after_time.strftime('%H:%M') if shift.absent_after_time else '' }}"
-                        data-dismissal="{{ shift.dismissal_time.strftime('%H:%M') if shift.dismissal_time else '' }}"
-                        onclick="showEditShift(this)">
-                  <i class="bi bi-pencil"></i>
+{% if active_shifts or inactive_shifts %}
+<div class="card mb-4">
+  <div class="card-header">الشفتات المضافة</div>
+  <div class="table-wrapper">
+    <table class="table table-sm mb-0">
+      <thead>
+        <tr>
+          <th>اسم الشفت</th>
+          <th>بداية الدوام</th>
+          <th>حد التأخر</th>
+          <th>حد الغياب</th>
+          <th>وقت الانصراف</th>
+          <th>الحالة</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for shift in active_shifts + inactive_shifts %}
+        <tr class="{{ '' if shift.is_active else 'text-muted' }}">
+          <td class="fw-600">{{ shift.name }}</td>
+          <td>{{ shift.start_time.strftime('%H:%M') if shift.start_time else '—' }}</td>
+          <td><span style="color:#e8a020">{{ shift.late_after_time.strftime('%H:%M') if shift.late_after_time else '—' }}</span></td>
+          <td><span class="text-danger">{{ shift.absent_after_time.strftime('%H:%M') if shift.absent_after_time else '—' }}</span></td>
+          <td>{{ shift.dismissal_time.strftime('%H:%M') if shift.dismissal_time else '—' }}</td>
+          <td>
+            {% if shift.is_active %}
+            <span class="badge-status badge-active">مفعَّل</span>
+            {% else %}
+            <span class="badge bg-secondary">معطَّل</span>
+            {% endif %}
+          </td>
+          <td>
+            <div class="d-flex gap-1">
+              <button class="btn btn-sm btn-outline-secondary"
+                      data-shift-id="{{ shift.id }}"
+                      data-shift-name="{{ shift.name }}"
+                      data-start="{{ shift.start_time.strftime('%H:%M') if shift.start_time else '' }}"
+                      data-late="{{ shift.late_after_time.strftime('%H:%M') if shift.late_after_time else '' }}"
+                      data-absent="{{ shift.absent_after_time.strftime('%H:%M') if shift.absent_after_time else '' }}"
+                      data-dismissal="{{ shift.dismissal_time.strftime('%H:%M') if shift.dismissal_time else '' }}"
+                      onclick="showEditShift(this)" title="تعديل">
+                <i class="bi bi-pencil"></i>
+              </button>
+              <form method="POST"
+                    action="{{ url_for('shifts.toggle_shift', shift_id=shift.id) }}"
+                    class="d-inline">
+                <button class="btn btn-sm {{ 'btn-outline-warning' if shift.is_active else 'btn-outline-success' }}"
+                        title="{{ 'تعطيل' if shift.is_active else 'تفعيل' }}">
+                  <i class="bi {{ 'bi-pause-circle' if shift.is_active else 'bi-play-circle' }}"></i>
                 </button>
-                <form method="POST"
-                      action="{{ url_for('shifts.toggle_shift', shift_id=shift.id) }}"
-                      class="d-inline">
-                  <button class="btn btn-sm {{ 'btn-outline-warning' if shift.is_active else 'btn-outline-success' }}"
-                          title="{{ 'تعطيل' if shift.is_active else 'تفعيل' }}">
-                    <i class="bi {{ 'bi-pause-circle' if shift.is_active else 'bi-play-circle' }}"></i>
-                  </button>
-                </form>
-                <form method="POST"
-                      action="{{ url_for('shifts.delete_shift', shift_id=shift.id) }}"
-                      class="d-inline">
-                  <button class="btn btn-sm btn-outline-danger"
-                          data-confirm="حذف الشفت '{{ shift.name }}'؟ لا يمكن حذفه إذا كانت شعب مرتبطة به.">
-                    <i class="bi bi-trash"></i>
-                  </button>
-                </form>
-              </div>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+              </form>
+              <form method="POST"
+                    action="{{ url_for('shifts.delete_shift', shift_id=shift.id) }}"
+                    class="d-inline">
+                <button class="btn btn-sm btn-outline-danger"
+                        data-confirm="حذف الشفت '{{ shift.name }}'؟ لا يمكن حذفه إذا كانت شعب مرتبطة به.">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
-  {% else %}
-  <div class="alert alert-light border mb-4" style="font-size:13px">
-    <i class="bi bi-info-circle me-1"></i>
-    لا توجد شفتات مضافة بعد. أضف شفتاً من النموذج أدناه.
-  </div>
-  {% endif %}
+</div>
+{% else %}
+<div class="alert alert-light border mb-4" style="font-size:13px">
+  <i class="bi bi-info-circle me-1"></i>
+  لا توجد شفتات مضافة بعد. أضف شفتاً من النموذج أدناه.
+</div>
+{% endif %}
 
-  {# Add shift form #}
-  <div class="card">
-    <div class="card-header">
-      <i class="bi bi-plus-circle-fill text-accent"></i>إضافة شفت جديد
-    </div>
-    <div class="card-body">
-      <form method="POST" action="{{ url_for('shifts.create_shift') }}" class="row g-3">
-        <div class="col-md-3">
-          <label class="form-label fw-600">اسم الشفت <span class="text-danger">*</span></label>
-          <input type="text" name="name" class="form-control"
-                 placeholder="مثال: الدوام الصباحي" required>
-        </div>
-        <div class="col-md-2">
-          <label class="form-label fw-600"><i class="bi bi-door-open text-accent me-1"></i>بداية الدوام <span class="text-danger">*</span></label>
-          <input type="time" name="start_time" class="form-control" required>
-        </div>
-        <div class="col-md-2">
-          <label class="form-label fw-600"><i class="bi bi-clock text-warning me-1"></i>حد التأخر <span class="text-danger">*</span></label>
-          <input type="time" name="late_after_time" class="form-control" style="border-color:#e8a020" required>
-        </div>
-        <div class="col-md-2">
-          <label class="form-label fw-600"><i class="bi bi-x-circle text-danger me-1"></i>حد الغياب <span class="text-danger">*</span></label>
-          <input type="time" name="absent_after_time" class="form-control" style="border-color:#e03e3e" required>
-        </div>
-        <div class="col-md-2">
-          <label class="form-label fw-600"><i class="bi bi-door-closed text-secondary me-1"></i>وقت الانصراف</label>
-          <input type="time" name="dismissal_time" class="form-control">
-          <small class="text-muted">اختياري</small>
-        </div>
-        <div class="col-md-1 d-flex align-items-end">
-          <button type="submit" class="btn btn-primary w-100">
-            <i class="bi bi-plus-circle-fill"></i>
-          </button>
-        </div>
-      </form>
-    </div>
+<div class="card">
+  <div class="card-header">
+    <i class="bi bi-plus-circle-fill text-accent me-1"></i>إضافة شفت جديد
+  </div>
+  <div class="card-body">
+    <form method="POST" action="{{ url_for('shifts.create_shift') }}" class="row g-3">
+      <div class="col-md-3">
+        <label class="form-label fw-600">اسم الشفت <span class="text-danger">*</span></label>
+        <input type="text" name="name" class="form-control"
+               placeholder="مثال: الدوام الصباحي" required>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label fw-600 small">
+          <i class="bi bi-door-open text-accent me-1"></i>بداية الدوام <span class="text-danger">*</span>
+        </label>
+        <input type="time" name="start_time" class="form-control" required>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label fw-600 small">
+          <i class="bi bi-clock text-warning me-1"></i>حد التأخر <span class="text-danger">*</span>
+        </label>
+        <input type="time" name="late_after_time" class="form-control"
+               style="border-color:#e8a020" required>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label fw-600 small">
+          <i class="bi bi-x-circle text-danger me-1"></i>حد الغياب <span class="text-danger">*</span>
+        </label>
+        <input type="time" name="absent_after_time" class="form-control"
+               style="border-color:#e03e3e" required>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label fw-600 small">
+          <i class="bi bi-door-closed text-secondary me-1"></i>وقت الانصراف
+        </label>
+        <input type="time" name="dismissal_time" class="form-control">
+        <small class="text-muted">اختياري</small>
+      </div>
+      <div class="col-md-1 d-flex align-items-end">
+        <button type="submit" class="btn btn-primary w-100">
+          <i class="bi bi-plus-circle-fill"></i>
+        </button>
+      </div>
+    </form>
   </div>
 </div>
 
@@ -407,18 +550,64 @@
     </div>
   </div>
 </div>
-{% endif %}
+
+{% endif %}{# is_school_obj #}
+
+<style>
+.att-mode-card {
+  border: 2px solid #dee2e6;
+  border-radius: 10px;
+  padding: 16px;
+  transition: border-color .2s, background .2s, box-shadow .2s;
+  background: #fff;
+  cursor: pointer;
+  user-select: none;
+}
+.att-mode-card:hover {
+  border-color: #1a3a5c;
+  box-shadow: 0 2px 8px rgba(26,58,92,.1);
+}
+.att-mode-active {
+  border-color: #1a3a5c !important;
+  background: #f0f4ff !important;
+  box-shadow: 0 2px 12px rgba(26,58,92,.12);
+}
+.att-dot {
+  display: inline-block;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  margin-left: 5px;
+  vertical-align: middle;
+}
+.collapse-chevron { transition: transform .2s; }
+[aria-expanded="true"] .collapse-chevron { transform: rotate(180deg); }
+</style>
 {% endblock %}
 
 {% block extra_js %}
 <script>
+function selectAttMode(mode) {
+  var chk = document.getElementById('shiftsToggle');
+  if (chk) chk.checked = (mode === 'shifts');
+
+  var normalCard = document.getElementById('modeNormalCard');
+  var shiftsCard = document.getElementById('modeShiftsCard');
+  if (normalCard) normalCard.classList.toggle('att-mode-active', mode === 'normal');
+  if (shiftsCard) shiftsCard.classList.toggle('att-mode-active', mode === 'shifts');
+
+  var shiftNote  = document.getElementById('shiftModeNote');
+  var normalNote = document.getElementById('normalModeNote');
+  if (shiftNote)  shiftNote.style.display  = (mode === 'shifts') ? '' : 'none';
+  if (normalNote) normalNote.style.display = (mode === 'normal') ? '' : 'none';
+}
+
 function showEditShift(btn) {
-  document.getElementById('editShiftName').value     = btn.dataset.shiftName;
-  document.getElementById('editShiftStart').value    = btn.dataset.start;
-  document.getElementById('editShiftLate').value     = btn.dataset.late;
-  document.getElementById('editShiftAbsent').value   = btn.dataset.absent;
+  document.getElementById('editShiftName').value      = btn.dataset.shiftName;
+  document.getElementById('editShiftStart').value     = btn.dataset.start;
+  document.getElementById('editShiftLate').value      = btn.dataset.late;
+  document.getElementById('editShiftAbsent').value    = btn.dataset.absent;
   document.getElementById('editShiftDismissal').value = btn.dataset.dismissal;
-  document.getElementById('editShiftForm').action    =
+  document.getElementById('editShiftForm').action     =
     '/attendance-shifts/' + btn.dataset.shiftId + '/edit';
   new bootstrap.Modal(document.getElementById('editShiftModal')).show();
 }
