@@ -303,20 +303,41 @@
         </div>
         <div class="collapse{{ ' show' if has_assignments }}" id="collapseTeacher">
           <div class="card-body">
-            {# Hidden flag so backend knows this section was submitted #}
             <input type="hidden" name="save_teacher_section" value="1">
 
-            {% if sections %}
-            {# Homeroom sections #}
-            <h6 class="fw-semibold mb-2">الصفوف الرئيسية (مشرف الصف)</h6>
-            <div class="row g-2 mb-4">
+            {% if sections or subjects %}
+
+            {# ── Stage / Grade filter row ── #}
+            <div class="row g-3 mb-3 align-items-end">
+              <div class="col-md-5" id="taStageCol">
+                <label class="form-label fw-semibold small text-muted">المرحلة الدراسية</label>
+                <select id="taStageFilter" class="form-select">
+                  <option value="">— اختر المرحلة —</option>
+                </select>
+              </div>
+              <div class="col-md-5">
+                <label class="form-label fw-semibold small text-muted">الصف الدراسي</label>
+                <select id="taGradeFilter" class="form-select" disabled>
+                  <option value="">— اختر الصف —</option>
+                </select>
+              </div>
+            </div>
+
+            {# Prompt shown before a grade is chosen #}
+            <p id="taSelectHint" class="text-muted small mb-3">
+              <i class="bi bi-arrow-up-circle me-1"></i>
+              اختر المرحلة والصف لعرض الشعب والمواد الخاصة بهذا الصف.
+            </p>
+
+            {# ── Homeroom sections — one panel per grade in DOM ── #}
+            <div id="taHomeroomWrap" style="display:none">
+              <h6 class="fw-semibold mb-2">الصفوف الرئيسية (مشرف الصف)</h6>
               {% for grade in grades %}
-              {% set grade_sections = sections | selectattr('grade_id', 'equalto', grade.id) | list %}
-              {% if grade_sections %}
-              <div class="col-12">
-                <div class="fw-medium text-muted small mb-1">{{ grade.name }}</div>
-                <div class="d-flex flex-wrap gap-2">
-                  {% for sec in grade_sections %}
+              {% set gs = sections | selectattr('grade_id', 'equalto', grade.id) | list %}
+              {% if gs %}
+              <div class="ta-grade-homeroom" data-gid="{{ grade.id }}" style="display:none">
+                <div class="d-flex flex-wrap gap-2 mb-3">
+                  {% for sec in gs %}
                   <div class="form-check form-check-inline">
                     <input class="form-check-input" type="checkbox"
                            name="homeroom_section_ids" value="{{ sec.id }}"
@@ -331,16 +352,15 @@
               {% endfor %}
             </div>
 
-            {# Teaching sections #}
-            <h6 class="fw-semibold mb-2">الشعب التي يُدرّسها</h6>
-            <div class="row g-2 mb-4">
+            {# ── Teaching sections — one panel per grade in DOM ── #}
+            <div id="taSectionsWrap" style="display:none">
+              <h6 class="fw-semibold mb-2">الشعب التي يُدرّسها</h6>
               {% for grade in grades %}
-              {% set grade_sections = sections | selectattr('grade_id', 'equalto', grade.id) | list %}
-              {% if grade_sections %}
-              <div class="col-12">
-                <div class="fw-medium text-muted small mb-1">{{ grade.name }}</div>
-                <div class="d-flex flex-wrap gap-2">
-                  {% for sec in grade_sections %}
+              {% set gs = sections | selectattr('grade_id', 'equalto', grade.id) | list %}
+              {% if gs %}
+              <div class="ta-grade-sections" data-gid="{{ grade.id }}" style="display:none">
+                <div class="d-flex flex-wrap gap-2 mb-3">
+                  {% for sec in gs %}
                   <div class="form-check form-check-inline">
                     <input class="form-check-input" type="checkbox"
                            name="teaching_section_ids" value="{{ sec.id }}"
@@ -355,19 +375,45 @@
               {% endfor %}
             </div>
 
-            {# Subjects #}
+            {# ── Subjects — one panel per grade in DOM ── #}
             {% if subjects %}
-            <h6 class="fw-semibold mb-2">المواد الدراسية</h6>
-            <div class="d-flex flex-wrap gap-2">
-              {% for subj in subjects %}
-              <div class="form-check form-check-inline">
-                <input class="form-check-input" type="checkbox"
-                       name="subject_ids" value="{{ subj.id }}"
-                       id="subj_{{ subj.id }}"
-                       {{ 'checked' if subj.id in existing_subject_ids }}>
-                <label class="form-check-label" for="subj_{{ subj.id }}">{{ subj.name }}</label>
+            <div id="taSubjectsWrap" style="display:none">
+              <h6 class="fw-semibold mb-2">المواد الدراسية</h6>
+              {% for grade in grades %}
+              {% set gsubjs = subjects | selectattr('grade_id', 'equalto', grade.id) | list %}
+              {% if gsubjs %}
+              <div class="ta-grade-subjects" data-gid="{{ grade.id }}" style="display:none">
+                <div class="d-flex flex-wrap gap-2 mb-2">
+                  {% for subj in gsubjs %}
+                  <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="checkbox"
+                           name="subject_ids" value="{{ subj.id }}"
+                           id="subj_{{ subj.id }}"
+                           {{ 'checked' if subj.id in existing_subject_ids }}>
+                    <label class="form-check-label" for="subj_{{ subj.id }}">{{ subj.name }}</label>
+                  </div>
+                  {% endfor %}
+                </div>
               </div>
+              {% endif %}
               {% endfor %}
+              {# Subjects with no grade_id — always shown once any grade is selected #}
+              {% set ung = subjects | selectattr('grade_id', 'none') | list %}
+              {% if ung %}
+              <div class="ta-ungrouped-subjects" style="display:none">
+                <div class="d-flex flex-wrap gap-2 mb-2">
+                  {% for subj in ung %}
+                  <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="checkbox"
+                           name="subject_ids" value="{{ subj.id }}"
+                           id="subj_{{ subj.id }}"
+                           {{ 'checked' if subj.id in existing_subject_ids }}>
+                    <label class="form-check-label" for="subj_{{ subj.id }}">{{ subj.name }}</label>
+                  </div>
+                  {% endfor %}
+                </div>
+              </div>
+              {% endif %}
             </div>
             {% endif %}
 
@@ -466,4 +512,90 @@
 .collapse-chevron { transition: transform .2s; }
 [aria-expanded="true"] .collapse-chevron { transform: rotate(180deg); }
 </style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  var grades = [
+    {% for g in grades %}{"id":{{ g.id }},"name":{{ g.name|tojson }},"stage":{{ (g.stage or "")|tojson }}},{% endfor %}
+  ];
+
+  var stageSel  = document.getElementById('taStageFilter');
+  var gradeSel  = document.getElementById('taGradeFilter');
+  var stageCol  = document.getElementById('taStageCol');
+  var hint      = document.getElementById('taSelectHint');
+  var hrWrap    = document.getElementById('taHomeroomWrap');
+  var secWrap   = document.getElementById('taSectionsWrap');
+  var subjWrap  = document.getElementById('taSubjectsWrap');
+
+  if (!stageSel) return;
+
+  // Collect unique stages in declaration order
+  var stages = [], seen = {};
+  grades.forEach(function(g) {
+    var s = g.stage || '';
+    if (!seen[s]) { seen[s] = true; stages.push(s); }
+  });
+
+  var multiStage = stages.length > 1 || (stages.length === 1 && stages[0] !== '');
+
+  if (multiStage) {
+    stages.forEach(function(s) {
+      var o = document.createElement('option');
+      o.value = s; o.textContent = s || 'بدون مرحلة';
+      stageSel.appendChild(o);
+    });
+  } else {
+    // No stages — hide stage column and populate grade directly
+    if (stageCol) stageCol.style.display = 'none';
+    grades.forEach(function(g) {
+      var o = document.createElement('option');
+      o.value = g.id; o.textContent = g.name;
+      gradeSel.appendChild(o);
+    });
+    gradeSel.disabled = false;
+  }
+
+  function refreshGrades() {
+    gradeSel.innerHTML = '<option value="">— اختر الصف —</option>';
+    gradeSel.disabled = true;
+    var sv = stageSel.value;
+    if (!sv) { refreshContent(null); return; }
+    grades.filter(function(g) { return (g.stage || '') === sv; })
+      .forEach(function(g) {
+        var o = document.createElement('option');
+        o.value = g.id; o.textContent = g.name;
+        gradeSel.appendChild(o);
+      });
+    gradeSel.disabled = false;
+    refreshContent(null);
+  }
+
+  function refreshContent(gradeId) {
+    var show = gradeId !== null && gradeId !== '';
+    [hrWrap, secWrap, subjWrap].forEach(function(w) { if (w) w.style.display = show ? '' : 'none'; });
+    if (hint) hint.style.display = show ? 'none' : '';
+
+    ['ta-grade-homeroom', 'ta-grade-sections', 'ta-grade-subjects'].forEach(function(cls) {
+      document.querySelectorAll('.' + cls).forEach(function(el) {
+        el.style.display = (String(el.dataset.gid) === String(gradeId)) ? '' : 'none';
+      });
+    });
+    // Ungrouped subjects: show whenever any grade is selected
+    document.querySelectorAll('.ta-ungrouped-subjects').forEach(function(el) {
+      el.style.display = show ? '' : 'none';
+    });
+  }
+
+  if (multiStage) {
+    stageSel.addEventListener('change', function() { refreshGrades(); });
+  }
+  gradeSel.addEventListener('change', function() {
+    refreshContent(gradeSel.value || null);
+  });
+
+  refreshContent(null);
+})();
+</script>
 {% endblock %}
