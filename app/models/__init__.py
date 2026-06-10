@@ -924,6 +924,16 @@ class Employee(db.Model):
     hire_date     = db.Column(db.Date, default=date.today)
     contract_type = db.Column(db.String(30), nullable=True)
 
+    # ── Payroll profile (Phase: professional payroll) ─────────────────────────
+    # salary_type:    'monthly' | 'daily' | 'per_session'
+    # payment_method: 'cash' | 'bank' | 'wallet'
+    # payroll_status: 'active' | 'suspended' | 'resigned' | 'inactive'
+    salary_type        = db.Column(db.String(20),  nullable=True, default='monthly')
+    pay_method         = db.Column(db.String(20),  nullable=True)
+    bank_account       = db.Column(db.String(120), nullable=True)
+    salary_start_date  = db.Column(db.Date,        nullable=True)
+    payroll_status     = db.Column(db.String(20),  nullable=True, default='active')
+
     status        = db.Column(db.String(20), default='active')
     notes         = db.Column(db.Text, nullable=True)
     created_at    = db.Column(db.DateTime, default=datetime.utcnow)
@@ -936,7 +946,14 @@ class Employee(db.Model):
     sections_managed = db.relationship('Section', backref='teacher', lazy='dynamic',
                                         foreign_keys='Section.teacher_id')
     salary_records   = db.relationship('SalaryRecord',       backref='employee', lazy='dynamic')
+    salary_components = db.relationship('SalaryComponent',   backref='employee', lazy='dynamic')
     evaluations      = db.relationship('EmployeeEvaluation', backref='employee', lazy='dynamic')
+
+    @property
+    def is_payroll_active(self) -> bool:
+        """True when this employee should be included in payroll generation."""
+        return (self.status == 'active'
+                and (self.payroll_status in (None, '', 'active')))
     attendances      = db.relationship('EmployeeAttendance', back_populates='employee', lazy='dynamic')
 
     school = db.relationship('School', foreign_keys=[school_id],
@@ -1228,29 +1245,234 @@ class SalaryRecord(db.Model):
     month       = db.Column(db.Integer, nullable=False)
     year        = db.Column(db.Integer, nullable=False)
     base_salary = db.Column(db.Numeric(12, 2), nullable=False)
+    # allowances / deductions are kept as cached TOTALS (sum of PayrollItem lines)
+    # for backward compatibility with reports, Excel/PDF exports and old records.
     allowances  = db.Column(db.Numeric(12, 2), default=0)
     deductions  = db.Column(db.Numeric(12, 2), default=0)
     net_salary  = db.Column(db.Numeric(12, 2), nullable=False)
     paid_date   = db.Column(db.Date, nullable=True)
-    status      = db.Column(db.String(20), default='pending')
+    # status: 'draft' | 'approved' | 'paid' | 'cancelled'
+    # ('pending' from the legacy system is treated as 'draft'.)
+    status      = db.Column(db.String(20), default='draft')
     payment_method = db.Column(db.String(20), nullable=True)
     notes       = db.Column(db.Text, nullable=True)
+
+    # ── Snapshots (keep history correct even if the employee changes later) ────
+    employee_name_snapshot = db.Column(db.String(200), nullable=True)
+    job_title_snapshot     = db.Column(db.String(150), nullable=True)
+    department_snapshot    = db.Column(db.String(100), nullable=True)
+
+    # ── Attendance breakdown (informational counts; money lives in PayrollItem)─
+    absence_days       = db.Column(db.Integer, default=0)
+    late_count         = db.Column(db.Integer, default=0)
+    early_leave_count  = db.Column(db.Integer, default=0)
+
+    # ── Workflow audit ────────────────────────────────────────────────────────
+    approved_by  = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    approved_at  = db.Column(db.DateTime, nullable=True)
+    cancelled_at = db.Column(db.DateTime, nullable=True)
 
     expense_id  = db.Column(db.Integer, db.ForeignKey('expenses.id'), nullable=True)
     created_by  = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at  = db.Column(db.DateTime, default=datetime.utcnow,
+                            onupdate=datetime.utcnow)
 
-    creator = db.relationship('User',    foreign_keys=[created_by])
-    expense = db.relationship('Expense', foreign_keys=[expense_id])
-    school  = db.relationship('School',  foreign_keys=[school_id],
-                              backref=db.backref('salary_records', lazy='dynamic'))
+    creator  = db.relationship('User', foreign_keys=[created_by])
+    approver = db.relationship('User', foreign_keys=[approved_by])
+    expense  = db.relationship('Expense', foreign_keys=[expense_id])
+    school   = db.relationship('School',  foreign_keys=[school_id],
+                               backref=db.backref('salary_records', lazy='dynamic'))
     academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id],
                                     backref=db.backref('salary_records', lazy='dynamic'))
+    items = db.relationship('PayrollItem', back_populates='salary_record',
+                            cascade='all, delete-orphan', lazy='select',
+                            order_by='PayrollItem.id')
 
     __table_args__ = (
         db.UniqueConstraint('employee_id', 'month', 'year',
                             name='uq_salary_month_year'),
     )
+
+    # ── Display helpers (prefer snapshot, fall back to live employee) ──────────
+    @property
+    def employee_name(self) -> str:
+        return self.employee_name_snapshot or (
+            self.employee.full_name if self.employee else f'#{self.employee_id}')
+
+    @property
+    def job_title(self) -> str:
+        return self.job_title_snapshot or (
+            self.employee.job_title if self.employee else '') or ''
+
+    @property
+    def department(self) -> str:
+        return self.department_snapshot or (
+            self.employee.department if self.employee else '') or ''
+
+    @property
+    def is_locked(self) -> bool:
+        """Approved/Paid records are locked from normal editing."""
+        return self.status in ('approved', 'paid')
+
+    @property
+    def addition_items(self):
+        return [i for i in self.items if i.item_type == 'addition']
+
+    @property
+    def deduction_items(self):
+        return [i for i in self.items if i.item_type == 'deduction']
+
+    def recompute(self):
+        """Recalculate cached allowances/deductions/net from line items."""
+        add = sum((Decimal(i.amount or 0) for i in self.items
+                   if i.item_type == 'addition'), Decimal('0'))
+        ded = sum((Decimal(i.amount or 0) for i in self.items
+                   if i.item_type == 'deduction'), Decimal('0'))
+        self.allowances = add
+        self.deductions = ded
+        self.net_salary = (Decimal(self.base_salary or 0)) + add - ded
+        return self.net_salary
+
+
+class PayrollSettings(db.Model):
+    """
+    Per-school payroll configuration (one row per school).
+
+    School-scoped only — settings persist across academic years.  Created lazily
+    via PayrollSettings.get_or_create(school_id) the first time the payroll
+    settings page or a generation run needs them.
+    """
+    __tablename__ = 'payroll_settings'
+    __school_scoped__ = True
+
+    id        = db.Column(db.Integer, primary_key=True)
+    school_id = db.Column(db.Integer, db.ForeignKey('schools.id', ondelete='CASCADE'),
+                          nullable=False, unique=True, index=True)
+
+    # General
+    payroll_calculation_day = db.Column(db.Integer, default=28)
+    default_payment_day     = db.Column(db.Integer, default=1)
+    allow_edit_draft        = db.Column(db.Boolean, default=True)
+
+    # Attendance-based deductions
+    attendance_deduction_enabled = db.Column(db.Boolean, default=False)
+    # absence_method: 'fixed' (flat amount per absent day) | 'divider' (base / working_days)
+    absence_method        = db.Column(db.String(20),  default='fixed')
+    absence_fixed_amount  = db.Column(db.Numeric(12, 2), default=0)
+    monthly_working_days  = db.Column(db.Integer, default=26)
+
+    late_deduction_enabled = db.Column(db.Boolean, default=False)
+    # late_method: 'fixed_each' | 'per_minute' | 'per_group'
+    late_method        = db.Column(db.String(20),  default='fixed_each')
+    late_amount        = db.Column(db.Numeric(12, 2), default=0)
+    late_allowed_count = db.Column(db.Integer, default=0)
+    late_group_size    = db.Column(db.Integer, default=3)
+
+    early_leave_deduction_enabled = db.Column(db.Boolean, default=False)
+    early_leave_amount = db.Column(db.Numeric(12, 2), default=0)
+
+    # When True, days with an approved paid leave are NOT counted as absence.
+    unpaid_leave_deduction_enabled = db.Column(db.Boolean, default=False)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow,
+                           onupdate=datetime.utcnow)
+
+    school = db.relationship('School', foreign_keys=[school_id],
+                             backref=db.backref('payroll_settings', uselist=False))
+
+    @classmethod
+    def get_or_create(cls, school_id):
+        """Return the school's settings row, creating defaults if missing.
+        Does NOT commit — the caller is responsible for committing."""
+        row = (cls.query.execution_options(bypass_tenant_scope=True)
+               .filter_by(school_id=school_id).first())
+        if row is None:
+            row = cls(school_id=school_id)
+            db.session.add(row)
+            db.session.flush()
+        return row
+
+
+class SalaryComponent(db.Model):
+    """
+    Reusable salary component definition (allowance or deduction).
+
+    School-scoped only (definitions persist across years).  Recurring components
+    are auto-applied to matching employees during payroll generation; one-time
+    components are added manually to a single payroll record.
+    """
+    __tablename__ = 'salary_components'
+    __school_scoped__ = True
+
+    id        = db.Column(db.Integer, primary_key=True)
+    school_id = db.Column(db.Integer, db.ForeignKey('schools.id', ondelete='CASCADE'),
+                          nullable=False, index=True)
+    name      = db.Column(db.String(150), nullable=False)
+    # component_type: 'addition' | 'deduction'
+    component_type = db.Column(db.String(20), nullable=False, default='addition')
+    # amount_type: 'fixed' | 'variable'  (variable = leave amount blank until applied)
+    amount_type    = db.Column(db.String(20), nullable=False, default='fixed')
+    default_amount = db.Column(db.Numeric(12, 2), default=0)
+    # recurrence: 'recurring' (auto every month) | 'one_time'
+    recurrence     = db.Column(db.String(20), nullable=False, default='recurring')
+    # scope: 'general' (all active employees) | 'employee' (one employee)
+    scope          = db.Column(db.String(20), nullable=False, default='general')
+    employee_id    = db.Column(db.Integer, db.ForeignKey('employees.id'), nullable=True)
+    is_active      = db.Column(db.Boolean, default=True)
+    notes          = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow,
+                           onupdate=datetime.utcnow)
+
+    school = db.relationship('School', foreign_keys=[school_id],
+                             backref=db.backref('salary_components', lazy='dynamic'))
+
+    def __repr__(self):
+        return f'<SalaryComponent {self.name} ({self.component_type})>'
+
+
+class PayrollItem(db.Model):
+    """
+    A single addition/deduction line on one SalaryRecord.
+
+    School + year scoped (it belongs to a payroll record for a specific year).
+    Money lives here; SalaryRecord.allowances/deductions/net_salary are cached
+    totals derived from these lines via SalaryRecord.recompute().
+    """
+    __tablename__ = 'payroll_items'
+    __school_scoped__ = True
+    __year_scoped__ = True
+
+    id        = db.Column(db.Integer, primary_key=True)
+    salary_record_id = db.Column(db.Integer,
+                                 db.ForeignKey('salary_records.id', ondelete='CASCADE'),
+                                 nullable=False, index=True)
+    school_id = db.Column(db.Integer, db.ForeignKey('schools.id'),
+                          nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'),
+                                 nullable=False, index=True)
+    component_id = db.Column(db.Integer,
+                             db.ForeignKey('salary_components.id', ondelete='SET NULL'),
+                             nullable=True)
+    name      = db.Column(db.String(150), nullable=False)
+    # item_type: 'addition' | 'deduction'
+    item_type = db.Column(db.String(20), nullable=False)
+    amount    = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    # source: 'recurring' | 'one_time' | 'attendance' | 'manual'
+    source    = db.Column(db.String(20), default='manual')
+    notes     = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    salary_record = db.relationship('SalaryRecord', foreign_keys=[salary_record_id],
+                                    back_populates='items')
+    component     = db.relationship('SalaryComponent', foreign_keys=[component_id])
+    school        = db.relationship('School', foreign_keys=[school_id])
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+
+    def __repr__(self):
+        return f'<PayrollItem {self.name} {self.item_type} {self.amount}>'
 
 
 # ═════════════════════════════════════════════════════════════════════════════

@@ -1,58 +1,118 @@
 {% extends "shared/base.html" %}
-{% block title %}سجل رواتب {{ employee.full_name }}{% endblock %}
-{% block page_title %}سجل رواتب الموظف{% endblock %}
+{% block title %}كشف حساب موظف{% endblock %}
+{% block page_title %}كشف حساب موظف{% endblock %}
+
+{% set st_cls = {'draft':'badge-pending','pending':'badge-pending','approved':'badge-approved','paid':'badge-paid','cancelled':'badge-cancelled'} %}
 
 {% block content %}
 <div class="page-header">
   <div>
     <h1 class="page-title">{{ employee.full_name }}</h1>
-    <p class="page-subtitle">{{ employee.job_title }} — إجمالي المصروف: {{ '{:,.0f}'.format(total_paid) }} د.ع</p>
+    <p class="page-subtitle">{{ employee.job_title or '' }}{% if employee.department %} · {{ employee.department }}{% endif %}</p>
   </div>
   <a href="{{ url_for('salaries.index') }}" class="btn btn-outline-secondary">
     <i class="bi bi-arrow-right me-1"></i>رجوع
   </a>
 </div>
 
+<!-- Year filter -->
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="d-flex gap-3 align-items-end flex-wrap">
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">السنة</label>
+        <select name="year" class="form-select" style="width:140px" onchange="this.form.submit()">
+          <option value="">كل السنوات</option>
+          {% for y in years %}
+          <option value="{{ y }}" {{ 'selected' if y == year }}>{{ y }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Balance KPIs -->
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#1aab6d,#16c879)"><i class="bi bi-arrow-up-circle-fill"></i></div>
+      <div><div class="stat-value">{{ '{:,.0f}'.format(statement.total_credit) }}</div><div class="stat-label">إجمالي المستحق (د.ع)</div></div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#1a3a5c,#22508a)"><i class="bi bi-cash-stack"></i></div>
+      <div><div class="stat-value">{{ '{:,.0f}'.format(statement.total_debit) }}</div><div class="stat-label">إجمالي المصروف (د.ع)</div></div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#e8a020,#f5c25a)"><i class="bi bi-wallet2"></i></div>
+      <div><div class="stat-value">{{ '{:,.0f}'.format(statement.balance) }}</div>
+        <div class="stat-label">{{ 'مستحق للموظف' if statement.balance > 0 else ('مدفوع بالكامل' if statement.balance == 0 else 'مدفوع زائد') }} (د.ع)</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- Ledger -->
 <div class="card">
+  <div class="card-header"><i class="bi bi-journal-text text-accent"></i> كشف الحساب (دفتر الأستاذ)</div>
   <div class="table-wrapper">
-    <table class="table table-hover">
+    <table class="table">
       <thead>
         <tr>
-          <th>الشهر</th><th>السنة</th><th>الأساسي</th>
-          <th>البدلات</th><th>الخصومات</th><th>الصافي</th>
-          <th>الحالة</th><th>تاريخ الصرف</th><th></th>
+          <th>التاريخ</th><th>النوع</th><th>الوصف</th>
+          <th class="text-start">مستحق (دائن)</th><th class="text-start">مصروف (مدين)</th>
+          <th class="text-start">الرصيد</th><th>المرجع</th>
         </tr>
       </thead>
       <tbody>
-        {% for rec in records %}
+        {% for row in statement.rows %}
         <tr>
-          <td class="fw-600">{{ arabic_months[rec.month] }}</td>
-          <td>{{ rec.year }}</td>
-          <td>{{ '{:,.0f}'.format(rec.base_salary) }}</td>
-          <td class="text-success">
-            {% if rec.allowances %}+{{ '{:,.0f}'.format(rec.allowances) }}{% else %}—{% endif %}
-          </td>
-          <td class="text-danger">
-            {% if rec.deductions %}-{{ '{:,.0f}'.format(rec.deductions) }}{% else %}—{% endif %}
-          </td>
-          <td class="fw-700">{{ '{:,.0f}'.format(rec.net_salary) }}</td>
+          <td style="font-size:12.5px">{{ row.date.strftime('%Y-%m-%d') }}</td>
           <td>
-            <span class="badge-status {{ 'badge-paid' if rec.status == 'paid' else 'badge-pending' }}">
-              {{ 'مصروف' if rec.status == 'paid' else 'معلّق' }}
-            </span>
+            {% if row.credit %}<span class="badge-status badge-active">{{ row.type }}</span>
+            {% else %}<span class="badge-status badge-paid">{{ row.type }}</span>{% endif %}
           </td>
-          <td style="font-size:12.5px;color:#9aabb8">
-            {{ rec.paid_date.strftime('%Y-%m-%d') if rec.paid_date else '—' }}
-          </td>
+          <td>{{ row.description }}</td>
+          <td class="text-start text-success fw-600">{% if row.credit %}{{ '{:,.0f}'.format(row.credit) }}{% else %}—{% endif %}</td>
+          <td class="text-start text-danger fw-600">{% if row.debit %}{{ '{:,.0f}'.format(row.debit) }}{% else %}—{% endif %}</td>
+          <td class="text-start fw-700">{{ '{:,.0f}'.format(row.balance) }}</td>
+          <td class="text-muted" style="font-size:12px">{{ row.ref }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="text-center text-muted py-5">لا توجد حركات مالية لهذا الموظف.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Monthly records summary -->
+<div class="card mt-4">
+  <div class="card-header"><i class="bi bi-list-ul text-accent"></i> سجلات الرواتب</div>
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr><th>الشهر</th><th>الأساسي</th><th>البدلات</th><th>الخصومات</th><th>الصافي</th><th>الحالة</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for r in records %}
+        <tr>
+          <td class="fw-600">{{ arabic_months[r.month] }} {{ r.year }}</td>
+          <td>{{ '{:,.0f}'.format(r.base_salary) }}</td>
+          <td class="text-success">{% if r.allowances %}+{{ '{:,.0f}'.format(r.allowances) }}{% else %}—{% endif %}</td>
+          <td class="text-danger">{% if r.deductions %}-{{ '{:,.0f}'.format(r.deductions) }}{% else %}—{% endif %}</td>
+          <td class="fw-700">{{ '{:,.0f}'.format(r.net_salary) }}</td>
+          <td><span class="badge-status {{ st_cls.get(r.status,'badge-pending') }}">{{ status_labels.get(r.status, r.status) }}</span></td>
           <td>
-            <a href="{{ url_for('salaries.slip', rec_id=rec.id) }}"
-               class="btn btn-sm btn-outline-secondary" target="_blank">
-              <i class="bi bi-printer"></i>
-            </a>
+            <a href="{{ url_for('salaries.detail', rec_id=r.id) }}" class="btn btn-sm btn-outline-primary"><i class="bi bi-eye"></i></a>
+            <a href="{{ url_for('salaries.slip', rec_id=r.id) }}" target="_blank" class="btn btn-sm btn-outline-secondary"><i class="bi bi-printer"></i></a>
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="9" class="text-center text-muted py-4">لا توجد سجلات</td></tr>
+        <tr><td colspan="7" class="text-center text-muted py-4">لا توجد سجلات.</td></tr>
         {% endfor %}
       </tbody>
     </table>

@@ -140,6 +140,47 @@
               </select>
             </div>
             {% endif %}
+
+            {# ── Payroll profile ──────────────────────────────────────────── #}
+            {% if school_cfg.field_visible('employees', 'base_salary') %}
+            <div class="col-md-6">
+              <label class="form-label">نوع الراتب</label>
+              <select name="salary_type" class="form-select">
+                <option value="monthly"     {{ 'selected' if not employee or employee.salary_type in (None,'','monthly') }}>شهري</option>
+                <option value="daily"       {{ 'selected' if employee and employee.salary_type == 'daily' }}>يومي</option>
+                <option value="per_session" {{ 'selected' if employee and employee.salary_type == 'per_session' }}>بالحصة / المحاضرة</option>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">حالة الراتب</label>
+              <select name="payroll_status" class="form-select">
+                <option value="active"    {{ 'selected' if not employee or employee.payroll_status in (None,'','active') }}>فعّال</option>
+                <option value="suspended" {{ 'selected' if employee and employee.payroll_status == 'suspended' }}>موقوف</option>
+                <option value="resigned"  {{ 'selected' if employee and employee.payroll_status == 'resigned' }}>مستقيل</option>
+                <option value="inactive"  {{ 'selected' if employee and employee.payroll_status == 'inactive' }}>غير فعّال</option>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">طريقة الدفع</label>
+              <select name="pay_method" class="form-select">
+                <option value="">— اختر —</option>
+                <option value="cash"   {{ 'selected' if employee and employee.pay_method == 'cash' }}>نقدي</option>
+                <option value="bank"   {{ 'selected' if employee and employee.pay_method == 'bank' }}>حوالة بنكية</option>
+                <option value="wallet" {{ 'selected' if employee and employee.pay_method == 'wallet' }}>محفظة إلكترونية</option>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">رقم الحساب / المحفظة</label>
+              <input type="text" name="bank_account" class="form-control"
+                     value="{{ employee.bank_account if employee and employee.bank_account else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">تاريخ بدء الراتب</label>
+              <input type="date" name="salary_start_date" class="form-control"
+                     value="{{ employee.salary_start_date.isoformat() if employee and employee.salary_start_date else '' }}">
+            </div>
+            {% endif %}
+
             {% if school_cfg.field_visible('employees', 'address') %}
             <div class="col-12">
               <label class="form-label">العنوان</label>

@@ -1,11 +1,16 @@
 {% extends "shared/base.html" %}
 {% block title %}الرواتب{% endblock %}
-{% block page_title %}نظام الرواتب{% endblock %}
+{% block page_title %}مسير الرواتب{% endblock %}
+
+{% macro status_badge(st) %}
+  {% set cls = {'draft':'badge-pending','pending':'badge-pending','approved':'badge-approved','paid':'badge-paid','cancelled':'badge-cancelled'} %}
+  <span class="badge-status {{ cls.get(st,'badge-pending') }}">{{ status_labels.get(st, st) }}</span>
+{% endmacro %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">الرواتب</h1>
+    <h1 class="page-title">مسير الرواتب</h1>
     <p class="page-subtitle">{{ arabic_months[month] }} {{ year }}</p>
   </div>
   <div class="d-flex gap-2">
@@ -21,7 +26,9 @@
   </div>
 </div>
 
-<!-- Month/Year Selector -->
+{% include "salaries/_nav.html" %}
+
+<!-- Filters -->
 <div class="card mb-4">
   <div class="card-body py-3">
     <form method="GET" class="d-flex gap-3 align-items-end flex-wrap">
@@ -36,156 +43,134 @@
       <div>
         <label class="form-label mb-1" style="font-size:12.5px">السنة</label>
         <select name="year" class="form-select" style="width:100px">
-          {% for y in range(2022, 2030) %}
+          {% for y in range(2022, 2031) %}
           <option value="{{ y }}" {{ 'selected' if y == year }}>{{ y }}</option>
           {% endfor %}
         </select>
       </div>
-      <button class="btn btn-primary align-self-end">
-        <i class="bi bi-search me-1"></i>عرض
-      </button>
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">القسم</label>
+        <select name="department" class="form-select" style="width:160px">
+          <option value="">— الكل —</option>
+          {% for d in departments %}
+          <option value="{{ d }}" {{ 'selected' if d == dept_filter }}>{{ d }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="form-label mb-1" style="font-size:12.5px">الحالة</label>
+        <select name="status" class="form-select" style="width:140px">
+          <option value="">— الكل —</option>
+          {% for k, v in status_labels.items() if k != 'pending' %}
+          <option value="{{ k }}" {{ 'selected' if k == status_filter }}>{{ v }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button class="btn btn-primary"><i class="bi bi-search me-1"></i>عرض</button>
     </form>
   </div>
 </div>
 
-<!-- Summary KPIs -->
+<!-- KPIs -->
 <div class="row g-3 mb-4">
   <div class="col-md-3">
     <div class="stat-card">
-      <div class="stat-icon" style="background:linear-gradient(135deg,#1a3a5c,#22508a)">
-        <i class="bi bi-people-fill"></i>
-      </div>
-      <div>
-        <div class="stat-value">{{ records|length }}</div>
-        <div class="stat-label">سجلات الراتب</div>
-      </div>
+      <div class="stat-icon" style="background:linear-gradient(135deg,#1a3a5c,#22508a)"><i class="bi bi-people-fill"></i></div>
+      <div><div class="stat-value">{{ records|length }}</div><div class="stat-label">سجلات الراتب</div></div>
     </div>
   </div>
   <div class="col-md-3">
     <div class="stat-card">
-      <div class="stat-icon" style="background:linear-gradient(135deg,#e8a020,#f5c25a)">
-        <i class="bi bi-wallet-fill"></i>
-      </div>
-      <div>
-        <div class="stat-value">{{ '{:,.0f}'.format(total_net) }}</div>
-        <div class="stat-label">إجمالي الرواتب (د.ع)</div>
-      </div>
+      <div class="stat-icon" style="background:linear-gradient(135deg,#e8a020,#f5c25a)"><i class="bi bi-wallet-fill"></i></div>
+      <div><div class="stat-value">{{ '{:,.0f}'.format(total_net) }}</div><div class="stat-label">إجمالي الصافي (د.ع)</div></div>
     </div>
   </div>
   <div class="col-md-3">
     <div class="stat-card">
-      <div class="stat-icon" style="background:linear-gradient(135deg,#1aab6d,#16c879)">
-        <i class="bi bi-check-circle-fill"></i>
-      </div>
-      <div>
-        <div class="stat-value">{{ '{:,.0f}'.format(total_paid) }}</div>
-        <div class="stat-label">مصروف (د.ع)</div>
-      </div>
+      <div class="stat-icon" style="background:linear-gradient(135deg,#1aab6d,#16c879)"><i class="bi bi-check-circle-fill"></i></div>
+      <div><div class="stat-value">{{ '{:,.0f}'.format(total_paid) }}</div><div class="stat-label">مصروف (د.ع)</div></div>
     </div>
   </div>
   <div class="col-md-3">
     <div class="stat-card">
-      <div class="stat-icon" style="background:linear-gradient(135deg,#e03e3e,#f87171)">
-        <i class="bi bi-hourglass-split"></i>
-      </div>
-      <div>
-        <div class="stat-value">{{ records|selectattr('status','eq','pending')|list|length }}</div>
-        <div class="stat-label">معلّق الصرف</div>
-      </div>
+      <div class="stat-icon" style="background:linear-gradient(135deg,#e03e3e,#f87171)"><i class="bi bi-arrow-down-circle-fill"></i></div>
+      <div><div class="stat-value">{{ '{:,.0f}'.format(total_deduct) }}</div><div class="stat-label">إجمالي الخصومات (د.ع)</div></div>
     </div>
   </div>
 </div>
 
-<!-- Actions row -->
+<!-- Action toolbar -->
 {% if not is_historical_year %}
 <div class="d-flex gap-3 mb-3 flex-wrap">
-  <!-- Generate salaries -->
   <form method="POST" action="{{ url_for('salaries.generate_month') }}">
     <input type="hidden" name="month" value="{{ month }}">
     <input type="hidden" name="year"  value="{{ year }}">
     <button class="btn btn-outline-secondary"
-            data-confirm="توليد رواتب {{ arabic_months[month] }} {{ year }} لجميع الموظفين؟">
+            data-confirm="توليد رواتب {{ arabic_months[month] }} {{ year }} لجميع الموظفين الفعّالين؟">
       <i class="bi bi-lightning-charge-fill me-1"></i>توليد رواتب الشهر
     </button>
   </form>
 
-  <!-- Pay all pending -->
-  {% set pending_count = records|selectattr('status','eq','pending')|list|length %}
-  {% if pending_count > 0 %}
+  {% if draft_count > 0 %}
+  <form method="POST" action="{{ url_for('salaries.approve_all') }}">
+    <input type="hidden" name="month" value="{{ month }}">
+    <input type="hidden" name="year"  value="{{ year }}">
+    <button class="btn btn-info text-white"
+            data-confirm="اعتماد {{ draft_count }} مسودة راتب؟">
+      <i class="bi bi-patch-check-fill me-1"></i>اعتماد المسودات ({{ draft_count }})
+    </button>
+  </form>
+  {% endif %}
+
+  {% if approved_count > 0 %}
   <form method="POST" action="{{ url_for('salaries.pay_all') }}">
     <input type="hidden" name="month" value="{{ month }}">
     <input type="hidden" name="year"  value="{{ year }}">
     <button class="btn btn-success"
-            data-confirm="صرف {{ pending_count }} رواتب معلّقة دفعة واحدة؟">
-      <i class="bi bi-cash-stack me-1"></i>صرف الكل ({{ pending_count }})
+            data-confirm="صرف {{ approved_count }} راتب معتمد دفعة واحدة؟">
+      <i class="bi bi-cash-stack me-1"></i>صرف المعتمد ({{ approved_count }})
     </button>
   </form>
   {% endif %}
 </div>
 {% endif %}
 
-<!-- Records table -->
+<!-- Register table -->
 <div class="card mb-4">
   <div class="card-header">
-    <i class="bi bi-wallet-fill text-accent"></i>
-    سجلات رواتب {{ arabic_months[month] }} {{ year }}
+    <i class="bi bi-list-columns-reverse text-accent"></i>
+    رواتب {{ arabic_months[month] }} {{ year }}
   </div>
   <div class="table-wrapper">
     <table class="table table-hover">
       <thead>
         <tr>
-          <th>الموظف</th><th>المسمى</th><th>الراتب الأساسي</th>
+          <th>الموظف</th><th>المسمى</th><th>القسم</th><th>الأساسي</th>
           <th>البدلات</th><th>الخصومات</th><th>الصافي</th>
-          <th>الحالة</th><th>تاريخ الصرف</th><th>الإجراءات</th>
+          <th>الحالة</th><th>الإجراءات</th>
         </tr>
       </thead>
       <tbody>
         {% for rec in records %}
         <tr>
-          <td class="fw-600">{{ rec.employee.full_name }}</td>
-          <td class="text-muted" style="font-size:12.5px">{{ rec.employee.job_title }}</td>
+          <td class="fw-600">{{ rec.employee_name }}</td>
+          <td class="text-muted" style="font-size:12.5px">{{ rec.job_title }}</td>
+          <td class="text-muted" style="font-size:12.5px">{{ rec.department or '—' }}</td>
           <td>{{ '{:,.0f}'.format(rec.base_salary) }}</td>
-          <td class="text-success">
-            {% if rec.allowances %}+{{ '{:,.0f}'.format(rec.allowances) }}{% else %}—{% endif %}
-          </td>
-          <td class="text-danger">
-            {% if rec.deductions %}-{{ '{:,.0f}'.format(rec.deductions) }}{% else %}—{% endif %}
-          </td>
+          <td class="text-success">{% if rec.allowances %}+{{ '{:,.0f}'.format(rec.allowances) }}{% else %}—{% endif %}</td>
+          <td class="text-danger">{% if rec.deductions %}-{{ '{:,.0f}'.format(rec.deductions) }}{% else %}—{% endif %}</td>
           <td class="fw-700" style="font-size:15px">{{ '{:,.0f}'.format(rec.net_salary) }}</td>
-          <td>
-            <span class="badge-status {{ 'badge-paid' if rec.status == 'paid' else 'badge-pending' }}">
-              {{ 'مصروف' if rec.status == 'paid' else 'معلّق' }}
-            </span>
-          </td>
-          <td style="font-size:12.5px;color:#9aabb8">
-            {{ rec.paid_date.strftime('%Y-%m-%d') if rec.paid_date else '—' }}
-          </td>
+          <td>{{ status_badge(rec.status) }}</td>
           <td>
             <div class="d-flex gap-1">
+              <a href="{{ url_for('salaries.detail', rec_id=rec.id) }}"
+                 class="btn btn-sm btn-outline-primary" title="عرض / مراجعة">
+                <i class="bi bi-eye"></i>
+              </a>
               <a href="{{ url_for('salaries.slip', rec_id=rec.id) }}"
                  class="btn btn-sm btn-outline-secondary" title="كشف الراتب" target="_blank">
                 <i class="bi bi-printer"></i>
               </a>
-              {% if not is_historical_year %}
-              <a href="{{ url_for('salaries.edit', rec_id=rec.id) }}"
-                 class="btn btn-sm btn-outline-primary" title="تعديل">
-                <i class="bi bi-pencil"></i>
-              </a>
-              {% if rec.status == 'pending' %}
-              <form method="POST" action="{{ url_for('salaries.mark_paid', rec_id=rec.id) }}" class="d-inline">
-                <button class="btn btn-sm btn-success" title="صرف"
-                        data-confirm="تأكيد صرف راتب {{ rec.employee.full_name }}؟">
-                  <i class="bi bi-check-circle-fill"></i>
-                </button>
-              </form>
-              {% endif %}
-              <form method="POST" action="{{ url_for('salaries.delete', rec_id=rec.id) }}" class="d-inline">
-                <button class="btn btn-sm btn-outline-danger" title="حذف"
-                        data-confirm="حذف سجل راتب {{ rec.employee.full_name }}؟">
-                  <i class="bi bi-trash"></i>
-                </button>
-              </form>
-              {% endif %}
             </div>
           </td>
         </tr>
@@ -202,16 +187,16 @@
   </div>
 </div>
 
-<!-- Employees missing salary -->
-{% if unpaid_employees %}
+<!-- Employees without a record -->
+{% if missing_employees %}
 <div class="card border-warning">
   <div class="card-header" style="background:#fff8ec;color:#856404">
     <i class="bi bi-exclamation-triangle-fill me-2"></i>
-    موظفون بدون سجل راتب ({{ unpaid_employees|length }})
+    موظفون بدون سجل راتب ({{ missing_employees|length }})
   </div>
   <div class="card-body py-2">
     <div class="d-flex flex-wrap gap-2">
-      {% for emp in unpaid_employees %}
+      {% for emp in missing_employees %}
       <span class="badge" style="background:#f0f4f8;color:#1e2b3a;font-weight:600;padding:6px 12px;border-radius:8px">
         {{ emp.full_name }}
       </span>

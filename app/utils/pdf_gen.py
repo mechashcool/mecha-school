@@ -610,13 +610,13 @@ def generate_salary_pdf(record) -> bytes | None:
     elements.append(Paragraph(
         f"{ARABIC_MONTHS[record.month]} {record.year}", sub_s))
 
-    # Employee info
+    # Employee info (prefer snapshots so historical slips stay correct)
     emp = record.employee
     emp_data = [
-        ['Employee',   emp.full_name],
-        ['Employee ID', emp.employee_id],
-        ['Job Title',  emp.job_title],
-        ['Department', emp.department or '—'],
+        ['Employee',    record.employee_name],
+        ['Employee ID', emp.employee_id if emp else '—'],
+        ['Job Title',   record.job_title or '—'],
+        ['Department',  record.department or '—'],
     ]
     emp_tbl = Table(emp_data, colWidths=[5*cm, 10*cm])
     emp_tbl.setStyle(TableStyle([
@@ -634,14 +634,24 @@ def generate_salary_pdf(record) -> bytes | None:
     elements.append(emp_tbl)
     elements.append(Spacer(1, 0.6*cm))
 
-    # Salary breakdown
-    sal_data = [
-        ['Component', 'Amount (IQD)'],
-        ['Base Salary',  f"{float(record.base_salary):,.2f}"],
-        ['Allowances',  f"+{float(record.allowances):,.2f}"],
-        ['Deductions',  f"-{float(record.deductions):,.2f}"],
-        ['NET SALARY',  f"{float(record.net_salary):,.2f}"],
-    ]
+    # Salary breakdown — itemized from PayrollItem lines, with cached totals.
+    sal_data = [['Component', 'Amount (IQD)']]
+    sal_data.append(['Base Salary', f"{float(record.base_salary):,.2f}"])
+    try:
+        items = list(record.items)
+    except Exception:
+        items = []
+    for it in items:
+        sign = '+' if it.item_type == 'addition' else '-'
+        sal_data.append([it.name, f"{sign}{float(it.amount):,.2f}"])
+    # If no line items (legacy records), fall back to aggregate columns.
+    if not items:
+        if record.allowances:
+            sal_data.append(['Allowances', f"+{float(record.allowances):,.2f}"])
+        if record.deductions:
+            sal_data.append(['Deductions', f"-{float(record.deductions):,.2f}"])
+    sal_data.append(['NET SALARY', f"{float(record.net_salary):,.2f}"])
+
     sal_tbl = Table(sal_data, colWidths=[8*cm, 7*cm])
     sal_tbl.setStyle(TableStyle([
         ('BACKGROUND',  (0,0),(-1,0), colors.HexColor("#aebcca")),
@@ -667,7 +677,9 @@ def generate_salary_pdf(record) -> bytes | None:
     # Status + date
     status_s = ParagraphStyle('status', fontSize=10, alignment=1,
                                textColor=colors.HexColor('#9aabb8'))
-    paid_txt = f"Status: {'PAID' if record.status=='paid' else 'PENDING'}"
+    _status_en = {'draft': 'DRAFT', 'pending': 'DRAFT', 'approved': 'APPROVED',
+                  'paid': 'PAID', 'cancelled': 'CANCELLED'}
+    paid_txt = f"Status: {_status_en.get(record.status, record.status.upper())}"
     if record.paid_date:
         paid_txt += f"  |  Paid: {record.paid_date.strftime('%Y-%m-%d')}"
     elements.append(Paragraph(paid_txt, status_s))

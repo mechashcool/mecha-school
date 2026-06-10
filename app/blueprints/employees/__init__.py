@@ -174,6 +174,14 @@ def _handle_employee_post(employee):
         except ValueError:
             pass
 
+    salary_start = None
+    sal_start_str = request.form.get('salary_start_date', '').strip()
+    if sal_start_str:
+        try:
+            salary_start = dt.strptime(sal_start_str, '%Y-%m-%d').date()
+        except ValueError:
+            pass
+
     photo_path = None
     if 'photo' in request.files and request.files['photo'].filename:
         photo_path = save_uploaded_file(request.files['photo'], 'employees')
@@ -193,6 +201,11 @@ def _handle_employee_post(employee):
             base_salary   = float(request.form.get('base_salary', 0) or 0),
             hire_date     = hire_date,
             contract_type = request.form.get('contract_type', '').strip(),
+            salary_type   = request.form.get('salary_type', 'monthly') or 'monthly',
+            pay_method    = request.form.get('pay_method', '').strip() or None,
+            bank_account  = request.form.get('bank_account', '').strip() or None,
+            salary_start_date = salary_start,
+            payroll_status = request.form.get('payroll_status', 'active') or 'active',
             photo         = photo_path,
             notes         = request.form.get('notes', '').strip(),
             school_id     = school.id if school else None,
@@ -230,6 +243,12 @@ def _handle_employee_post(employee):
             request.form.get('base_salary', employee.base_salary) or 0)
         employee.status        = request.form.get('status', employee.status)
         employee.contract_type = request.form.get('contract_type', '').strip()
+        employee.salary_type   = request.form.get('salary_type', employee.salary_type) or 'monthly'
+        employee.pay_method    = request.form.get('pay_method', '').strip() or None
+        employee.bank_account  = request.form.get('bank_account', '').strip() or None
+        employee.payroll_status = request.form.get('payroll_status', employee.payroll_status) or 'active'
+        if salary_start:
+            employee.salary_start_date = salary_start
         employee.notes         = request.form.get('notes', '').strip()
         if hire_date:
             employee.hire_date = hire_date

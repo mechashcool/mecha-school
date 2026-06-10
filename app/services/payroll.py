@@ -13,14 +13,25 @@ Contract:
 All callers MUST wrap this in a db.session.commit() of their own — the
 helper only stages objects on the session.
 """
-from datetime import date
+import calendar
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
-from app.models import db, ExpenseCategory, Expense, SalaryRecord
+from app.models import (db, ExpenseCategory, Expense, SalaryRecord, PayrollItem,
+                        PayrollSettings, SalaryComponent, EmployeeAttendance)
 from app.utils.audit import log_action
 
 
 SYSTEM_SALARY_CATEGORY = 'رواتب'
+
+ZERO = Decimal('0')
+
+
+def _d(value) -> Decimal:
+    """Coerce any numeric/None to Decimal."""
+    if value is None or value == '':
+        return ZERO
+    return Decimal(str(value))
 
 
 def ensure_salaries_category(school_id=None):
@@ -105,3 +116,327 @@ def unpost_salary_expense(record: SalaryRecord, user_id: int = None):
             details=f'payroll expense reversed for salary #{record.id}'
         )
     record.expense_id = None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PAYROLL GENERATION, COMPONENTS & ATTENDANCE DEDUCTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def get_settings(school_id) -> PayrollSettings:
+    """Return (creating if needed) the payroll settings for a school."""
+    return PayrollSettings.get_or_create(school_id)
+
+
+def _month_range(month: int, year: int):
+    """First and last calendar day of a given month/year."""
+    last_day = calendar.monthrange(year, month)[1]
+    return date(year, month, 1), date(year, month, last_day)
+
+
+def _minutes_between(t_from, t_to) -> int:
+    """Whole minutes from t_from to t_to (Time objects); 0 if not positive."""
+    if not t_from or not t_to:
+        return 0
+    a = datetime.combine(date.today(), t_from)
+    b = datetime.combine(date.today(), t_to)
+    delta = (b - a).total_seconds() / 60.0
+    return int(delta) if delta > 0 else 0
+
+
+def compute_attendance(record: SalaryRecord, settings: PayrollSettings, school) -> dict:
+    """
+    Calculate attendance-based deduction details for one payroll record's month.
+
+    Uses EmployeeAttendance (NOT student attendance). Days inside the working
+    calendar with no record are treated as virtual absences, matching the HR
+    attendance report. Returns a dict with counts and Decimal deduction amounts.
+    """
+    from app.utils.employee_attendance_helper import get_working_days
+
+    result = {
+        'absence_days': 0, 'late_count': 0, 'early_leave_count': 0,
+        'absence_deduction': ZERO, 'late_deduction': ZERO,
+        'early_leave_deduction': ZERO,
+    }
+    if not settings or not settings.attendance_deduction_enabled:
+        return result
+
+    date_from, date_to = _month_range(record.month, record.year)
+    working_days = get_working_days(date_from, date_to, school)
+    if not working_days:
+        return result
+
+    # One bulk query, bypass tenant scope so it works regardless of the active
+    # view year (the record may belong to a non-current year).
+    rows = (
+        EmployeeAttendance.query
+        .execution_options(bypass_tenant_scope=True)
+        .filter(
+            EmployeeAttendance.school_id == record.school_id,
+            EmployeeAttendance.employee_id == record.employee_id,
+            EmployeeAttendance.date >= date_from,
+            EmployeeAttendance.date <= date_to,
+        )
+        .all()
+    )
+    by_date = {r.date: r for r in rows}
+
+    late_threshold = getattr(school, 'att_late_threshold', None)
+    departure_time = getattr(school, 'att_departure_time', None)
+
+    absence_days = late_count = early_leave_count = 0
+    total_late_minutes = 0
+    for day in working_days:
+        rec = by_date.get(day)
+        if rec is None:
+            absence_days += 1                      # virtual absence
+            continue
+        if rec.status == 'absent':
+            absence_days += 1
+        elif rec.status == 'late':
+            late_count += 1
+            total_late_minutes += _minutes_between(late_threshold, rec.check_in)
+        # Early leave: checked out before the configured departure time.
+        if (departure_time and rec.check_out
+                and rec.check_out < departure_time):
+            early_leave_count += 1
+
+    # ── Absence deduction ─────────────────────────────────────────────────────
+    absence_deduction = ZERO
+    if settings.absence_method == 'divider':
+        wd = settings.monthly_working_days or len(working_days)
+        if wd > 0:
+            per_day = _d(record.base_salary) / Decimal(wd)
+            absence_deduction = (per_day * absence_days).quantize(Decimal('1'))
+    else:  # 'fixed'
+        absence_deduction = _d(settings.absence_fixed_amount) * absence_days
+
+    # ── Late deduction ────────────────────────────────────────────────────────
+    late_deduction = ZERO
+    if settings.late_deduction_enabled:
+        allowed = settings.late_allowed_count or 0
+        if settings.late_method == 'per_minute':
+            late_deduction = _d(settings.late_amount) * total_late_minutes
+        else:
+            effective = max(0, late_count - allowed)
+            if settings.late_method == 'per_group':
+                group = settings.late_group_size or 1
+                late_deduction = _d(settings.late_amount) * (effective // group)
+            else:  # 'fixed_each'
+                late_deduction = _d(settings.late_amount) * effective
+
+    # ── Early-leave deduction ──────────────────────────────────────────────────
+    early_leave_deduction = ZERO
+    if settings.early_leave_deduction_enabled:
+        early_leave_deduction = _d(settings.early_leave_amount) * early_leave_count
+
+    result.update(
+        absence_days=absence_days,
+        late_count=late_count,
+        early_leave_count=early_leave_count,
+        absence_deduction=absence_deduction,
+        late_deduction=late_deduction,
+        early_leave_deduction=early_leave_deduction,
+    )
+    return result
+
+
+def _clear_generated_items(record: SalaryRecord):
+    """Remove auto-generated (recurring/attendance) items, keep manual/one-time."""
+    keep = []
+    for item in list(record.items):
+        if item.source in ('recurring', 'attendance'):
+            record.items.remove(item)
+            db.session.delete(item)
+        else:
+            keep.append(item)
+    return keep
+
+
+def apply_recurring_components(record: SalaryRecord):
+    """Add PayrollItem lines for every active recurring component that applies
+    to this record's employee (general scope + employee-specific)."""
+    comps = (
+        SalaryComponent.query
+        .execution_options(bypass_tenant_scope=True)
+        .filter(
+            SalaryComponent.school_id == record.school_id,
+            SalaryComponent.is_active.is_(True),
+            SalaryComponent.recurrence == 'recurring',
+        )
+        .all()
+    )
+    for comp in comps:
+        if comp.scope == 'employee' and comp.employee_id != record.employee_id:
+            continue
+        record.items.append(PayrollItem(
+            school_id        = record.school_id,
+            academic_year_id = record.academic_year_id,
+            component_id     = comp.id,
+            name             = comp.name,
+            item_type        = 'addition' if comp.component_type == 'addition' else 'deduction',
+            amount           = _d(comp.default_amount),
+            source           = 'recurring',
+        ))
+
+
+def apply_attendance_items(record: SalaryRecord, settings: PayrollSettings, school):
+    """Compute attendance deductions and store them as 'attendance' line items
+    plus informational counts on the record."""
+    stats = compute_attendance(record, settings, school)
+    record.absence_days      = stats['absence_days']
+    record.late_count        = stats['late_count']
+    record.early_leave_count = stats['early_leave_count']
+
+    deductions = [
+        ('خصم غياب',        stats['absence_deduction']),
+        ('خصم تأخير',       stats['late_deduction']),
+        ('خصم خروج مبكر',   stats['early_leave_deduction']),
+    ]
+    for name, amount in deductions:
+        if amount and amount > 0:
+            record.items.append(PayrollItem(
+                school_id        = record.school_id,
+                academic_year_id = record.academic_year_id,
+                name             = name,
+                item_type        = 'deduction',
+                amount           = amount,
+                source           = 'attendance',
+            ))
+
+
+def rebuild_auto_items(record: SalaryRecord, settings: PayrollSettings, school):
+    """Refresh recurring + attendance items for a DRAFT record, then recompute.
+    Manual / one-time items are preserved."""
+    _clear_generated_items(record)
+    apply_recurring_components(record)
+    apply_attendance_items(record, settings, school)
+    record.recompute()
+
+
+def _snapshot(record: SalaryRecord, employee):
+    record.employee_name_snapshot = employee.full_name
+    record.job_title_snapshot     = employee.job_title
+    record.department_snapshot    = employee.department
+
+
+def generate_payroll(school, active_year, month: int, year: int,
+                     employees, user_id=None):
+    """
+    Create DRAFT SalaryRecords for the given month/year for each active employee
+    that does not already have a record (in ANY academic year — the unique
+    constraint spans all years). Applies recurring components and attendance
+    deductions. Returns (created_count, skipped_count).
+    """
+    settings = get_settings(school.id)
+
+    # Existing employee_ids for this month/year across all years (bypass year
+    # scope so the unique-constraint check is accurate).
+    existing_ids = {
+        row.employee_id
+        for row in (
+            SalaryRecord.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(month=month, year=year, school_id=school.id)
+            .all()
+        )
+    }
+
+    created = skipped = 0
+    with db.session.no_autoflush:
+        for emp in employees:
+            if emp.id in existing_ids:
+                skipped += 1
+                continue
+            record = SalaryRecord(
+                employee_id      = emp.id,
+                school_id        = school.id,
+                academic_year_id = active_year.id,
+                month            = month,
+                year             = year,
+                base_salary      = _d(emp.base_salary),
+                allowances       = ZERO,
+                deductions       = ZERO,
+                net_salary       = _d(emp.base_salary),
+                status           = 'draft',
+                created_by       = user_id,
+            )
+            _snapshot(record, emp)
+            db.session.add(record)
+            db.session.flush()  # need record.id + academic_year_id for items
+            apply_recurring_components(record)
+            apply_attendance_items(record, settings, school)
+            record.recompute()
+            created += 1
+
+    return created, skipped
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  EMPLOYEE ACCOUNT STATEMENT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def employee_statement(employee, year: int = None) -> dict:
+    """
+    Build a ledger-style account statement for one employee.
+
+    Convention (school-friendly):
+      * A salary entitlement (net payable for a month) CREDITS the employee
+        (increases what the school owes them).
+      * A salary payment DEBITS the employee (reduces what the school owes).
+      * Running balance = total owed to employee − total paid.
+
+    Cancelled records are excluded. Returns dict with rows + totals.
+    """
+    q = (SalaryRecord.query
+         .execution_options(bypass_tenant_scope=True)
+         .filter(SalaryRecord.employee_id == employee.id,
+                 SalaryRecord.school_id == employee.school_id))
+    if year:
+        q = q.filter(SalaryRecord.year == year)
+    records = q.order_by(SalaryRecord.year.asc(), SalaryRecord.month.asc()).all()
+
+    events = []  # (sort_date, type, description, credit, debit, ref, month, year)
+    for r in records:
+        if r.status == 'cancelled':
+            continue
+        entitle_date = date(r.year, r.month, 1)
+        events.append({
+            'date': entitle_date,
+            'type': 'استحقاق راتب',
+            'description': f'صافي راتب {r.month:02d}/{r.year}',
+            'credit': _d(r.net_salary),
+            'debit': ZERO,
+            'ref': f'SAL-{r.id}',
+            'month': r.month, 'year': r.year,
+            'status': r.status,
+        })
+        if r.status == 'paid':
+            events.append({
+                'date': r.paid_date or entitle_date,
+                'type': 'صرف راتب',
+                'description': f'دفع راتب {r.month:02d}/{r.year}',
+                'credit': ZERO,
+                'debit': _d(r.net_salary),
+                'ref': f'PAY-{r.id}',
+                'month': r.month, 'year': r.year,
+                'status': r.status,
+            })
+
+    events.sort(key=lambda e: (e['date'], 0 if e['credit'] else 1))
+
+    balance = ZERO
+    rows = []
+    total_credit = total_debit = ZERO
+    for ev in events:
+        balance += ev['credit'] - ev['debit']
+        total_credit += ev['credit']
+        total_debit += ev['debit']
+        rows.append({**ev, 'balance': balance})
+
+    return {
+        'rows': rows,
+        'total_credit': total_credit,   # total owed to employee
+        'total_debit': total_debit,     # total paid to employee
+        'balance': balance,             # >0 ⇒ school owes employee
+    }

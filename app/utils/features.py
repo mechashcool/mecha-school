@@ -86,7 +86,11 @@ FEATURES: dict[str, dict] = {
     "salaries.create":           {"label": "إضافة راتب",             "module": "salaries"},
     "salaries.edit":             {"label": "تعديل راتب",             "module": "salaries"},
     "salaries.delete":           {"label": "حذف راتب",               "module": "salaries"},
+    "salaries.approve":          {"label": "اعتماد الرواتب",         "module": "salaries"},
     "salaries.pay":              {"label": "صرف الرواتب",            "module": "salaries"},
+    "salaries.settings":         {"label": "إعدادات الرواتب",        "module": "salaries"},
+    "salaries.components":       {"label": "بنود الراتب",            "module": "salaries"},
+    "salaries.statement":        {"label": "كشف حساب موظف",         "module": "salaries"},
     "salaries.export":           {"label": "تصدير الرواتب",          "module": "salaries"},
 
     # ── Employees ─────────────────────────────────────────────────────────────

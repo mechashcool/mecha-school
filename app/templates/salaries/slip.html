@@ -87,19 +87,23 @@
     <div class="emp-info">
       <div class="info-item">
         <label>الموظف</label>
-        <span>{{ record.employee.full_name }}</span>
+        <span>{{ record.employee_name }}</span>
       </div>
       <div class="info-item">
         <label>رقم الموظف</label>
-        <span>{{ record.employee.employee_id }}</span>
+        <span>{{ record.employee.employee_id if record.employee }}</span>
       </div>
       <div class="info-item">
         <label>المسمى الوظيفي</label>
-        <span>{{ record.employee.job_title }}</span>
+        <span>{{ record.job_title or '—' }}</span>
+      </div>
+      <div class="info-item">
+        <label>القسم</label>
+        <span>{{ record.department or '—' }}</span>
       </div>
       <div class="info-item">
         <label>الحالة</label>
-        <span class="status-badge">{{ 'مصروف' if record.status == 'paid' else 'معلّق' }}</span>
+        <span class="status-badge">{{ status_labels.get(record.status, record.status) }}</span>
       </div>
     </div>
 
@@ -116,20 +120,26 @@
           <td>الراتب الأساسي</td>
           <td style="text-align:left" class="amount">{{ '{:,.0f}'.format(record.base_salary) }}</td>
         </tr>
-        {% if record.allowances %}
+        {% for item in record.addition_items %}
         <tr>
-          <td>البدلات</td>
-          <td style="text-align:left" class="amount positive">+ {{ '{:,.0f}'.format(record.allowances) }}</td>
+          <td>{{ item.name }}</td>
+          <td style="text-align:left" class="amount positive">+ {{ '{:,.0f}'.format(item.amount) }}</td>
         </tr>
-        {% endif %}
-        {% if record.deductions %}
+        {% endfor %}
+        {% for item in record.deduction_items %}
         <tr>
-          <td>الخصومات</td>
-          <td style="text-align:left" class="amount negative">- {{ '{:,.0f}'.format(record.deductions) }}</td>
+          <td>{{ item.name }}</td>
+          <td style="text-align:left" class="amount negative">- {{ '{:,.0f}'.format(item.amount) }}</td>
         </tr>
-        {% endif %}
+        {% endfor %}
       </tbody>
     </table>
+
+    {% if record.absence_days or record.late_count or record.early_leave_count %}
+    <div style="background:#f8fbff;border:1px solid #dde3ec;border-radius:8px;padding:10px 16px;margin-bottom:20px;font-size:12.5px;color:#6b7a8d">
+      ملخص الحضور: غياب {{ record.absence_days }} يوم · تأخير {{ record.late_count }} · خروج مبكر {{ record.early_leave_count }}
+    </div>
+    {% endif %}
 
     <!-- Net -->
     <div class="net-row">

@@ -1,0 +1,203 @@
+{% extends "shared/base.html" %}
+{% block title %}بنود الراتب{% endblock %}
+{% block page_title %}بنود الراتب{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">بنود الراتب</h1>
+  <p class="page-subtitle">البدلات والخصومات القابلة لإعادة الاستخدام</p></div>
+  {% if not is_historical_year %}
+  <button class="btn btn-primary" onclick="openComp()">
+    <i class="bi bi-plus-circle me-1"></i>بند جديد
+  </button>
+  {% endif %}
+</div>
+
+{% include "salaries/_nav.html" %}
+
+<div class="card">
+  <div class="card-header"><i class="bi bi-ui-checks-grid text-accent"></i> البنود المعرّفة</div>
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>الاسم</th><th>النوع</th><th>المبلغ الافتراضي</th><th>التكرار</th>
+          <th>النطاق</th><th>الحالة</th>{% if not is_historical_year %}<th>الإجراءات</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in components %}
+        <tr>
+          <td class="fw-600">{{ c.name }}</td>
+          <td>
+            {% if c.component_type == 'addition' %}
+              <span class="badge-status badge-paid">بدل / إضافة</span>
+            {% else %}
+              <span class="badge-status badge-absent">خصم</span>
+            {% endif %}
+          </td>
+          <td>{{ '{:,.0f}'.format(c.default_amount or 0) }}{% if c.amount_type == 'variable' %} <span class="text-muted" style="font-size:11px">(متغير)</span>{% endif %}</td>
+          <td>{{ 'دوري' if c.recurrence == 'recurring' else 'مرة واحدة' }}</td>
+          <td>{{ 'عام' if c.scope == 'general' else ('موظف: ' ~ (c.employee.full_name if c.employee else '—')) }}</td>
+          <td>
+            <span class="badge-status {{ 'badge-active' if c.is_active else 'badge-inactive' }}">
+              {{ 'مفعّل' if c.is_active else 'معطّل' }}
+            </span>
+          </td>
+          {% if not is_historical_year %}
+          <td>
+            <div class="d-flex gap-1">
+              <button class="btn btn-sm btn-outline-primary" title="تعديل"
+                onclick='editComp({{ {
+                  "id": c.id, "name": c.name, "component_type": c.component_type,
+                  "amount_type": c.amount_type, "default_amount": (c.default_amount|float),
+                  "recurrence": c.recurrence, "scope": c.scope,
+                  "employee_id": c.employee_id, "is_active": c.is_active,
+                  "notes": c.notes or ""
+                } | tojson }})'>
+                <i class="bi bi-pencil"></i>
+              </button>
+              <form method="POST" action="{{ url_for('salaries.component_delete', comp_id=c.id) }}">
+                <button class="btn btn-sm btn-outline-danger" title="حذف" data-confirm="حذف البند «{{ c.name }}»؟">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </form>
+            </div>
+          </td>
+          {% endif %}
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="text-center text-muted py-5">
+          <i class="bi bi-ui-checks-grid" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+          لا توجد بنود — أضف بدلات وخصومات قابلة لإعادة الاستخدام
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if not is_historical_year %}
+<!-- Add/Edit Modal -->
+<div class="modal fade" id="compModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="POST" action="{{ url_for('salaries.component_save') }}">
+        <div class="modal-header">
+          <h5 class="modal-title" id="compModalTitle">بند جديد</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" name="id" id="c_id">
+          <div class="mb-3">
+            <label class="form-label">اسم البند <span class="text-danger">*</span></label>
+            <input type="text" name="name" id="c_name" class="form-control" required>
+          </div>
+          <div class="row g-3">
+            <div class="col-6">
+              <label class="form-label">النوع</label>
+              <select name="component_type" id="c_type" class="form-select">
+                <option value="addition">بدل / إضافة</option>
+                <option value="deduction">خصم</option>
+              </select>
+            </div>
+            <div class="col-6">
+              <label class="form-label">طبيعة المبلغ</label>
+              <select name="amount_type" id="c_amount_type" class="form-select">
+                <option value="fixed">ثابت</option>
+                <option value="variable">متغير</option>
+              </select>
+            </div>
+            <div class="col-6">
+              <label class="form-label">المبلغ الافتراضي</label>
+              <input type="number" name="default_amount" id="c_amount" class="form-control" min="0" step="1000" value="0">
+            </div>
+            <div class="col-6">
+              <label class="form-label">التكرار</label>
+              <select name="recurrence" id="c_recurrence" class="form-select">
+                <option value="recurring">دوري (كل شهر تلقائياً)</option>
+                <option value="one_time">مرة واحدة</option>
+              </select>
+            </div>
+            <div class="col-6">
+              <label class="form-label">النطاق</label>
+              <select name="scope" id="c_scope" class="form-select" onchange="toggleEmp()">
+                <option value="general">عام (كل الموظفين)</option>
+                <option value="employee">موظف محدد</option>
+              </select>
+            </div>
+            <div class="col-6" id="empWrap" style="display:none">
+              <label class="form-label">الموظف</label>
+              <select name="employee_id" id="c_employee" class="form-select">
+                <option value="">— اختر —</option>
+                {% for e in employees %}
+                <option value="{{ e.id }}">{{ e.full_name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-12">
+              <label class="form-label">ملاحظات</label>
+              <textarea name="notes" id="c_notes" class="form-control" rows="2"></textarea>
+            </div>
+            <div class="col-12">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" name="is_active" id="c_active" checked>
+                <label class="form-check-label" for="c_active">مفعّل</label>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">إلغاء</button>
+          <button type="submit" class="btn btn-primary">حفظ</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let compModal;
+document.addEventListener('DOMContentLoaded', () => {
+  const el = document.getElementById('compModal');
+  if (el) compModal = new bootstrap.Modal(el);
+});
+function toggleEmp(){
+  document.getElementById('empWrap').style.display =
+    document.getElementById('c_scope').value === 'employee' ? 'block' : 'none';
+}
+function openComp(){
+  document.getElementById('compModalTitle').textContent = 'بند جديد';
+  document.getElementById('c_id').value = '';
+  document.getElementById('c_name').value = '';
+  document.getElementById('c_type').value = 'addition';
+  document.getElementById('c_amount_type').value = 'fixed';
+  document.getElementById('c_amount').value = 0;
+  document.getElementById('c_recurrence').value = 'recurring';
+  document.getElementById('c_scope').value = 'general';
+  document.getElementById('c_employee').value = '';
+  document.getElementById('c_notes').value = '';
+  document.getElementById('c_active').checked = true;
+  toggleEmp();
+  compModal.show();
+}
+function editComp(c){
+  document.getElementById('compModalTitle').textContent = 'تعديل بند';
+  document.getElementById('c_id').value = c.id;
+  document.getElementById('c_name').value = c.name;
+  document.getElementById('c_type').value = c.component_type;
+  document.getElementById('c_amount_type').value = c.amount_type;
+  document.getElementById('c_amount').value = c.default_amount;
+  document.getElementById('c_recurrence').value = c.recurrence;
+  document.getElementById('c_scope').value = c.scope;
+  document.getElementById('c_employee').value = c.employee_id || '';
+  document.getElementById('c_notes').value = c.notes;
+  document.getElementById('c_active').checked = !!c.is_active;
+  toggleEmp();
+  compModal.show();
+}
+</script>
+{% endblock %}

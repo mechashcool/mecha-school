@@ -1,0 +1,21 @@
+{# Payroll sub-navigation — included at the top of every payroll page. #}
+<ul class="nav nav-pills gap-2 mb-4" style="font-size:13.5px">
+  <li class="nav-item">
+    <a class="nav-link {{ 'active' if request.endpoint == 'salaries.index' }}"
+       href="{{ url_for('salaries.index') }}">
+      <i class="bi bi-list-columns-reverse me-1"></i>مسير الرواتب
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {{ 'active' if request.endpoint == 'salaries.components' }}"
+       href="{{ url_for('salaries.components') }}">
+      <i class="bi bi-ui-checks-grid me-1"></i>بنود الراتب
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {{ 'active' if request.endpoint == 'salaries.settings' }}"
+       href="{{ url_for('salaries.settings') }}">
+      <i class="bi bi-gear-fill me-1"></i>إعدادات الرواتب
+    </a>
+  </li>
+</ul>

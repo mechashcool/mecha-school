@@ -1,0 +1,258 @@
+{% extends "shared/base.html" %}
+{% block title %}مراجعة راتب{% endblock %}
+{% block page_title %}مراجعة سجل راتب{% endblock %}
+
+{% set st_cls = {'draft':'badge-pending','pending':'badge-pending','approved':'badge-approved','paid':'badge-paid','cancelled':'badge-cancelled'} %}
+{% set editable = (not record.is_locked) and record.status != 'cancelled' and not is_historical_year %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ record.employee_name }}</h1>
+    <p class="page-subtitle">
+      راتب {{ arabic_months[record.month] }} {{ record.year }} ·
+      <span class="badge-status {{ st_cls.get(record.status,'badge-pending') }}">{{ status_labels.get(record.status, record.status) }}</span>
+    </p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('salaries.slip', rec_id=record.id) }}" target="_blank" class="btn btn-outline-secondary">
+      <i class="bi bi-printer me-1"></i>كشف الراتب
+    </a>
+    <a href="{{ url_for('salaries.index', month=record.month, year=record.year) }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>رجوع
+    </a>
+  </div>
+</div>
+
+<div class="row g-4">
+  <!-- ── Left: line items ─────────────────────────────────────────────── -->
+  <div class="col-lg-8">
+    <div class="card mb-4">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-receipt text-accent"></i> بنود الراتب</span>
+        {% if editable %}
+        <form method="POST" action="{{ url_for('salaries.recalculate', rec_id=record.id) }}">
+          <button class="btn btn-sm btn-outline-secondary"
+                  data-confirm="إعادة حساب البدلات الثابتة وخصومات الحضور؟ (لن تتأثر البنود اليدوية)">
+            <i class="bi bi-arrow-repeat me-1"></i>إعادة حساب تلقائي
+          </button>
+        </form>
+        {% endif %}
+      </div>
+      <div class="table-wrapper">
+        <table class="table">
+          <thead>
+            <tr><th>البند</th><th>النوع</th><th>المصدر</th><th class="text-start">المبلغ</th>{% if editable %}<th></th>{% endif %}</tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="fw-600">الراتب الأساسي</td>
+              <td><span class="badge-status badge-active">أساسي</span></td>
+              <td class="text-muted" style="font-size:12px">—</td>
+              <td class="text-start fw-700">{{ '{:,.0f}'.format(record.base_salary) }}</td>
+              {% if editable %}<td></td>{% endif %}
+            </tr>
+            {% set src_labels = {'recurring':'دوري','one_time':'مرة واحدة','attendance':'حضور','manual':'يدوي'} %}
+            {% for item in record.items %}
+            <tr>
+              <td>{{ item.name }}</td>
+              <td>
+                {% if item.item_type == 'addition' %}
+                  <span class="badge-status badge-paid">بدل / إضافة</span>
+                {% else %}
+                  <span class="badge-status badge-absent">خصم</span>
+                {% endif %}
+              </td>
+              <td class="text-muted" style="font-size:12px">{{ src_labels.get(item.source, item.source) }}</td>
+              <td class="text-start fw-600 {{ 'text-success' if item.item_type=='addition' else 'text-danger' }}">
+                {{ '+' if item.item_type=='addition' else '-' }}{{ '{:,.0f}'.format(item.amount) }}
+              </td>
+              {% if editable %}
+              <td>
+                <form method="POST" action="{{ url_for('salaries.delete_item', rec_id=record.id, item_id=item.id) }}">
+                  <button class="btn btn-sm btn-outline-danger" title="حذف" data-confirm="حذف البند «{{ item.name }}»؟">
+                    <i class="bi bi-x-lg"></i>
+                  </button>
+                </form>
+              </td>
+              {% endif %}
+            </tr>
+            {% endfor %}
+          </tbody>
+          <tfoot>
+            <tr style="border-top:2px solid #e3e9f0">
+              <td colspan="3" class="fw-700">إجمالي البدلات</td>
+              <td class="text-start fw-700 text-success">+{{ '{:,.0f}'.format(record.allowances or 0) }}</td>
+              {% if editable %}<td></td>{% endif %}
+            </tr>
+            <tr>
+              <td colspan="3" class="fw-700">إجمالي الخصومات</td>
+              <td class="text-start fw-700 text-danger">-{{ '{:,.0f}'.format(record.deductions or 0) }}</td>
+              {% if editable %}<td></td>{% endif %}
+            </tr>
+            <tr style="background:#f0f4f8">
+              <td colspan="3" class="fw-800" style="font-size:15px">صافي الراتب</td>
+              <td class="text-start fw-800" style="font-size:17px">{{ '{:,.0f}'.format(record.net_salary) }} د.ع</td>
+              {% if editable %}<td></td>{% endif %}
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+
+    {% if editable %}
+    <!-- Add line item -->
+    <div class="card mb-4">
+      <div class="card-header"><i class="bi bi-plus-circle text-accent"></i> إضافة بند يدوي</div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('salaries.add_item', rec_id=record.id) }}" class="row g-3 align-items-end">
+          <div class="col-md-4">
+            <label class="form-label">من البنود المعرّفة (اختياري)</label>
+            <select name="component_id" class="form-select" onchange="fillComp(this)">
+              <option value="">— بند مخصص —</option>
+              {% for c in components %}
+              <option value="{{ c.id }}" data-type="{{ c.component_type }}" data-amount="{{ c.default_amount }}" data-name="{{ c.name }}">
+                {{ c.name }} ({{ 'بدل' if c.component_type=='addition' else 'خصم' }})
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">الاسم</label>
+            <input type="text" name="name" id="itemName" class="form-control" placeholder="مثال: مكافأة">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">النوع</label>
+            <select name="item_type" id="itemType" class="form-select">
+              <option value="addition">بدل / إضافة</option>
+              <option value="deduction">خصم</option>
+            </select>
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">المبلغ</label>
+            <input type="number" name="amount" id="itemAmount" class="form-control" min="0" step="1000" value="0">
+          </div>
+          <div class="col-md-1">
+            <button class="btn btn-primary w-100"><i class="bi bi-plus-lg"></i></button>
+          </div>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Notes -->
+    <div class="card">
+      <div class="card-header"><i class="bi bi-sticky text-accent"></i> ملاحظات</div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('salaries.update_notes', rec_id=record.id) }}">
+          <textarea name="notes" class="form-control" rows="2"
+                    {{ 'readonly' if is_historical_year }}>{{ record.notes or '' }}</textarea>
+          {% if not is_historical_year %}
+          <button class="btn btn-sm btn-outline-secondary mt-2">حفظ الملاحظات</button>
+          {% endif %}
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Right: summary + workflow ────────────────────────────────────── -->
+  <div class="col-lg-4">
+    <div class="card mb-4">
+      <div class="card-header"><i class="bi bi-person-vcard text-accent"></i> بيانات الموظف</div>
+      <div class="card-body" style="font-size:13.5px">
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">الموظف</span><span class="fw-600">{{ record.employee_name }}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">المسمى</span><span>{{ record.job_title or '—' }}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">القسم</span><span>{{ record.department or '—' }}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">الشهر</span><span>{{ arabic_months[record.month] }} {{ record.year }}</span></div>
+      </div>
+    </div>
+
+    {% if record.absence_days or record.late_count or record.early_leave_count %}
+    <div class="card mb-4">
+      <div class="card-header"><i class="bi bi-calendar-x text-accent"></i> ملخص الحضور</div>
+      <div class="card-body" style="font-size:13.5px">
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">أيام الغياب</span><span class="fw-600">{{ record.absence_days }}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">مرات التأخير</span><span class="fw-600">{{ record.late_count }}</span></div>
+        <div class="d-flex justify-content-between py-1"><span class="text-muted">الخروج المبكر</span><span class="fw-600">{{ record.early_leave_count }}</span></div>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Workflow actions -->
+    {% if not is_historical_year %}
+    <div class="card">
+      <div class="card-header"><i class="bi bi-diagram-3 text-accent"></i> سير العمل</div>
+      <div class="card-body d-flex flex-column gap-2">
+        {% if record.status in ('draft','pending') %}
+          <form method="POST" action="{{ url_for('salaries.approve', rec_id=record.id) }}">
+            <button class="btn btn-info text-white w-100" data-confirm="اعتماد هذا الراتب؟">
+              <i class="bi bi-patch-check-fill me-1"></i>اعتماد الراتب
+            </button>
+          </form>
+          <form method="POST" action="{{ url_for('salaries.cancel', rec_id=record.id) }}">
+            <button class="btn btn-outline-secondary w-100" data-confirm="إلغاء هذا الراتب؟">
+              <i class="bi bi-slash-circle me-1"></i>إلغاء
+            </button>
+          </form>
+          <form method="POST" action="{{ url_for('salaries.delete', rec_id=record.id) }}">
+            <button class="btn btn-outline-danger w-100" data-confirm="حذف مسودة الراتب نهائياً؟">
+              <i class="bi bi-trash me-1"></i>حذف المسودة
+            </button>
+          </form>
+        {% elif record.status == 'approved' %}
+          <form method="POST" action="{{ url_for('salaries.mark_paid', rec_id=record.id) }}">
+            <div class="mb-2">
+              <label class="form-label">طريقة الدفع</label>
+              <select name="payment_method" class="form-select">
+                <option value="cash">نقدي</option>
+                <option value="bank">حوالة بنكية</option>
+                <option value="wallet">محفظة إلكترونية</option>
+              </select>
+            </div>
+            <button class="btn btn-success w-100" data-confirm="تأكيد صرف الراتب؟ سيُسجّل قيد مصروف مرتبط.">
+              <i class="bi bi-cash-stack me-1"></i>صرف الراتب
+            </button>
+          </form>
+          <form method="POST" action="{{ url_for('salaries.cancel', rec_id=record.id) }}">
+            <button class="btn btn-outline-secondary w-100" data-confirm="إلغاء هذا الراتب المعتمد؟">
+              <i class="bi bi-slash-circle me-1"></i>إلغاء الاعتماد والراتب
+            </button>
+          </form>
+        {% elif record.status == 'paid' %}
+          <div class="alert alert-success py-2 mb-0" style="font-size:13px">
+            <i class="bi bi-check-circle-fill me-1"></i>
+            صُرف بتاريخ {{ record.paid_date.strftime('%Y-%m-%d') if record.paid_date }}
+          </div>
+          <form method="POST" action="{{ url_for('salaries.unpay', rec_id=record.id) }}">
+            <button class="btn btn-outline-danger w-100" data-confirm="إلغاء الصرف وحذف قيد المصروف المرتبط؟">
+              <i class="bi bi-arrow-counterclockwise me-1"></i>إلغاء الصرف
+            </button>
+          </form>
+        {% elif record.status == 'cancelled' %}
+          <div class="alert alert-secondary py-2 mb-0" style="font-size:13px">
+            <i class="bi bi-slash-circle me-1"></i>هذا السجل ملغى.
+          </div>
+          <form method="POST" action="{{ url_for('salaries.delete', rec_id=record.id) }}">
+            <button class="btn btn-outline-danger w-100" data-confirm="حذف السجل الملغى نهائياً؟">
+              <i class="bi bi-trash me-1"></i>حذف نهائي
+            </button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function fillComp(sel){
+  const opt = sel.options[sel.selectedIndex];
+  if(!opt.value) return;
+  document.getElementById('itemName').value = opt.dataset.name || '';
+  document.getElementById('itemType').value = opt.dataset.type === 'deduction' ? 'deduction' : 'addition';
+  document.getElementById('itemAmount').value = opt.dataset.amount || 0;
+}
+</script>
+{% endblock %}

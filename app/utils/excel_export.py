@@ -149,7 +149,7 @@ def export_salary_month(records, month: int, year: int) -> bytes | None:
     ws = wb.active
     ws.title = f'Salaries {MONTHS[month]} {year}'
 
-    headers = ['#', 'Employee ID', 'Full Name', 'Job Title',
+    headers = ['#', 'Employee ID', 'Full Name', 'Job Title', 'Department',
                'Base Salary', 'Allowances', 'Deductions', 'Net Salary',
                'Status', 'Paid Date']
     hs = _header_style()
@@ -158,14 +158,19 @@ def export_salary_month(records, month: int, year: int) -> bytes | None:
         cell.font = hs['font']; cell.fill = hs['fill']; cell.alignment = hs['alignment']
     ws.row_dimensions[1].height = 22
 
+    status_en = {'draft': 'Draft', 'pending': 'Draft', 'approved': 'Approved',
+                 'paid': 'Paid', 'cancelled': 'Cancelled'}
+
     total_net = 0
     for i, r in enumerate(records, 1):
         net = float(r.net_salary)
         total_net += net
+        emp_code = r.employee.employee_id if r.employee else ''
         row = [
-            i, r.employee.employee_id, r.employee.full_name, r.employee.job_title,
-            float(r.base_salary), float(r.allowances), float(r.deductions), net,
-            'Paid' if r.status == 'paid' else 'Pending',
+            i, emp_code, r.employee_name, r.job_title, r.department,
+            float(r.base_salary), float(r.allowances or 0),
+            float(r.deductions or 0), net,
+            status_en.get(r.status, r.status),
             r.paid_date.strftime('%Y-%m-%d') if r.paid_date else '',
         ]
         for col, val in enumerate(row, 1):
@@ -177,7 +182,7 @@ def export_salary_month(records, month: int, year: int) -> bytes | None:
     # Total row
     tr = len(records) + 2
     ws.cell(row=tr, column=3, value='TOTAL').font = Font(bold=True)
-    total_cell = ws.cell(row=tr, column=8, value=total_net)
+    total_cell = ws.cell(row=tr, column=9, value=total_net)
     total_cell.font = Font(bold=True, color='1AAB6D')
     total_cell.fill = PatternFill('solid', fgColor='E8F8F0')
 

@@ -1,0 +1,148 @@
+{% extends "shared/base.html" %}
+{% block title %}إعدادات الرواتب{% endblock %}
+{% block page_title %}إعدادات الرواتب{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">إعدادات الرواتب</h1>
+  <p class="page-subtitle">إعدادات احتساب الرواتب وخصومات الحضور لهذه المدرسة</p></div>
+</div>
+
+{% include "salaries/_nav.html" %}
+
+<form method="POST" action="{{ url_for('salaries.settings') }}">
+<div class="row g-4">
+  <!-- General -->
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-sliders text-accent"></i> إعدادات عامة</div>
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label">يوم احتساب الرواتب (من الشهر)</label>
+          <input type="number" name="payroll_calculation_day" class="form-control"
+                 min="1" max="31" value="{{ cfg.payroll_calculation_day or 28 }}">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">يوم الصرف الافتراضي (من الشهر)</label>
+          <input type="number" name="default_payment_day" class="form-control"
+                 min="1" max="31" value="{{ cfg.default_payment_day or 1 }}">
+        </div>
+        <div class="form-check form-switch">
+          <input class="form-check-input" type="checkbox" name="allow_edit_draft"
+                 id="allow_edit_draft" {{ 'checked' if cfg.allow_edit_draft }}>
+          <label class="form-check-label" for="allow_edit_draft">السماح بتعديل المسودات</label>
+        </div>
+        <div class="alert alert-info mt-3 py-2 mb-0" style="font-size:12.5px">
+          <i class="bi bi-info-circle me-1"></i>
+          الرواتب المعتمدة والمدفوعة مقفلة من التعديل دائماً. العملة: د.ع (IQD).
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Absence -->
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-calendar-x text-accent"></i> خصومات الحضور</div>
+      <div class="card-body">
+        <div class="form-check form-switch mb-3">
+          <input class="form-check-input" type="checkbox" name="attendance_deduction_enabled"
+                 id="att_en" {{ 'checked' if cfg.attendance_deduction_enabled }}>
+          <label class="form-check-label" for="att_en">تفعيل الخصومات المبنية على الحضور</label>
+        </div>
+        <hr>
+        <div class="mb-3">
+          <label class="form-label">طريقة خصم الغياب</label>
+          <select name="absence_method" class="form-select" id="absMethod">
+            <option value="fixed"   {{ 'selected' if cfg.absence_method == 'fixed' }}>مبلغ ثابت لكل يوم غياب</option>
+            <option value="divider" {{ 'selected' if cfg.absence_method == 'divider' }}>الراتب الأساسي ÷ أيام العمل</option>
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">مبلغ خصم اليوم الواحد (للطريقة الثابتة)</label>
+          <input type="number" name="absence_fixed_amount" class="form-control"
+                 min="0" step="1000" value="{{ cfg.absence_fixed_amount or 0 }}">
+        </div>
+        <div class="mb-0">
+          <label class="form-label">عدد أيام العمل الشهرية (للطريقة بالقسمة)</label>
+          <input type="number" name="monthly_working_days" class="form-control"
+                 min="1" max="31" value="{{ cfg.monthly_working_days or 26 }}">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Late -->
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-clock-history text-accent"></i> خصم التأخير</div>
+      <div class="card-body">
+        <div class="form-check form-switch mb-3">
+          <input class="form-check-input" type="checkbox" name="late_deduction_enabled"
+                 id="late_en" {{ 'checked' if cfg.late_deduction_enabled }}>
+          <label class="form-check-label" for="late_en">تفعيل خصم التأخير</label>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">طريقة الخصم</label>
+          <select name="late_method" class="form-select">
+            <option value="fixed_each" {{ 'selected' if cfg.late_method == 'fixed_each' }}>مبلغ ثابت لكل تأخير</option>
+            <option value="per_minute" {{ 'selected' if cfg.late_method == 'per_minute' }}>لكل دقيقة تأخير</option>
+            <option value="per_group"  {{ 'selected' if cfg.late_method == 'per_group' }}>لكل مجموعة تأخيرات</option>
+          </select>
+        </div>
+        <div class="row g-2">
+          <div class="col-6 mb-0">
+            <label class="form-label">مبلغ الخصم</label>
+            <input type="number" name="late_amount" class="form-control" min="0" step="500" value="{{ cfg.late_amount or 0 }}">
+          </div>
+          <div class="col-6 mb-0">
+            <label class="form-label">عدد التأخيرات المسموحة</label>
+            <input type="number" name="late_allowed_count" class="form-control" min="0" value="{{ cfg.late_allowed_count or 0 }}">
+          </div>
+          <div class="col-6">
+            <label class="form-label">حجم المجموعة (للطريقة بالمجموعات)</label>
+            <input type="number" name="late_group_size" class="form-control" min="1" value="{{ cfg.late_group_size or 3 }}">
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Early leave + leave -->
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-box-arrow-right text-accent"></i> الخروج المبكر والإجازات</div>
+      <div class="card-body">
+        <div class="form-check form-switch mb-3">
+          <input class="form-check-input" type="checkbox" name="early_leave_deduction_enabled"
+                 id="early_en" {{ 'checked' if cfg.early_leave_deduction_enabled }}>
+          <label class="form-check-label" for="early_en">تفعيل خصم الخروج المبكر</label>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">مبلغ خصم الخروج المبكر</label>
+          <input type="number" name="early_leave_amount" class="form-control" min="0" step="500" value="{{ cfg.early_leave_amount or 0 }}">
+        </div>
+        <hr>
+        <div class="form-check form-switch mb-0">
+          <input class="form-check-input" type="checkbox" name="unpaid_leave_deduction_enabled"
+                 id="unpaid_en" {{ 'checked' if cfg.unpaid_leave_deduction_enabled }}>
+          <label class="form-check-label" for="unpaid_en">خصم الإجازات غير المدفوعة</label>
+        </div>
+        <div class="alert alert-warning mt-3 py-2 mb-0" style="font-size:12px">
+          <i class="bi bi-info-circle me-1"></i>
+          يعتمد خصم الخروج المبكر على وقت الانصراف المحدد في إعدادات الحضور للمدرسة.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if not is_historical_year %}
+<div class="mt-4">
+  <button type="submit" class="btn btn-primary px-5">
+    <i class="bi bi-check-circle-fill me-2"></i>حفظ الإعدادات
+  </button>
+</div>
+{% endif %}
+</form>
+{% endblock %}

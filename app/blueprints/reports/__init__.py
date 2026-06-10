@@ -107,9 +107,10 @@ def index():
     absent_today  = _att_count('absent')
     late_today    = _att_count('late')
 
-    # Salary year total
+    # Salary year total (exclude cancelled payroll records)
     sal_q = db.session.query(func.coalesce(func.sum(SalaryRecord.net_salary), 0))\
-                      .filter(SalaryRecord.year == year)
+                      .filter(SalaryRecord.year == year,
+                              SalaryRecord.status != 'cancelled')
     if school_id:
         sal_q = sal_q.filter(SalaryRecord.school_id == school_id)
     salary_year = float(sal_q.scalar())
@@ -365,14 +366,16 @@ def salary_report():
                 func.count(SalaryRecord.id).label('months'),
                 func.coalesce(func.sum(SalaryRecord.net_salary), 0).label('total'))
              .join(SalaryRecord, SalaryRecord.employee_id == Employee.id)
-             .filter(SalaryRecord.year == year))
+             .filter(SalaryRecord.year == year,
+                     SalaryRecord.status != 'cancelled'))
     if school_id:
         sal_q = sal_q.filter(SalaryRecord.school_id == school_id)
     rows = (sal_q.group_by(Employee.full_name, Employee.job_title)
                  .order_by(func.sum(SalaryRecord.net_salary).desc()).all())
 
     grand_q = db.session.query(func.coalesce(func.sum(SalaryRecord.net_salary), 0))\
-                        .filter(SalaryRecord.year == year)
+                        .filter(SalaryRecord.year == year,
+                                SalaryRecord.status != 'cancelled')
     if school_id:
         grand_q = grand_q.filter(SalaryRecord.school_id == school_id)
     grand_total = float(grand_q.scalar())

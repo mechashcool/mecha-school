@@ -23,8 +23,9 @@ def _models():
         EmployeeAttendance, EmployeeDocument, EmployeeEvaluation, Exam,
         ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord,
         FeeType, Grade, InventoryCategory, InventoryCount, InventoryItem,
-        InventoryMovement, LeaveRequest, Notification, PushNotification, Revenue,
-        RevenueCategory, SalaryRecord, Schedule,
+        InventoryMovement, LeaveRequest, Notification, PayrollItem,
+        PayrollSettings, PushNotification, Revenue,
+        RevenueCategory, SalaryComponent, SalaryRecord, Schedule,
         Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
         Subject, User,
         SchoolVideo, SchoolAnnouncement,
@@ -37,8 +38,9 @@ def _models():
         EmployeeAttendance, EmployeeDocument, EmployeeEvaluation, Exam,
         ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord,
         FeeType, Grade, InventoryCategory, InventoryCount, InventoryItem,
-        InventoryMovement, LeaveRequest, Notification, PushNotification, Revenue,
-        RevenueCategory, SalaryRecord, Schedule,
+        InventoryMovement, LeaveRequest, Notification, PayrollItem,
+        PayrollSettings, PushNotification, Revenue,
+        RevenueCategory, SalaryComponent, SalaryRecord, Schedule,
         Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
         Subject, User,
         SchoolVideo, SchoolAnnouncement,
@@ -47,11 +49,13 @@ def _models():
     # Student, StudentDocument, StudentSuspension are school-scoped only —
     # they persist across academic years so that a year rollover does not
     # require re-entering master student data.
+    # PayrollSettings and SalaryComponent are school-scoped only — payroll
+    # configuration and component definitions persist across academic years.
     year_scoped = (
         Complaint, EmployeeAttendance, EmployeeEvaluation, Exam, ExamResult, Expense,
         FeeInstallment, FeeRecord, FeeType, Grade, InventoryCategory,
-        InventoryCount, InventoryItem, InventoryMovement, Revenue, SalaryRecord,
-        Schedule, Section, StudentAttendance, Subject, LeaveRequest,
+        InventoryCount, InventoryItem, InventoryMovement, PayrollItem, Revenue,
+        SalaryRecord, Schedule, Section, StudentAttendance, Subject, LeaveRequest,
     )
     return school_scoped, year_scoped
 
@@ -270,7 +274,8 @@ def _inherit_scope(session_, obj):
         AcademicYear, Complaint, Employee, EmployeeAttendance, EmployeeDocument,
         EmployeeEvaluation, Exam, ExamResult, Expense, FeeInstallment,
         FeeRecord, Grade, InventoryCategory, InventoryCount, InventoryItem,
-        InventoryMovement, LeaveRequest, Notification, PushNotification, Revenue, SalaryRecord, Schedule,
+        InventoryMovement, LeaveRequest, Notification, PayrollItem,
+        PushNotification, Revenue, SalaryRecord, Schedule,
         Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
         Subject, User,
     )
@@ -336,6 +341,10 @@ def _inherit_scope(session_, obj):
             salary_date = date(obj.year, obj.month, 1) if obj.year and obj.month else None
             ay = _academic_year_for_date(session_, obj.school_id, salary_date)
             obj.academic_year_id = ay.id if ay else current_academic_year_id()
+    elif isinstance(obj, PayrollItem):
+        # Inherit school AND year from the owning payroll record so line items
+        # always land in the same year as their salary record.
+        copy_scope(obj.salary_record or load(SalaryRecord, obj.salary_record_id))
     elif isinstance(obj, StudentAttendance):
         student = obj.student or load(Student, obj.student_id)
         if student and getattr(obj, 'school_id', None) is None:
@@ -408,7 +417,8 @@ def _validate_relationship_scope(session_, obj):
         AcademicYear, Complaint, Employee, EmployeeAttendance, EmployeeDocument,
         EmployeeEvaluation, Exam, ExamResult, Expense, FeeInstallment,
         FeeRecord, Grade, InventoryCategory, InventoryCount, InventoryItem,
-        InventoryMovement, LeaveRequest, Revenue, RevenueCategory, SalaryRecord, Schedule,
+        InventoryMovement, LeaveRequest, PayrollItem, Revenue, RevenueCategory,
+        SalaryRecord, Schedule,
         Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
         Subject, ExpenseCategory, Notification, User,
     )
@@ -479,6 +489,11 @@ def _validate_relationship_scope(session_, obj):
         employee = obj.employee or load(Employee, obj.employee_id)
         require(employee and employee.school_id == obj.school_id,
                 'SalaryRecord must match employee school')
+    elif isinstance(obj, PayrollItem):
+        record = obj.salary_record or load(SalaryRecord, obj.salary_record_id)
+        require(record and record.school_id == obj.school_id
+                and record.academic_year_id == obj.academic_year_id,
+                'PayrollItem must match salary record school/year')
     elif isinstance(obj, StudentAttendance):
         student = obj.student or load(Student, obj.student_id)
         require(student and student.school_id == obj.school_id,
