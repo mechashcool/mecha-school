@@ -16,8 +16,10 @@ POST /teacher/exams                    create an exam — accepts title + max_sc
 GET  /teacher/exams/<id>               exam detail + entered results (subject_id, section_id, title)
 POST /teacher/exams/<id>/results       bulk-upsert grade entries (accepts score/note or marks/notes)
 GET  /teacher/notifications            notifications feed (paginated)
-GET  /teacher/homework                 homework list (subject_id, section_id, grade_name)
-POST /teacher/homework                 create homework — subject_id required
+GET    /teacher/homework                 homework list (subject_id, section_id, grade_name)
+POST   /teacher/homework                 create homework — subject_id required
+PUT    /teacher/homework/<id>            update homework — all core fields required
+PATCH  /teacher/homework/<id>            same as PUT (both verbs accepted)
 
 Security rules
 ──────────────
@@ -879,15 +881,20 @@ def teacher_homework_create():
     """
     Create a new homework assignment from the mobile app.
 
-    Expected JSON body:
+    Body: application/json  OR  multipart/form-data.
+    Multipart adds an optional 'attachment' file field (jpg/jpeg/png/webp/pdf).
+
+    Fields:
         title        str   required
         section_id   int   required
-        subject_id   int   optional
-        publish_date str   YYYY-MM-DD  required
+        subject_id   int   required
         due_date     str   YYYY-MM-DD  required
+        publish_date str   YYYY-MM-DD  optional (defaults to today)
         description  str   optional
+        attachment   file  optional (multipart only)
     """
     from app.utils.school_config import get_school_config
+    from app.utils.helpers import save_uploaded_file
     from datetime import datetime as _dt
 
     user = g.mobile_user
@@ -901,14 +908,31 @@ def teacher_homework_create():
     if not emp:
         return err('employee_profile_not_found', 404)
 
-    data = request.get_json(silent=True) or {}
+    is_multipart = bool(
+        request.content_type and 'multipart/form-data' in request.content_type
+    )
+    if is_multipart:
+        data        = request.form
+        attachment  = request.files.get('attachment')
+    else:
+        data        = request.get_json(silent=True) or {}
+        attachment  = None
 
-    title        = (data.get('title') or '').strip()
+    title        = (data.get('title')       or '').strip()
     section_id   = data.get('section_id')
     subject_id   = data.get('subject_id')
-    publish_date = data.get('publish_date', '')
-    due_date_str = data.get('due_date', '')
+    publish_date = (data.get('publish_date') or '').strip()
+    due_date_str = (data.get('due_date')     or '').strip()
     description  = (data.get('description') or '').strip() or None
+
+    try:
+        section_id = int(section_id) if section_id is not None else None
+    except (ValueError, TypeError):
+        section_id = None
+    try:
+        subject_id = int(subject_id) if subject_id is not None else None
+    except (ValueError, TypeError):
+        subject_id = None
 
     if not title:
         return err('required_field_missing: title')
@@ -957,32 +981,203 @@ def teacher_homework_create():
     if not year:
         return err('no active academic year', 400)
 
+    # Handle optional attachment upload
+    att_path = None
+    att_type = None
+    if attachment and attachment.filename:
+        _HOMEWORK_EXTS = {'jpg', 'jpeg', 'png', 'webp', 'pdf'}
+        uploaded = save_uploaded_file(
+            attachment,
+            subfolder='homework',
+            allowed_exts=_HOMEWORK_EXTS,
+        )
+        if uploaded is None:
+            return err('invalid_attachment — allowed: jpg, jpeg, png, webp, pdf')
+        orig_ext = (
+            attachment.filename.rsplit('.', 1)[-1].lower()
+            if '.' in attachment.filename else ''
+        )
+        att_path = uploaded
+        att_type = 'pdf' if orig_ext == 'pdf' else 'image'
+
     hw = Homework(
         school_id=emp.school_id,
         academic_year_id=year.id,
         teacher_id=emp.id,
-        subject_id=subject_id or None,
+        subject_id=subject_id,
         section_id=section_id,
         title=title,
         description=description,
         publish_date=pub_dt,
         due_date=due_dt,
         is_active=True,
+        attachment_path=att_path,
+        attachment_type=att_type,
     )
     db.session.add(hw)
     db.session.commit()
 
+    att_url  = _hw_attachment_url(hw)
+    att_name = hw.attachment_path.rstrip('/').rsplit('/', 1)[-1] if hw.attachment_path else None
+
     return ok(
         message='تم إضافة الواجب بنجاح.',
         homework={
-            'id':           hw.id,
-            'title':        hw.title,
-            'subject_id':   hw.subject_id,
-            'subject_name': hw.subject.name if hw.subject else None,
-            'section_id':   hw.section_id,
-            'section_name': hw.section.name if hw.section else None,
-            'grade_name':   hw.section.grade.name if hw.section and hw.section.grade else None,
-            'publish_date': hw.publish_date.isoformat(),
-            'due_date':     hw.due_date.isoformat(),
+            'id':              hw.id,
+            'title':           hw.title,
+            'description':     hw.description,
+            'subject_id':      hw.subject_id,
+            'subject_name':    hw.subject.name if hw.subject else None,
+            'section_id':      hw.section_id,
+            'section_name':    hw.section.name if hw.section else None,
+            'grade_name':      hw.section.grade.name if hw.section and hw.section.grade else None,
+            'publish_date':    hw.publish_date.isoformat(),
+            'due_date':        hw.due_date.isoformat(),
+            'attachment_url':  att_url,
+            'attachment_name': att_name,
+            'attachment_type': hw.attachment_type,
         },
     ), 201
+
+
+@mobile_api_bp.route('/teacher/homework/<int:homework_id>', methods=['PUT', 'PATCH'])
+@jwt_required()
+@role_required('teacher')
+def teacher_homework_update(homework_id):
+    """
+    Update an existing homework assignment. Both PUT and PATCH are accepted;
+    all core fields (title, section_id, subject_id, due_date) are required in
+    both cases — this matches the Flutter edit-screen that always sends a full
+    form payload.
+
+    Body: application/json  OR  multipart/form-data.
+    Multipart adds an optional 'attachment' file field (jpg/jpeg/png/webp/pdf).
+    """
+    from app.utils.school_config import get_school_config
+    from app.utils.helpers import save_uploaded_file
+
+    user = g.mobile_user
+    cfg  = get_school_config(user.school_id)
+    if not cfg.action_enabled('homework', 'api_access'):
+        return err('الوصول إلى الواجبات غير مفعل لهذه المدرسة.', 403)
+
+    emp = _get_employee()
+    if not emp:
+        return err('employee_profile_not_found', 404)
+
+    # Return 404 for wrong school, wrong teacher, or soft-deleted — never leak
+    hw = Homework.query.filter_by(
+        id=homework_id,
+        school_id=emp.school_id,
+        teacher_id=emp.id,
+        is_active=True,
+    ).first()
+    if not hw:
+        return err('homework_not_found', 404)
+
+    is_multipart = bool(
+        request.content_type and 'multipart/form-data' in request.content_type
+    )
+    if is_multipart:
+        title        = (request.form.get('title')       or '').strip()
+        description  = (request.form.get('description') or '').strip() or None
+        due_date_str = (request.form.get('due_date')    or '').strip()
+        section_id   = request.form.get('section_id')
+        subject_id   = request.form.get('subject_id')
+    else:
+        data         = request.get_json(silent=True) or {}
+        title        = (data.get('title')       or '').strip()
+        description  = (data.get('description') or '').strip() or None
+        due_date_str = (data.get('due_date')    or '').strip()
+        section_id   = data.get('section_id')
+        subject_id   = data.get('subject_id')
+
+    try:
+        section_id = int(section_id) if section_id is not None else None
+    except (ValueError, TypeError):
+        section_id = None
+    try:
+        subject_id = int(subject_id) if subject_id is not None else None
+    except (ValueError, TypeError):
+        subject_id = None
+
+    if not title:
+        return err('required_field_missing: title')
+    if not section_id:
+        return err('required_field_missing: section_id')
+    if not subject_id:
+        return err('required_field_missing: subject_id')
+    if not due_date_str:
+        return err('required_field_missing: due_date')
+
+    try:
+        due_dt = _dt.strptime(due_date_str, '%Y-%m-%d').date()
+    except ValueError:
+        return err('invalid due_date — use YYYY-MM-DD')
+
+    allowed_sec_ids = _teacher_section_ids(emp)
+    if section_id not in allowed_sec_ids:
+        return err('forbidden — section not assigned to you', 403)
+
+    allowed_subj_ids = {
+        row.subject_id
+        for row in db.session.execute(
+            select(teacher_subjects.c.subject_id).where(
+                teacher_subjects.c.employee_id == emp.id
+            )
+        ).fetchall()
+    }
+    if subject_id not in allowed_subj_ids:
+        return err('forbidden — subject not assigned to you', 403)
+
+    # Attachment replacement (multipart only).
+    # NOTE: the old file is NOT deleted from Supabase Storage — the project
+    # does not yet have a storage-delete helper.
+    new_path = hw.attachment_path
+    new_type = hw.attachment_type
+    if is_multipart:
+        attachment_file = request.files.get('attachment')
+        if attachment_file and attachment_file.filename:
+            _HOMEWORK_EXTS = {'jpg', 'jpeg', 'png', 'webp', 'pdf'}
+            uploaded = save_uploaded_file(
+                attachment_file,
+                subfolder='homework',
+                allowed_exts=_HOMEWORK_EXTS,
+            )
+            if uploaded is None:
+                return err('invalid_attachment — allowed: jpg, jpeg, png, webp, pdf')
+            orig_ext = (
+                attachment_file.filename.rsplit('.', 1)[-1].lower()
+                if '.' in attachment_file.filename else ''
+            )
+            new_path = uploaded
+            new_type = 'pdf' if orig_ext == 'pdf' else 'image'
+
+    hw.title           = title
+    hw.description     = description
+    hw.section_id      = section_id
+    hw.subject_id      = subject_id
+    hw.due_date        = due_dt
+    hw.attachment_path = new_path
+    hw.attachment_type = new_type
+    db.session.commit()
+
+    att_url  = _hw_attachment_url(hw)
+    att_name = hw.attachment_path.rstrip('/').rsplit('/', 1)[-1] if hw.attachment_path else None
+
+    return ok(
+        homework={
+            'id':              hw.id,
+            'title':           hw.title,
+            'description':     hw.description,
+            'section_id':      hw.section_id,
+            'section_name':    hw.section.name if hw.section else None,
+            'grade_name':      hw.section.grade.name if hw.section and hw.section.grade else None,
+            'subject_id':      hw.subject_id,
+            'subject_name':    hw.subject.name if hw.subject else None,
+            'due_date':        hw.due_date.isoformat(),
+            'attachment_url':  att_url,
+            'attachment_name': att_name,
+            'attachment_type': hw.attachment_type,
+        }
+    )
