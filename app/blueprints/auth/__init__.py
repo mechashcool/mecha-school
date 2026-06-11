@@ -31,6 +31,7 @@ def login():
             user.last_login = datetime.utcnow()
             db.session.commit()
             log_action('login', 'user', user.id, f'Login from {request.remote_addr}')
+            flash('تم تسجيل الدخول بنجاح.', 'success')
             next_page = request.args.get('next')
             return redirect(next_page or _role_redirect_url(user))
         else:

@@ -262,6 +262,38 @@
 
     .submit-btn:active { transform: scale(0.99); }
 
+    /* Flash message banners */
+    .flash-banner {
+      border-radius: 9px;
+      padding: 9px 13px;
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 14px;
+      direction: rtl;
+      line-height: 1.5;
+    }
+
+    .flash-banner.success {
+      background: rgba(22, 163, 74, 0.08);
+      border: 1px solid rgba(22, 163, 74, 0.30);
+      color: #15803d;
+    }
+
+    .flash-banner.warning {
+      background: rgba(202, 138, 4, 0.08);
+      border: 1px solid rgba(202, 138, 4, 0.30);
+      color: #b45309;
+    }
+
+    .flash-banner.danger, .flash-banner.error {
+      background: rgba(185, 28, 28, 0.07);
+      border: 1px solid rgba(220, 80, 80, 0.28);
+      color: #b91c1c;
+    }
+
     /* Card footer */
     .card-footer {
       margin-top: clamp(12px, 2vh, 20px);
@@ -378,6 +410,22 @@
             <h2>مرحباً بك مجدداً</h2>
             <p>الرجاء تسجيل الدخول للمتابعة</p>
           </div>
+
+          <!-- Flash messages (e.g. logout confirmation) -->
+          {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+            <div class="flash-banner {{ category }}">
+              {% if category == 'success' %}
+                <i class="bi bi-check-circle-fill"></i>
+              {% elif category == 'warning' %}
+                <i class="bi bi-exclamation-triangle-fill"></i>
+              {% else %}
+                <i class="bi bi-exclamation-circle-fill"></i>
+              {% endif %}
+              {{ message }}
+            </div>
+            {% endfor %}
+          {% endwith %}
 
           <!-- Form -->
           <form method="POST" action="{{ url_for('auth.login') }}">
