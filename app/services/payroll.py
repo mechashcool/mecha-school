@@ -166,8 +166,13 @@ def compute_attendance(record: SalaryRecord, settings: PayrollSettings, school) 
     if not working_days:
         return result
 
-    # One bulk query, bypass tenant scope so it works regardless of the active
+    # One bulk query for explicit EmployeeAttendance records within the salary
+    # month only.  bypass_tenant_scope so it works regardless of the active
     # view year (the record may belong to a non-current year).
+    # Only EXPLICIT records are counted — days with no record are treated as
+    # present (the school did not log a problem for that day).  This matches
+    # the HR attendance report and prevents inflated deductions when a school
+    # only enters absent/late events instead of recording every day.
     rows = (
         EmployeeAttendance.query
         .execution_options(bypass_tenant_scope=True)
@@ -179,18 +184,16 @@ def compute_attendance(record: SalaryRecord, settings: PayrollSettings, school) 
         )
         .all()
     )
-    by_date = {r.date: r for r in rows}
+    # Index by date for O(1) lookup; restrict to dates that fall on a working day.
+    working_day_set = set(working_days)
+    by_date = {r.date: r for r in rows if r.date in working_day_set}
 
     late_threshold = getattr(school, 'att_late_threshold', None)
     departure_time = getattr(school, 'att_departure_time', None)
 
     absence_days = late_count = early_leave_count = 0
     total_late_minutes = 0
-    for day in working_days:
-        rec = by_date.get(day)
-        if rec is None:
-            absence_days += 1                      # virtual absence
-            continue
+    for rec in by_date.values():
         if rec.status == 'absent':
             absence_days += 1
         elif rec.status == 'late':

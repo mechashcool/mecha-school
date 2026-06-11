@@ -169,7 +169,7 @@
 
     {% if record.absence_days or record.late_count or record.early_leave_count %}
     <div class="card mb-4">
-      <div class="card-header"><i class="bi bi-calendar-x text-accent"></i> ملخص الحضور</div>
+      <div class="card-header"><i class="bi bi-calendar-x text-accent"></i> ملخص الحضور لشهر {{ arabic_months[record.month] }} {{ record.year }}</div>
       <div class="card-body" style="font-size:13.5px">
         <div class="d-flex justify-content-between py-1"><span class="text-muted">أيام الغياب</span><span class="fw-600">{{ record.absence_days }}</span></div>
         <div class="d-flex justify-content-between py-1"><span class="text-muted">مرات التأخير</span><span class="fw-600">{{ record.late_count }}</span></div>
