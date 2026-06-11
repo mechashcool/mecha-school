@@ -1040,17 +1040,16 @@ def teacher_homework_create():
     ), 201
 
 
-@mobile_api_bp.route('/teacher/homework/<int:homework_id>', methods=['PUT', 'PATCH'])
+@mobile_api_bp.route('/teacher/homework/<int:homework_id>', methods=['PUT', 'PATCH', 'DELETE'])
 @jwt_required()
 @role_required('teacher')
 def teacher_homework_update(homework_id):
     """
-    Update an existing homework assignment. Both PUT and PATCH are accepted;
-    all core fields (title, section_id, subject_id, due_date) are required in
-    both cases — this matches the Flutter edit-screen that always sends a full
-    form payload.
+    PUT/PATCH: Update an existing homework assignment.
+    DELETE:    Soft-delete (sets is_active=False). Teacher can only delete
+               their own homework within their own school.
 
-    Body: application/json  OR  multipart/form-data.
+    Body (PUT/PATCH): application/json  OR  multipart/form-data.
     Multipart adds an optional 'attachment' file field (jpg/jpeg/png/webp/pdf).
     """
     from app.utils.school_config import get_school_config
@@ -1065,7 +1064,6 @@ def teacher_homework_update(homework_id):
     if not emp:
         return err('employee_profile_not_found', 404)
 
-    # Return 404 for wrong school, wrong teacher, or soft-deleted — never leak
     hw = Homework.query.filter_by(
         id=homework_id,
         school_id=emp.school_id,
@@ -1075,6 +1073,12 @@ def teacher_homework_update(homework_id):
     if not hw:
         return err('homework_not_found', 404)
 
+    if request.method == 'DELETE':
+        hw.is_active = False
+        db.session.commit()
+        return ok(message='homework_deleted')
+
+    # ── PUT / PATCH ────────────────────────────────────────────────────────
     is_multipart = bool(
         request.content_type and 'multipart/form-data' in request.content_type
     )
