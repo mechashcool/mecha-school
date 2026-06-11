@@ -3,222 +3,447 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>تسجيل الدخول — المهندس</title>
+  <title>تسجيل الدخول — Core School</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.rtl.min.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
-
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;900&display=swap"
+        rel="stylesheet">
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
   <style>
-    :root {
-      --primary:  #1a3a5c;
-      --accent:   #e8a020;
-      --bg:       #0f2540;
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-    body {
+    html, body {
+      width: 100%;
+      min-height: 100%;
+      margin: 0;
       font-family: 'Cairo', sans-serif;
-      background: var(--bg);
+    }
+
+    /*
+     * Login page wrapper — full-viewport, centers the shell.
+     * overflow-x: hidden prevents stray horizontal scrollbars.
+     */
+    .login-page {
       min-height: 100vh;
-      display: flex; align-items: center; justify-content: center;
-      position: relative; overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: clamp(8px, 1.5vw, 16px);
+      background: #061a35;
+      overflow-x: hidden;
     }
 
-    /* Geometric background */
-    body::before {
-      content: '';
-      position: absolute; inset: 0;
-      background:
-        radial-gradient(ellipse at 80% 20%, rgba(232,160,32,.15) 0%, transparent 50%),
-        radial-gradient(ellipse at 20% 80%, rgba(26,58,92,.8)    0%, transparent 50%);
+    /* ══════════════════════════════════════════════════════════════════════
+       UNIFIED SHELL
+       height: min(88vh, 760px) — never exceeds viewport height.
+       min-height: 620px — floor so the form always shows on short screens.
+       overflow: hidden — locks the shell so inner content cannot push it
+         taller and cause page-level scroll on desktop.
+       direction: ltr — forces physical left/right grid layout regardless
+         of the html dir="rtl" attribute.
+    ══════════════════════════════════════════════════════════════════════ */
+    .login-shell {
+      width: min(96vw, 1320px);
+      height: min(86vh, 720px);
+      min-height: 540px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+      gap: 0;
+      border-radius: 24px;
+      overflow: hidden;
+      direction: ltr;
+      box-shadow:
+        0 28px 72px rgba(0, 0, 0, 0.6),
+        0 0 0 1px rgba(120, 180, 255, 0.12);
     }
 
-    .pattern {
-      position: absolute; inset: 0; opacity: .04;
-      background-image: repeating-linear-gradient(
-        45deg,
-        #fff 0, #fff 1px, transparent 0, transparent 50%
-      );
-      background-size: 30px 30px;
-    }
-
-    /* Card */
-    .login-card {
-      position: relative; z-index: 10;
-      width: 100%; max-width: 440px;
-      background: rgba(255,255,255,.97);
-      border-radius: 20px;
-      box-shadow: 0 30px 80px rgba(0,0,0,.4);
+    /* ══════════════════════════════════════════════════════════════════════
+       LEFT COLUMN — hero image
+    ══════════════════════════════════════════════════════════════════════ */
+    .hero-panel {
+      min-width: 0;
+      min-height: 0;
+      background: #071428;
+      border-right: 1px solid rgba(120, 180, 255, 0.1);
       overflow: hidden;
     }
 
-    .login-header {
-      background: linear-gradient(135deg, var(--primary), #22508a);
-      padding: 36px 40px 30px;
+    .hero-panel img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      object-position: center;
+    }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       RIGHT COLUMN — login form, light premium surface
+    ══════════════════════════════════════════════════════════════════════ */
+    .login-panel {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(145deg, #ffffff 0%, #f4f8ff 45%, #edf6ff 100%);
+      padding: clamp(20px, 3vw, 48px);
+      direction: rtl;
+      overflow: hidden;
+    }
+
+    /* ── Login card ─────────────────────────────────────────────────── */
+    .login-card {
+      width: min(100%, 460px);
+    }
+
+    /* Brand */
+    .brand-block {
       text-align: center;
-      position: relative;
-    }
-    .login-header::after {
-      content: '';
-      position: absolute; bottom: -1px; left: 0; right: 0;
-      height: 20px;
-      background: rgba(255,255,255,.97);
-      clip-path: ellipse(60% 100% at 50% 100%);
+      margin-bottom: clamp(16px, 2.5vh, 24px);
     }
 
-    .logo-circle {
-      width: 68px; height: 68px;
-      background: var(--accent);
-      border-radius: 18px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 32px; font-weight: 900; color: #fff;
-      margin: 0 auto 14px;
-      box-shadow: 0 8px 24px rgba(232,160,32,.4);
-    }
-    .login-header h1 {
-      color: #fff; font-size: 22px; font-weight: 800; margin: 0;
-    }
-    .login-header p {
-      color: rgba(255,255,255,.7); font-size: 13px; margin: 4px 0 0;
+    .login-logo {
+      display: block;
+      margin: 0 auto 8px;
+      max-width: clamp(120px, 14vw, 170px);
+      height: auto;
+      object-fit: contain;
     }
 
-    .login-body { padding: 34px 40px 36px; }
-
-    .form-label {
-      font-weight: 700; font-size: 13px; color: #1e2b3a; margin-bottom: 7px;
-    }
-    .input-group-text {
-      background: #f0f4f8; border-color: #dde3ec;
-      color: #6b7a8d; border-radius: 0 10px 10px 0;
-    }
-    .form-control {
-      border: 1.5px solid #dde3ec; border-radius: 10px 0 0 10px;
-      font-size: 14px; padding: 11px 16px;
-      transition: border-color .2s, box-shadow .2s;
-    }
-    .form-control:focus {
-      border-color: var(--primary);
-      box-shadow: 0 0 0 3px rgba(26,58,92,.1);
+    .brand-powered {
+      font-size: 11px;
+      color: #5a7090;
+      font-weight: 500;
+      line-height: 1.6;
     }
 
-    .btn-login {
-      background: linear-gradient(135deg, var(--primary), #22508a);
-      color: #fff; border: none;
-      width: 100%; padding: 13px;
-      border-radius: 10px;
-      font-size: 15px; font-weight: 700;
-      cursor: pointer; transition: opacity .2s, transform .1s;
-      margin-top: 8px;
-    }
-    .btn-login:hover { opacity: .93; transform: translateY(-1px); }
-    .btn-login:active { transform: translateY(0); }
-
-    .alert-custom {
-      background: #fef0f0; color: #b91c1c;
-      border: 1px solid #fecaca;
-      border-radius: 10px; padding: 11px 16px;
-      font-size: 13.5px; margin-bottom: 20px;
-      display: flex; align-items: center; gap: 8px;
+    .brand-divider {
+      display: block;
+      width: 48px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, #c9a227, transparent);
+      border-radius: 2px;
+      margin: 10px auto 0;
     }
 
-    .login-footer {
+    /* Heading */
+    .form-heading {
       text-align: center;
-      padding: 16px 40px;
-      background: #f8fafc;
-      border-top: 1px solid #eef2f7;
-      font-size: 12px; color: #9aabb8;
+      margin-bottom: clamp(14px, 2.2vh, 20px);
     }
 
-    .form-check-label { font-size: 13px; color: #4a5568; font-weight: 500; }
-
-    /* Floating shapes */
-    .shape {
-      position: absolute; border-radius: 50%;
-      background: rgba(232,160,32,.08);
+    .form-heading h2 {
+      font-size: clamp(17px, 1.5vw, 21px);
+      font-weight: 800;
+      color: #0c1e38;
+      margin-bottom: 4px;
     }
-    .shape-1 { width:300px; height:300px; top:-100px; left:-100px; }
-    .shape-2 { width:200px; height:200px; bottom:-60px; right:-60px; }
-    .shape-3 { width:120px; height:120px; top:40%; left:5%; }
+
+    .form-heading p {
+      font-size: 12.5px;
+      color: #5a708a;
+      font-weight: 500;
+    }
+
+    /* Error banner */
+    .error-banner {
+      background: rgba(185, 28, 28, 0.07);
+      border: 1px solid rgba(220, 80, 80, 0.28);
+      color: #b91c1c;
+      border-radius: 9px;
+      padding: 9px 13px;
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 14px;
+      direction: rtl;
+      line-height: 1.5;
+    }
+
+    /* Field groups */
+    .field-group { margin-bottom: clamp(10px, 1.5vh, 15px); }
+
+    .field-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 700;
+      color: #2a3f5e;
+      margin-bottom: 5px;
+    }
+
+    .field-wrap { position: relative; }
+
+    .field-input {
+      width: 100%;
+      padding: 10px 40px 10px 13px;
+      background: #ffffff;
+      border: 1.5px solid #c0d4ec;
+      border-radius: 9px;
+      font-family: 'Cairo', sans-serif;
+      font-size: 13.5px;
+      font-weight: 500;
+      color: #0c1e38;
+      direction: rtl;
+      text-align: right;
+      transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
+      outline: none;
+      box-shadow: 0 1px 3px rgba(0, 30, 80, 0.06);
+    }
+
+    .field-input::placeholder {
+      color: #8aaccc;
+      font-weight: 400;
+    }
+
+    .field-input:focus {
+      border-color: #1a7aff;
+      background: #f4f8ff;
+      box-shadow: 0 0 0 3px rgba(26, 122, 255, 0.12);
+    }
+
+    .field-icon {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #90b0d0;
+      font-size: 15px;
+      pointer-events: none;
+    }
+
+    /* Remember row */
+    .remember-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      direction: rtl;
+      margin-bottom: clamp(14px, 2vh, 20px);
+    }
+
+    .remember-row input[type="checkbox"] {
+      width: 15px;
+      height: 15px;
+      accent-color: #1a7aff;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .remember-row label {
+      font-size: 12.5px;
+      font-weight: 600;
+      color: #4a6a88;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    /* Submit button */
+    .submit-btn {
+      width: 100%;
+      padding: 11px;
+      background: linear-gradient(135deg, #1a3a8a 0%, #1a7aff 100%);
+      border: none;
+      border-radius: 9px;
+      font-family: 'Cairo', sans-serif;
+      font-size: 14.5px;
+      font-weight: 800;
+      color: #fff;
+      cursor: pointer;
+      transition: opacity 0.18s, transform 0.1s, box-shadow 0.18s;
+      box-shadow: 0 5px 18px rgba(26, 122, 255, 0.38);
+      letter-spacing: 0.3px;
+    }
+
+    .submit-btn:hover {
+      opacity: 0.9;
+      box-shadow: 0 7px 24px rgba(26, 122, 255, 0.5);
+    }
+
+    .submit-btn:active { transform: scale(0.99); }
+
+    /* Card footer */
+    .card-footer {
+      margin-top: clamp(12px, 2vh, 20px);
+      padding-top: 14px;
+      border-top: 1px solid #dce8f4;
+      text-align: center;
+    }
+
+    .support-note {
+      font-size: 11.5px;
+      color: #7a9ab8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      margin-bottom: 6px;
+    }
+
+    .support-note i { color: #b8921e; font-size: 12px; }
+
+    .copy-note {
+      font-size: 10px;
+      color: #9ab0c8;
+      font-weight: 500;
+    }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       RESPONSIVE
+    ══════════════════════════════════════════════════════════════════════ */
+
+    /*
+     * Tablet / narrow desktop (≤ 1000px):
+     * Switch to single-column. Login panel goes first (top), hero second.
+     * Shell height becomes auto so the login form is never clipped.
+     */
+    @media (max-width: 1000px) {
+      .login-page {
+        padding: 0;
+        align-items: flex-start;
+      }
+
+      .login-shell {
+        width: 100%;
+        height: auto;
+        min-height: 100vh;
+        grid-template-columns: 1fr;
+        grid-template-rows: auto minmax(0, 38vh);
+        border-radius: 0;
+        box-shadow: none;
+      }
+
+      .login-panel {
+        grid-row: 1;
+        padding: 32px 24px 24px;
+        overflow-y: visible;
+      }
+
+      .hero-panel {
+        grid-row: 2;
+        border-right: none;
+        border-top: 1px solid rgba(120, 180, 255, 0.12);
+        max-height: 38vh;
+        padding: 16px 20px;
+        background: #071428;
+      }
+    }
+
+    /* Mobile (≤ 600px): hide hero, full-width form */
+    @media (max-width: 600px) {
+      .login-page { background: linear-gradient(145deg, #ffffff 0%, #f4f8ff 100%); }
+
+      .login-shell {
+        min-height: 100vh;
+        grid-template-rows: 1fr;
+      }
+
+      .hero-panel { display: none; }
+
+      .login-panel {
+        padding: 28px 18px 24px;
+        min-height: 100vh;
+      }
+
+      .login-card { width: 100%; }
+    }
   </style>
 </head>
 <body>
-  <div class="pattern"></div>
-  <div class="shape shape-1"></div>
-  <div class="shape shape-2"></div>
-  <div class="shape shape-3"></div>
 
-  <div class="login-card">
-    <div class="login-header">
-      <div class="logo-circle">م</div>
-      <h1>المهندس</h1>
-      <p>نظام إدارة المدرسة الخاصة</p>
-    </div>
+  <div class="login-page">
+    <div class="login-shell">
 
-    <div class="login-body">
-      <h2 style="font-size:18px;font-weight:800;color:#1e2b3a;margin-bottom:22px">
-        تسجيل الدخول
-      </h2>
-
-      {% if error %}
-      <div class="alert-custom">
-        <i class="bi bi-exclamation-circle-fill"></i>
-        {{ error }}
+      <!-- ══ LEFT: Hero image ═══════════════════════════════════════════════ -->
+      <div class="hero-panel">
+        <img src="{{ url_for('static', filename='images/login_hero_final.png') }}"
+             alt="Core School">
       </div>
-      {% endif %}
 
-      <form method="POST" action="{{ url_for('auth.login') }}">
-        <div class="mb-4">
-          <label class="form-label">اسم المستخدم أو البريد الإلكتروني</label>
-          <div class="input-group">
-            <input type="text" name="username" class="form-control"
-                   placeholder="أدخل اسم المستخدم"
-                   required autofocus value="{{ request.form.get('username','') }}">
-            <span class="input-group-text"><i class="bi bi-person"></i></span>
+      <!-- ══ RIGHT: Login card ══════════════════════════════════════════════ -->
+      <div class="login-panel">
+        <div class="login-card">
+
+          <!-- Brand -->
+          <div class="brand-block">
+            <img src="{{ url_for('static', filename='images/Logo-Core-School-clean.png') }}"
+                 alt="Core School"
+                 class="login-logo">
+            <div class="brand-powered">النواة الذكية للأنظمة والحلول التقنية</div>
+            <span class="brand-divider"></span>
           </div>
-        </div>
 
-        <div class="mb-3">
-          <label class="form-label">كلمة المرور</label>
-          <div class="input-group">
-            <input type="password" name="password" id="passwordInput"
-                   class="form-control" placeholder="أدخل كلمة المرور" required>
-            <span class="input-group-text" style="cursor:pointer" onclick="togglePwd()">
-              <i class="bi bi-eye" id="eyeIcon"></i>
-            </span>
+          <!-- Heading -->
+          <div class="form-heading">
+            <h2>مرحباً بك مجدداً</h2>
+            <p>الرجاء تسجيل الدخول للمتابعة</p>
           </div>
-        </div>
 
-        <div class="d-flex justify-content-between align-items-center mb-3">
-          <div class="form-check">
-            <input class="form-check-input" type="checkbox" name="remember" id="rememberMe">
-            <label class="form-check-label" for="rememberMe">تذكرني</label>
+          <!-- Form -->
+          <form method="POST" action="{{ url_for('auth.login') }}">
+
+            {% if error %}
+            <div class="error-banner">
+              <i class="bi bi-exclamation-circle-fill"></i>
+              {{ error }}
+            </div>
+            {% endif %}
+
+            <!-- Username -->
+            <div class="field-group">
+              <label class="field-label" for="usernameInput">اسم المستخدم</label>
+              <div class="field-wrap">
+                <i class="bi bi-person field-icon"></i>
+                <input class="field-input"
+                       type="text"
+                       id="usernameInput"
+                       name="username"
+                       placeholder="أدخل اسم المستخدم"
+                       required
+                       autofocus
+                       value="{{ request.form.get('username', '') }}">
+              </div>
+            </div>
+
+            <!-- Password -->
+            <div class="field-group">
+              <label class="field-label" for="passwordInput">كلمة المرور</label>
+              <div class="field-wrap">
+                <i class="bi bi-lock field-icon"></i>
+                <input class="field-input"
+                       type="password"
+                       id="passwordInput"
+                       name="password"
+                       placeholder="أدخل كلمة المرور"
+                       required>
+              </div>
+            </div>
+
+            <!-- Remember me -->
+            <div class="remember-row">
+              <input type="checkbox" id="rememberMe" name="remember">
+              <label for="rememberMe">تذكرني</label>
+            </div>
+
+            <!-- Submit -->
+            <button type="submit" class="submit-btn">تسجيل الدخول</button>
+
+          </form>
+
+          <!-- Footer -->
+          <div class="card-footer">
+            <div class="support-note">
+              <i class="bi bi-headset"></i>
+              للدعم والمساعدة، تواصل معنا مباشرة
+            </div>
+            <div class="copy-note">© النواة الذكية للأنظمة والحلول التقنية. جميع الحقوق محفوظة.</div>
           </div>
+
         </div>
+      </div>
 
-        <button type="submit" class="btn-login">
-          <i class="bi bi-box-arrow-in-right me-2"></i>تسجيل الدخول
-        </button>
-      </form>
-    </div>
-
-    <div class="login-footer">
-      © {{ now.year }} شركة المهندس — جميع الحقوق محفوظة
     </div>
   </div>
 
-  <script>
-    function togglePwd() {
-      const inp = document.getElementById('passwordInput');
-      const ico = document.getElementById('eyeIcon');
-      if (inp.type === 'password') {
-        inp.type = 'text';
-        ico.className = 'bi bi-eye-slash';
-      } else {
-        inp.type = 'password';
-        ico.className = 'bi bi-eye';
-      }
-    }
-  </script>
 </body>
 </html>
