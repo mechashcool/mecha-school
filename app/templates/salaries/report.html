@@ -1,0 +1,207 @@
+{% extends "shared/base.html" %}
+{% block title %}سجلات الرواتب{% endblock %}
+{% block page_title %}سجلات الرواتب / تقرير الرواتب{% endblock %}
+
+{% macro status_badge(st) %}
+  {% set cls = {'draft':'badge-pending','pending':'badge-pending','approved':'badge-approved','paid':'badge-paid','cancelled':'badge-cancelled'} %}
+  <span class="badge-status {{ cls.get(st,'badge-pending') }}">{{ status_labels.get(st, st) }}</span>
+{% endmacro %}
+
+{# Preserve the active filters on the export links. #}
+{% set qs = '?' ~ request.query_string.decode('utf-8') if request.query_string else '' %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">سجلات الرواتب</h1>
+    <p class="page-subtitle">تقرير شامل لرواتب الموظفين عبر الأشهر والسنوات</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('salaries.report_export_pdf') }}{{ qs }}"
+       target="_blank" class="btn btn-outline-danger">
+      <i class="bi bi-file-earmark-pdf-fill me-1"></i>PDF
+    </a>
+    <a href="{{ url_for('salaries.report_export_excel') }}{{ qs }}"
+       class="btn btn-outline-success">
+      <i class="bi bi-file-earmark-excel-fill me-1"></i>Excel
+    </a>
+  </div>
+</div>
+
+{% include "salaries/_nav.html" %}
+
+<!-- Filters -->
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="row g-3 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label mb-1" style="font-size:12.5px">بحث (الاسم أو الرقم)</label>
+        <input type="text" name="q" class="form-control" value="{{ filters.q or '' }}"
+               placeholder="اسم الموظف أو الرقم الوظيفي">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label mb-1" style="font-size:12.5px">الموظف</label>
+        <select name="employee_id" class="form-select">
+          <option value="">— كل الموظفين —</option>
+          {% for e in employees %}
+          <option value="{{ e.id }}" {{ 'selected' if filters.employee_id == e.id }}>
+            {{ e.full_name }}{% if e.employee_id %} ({{ e.employee_id }}){% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12.5px">السنة</label>
+        <select name="year" class="form-select">
+          <option value="">كل السنوات</option>
+          {% for y in years %}
+          <option value="{{ y }}" {{ 'selected' if filters.year == y }}>{{ y }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12.5px">الشهر</label>
+        <select name="month" class="form-select">
+          <option value="">كل الأشهر</option>
+          {% for i in range(1,13) %}
+          <option value="{{ i }}" {{ 'selected' if filters.month == i }}>{{ arabic_months[i] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12.5px">القسم</label>
+        <select name="department" class="form-select">
+          <option value="">— الكل —</option>
+          {% for d in departments %}
+          <option value="{{ d }}" {{ 'selected' if d == filters.department }}>{{ d }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12.5px">الحالة</label>
+        <select name="status" class="form-select">
+          <option value="">كل الحالات</option>
+          {% for s in ['draft','approved','paid','cancelled'] %}
+          <option value="{{ s }}" {{ 'selected' if s == filters.status }}>{{ status_labels[s] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12.5px">من شهر (اختياري)</label>
+        <input type="month" name="period_from" class="form-control" value="{{ filters.period_from or '' }}">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12.5px">إلى شهر (اختياري)</label>
+        <input type="month" name="period_to" class="form-control" value="{{ filters.period_to or '' }}">
+      </div>
+      <div class="col-md-3 d-flex gap-2">
+        <button type="submit" class="btn btn-primary"><i class="bi bi-funnel-fill me-1"></i>تطبيق</button>
+        <a href="{{ url_for('salaries.report') }}" class="btn btn-outline-secondary">إعادة تعيين</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Totals -->
+<div class="row g-3 mb-4">
+  <div class="col-md-3 col-6">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#1a3a5c,#22508a)"><i class="bi bi-list-ol"></i></div>
+      <div><div class="stat-value">{{ totals.count }}</div><div class="stat-label">عدد السجلات</div></div>
+    </div>
+  </div>
+  <div class="col-md-3 col-6">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#5b6b7d,#7d8da0)"><i class="bi bi-cash"></i></div>
+      <div><div class="stat-value">{{ '{:,.0f}'.format(totals.total_base) }}</div><div class="stat-label">إجمالي الأساسي (د.ع)</div></div>
+    </div>
+  </div>
+  <div class="col-md-3 col-6">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#1aab6d,#16c879)"><i class="bi bi-plus-circle"></i></div>
+      <div><div class="stat-value">{{ '{:,.0f}'.format(totals.total_allow) }}</div><div class="stat-label">إجمالي البدلات (د.ع)</div></div>
+    </div>
+  </div>
+  <div class="col-md-3 col-6">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#e03e3e,#f06060)"><i class="bi bi-dash-circle"></i></div>
+      <div><div class="stat-value">{{ '{:,.0f}'.format(totals.total_deduct) }}</div><div class="stat-label">إجمالي الخصومات (د.ع)</div></div>
+    </div>
+  </div>
+  <div class="col-md-3 col-6">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#0f2540,#1a3a5c)"><i class="bi bi-wallet2"></i></div>
+      <div><div class="stat-value">{{ '{:,.0f}'.format(totals.total_net) }}</div><div class="stat-label">إجمالي الصافي (عدا الملغية)</div></div>
+    </div>
+  </div>
+  <div class="col-md-3 col-6">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#1aab6d,#0f8a55)"><i class="bi bi-check2-circle"></i></div>
+      <div><div class="stat-value">{{ '{:,.0f}'.format(totals.total_paid) }}</div><div class="stat-label">إجمالي المصروف (المدفوع)</div></div>
+    </div>
+  </div>
+  <div class="col-md-6 col-12">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#e8a020,#f5c25a)"><i class="bi bi-collection"></i></div>
+      <div>
+        <div class="stat-value" style="font-size:15px">
+          مسودة {{ totals.count_draft }} · معتمد {{ totals.count_approved }} · مدفوع {{ totals.count_paid }} · ملغي {{ totals.count_cancelled }}
+        </div>
+        <div class="stat-label">توزيع الحالات</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Records table -->
+<div class="card">
+  <div class="card-header"><i class="bi bi-table text-accent"></i> سجلات الرواتب المطابقة للفلاتر</div>
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>الموظف</th><th>القسم</th><th>الشهر/السنة</th>
+          <th>الأساسي</th><th>البدلات</th><th>الخصومات</th><th>الصافي</th>
+          <th>الحالة</th><th>تاريخ الصرف</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in records %}
+        <tr {% if r.status == 'cancelled' %}style="opacity:.6"{% endif %}>
+          <td class="fw-600">
+            {{ r.employee_name }}
+            {% if r.employee %}<span class="text-muted d-block" style="font-size:11px">{{ r.employee.employee_id }}</span>{% endif %}
+          </td>
+          <td style="font-size:12.5px">{{ r.department or '—' }}</td>
+          <td class="fw-600">{{ arabic_months[r.month] }} {{ r.year }}</td>
+          <td>{{ '{:,.0f}'.format(r.base_salary) }}</td>
+          <td class="text-success">{% if r.allowances %}+{{ '{:,.0f}'.format(r.allowances) }}{% else %}—{% endif %}</td>
+          <td class="text-danger">{% if r.deductions %}-{{ '{:,.0f}'.format(r.deductions) }}{% else %}—{% endif %}</td>
+          <td class="fw-700">{{ '{:,.0f}'.format(r.net_salary) }}</td>
+          <td>{{ status_badge(r.status) }}</td>
+          <td style="font-size:12.5px;color:#6b7a8d">{{ r.paid_date.strftime('%Y-%m-%d') if r.paid_date else '—' }}</td>
+          <td>
+            <div class="d-flex gap-1">
+              <a href="{{ url_for('salaries.detail', rec_id=r.id) }}" class="btn btn-sm btn-outline-primary" title="تفاصيل"><i class="bi bi-eye"></i></a>
+              <a href="{{ url_for('salaries.slip', rec_id=r.id) }}" target="_blank" class="btn btn-sm btn-outline-secondary" title="قسيمة"><i class="bi bi-printer"></i></a>
+              <a href="{{ url_for('salaries.employee_history', emp_id=r.employee_id) }}" class="btn btn-sm btn-outline-info" title="كشف الموظف"><i class="bi bi-journal-text"></i></a>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="10" class="text-center text-muted py-5">
+          <i class="bi bi-inbox" style="font-size:34px;opacity:.3;display:block;margin-bottom:8px"></i>
+          لا توجد سجلات رواتب مطابقة للفلاتر المحددة.
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if records %}
+  <div class="card-footer d-flex justify-content-between align-items-center" style="font-size:13px">
+    <span class="text-muted">عدد السجلات: {{ totals.count }}</span>
+    <span class="fw-700">إجمالي الصافي (عدا الملغية): {{ '{:,.0f}'.format(totals.total_net) }} د.ع</span>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

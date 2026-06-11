@@ -741,3 +741,156 @@ def export_single_employee_attendance(emp_row, date_from: str, date_to: str) -> 
     buf3 = BytesIO()
     wb.save(buf3)
     return buf3.getvalue()
+
+
+# ─── PAYROLL LEDGER REPORT (multi-month, filtered) ────────────────────────────
+
+def export_salary_report(records, totals, arabic_months=None,
+                         status_labels=None, title='تقرير الرواتب') -> bytes | None:
+    """
+    Export a filtered, multi-month payroll ledger to Excel.
+
+    records  : list of SalaryRecord rows (already filtered/ordered by the caller)
+    totals   : dict from the blueprint's _report_totals (base/allow/deduct/net/paid)
+    Returns bytes or None when openpyxl is unavailable.
+    """
+    wb = _wb()
+    if not wb:
+        return None
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    arabic_months = arabic_months or ['']*13
+    status_labels = status_labels or {}
+
+    ws = wb.active
+    ws.title = 'Payroll Report'
+    ws.sheet_view.rightToLeft = True
+
+    headers = ['م', 'الموظف', 'الرقم الوظيفي', 'القسم', 'الشهر/السنة',
+               'الأساسي', 'البدلات', 'الخصومات', 'الصافي', 'الحالة',
+               'تاريخ الصرف', 'أيام الغياب', 'مرات التأخير']
+    hs = _header_style()
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = hs['font']; cell.fill = hs['fill']; cell.alignment = hs['alignment']
+    ws.row_dimensions[1].height = 22
+
+    for i, r in enumerate(records, 1):
+        emp_code = r.employee.employee_id if r.employee else ''
+        period   = f"{arabic_months[r.month] if r.month < len(arabic_months) else r.month} {r.year}"
+        row = [
+            i, r.employee_name, emp_code, r.department or '', period,
+            float(r.base_salary or 0), float(r.allowances or 0),
+            float(r.deductions or 0), float(r.net_salary or 0),
+            status_labels.get(r.status, r.status),
+            r.paid_date.strftime('%Y-%m-%d') if r.paid_date else '',
+            r.absence_days or 0, r.late_count or 0,
+        ]
+        for col, val in enumerate(row, 1):
+            cell = ws.cell(row=i + 1, column=col, value=val)
+            cell.alignment = Alignment(vertical='center')
+            if r.status == 'cancelled':
+                cell.fill = PatternFill('solid', fgColor='FBE9E9')
+            elif i % 2 == 0:
+                cell.fill = PatternFill('solid', fgColor='F0F4F8')
+
+    # Totals row (monetary totals exclude cancelled — see _report_totals)
+    tr = len(records) + 2
+    ws.cell(row=tr, column=2, value='الإجمالي (عدا الملغية)').font = Font(bold=True)
+    for col, key in ((6, 'total_base'), (7, 'total_allow'),
+                     (8, 'total_deduct'), (9, 'total_net')):
+        c = ws.cell(row=tr, column=col, value=float(totals.get(key, 0)))
+        c.font = Font(bold=True)
+        c.fill = PatternFill('solid', fgColor='E8F8F0')
+
+    pr = tr + 1
+    ws.cell(row=pr, column=2, value='إجمالي المصروف (المدفوع)').font = Font(bold=True)
+    pc = ws.cell(row=pr, column=9, value=float(totals.get('total_paid', 0)))
+    pc.font = Font(bold=True, color='1A3A5C')
+    pc.fill = PatternFill('solid', fgColor='E8F1FB')
+
+    cr = pr + 1
+    ws.cell(row=cr, column=2,
+            value=(f"عدد السجلات: {totals.get('count', 0)} | "
+                   f"مسودة: {totals.get('count_draft', 0)} | "
+                   f"معتمد: {totals.get('count_approved', 0)} | "
+                   f"مدفوع: {totals.get('count_paid', 0)} | "
+                   f"ملغي: {totals.get('count_cancelled', 0)}")).font = Font(size=10)
+
+    _autowidth(ws)
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# ─── EMPLOYEE SALARY STATEMENT (ledger) ───────────────────────────────────────
+
+def export_employee_statement(employee, statement, arabic_months=None,
+                              year=None) -> bytes | None:
+    """
+    Export one employee's salary account statement (ledger) to Excel.
+
+    statement : dict from app.services.payroll.employee_statement()
+    Returns bytes or None when openpyxl is unavailable.
+    """
+    wb = _wb()
+    if not wb:
+        return None
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    ws = wb.active
+    ws.title = 'Salary Statement'
+    ws.sheet_view.rightToLeft = True
+
+    # Title block
+    ws.cell(row=1, column=1, value='كشف حساب الراتب').font = Font(bold=True, size=14)
+    ws.cell(row=2, column=1, value=f'الموظف: {employee.full_name}').font = Font(bold=True)
+    info = []
+    if employee.job_title:
+        info.append(employee.job_title)
+    if employee.department:
+        info.append(employee.department)
+    if year:
+        info.append(f'السنة: {year}')
+    ws.cell(row=3, column=1, value=' · '.join(info))
+
+    head_row = 5
+    headers = ['التاريخ', 'النوع', 'الوصف', 'مستحق (دائن)', 'مصروف (مدين)',
+               'الرصيد', 'المرجع']
+    hs = _header_style()
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=head_row, column=col, value=h)
+        cell.font = hs['font']; cell.fill = hs['fill']; cell.alignment = hs['alignment']
+    ws.row_dimensions[head_row].height = 22
+
+    rows = statement.get('rows', [])
+    for i, rrow in enumerate(rows, 1):
+        data = [
+            rrow['date'].strftime('%Y-%m-%d') if rrow.get('date') else '',
+            rrow.get('type', ''),
+            rrow.get('description', ''),
+            float(rrow.get('credit', 0)) or '',
+            float(rrow.get('debit', 0)) or '',
+            float(rrow.get('balance', 0)),
+            rrow.get('ref', ''),
+        ]
+        for col, val in enumerate(data, 1):
+            cell = ws.cell(row=head_row + i, column=col, value=val)
+            cell.alignment = Alignment(vertical='center')
+            if i % 2 == 0:
+                cell.fill = PatternFill('solid', fgColor='F0F4F8')
+
+    tr = head_row + len(rows) + 1
+    ws.cell(row=tr, column=3, value='الإجمالي').font = Font(bold=True)
+    tc = ws.cell(row=tr, column=4, value=float(statement.get('total_credit', 0)))
+    tc.font = Font(bold=True, color='1AAB6D')
+    td = ws.cell(row=tr, column=5, value=float(statement.get('total_debit', 0)))
+    td.font = Font(bold=True, color='1A3A5C')
+    bc = ws.cell(row=tr, column=6, value=float(statement.get('balance', 0)))
+    bc.font = Font(bold=True)
+    bc.fill = PatternFill('solid', fgColor='FFF6E5')
+
+    _autowidth(ws)
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

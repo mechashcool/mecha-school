@@ -78,6 +78,125 @@ def _owned_record(rec_id) -> SalaryRecord:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  PAYROLL LEDGER / REPORT  — shared filtering + totals (used by page + exports)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _parse_period(raw):
+    """Parse a 'YYYY-MM' month input into a (year, month) tuple, else None."""
+    if not raw:
+        return None
+    try:
+        y, m = str(raw).split('-')[:2]
+        return (int(y), int(m))
+    except (ValueError, TypeError):
+        return None
+
+
+def _report_totals(records) -> dict:
+    """Totals for a filtered record set. Monetary totals EXCLUDE cancelled rows;
+    paid total counts only status='paid'. Counts cover every listed record."""
+    active = [r for r in records if r.status != 'cancelled']
+    return {
+        'count':           len(records),
+        'count_active':    len(active),
+        'total_base':      sum(float(r.base_salary or 0) for r in active),
+        'total_allow':     sum(float(r.allowances or 0)  for r in active),
+        'total_deduct':    sum(float(r.deductions or 0)  for r in active),
+        'total_net':       sum(float(r.net_salary or 0)  for r in active),
+        'total_paid':      sum(float(r.net_salary or 0)
+                               for r in records if r.status == 'paid'),
+        'count_draft':     sum(1 for r in records if r.status in ('draft', 'pending')),
+        'count_approved':  sum(1 for r in records if r.status == 'approved'),
+        'count_paid':      sum(1 for r in records if r.status == 'paid'),
+        'count_cancelled': sum(1 for r in records if r.status == 'cancelled'),
+    }
+
+
+def _collect_report(args, school_id):
+    """
+    Build the filtered, multi-month payroll record set from request args.
+
+    Supported filters: q (name/code), employee_id, year, month, department,
+    status, period_from / period_to (YYYY-MM range over the salary period).
+
+    Spans ALL academic years (include_all_years) but stays school-scoped.
+    Returns (records, totals, filters_echo).
+    """
+    text        = (args.get('q') or '').strip()
+    employee_id = args.get('employee_id', type=int)
+    year        = args.get('year', type=int)
+    month       = args.get('month', type=int)
+    dept        = (args.get('department') or '').strip()
+    status      = (args.get('status') or '').strip()
+    period_from = (args.get('period_from') or '').strip()
+    period_to   = (args.get('period_to') or '').strip()
+
+    q = SalaryRecord.query.execution_options(include_all_years=True)
+    if school_id:
+        q = q.filter(SalaryRecord.school_id == school_id)
+    if year:
+        q = q.filter(SalaryRecord.year == year)
+    if month:
+        q = q.filter(SalaryRecord.month == month)
+    if employee_id:
+        q = q.filter(SalaryRecord.employee_id == employee_id)
+    if status:
+        if status in ('draft', 'pending'):
+            q = q.filter(SalaryRecord.status.in_(['draft', 'pending']))
+        else:
+            q = q.filter(SalaryRecord.status == status)
+
+    records = (q.join(Employee)
+               .order_by(SalaryRecord.year.desc(), SalaryRecord.month.desc(),
+                         Employee.full_name)
+               .all())
+
+    # Period range (YYYY-MM) over the salary period (year, month).
+    pf, pt = _parse_period(period_from), _parse_period(period_to)
+    if pf:
+        records = [r for r in records if (r.year, r.month) >= pf]
+    if pt:
+        records = [r for r in records if (r.year, r.month) <= pt]
+
+    # Department filter (property prefers the snapshot taken at generation time).
+    if dept:
+        records = [r for r in records if (r.department or '') == dept]
+
+    # Free-text search across employee name and code.
+    if text:
+        t = text.lower()
+        def _match(r):
+            code = (r.employee.employee_id if r.employee else '') or ''
+            return t in (r.employee_name or '').lower() or t in code.lower()
+        records = [r for r in records if _match(r)]
+
+    filters_echo = {
+        'q': text, 'employee_id': employee_id, 'year': year, 'month': month,
+        'department': dept, 'status': status,
+        'period_from': period_from, 'period_to': period_to,
+    }
+    return records, _report_totals(records), filters_echo
+
+
+def _filters_label(filters) -> str:
+    """Human-readable Arabic summary of the active report filters (for exports)."""
+    bits = []
+    if filters.get('year'):
+        bits.append(f"السنة: {filters['year']}")
+    if filters.get('month'):
+        bits.append(f"الشهر: {ARABIC_MONTHS[filters['month']]}")
+    if filters.get('period_from') or filters.get('period_to'):
+        bits.append(f"الفترة: {filters.get('period_from') or '—'} ← {filters.get('period_to') or '—'}")
+    if filters.get('department'):
+        bits.append(f"القسم: {filters['department']}")
+    if filters.get('status'):
+        bits.append(f"الحالة: {STATUS_LABELS.get(filters['status'], filters['status'])}")
+    if filters.get('q'):
+        bits.append(f"بحث: {filters['q']}")
+    return ' | '.join(bits) if bits else 'كل سجلات الرواتب'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  GENERAL PAYROLL REGISTER  (مسير الرواتب)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -680,6 +799,118 @@ def employee_history(emp_id):
                            records=records, years=years, year=year,
                            status_labels=STATUS_LABELS,
                            arabic_months=ARABIC_MONTHS)
+
+
+@salaries_bp.route('/employee/<int:emp_id>/statement/pdf')
+@login_required
+@permission_required('manage_salaries')
+def employee_statement_pdf(emp_id):
+    from app.utils.pdf_gen import generate_employee_statement_pdf
+    employee = Employee.query.get_or_404(emp_id)
+    school, school_id = _school_or_redirect()
+    if school_id and employee.school_id and employee.school_id != school_id:
+        abort(403)
+    year = request.args.get('year', type=int)
+    statement = employee_statement(employee, year=year)
+    pdf_bytes = generate_employee_statement_pdf(
+        employee, statement, school=school, year=year,
+        arabic_months=ARABIC_MONTHS)
+    if not pdf_bytes:
+        flash('مكتبة PDF غير متاحة على الخادم.', 'warning')
+        return redirect(url_for('salaries.employee_history', emp_id=emp_id, year=year))
+    fname = f"statement_{employee.employee_id}{('_' + str(year)) if year else ''}.pdf"
+    return Response(pdf_bytes, mimetype='application/pdf',
+                    headers={'Content-Disposition': f'attachment; filename={fname}'})
+
+
+@salaries_bp.route('/employee/<int:emp_id>/statement/excel')
+@login_required
+@permission_required('manage_salaries')
+def employee_statement_excel(emp_id):
+    from app.utils.excel_export import export_employee_statement
+    employee = Employee.query.get_or_404(emp_id)
+    _, school_id = _school_or_redirect()
+    if school_id and employee.school_id and employee.school_id != school_id:
+        abort(403)
+    year = request.args.get('year', type=int)
+    statement = employee_statement(employee, year=year)
+    data = export_employee_statement(employee, statement,
+                                     arabic_months=ARABIC_MONTHS, year=year)
+    if not data:
+        flash('مكتبة Excel غير متاحة.', 'warning')
+        return redirect(url_for('salaries.employee_history', emp_id=emp_id, year=year))
+    fname = f"statement_{employee.employee_id}{('_' + str(year)) if year else ''}.xlsx"
+    return Response(
+        data,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename={fname}'})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PAYROLL LEDGER / REPORT  (سجلات الرواتب)  + PDF / Excel exports
+# ─────────────────────────────────────────────────────────────────────────────
+
+@salaries_bp.route('/report')
+@login_required
+@permission_required('manage_salaries')
+def report():
+    school, school_id = _school_or_redirect()
+    records, totals, filters = _collect_report(request.args, school_id)
+
+    emp_q = Employee.query
+    if school_id:
+        emp_q = emp_q.filter_by(school_id=school_id)
+    employees = emp_q.order_by(Employee.full_name).all()
+    departments = sorted({(e.department or '').strip()
+                          for e in employees if (e.department or '').strip()})
+
+    yq = SalaryRecord.query.execution_options(include_all_years=True)
+    if school_id:
+        yq = yq.filter(SalaryRecord.school_id == school_id)
+    years = sorted({row.year for row in yq.with_entities(SalaryRecord.year).all()},
+                   reverse=True)
+
+    return render_template('salaries/report.html',
+                           records=records, totals=totals, filters=filters,
+                           employees=employees, departments=departments,
+                           years=years, status_labels=STATUS_LABELS,
+                           arabic_months=ARABIC_MONTHS)
+
+
+@salaries_bp.route('/report/export/excel')
+@login_required
+@permission_required('manage_salaries')
+def report_export_excel():
+    from app.utils.excel_export import export_salary_report
+    _, school_id = _school_or_redirect()
+    records, totals, _filters = _collect_report(request.args, school_id)
+    data = export_salary_report(records, totals,
+                                arabic_months=ARABIC_MONTHS,
+                                status_labels=STATUS_LABELS)
+    if not data:
+        flash('مكتبة Excel غير متاحة.', 'warning')
+        return redirect(url_for('salaries.report', **request.args.to_dict()))
+    return Response(
+        data,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename=payroll_report.xlsx'})
+
+
+@salaries_bp.route('/report/export/pdf')
+@login_required
+@permission_required('manage_salaries')
+def report_export_pdf():
+    from app.utils.pdf_gen import generate_payroll_report_pdf
+    school, school_id = _school_or_redirect()
+    records, totals, filters = _collect_report(request.args, school_id)
+    pdf_bytes = generate_payroll_report_pdf(
+        records, totals, filters_label=_filters_label(filters),
+        school=school, arabic_months=ARABIC_MONTHS, status_labels=STATUS_LABELS)
+    if not pdf_bytes:
+        flash('مكتبة PDF غير متاحة على الخادم.', 'warning')
+        return redirect(url_for('salaries.report', **request.args.to_dict()))
+    return Response(pdf_bytes, mimetype='application/pdf',
+                    headers={'Content-Disposition': 'attachment; filename=payroll_report.pdf'})
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -1545,3 +1545,282 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
 
     doc.build(elements)
     return buf.getvalue()
+
+
+def generate_payroll_report_pdf(records, totals, filters_label='',
+                                school=None, arabic_months=None,
+                                status_labels=None) -> bytes | None:
+    """
+    Arabic RTL payroll ledger report PDF (landscape) for a filtered record set.
+
+    records : list of SalaryRecord rows (already filtered/ordered by the caller)
+    totals  : dict from the blueprint's _report_totals
+    Returns bytes or None when ReportLab is unavailable.
+    """
+    if not _get_rl():
+        return None
+
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.units import cm
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.colors import HexColor
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    arabic_ok = _register_arabic_fonts(pdfmetrics, TTFont)
+    fn   = 'Amiri'      if arabic_ok else 'Helvetica'
+    fn_b = 'Amiri-Bold' if arabic_ok else 'Helvetica-Bold'
+    ar   = _shape_arabic_text
+    arabic_months = arabic_months or ['']*13
+    status_labels = status_labels or {}
+
+    HEADER_BG = HexColor('#1a3a5c')
+    ALT_BG    = HexColor('#f0f4f8')
+    CANCEL_BG = HexColor('#fbe9e9')
+    WHITE     = colors.white
+
+    def money(v):
+        try:
+            return f"{float(v or 0):,.0f}"
+        except (TypeError, ValueError):
+            return '0'
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+                            leftMargin=1.2*cm, rightMargin=1.2*cm,
+                            topMargin=1.4*cm, bottomMargin=1.4*cm)
+
+    title_s = ParagraphStyle('pt',  fontName=fn_b, fontSize=14, alignment=1,
+                             textColor=HexColor('#1a3a5c'))
+    sub_s   = ParagraphStyle('ps',  fontName=fn,   fontSize=9,  alignment=1,
+                             textColor=HexColor('#555555'))
+    th_s    = ParagraphStyle('pth', fontName=fn_b, fontSize=8,  alignment=1, textColor=WHITE)
+    td_s    = ParagraphStyle('ptd', fontName=fn,   fontSize=8,  alignment=1)
+
+    elements = []
+    school_name = ''
+    if school:
+        school_name = getattr(school, 'school_name_ar', '') or getattr(school, 'school_name', '')
+    if school_name:
+        elements.append(Paragraph(ar(school_name), title_s))
+        elements.append(Spacer(1, 0.15*cm))
+    elements.append(Paragraph(ar('تقرير الرواتب'), title_s))
+    if filters_label:
+        elements.append(Paragraph(ar(filters_label), sub_s))
+    elements.append(Spacer(1, 0.35*cm))
+
+    def p(t):
+        return Paragraph(ar(str(t if t not in (None, '') else '—')), td_s)
+
+    def ph(t):
+        return Paragraph(ar(str(t or '')), th_s)
+
+    # ── Summary block ─────────────────────────────────────────────────────────
+    sum_data = [
+        [ph('عدد السجلات'), ph('إجمالي الأساسي'), ph('إجمالي البدلات'),
+         ph('إجمالي الخصومات'), ph('إجمالي الصافي'), ph('إجمالي المصروف')],
+        [p(totals.get('count', 0)), p(money(totals.get('total_base'))),
+         p(money(totals.get('total_allow'))), p(money(totals.get('total_deduct'))),
+         p(money(totals.get('total_net'))), p(money(totals.get('total_paid')))],
+    ]
+    s_tbl = Table(sum_data, colWidths=[3.8*cm]*6)
+    s_tbl.setStyle(TableStyle([
+        ('BACKGROUND',    (0, 0), (-1, 0), HEADER_BG),
+        ('FONTNAME',      (0, 0), (-1, -1), fn),
+        ('ALIGN',         (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING',    (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('GRID',          (0, 0), (-1, -1), 0.3, HexColor('#cccccc')),
+    ]))
+    elements.append(s_tbl)
+    elements.append(Spacer(1, 0.45*cm))
+
+    # ── Detail table ──────────────────────────────────────────────────────────
+    col_h = [ph('#'), ph('الموظف'), ph('الرقم'), ph('القسم'), ph('الشهر/السنة'),
+             ph('الأساسي'), ph('البدلات'), ph('الخصومات'), ph('الصافي'),
+             ph('الحالة'), ph('تاريخ الصرف')]
+    col_w = [0.8*cm, 4.3*cm, 2*cm, 3*cm, 2.6*cm,
+             2.3*cm, 2.1*cm, 2.1*cm, 2.4*cm, 1.8*cm, 2.3*cm]
+
+    table_data = [col_h]
+    row_meta = []  # (index, is_cancelled)
+    for i, r in enumerate(records, 1):
+        emp_code = r.employee.employee_id if r.employee else ''
+        period   = f"{arabic_months[r.month] if r.month < len(arabic_months) else r.month} {r.year}"
+        table_data.append([
+            p(i), p(r.employee_name), p(emp_code), p(r.department or '—'), p(period),
+            p(money(r.base_salary)), p(money(r.allowances)), p(money(r.deductions)),
+            p(money(r.net_salary)), p(status_labels.get(r.status, r.status)),
+            p(r.paid_date.strftime('%Y-%m-%d') if r.paid_date else '—'),
+        ])
+        row_meta.append((i, r.status == 'cancelled'))
+
+    style_cmds = [
+        ('BACKGROUND',    (0, 0), (-1, 0), HEADER_BG),
+        ('FONTNAME',      (0, 0), (-1, -1), fn),
+        ('ALIGN',         (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID',          (0, 0), (-1, -1), 0.3, HexColor('#cccccc')),
+        ('TOPPADDING',    (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]
+    for idx, is_cancel in row_meta:
+        if is_cancel:
+            style_cmds.append(('BACKGROUND', (0, idx), (-1, idx), CANCEL_BG))
+        elif idx % 2 == 0:
+            style_cmds.append(('BACKGROUND', (0, idx), (-1, idx), ALT_BG))
+
+    tbl = Table(table_data, colWidths=col_w, repeatRows=1)
+    tbl.setStyle(TableStyle(style_cmds))
+    elements.append(tbl)
+
+    elements.append(Spacer(1, 0.35*cm))
+    foot_s = ParagraphStyle('pf', fontName=fn, fontSize=8, alignment=1,
+                            textColor=HexColor('#9aabb8'))
+    elements.append(Paragraph(
+        ar(f'تم الإنشاء: {datetime.utcnow().strftime("%Y-%m-%d %H:%M")} | نظام المهندس'),
+        foot_s))
+
+    doc.build(elements)
+    return buf.getvalue()
+
+
+def generate_employee_statement_pdf(employee, statement, school=None,
+                                    year=None, arabic_months=None) -> bytes | None:
+    """
+    Arabic RTL salary account statement (ledger) PDF for one employee.
+    Returns bytes or None when ReportLab is unavailable.
+    """
+    if not _get_rl():
+        return None
+
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.colors import HexColor
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    arabic_ok = _register_arabic_fonts(pdfmetrics, TTFont)
+    fn   = 'Amiri'      if arabic_ok else 'Helvetica'
+    fn_b = 'Amiri-Bold' if arabic_ok else 'Helvetica-Bold'
+    ar   = _shape_arabic_text
+
+    HEADER_BG = HexColor('#1a3a5c')
+    ALT_BG    = HexColor('#f0f4f8')
+    WHITE     = colors.white
+
+    def money(v):
+        try:
+            return f"{float(v or 0):,.0f}"
+        except (TypeError, ValueError):
+            return '0'
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            leftMargin=1.5*cm, rightMargin=1.5*cm,
+                            topMargin=1.5*cm, bottomMargin=1.5*cm)
+
+    title_s = ParagraphStyle('st',  fontName=fn_b, fontSize=15, alignment=1,
+                             textColor=HexColor('#1a3a5c'))
+    sub_s   = ParagraphStyle('ss',  fontName=fn,   fontSize=10, alignment=1,
+                             textColor=HexColor('#555555'))
+    th_s    = ParagraphStyle('sth', fontName=fn_b, fontSize=9,  alignment=1, textColor=WHITE)
+    td_s    = ParagraphStyle('std', fontName=fn,   fontSize=9,  alignment=1)
+
+    elements = []
+    school_name = ''
+    if school:
+        school_name = getattr(school, 'school_name_ar', '') or getattr(school, 'school_name', '')
+    if school_name:
+        elements.append(Paragraph(ar(school_name), title_s))
+        elements.append(Spacer(1, 0.15*cm))
+    elements.append(Paragraph(ar('كشف حساب الراتب'), title_s))
+
+    info_bits = [employee.full_name]
+    if employee.job_title:
+        info_bits.append(employee.job_title)
+    if employee.department:
+        info_bits.append(employee.department)
+    if year:
+        info_bits.append(f'السنة: {year}')
+    elements.append(Paragraph(ar('  ·  '.join(info_bits)), sub_s))
+    elements.append(Spacer(1, 0.35*cm))
+
+    def p(t, style=td_s):
+        return Paragraph(ar(str(t if t not in (None, '') else '—')), style)
+
+    def ph(t):
+        return Paragraph(ar(str(t or '')), th_s)
+
+    # Summary
+    sum_data = [
+        [ph('إجمالي المستحق'), ph('إجمالي المصروف'), ph('الرصيد')],
+        [p(money(statement.get('total_credit'))),
+         p(money(statement.get('total_debit'))),
+         p(money(statement.get('balance')))],
+    ]
+    s_tbl = Table(sum_data, colWidths=[5.5*cm]*3)
+    s_tbl.setStyle(TableStyle([
+        ('BACKGROUND',    (0, 0), (-1, 0), HEADER_BG),
+        ('FONTNAME',      (0, 0), (-1, -1), fn),
+        ('ALIGN',         (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING',    (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('GRID',          (0, 0), (-1, -1), 0.3, HexColor('#cccccc')),
+    ]))
+    elements.append(s_tbl)
+    elements.append(Spacer(1, 0.45*cm))
+
+    col_h = [ph('التاريخ'), ph('النوع'), ph('الوصف'),
+             ph('مستحق'), ph('مصروف'), ph('الرصيد'), ph('المرجع')]
+    col_w = [2.3*cm, 2.6*cm, 4.6*cm, 2.3*cm, 2.3*cm, 2.3*cm, 2.2*cm]
+
+    table_data = [col_h]
+    rows = statement.get('rows', [])
+    for i, rrow in enumerate(rows, 1):
+        table_data.append([
+            p(rrow['date'].strftime('%Y-%m-%d') if rrow.get('date') else '—'),
+            p(rrow.get('type', '')),
+            p(rrow.get('description', '')),
+            p(money(rrow.get('credit')) if rrow.get('credit') else '—'),
+            p(money(rrow.get('debit')) if rrow.get('debit') else '—'),
+            p(money(rrow.get('balance'))),
+            p(rrow.get('ref', '')),
+        ])
+
+    style_cmds = [
+        ('BACKGROUND',    (0, 0), (-1, 0), HEADER_BG),
+        ('FONTNAME',      (0, 0), (-1, -1), fn),
+        ('ALIGN',         (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID',          (0, 0), (-1, -1), 0.3, HexColor('#cccccc')),
+        ('TOPPADDING',    (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]
+    for i in range(1, len(rows) + 1):
+        if i % 2 == 0:
+            style_cmds.append(('BACKGROUND', (0, i), (-1, i), ALT_BG))
+
+    if rows:
+        tbl = Table(table_data, colWidths=col_w, repeatRows=1)
+        tbl.setStyle(TableStyle(style_cmds))
+        elements.append(tbl)
+    else:
+        elements.append(Paragraph(ar('لا توجد حركات مالية لهذا الموظف.'), sub_s))
+
+    elements.append(Spacer(1, 0.4*cm))
+    foot_s = ParagraphStyle('sf', fontName=fn, fontSize=8, alignment=1,
+                            textColor=HexColor('#9aabb8'))
+    elements.append(Paragraph(
+        ar(f'تم الإنشاء: {datetime.utcnow().strftime("%Y-%m-%d %H:%M")} | نظام المهندس'),
+        foot_s))
+
+    doc.build(elements)
+    return buf.getvalue()

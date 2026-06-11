@@ -10,10 +10,22 @@
     <h1 class="page-title">{{ employee.full_name }}</h1>
     <p class="page-subtitle">{{ employee.job_title or '' }}{% if employee.department %} · {{ employee.department }}{% endif %}</p>
   </div>
-  <a href="{{ url_for('salaries.index') }}" class="btn btn-outline-secondary">
-    <i class="bi bi-arrow-right me-1"></i>رجوع
-  </a>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('salaries.employee_statement_pdf', emp_id=employee.id, year=year or '') }}"
+       target="_blank" class="btn btn-outline-danger">
+      <i class="bi bi-file-earmark-pdf-fill me-1"></i>PDF
+    </a>
+    <a href="{{ url_for('salaries.employee_statement_excel', emp_id=employee.id, year=year or '') }}"
+       class="btn btn-outline-success">
+      <i class="bi bi-file-earmark-excel-fill me-1"></i>Excel
+    </a>
+    <a href="{{ url_for('salaries.report') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>رجوع
+    </a>
+  </div>
 </div>
+
+{% include "salaries/_nav.html" %}
 
 <!-- Year filter -->
 <div class="card mb-4">
