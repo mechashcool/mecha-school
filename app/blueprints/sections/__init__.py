@@ -16,13 +16,12 @@ sections_bp = Blueprint('sections', __name__,
                           template_folder='../../templates/sections')
 
 
-def _section_dependency_counts(section):
-    """Return dependent row counts that make deleting a section unsafe."""
-    teacher_assignments = (
-        db.session.query(teacher_subjects)
-        .filter(teacher_subjects.c.section_id == section.id)
-        .count()
-    )
+def _section_blocking_counts(section):
+    """
+    Return counts of records that genuinely prevent deleting a section.
+    Teacher-subject assignments are NOT included here — they are cleaned
+    up automatically before deletion and must not block it.
+    """
     return {
         'students': Student.query.execution_options(include_all_years=True)
                            .filter_by(section_id=section.id).count(),
@@ -30,25 +29,21 @@ def _section_dependency_counts(section):
                      .filter_by(section_id=section.id).count(),
         'schedules': Schedule.query.execution_options(include_all_years=True)
                              .filter_by(section_id=section.id).count(),
-        'teacher_assignments': teacher_assignments,
     }
 
 
-def _format_dependency_message(counts, item_name):
-    blocking = [name for name, count in counts.items() if count]
-    if not blocking:
+def _section_block_message(counts):
+    """Return an Arabic flash message if any count blocks deletion, else None."""
+    parts = []
+    if counts.get('students'):
+        parts.append(f'{counts["students"]} طالب/ة')
+    if counts.get('exams'):
+        parts.append(f'{counts["exams"]} اختبار')
+    if counts.get('schedules'):
+        parts.append(f'{counts["schedules"]} حصة في الجدول الدراسي')
+    if not parts:
         return None
-    labels = {
-        'sections': 'sections',
-        'students': 'students',
-        'exams': 'exams',
-        'schedules': 'schedule entries',
-        'teacher_assignments': 'teacher assignments',
-    }
-    return (
-        f'Cannot delete {item_name} because it is still linked to '
-        f'{", ".join(labels[name] for name in blocking)}.'
-    )
+    return 'لا يمكن حذف هذه الشعبة لأنها مرتبطة بـ: ' + '، '.join(parts) + '. يرجى إزالة هذه البيانات أولاً.'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -163,8 +158,7 @@ def delete_grade(grade_id):
     year_id = grade.academic_year_id
     if grade.sections.count():
         flash(
-            'Cannot delete this class because it still has sections. '
-            'Delete or move the sections first.',
+            'لا يمكن حذف هذا الصف لأنه لا يزال يحتوي على شعب. احذف الشعب أولاً.',
             'warning',
         )
         return redirect(url_for('sections.index', year_id=year_id))
@@ -309,15 +303,21 @@ def edit_section(sec_id):
 def delete_section(sec_id):
     section = Section.query.execution_options(include_all_years=True).get_or_404(sec_id)
     year_id = section.grade.academic_year_id
-    counts = _section_dependency_counts(section)
-    message = _format_dependency_message(counts, 'this section')
+
+    message = _section_block_message(_section_blocking_counts(section))
     if message:
         flash(message, 'warning')
         return redirect(url_for('sections.index', year_id=year_id))
 
+    # Clean up teacher-subject assignments for this section before deletion.
+    # These are non-critical junction rows; removing them is safe and expected.
+    db.session.execute(
+        teacher_subjects.delete().where(teacher_subjects.c.section_id == sec_id)
+    )
+
     db.session.delete(section)
     db.session.commit()
-    flash('تم حذف الشعبة.', 'success')
+    flash('تم حذف الشعبة بنجاح.', 'success')
     return redirect(url_for('sections.index', year_id=year_id))
 
 
