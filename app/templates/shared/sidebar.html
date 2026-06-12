@@ -114,6 +114,9 @@
       <a href="{{ _complaints_url }}"
          class="{{ 'active' if request.endpoint and request.endpoint.startswith('parent.complaint') }}">
         <i class="bi bi-chat-left-text-fill"></i> &#1575;&#1604;&#1588;&#1603;&#1575;&#1608;&#1609;
+        {% if sidebar_counts.pending_complaints > 0 %}
+        <span class="nav-badge">{{ sidebar_counts.pending_complaints }}</span>
+        {% endif %}
       </a>
     </li>
     {% endif %}
@@ -123,6 +126,9 @@
       <a href="{{ _leave_url }}"
          class="{{ 'active' if request.endpoint and request.endpoint.startswith('parent.leave_request') }}">
         <i class="bi bi-calendar2-check-fill"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;
+        {% if sidebar_counts.pending_leave_requests > 0 %}
+        <span class="nav-badge">{{ sidebar_counts.pending_leave_requests }}</span>
+        {% endif %}
       </a>
     </li>
     {% endif %}
@@ -133,6 +139,9 @@
       <a href="{{ _chat_url }}"
          class="{{ 'active' if request.endpoint and request.endpoint.startswith('chat.user') }}">
         <i class="bi bi-chat-dots-fill"></i> المراسلات
+        {% if sidebar_counts.unread_chat > 0 %}
+        <span class="nav-badge">{{ sidebar_counts.unread_chat }}</span>
+        {% endif %}
       </a>
     </li>
     {% endif %}
@@ -200,6 +209,9 @@
       <a href="{{ _teacher_chat_url }}"
          class="{{ 'active' if request.endpoint and request.endpoint.startswith('chat.user') }}">
         <i class="bi bi-chat-dots-fill"></i> المراسلات
+        {% if sidebar_counts.unread_chat > 0 %}
+        <span class="nav-badge">{{ sidebar_counts.unread_chat }}</span>
+        {% endif %}
       </a>
     </li>
     {% endif %}
@@ -510,8 +522,10 @@
     {# ═══ Group: Communication ══════════════════════════════════════════ #}
     {% if current_user.is_admin_user or ('notifications' in enabled_modules) %}
     <li class="nav-group" data-group="comm">
+      {% set _comm_badge = (sidebar_counts.unread_chat or 0) + (sidebar_counts.pending_complaints or 0) + (sidebar_counts.pending_leave_requests or 0) %}
       <button type="button" class="nav-group-toggle" aria-expanded="false">
         <i class="bi bi-chat-dots-fill group-icon"></i> التواصل
+        {% if _comm_badge > 0 %}<span class="nav-badge">{{ _comm_badge }}</span>{% endif %}
         <i class="bi bi-chevron-left chevron"></i>
       </button>
       <ul class="nav-group-items">
@@ -520,6 +534,9 @@
           <a href="{{ url_for('chat.index') }}"
              class="{{ 'active' if request.blueprint == 'chat' }}">
             <i class="bi bi-chat-dots"></i> المراسلات
+            {% if sidebar_counts.unread_chat > 0 %}
+            <span class="nav-badge">{{ sidebar_counts.unread_chat }}</span>
+            {% endif %}
           </a>
         </li>
         {% endif %}
@@ -528,12 +545,18 @@
           <a href="{{ url_for('admin.complaints_list') }}"
              class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.complaint') }}">
             <i class="bi bi-chat-left-text"></i> &#1575;&#1604;&#1588;&#1603;&#1575;&#1608;&#1609;
+            {% if sidebar_counts.pending_complaints > 0 %}
+            <span class="nav-badge">{{ sidebar_counts.pending_complaints }}</span>
+            {% endif %}
           </a>
         </li>
         <li class="nav-item">
           <a href="{{ url_for('admin.leave_requests_list') }}"
              class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.leave_request') }}">
             <i class="bi bi-calendar2-check"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;
+            {% if sidebar_counts.pending_leave_requests > 0 %}
+            <span class="nav-badge">{{ sidebar_counts.pending_leave_requests }}</span>
+            {% endif %}
           </a>
         </li>
         <li class="nav-item">
@@ -627,12 +650,18 @@
           <a href="{{ url_for('admin.complaints_list') }}"
              class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.complaint') }}">
             <i class="bi bi-chat-left-text"></i> &#1575;&#1604;&#1588;&#1603;&#1575;&#1608;&#1609;
+            {% if sidebar_counts.pending_complaints > 0 %}
+            <span class="nav-badge">{{ sidebar_counts.pending_complaints }}</span>
+            {% endif %}
           </a>
         </li>
         <li class="nav-item">
           <a href="{{ url_for('admin.leave_requests_list') }}"
              class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.leave_request') }}">
             <i class="bi bi-calendar2-check"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;
+            {% if sidebar_counts.pending_leave_requests > 0 %}
+            <span class="nav-badge">{{ sidebar_counts.pending_leave_requests }}</span>
+            {% endif %}
           </a>
         </li>
         <li class="nav-item">

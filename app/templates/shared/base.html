@@ -611,6 +611,17 @@
     .fw-800 { font-weight: 800 !important; }
     .rounded-12 { border-radius: 12px !important; }
     .gap-12 { gap: 12px; }
+
+    /* ── Sidebar group-toggle badge ──────────────────── */
+    /* nav-badge has margin-right:auto by default (pushes to end in nav-item links).
+       Inside a toggle button the badge must NOT use auto — that would compete with
+       the chevron's auto margin and split the remaining space unevenly.
+       Instead the badge sits directly after the label text; the chevron's own
+       margin-right:auto then pushes it to the far end of the row. */
+    .nav-group-toggle .nav-badge {
+      margin-right: 0;
+      margin-left: 6px;
+    }
   </style>
 
   {% block extra_css %}{% endblock %}

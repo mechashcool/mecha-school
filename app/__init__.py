@@ -198,6 +198,7 @@ def create_app(config_name=None):
         real_active_year = None   # CURRENT active year only; for write-guards
         all_schools      = []
         all_school_years = []     # all years for this school; for year-switcher
+        sidebar_counts   = {'pending_complaints': 0, 'pending_leave_requests': 0, 'unread_chat': 0}
 
         skip_db_context = (
             request.endpoint is None
@@ -306,6 +307,73 @@ def create_app(config_name=None):
             from app.utils.school_config import NullSchoolConfig
             school_cfg = NullSchoolConfig()
 
+        # ── Sidebar badge counts ──────────────────────────────────────────────
+        # Complaint + leave request + chat-unread counters injected for badge rendering.
+        # Skipped for unauthenticated requests; each count wrapped in its own guard.
+        if current_user.is_authenticated and not skip_db_context:
+            try:
+                from app.models import (
+                    Complaint, LeaveRequest,
+                    ChatMessage, ChatMessageRead, ChatRoomMember,
+                )
+                _uid  = current_user.id
+                _sid  = (current_school.id
+                         if current_school and hasattr(current_school, 'id')
+                         else getattr(current_user, 'school_id', None))
+                _role = current_user.role.name if current_user.role else None
+
+                if _sid:
+                    if current_user.is_admin_user:
+                        sidebar_counts['pending_complaints'] = (
+                            Complaint.query
+                            .execution_options(bypass_tenant_scope=True, include_all_years=True)
+                            .filter(Complaint.school_id == _sid,
+                                    Complaint.status.in_(['new', 'under_review']))
+                            .count()
+                        )
+                        sidebar_counts['pending_leave_requests'] = (
+                            LeaveRequest.query
+                            .execution_options(bypass_tenant_scope=True, include_all_years=True)
+                            .filter(LeaveRequest.school_id == _sid,
+                                    LeaveRequest.status == 'pending')
+                            .count()
+                        )
+                    elif _role == 'parent':
+                        sidebar_counts['pending_complaints'] = (
+                            Complaint.query
+                            .execution_options(bypass_tenant_scope=True, include_all_years=True)
+                            .filter(Complaint.school_id == _sid,
+                                    Complaint.parent_id == _uid,
+                                    Complaint.status.in_(['new', 'under_review']))
+                            .count()
+                        )
+                        sidebar_counts['pending_leave_requests'] = (
+                            LeaveRequest.query
+                            .execution_options(bypass_tenant_scope=True, include_all_years=True)
+                            .filter(LeaveRequest.school_id == _sid,
+                                    LeaveRequest.parent_id == _uid,
+                                    LeaveRequest.status == 'pending')
+                            .count()
+                        )
+
+                if 'chat' in enabled_modules:
+                    _member_rooms = (db.session.query(ChatRoomMember.room_id)
+                                     .filter_by(user_id=_uid))
+                    _read_msgs = (db.session.query(ChatMessageRead.message_id)
+                                  .filter_by(user_id=_uid))
+                    sidebar_counts['unread_chat'] = (
+                        ChatMessage.query
+                        .filter(
+                            ChatMessage.room_id.in_(_member_rooms),
+                            ChatMessage.is_deleted == False,
+                            ChatMessage.sender_user_id != _uid,
+                            ChatMessage.id.notin_(_read_msgs),
+                        )
+                        .count()
+                    ) or 0
+            except Exception:
+                db.session.rollback()
+
         # True when a school user is viewing a historical (non-current) year.
         # Injected into all templates so they can hide write-action buttons.
         try:
@@ -333,6 +401,7 @@ def create_app(config_name=None):
             enabled_modules      = enabled_modules,         # set of enabled module keys
             enabled_features     = enabled_features,        # set of enabled feature keys
             school_cfg           = school_cfg,              # SchoolConfig for section/field/action guards
+            sidebar_counts       = sidebar_counts,          # badge counters for sidebar nav items
         )
 
     # ── Module access guard ───────────────────────────────────────────────────
