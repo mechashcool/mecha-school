@@ -141,6 +141,15 @@ class _NotificationService:
             return []
         if user.school_id is None:
             return []
+
+        # Add Flutter routing fields if the caller didn't specify them.
+        if not data or 'type' not in data:
+            role_name = user.role.name if user.role else ''
+            route = '/teacher/notifications' if role_name == 'teacher' else '/parent/notifications'
+            data = dict(data or {})
+            data.setdefault('type', 'notification')
+            data.setdefault('route', route)
+
         token = user.device_token
         result = self.backend.send_one(token, title, body, data) \
                  if token else (False, None, 'no-device-token')
@@ -216,6 +225,9 @@ class _NotificationService:
         payload = dict(data or {})
         payload.setdefault('student_id', str(student_id))
         payload.setdefault('student_name', student.full_name)
+        # Flutter routing fields — Flutter reads data.type and data.route
+        payload.setdefault('type', 'notification')
+        payload.setdefault('route', '/parent/notifications')
         return self.send_to_users(parent_ids, title, body, ntype, payload)
 
     def broadcast(self, announcement_id: int):

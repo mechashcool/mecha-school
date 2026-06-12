@@ -172,10 +172,11 @@ def _push_new_message(room: ChatRoom, msg: ChatMessage, sender_name: str) -> Non
                   else f'رسالة جديدة من {sender_name}')
         body   = (msg.body or '[مرفق]')[:150]
         data   = {
-            'type':       ntype,
+            'type':       'message',   # Flutter routes on data.type
+            'route':      '/chat',     # Flutter navigates to this screen
+            'ntype':      ntype,       # keep internal sub-type for Flutter to inspect if needed
             'room_id':    str(room.id),
             'message_id': str(msg.id),
-            'screen':     'chat',
         }
         for mem in members:
             if mem.user_id == msg.sender_user_id:

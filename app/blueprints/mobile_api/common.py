@@ -4,12 +4,16 @@ Mobile API — Common endpoints (available to all authenticated roles)
 GET  /api/mobile/v1/me               current user profile + school
 POST /api/mobile/v1/me/device-token  save/update the FCM push token
 """
+import logging
+
 from flask import g, request
 
-from app.models import db
+from app.models import db, MobileDeviceToken
 from app.utils.helpers import resolve_photo_url
 from .utils import jwt_required, ok, err
 from . import mobile_api_bp
+
+log = logging.getLogger('mecha.mobile.common')
 
 
 @mobile_api_bp.route('/me', methods=['GET'])
@@ -75,18 +79,53 @@ def update_device_token():
     Save or update the FCM push notification token for this device.
 
     Request body (JSON):
-      { "device_token": "<FCM registration token>", "locale": "ar" }
+      { "device_token": "<FCM registration token>", "locale": "ar",
+        "platform": "android"|"ios"|"web", "device_name": "..." }
+
+    Accepts 'device_token' (Flutter field name) or 'fcm_token' interchangeably.
     """
     user    = g.mobile_user
     payload = request.get_json(silent=True) or {}
 
-    token = (payload.get('device_token') or '').strip()
+    # Accept both Flutter's 'device_token' and the internal 'fcm_token' key.
+    token = (payload.get('device_token') or payload.get('fcm_token') or '').strip()
     if not token:
         return err('device_token is required')
 
+    platform    = (payload.get('platform') or 'android').strip()[:20]
+    device_name = (payload.get('device_name') or '').strip()[:200] or None
+
+    # Keep the legacy single-token field in sync.
     user.device_token = token
     if payload.get('locale'):
         user.locale = payload['locale'][:10]
+
+    # Upsert into MobileDeviceToken — this is the table send_push_to_user() reads.
+    # Without this, FCM pushes are never delivered because the token is never found.
+    if user.school_id is not None:
+        existing = MobileDeviceToken.query.filter_by(fcm_token=token).first()
+        if existing:
+            if existing.user_id != user.id:
+                log.info('[FCM] device-token reassigned  old_user=%s new_user=%s token=%.16s…',
+                         existing.user_id, user.id, token)
+                existing.user_id   = user.id
+                existing.school_id = user.school_id
+            existing.platform    = platform
+            existing.device_name = device_name
+            existing.touch()
+        else:
+            db.session.add(MobileDeviceToken(
+                user_id     = user.id,
+                school_id   = user.school_id,
+                fcm_token   = token,
+                platform    = platform,
+                device_name = device_name,
+            ))
+    else:
+        log.warning('[FCM] device-token saved to User only — user_id=%s has no school_id', user.id)
+
     db.session.commit()
+    log.warning('[FCM] device-token registered  user_id=%s platform=%s token=%.16s…',
+                user.id, platform, token)
 
     return ok(message='device_token_saved')

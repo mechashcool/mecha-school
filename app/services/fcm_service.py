@@ -120,8 +120,10 @@ def _send_one(token: str, title: str, body: str,
             data=str_data,
         )
         msg_id = _messaging.send(msg)
+        log.info('[FCM] ✓ sent  token=%.16s…  msg_id=%s  title=%r', token, msg_id, title)
         return True, msg_id, None
     except Exception as exc:
+        log.warning('[FCM] ✗ send failed  token=%.16s…  error=%s', token, exc)
         return False, None, str(exc)
 
 
@@ -162,17 +164,15 @@ def send_push_to_user(user_id: int, title: str, body: str,
         log.debug('[FCM] no active device tokens for user_id=%s — push skipped', user_id)
         return 0, 0
 
-    log.debug('[FCM] pushing to user_id=%s — %d active token(s)', user_id, len(tokens))
+    log.info('[FCM] pushing to user_id=%s — %d active token(s)', user_id, len(tokens))
     success_count = fail_count = deactivated = 0
 
     for dt in tokens:
         ok, msg_id, error = _send_one(dt.fcm_token, title, body, data)
         if ok:
             success_count += 1
-            log.debug('[FCM] ✓ token=%.16s… msg_id=%s', dt.fcm_token, msg_id)
         else:
             fail_count += 1
-            log.warning('[FCM] ✗ token=%.16s… error=%s', dt.fcm_token, error)
             if _is_stale_token(error or ''):
                 dt.is_active = False
                 deactivated += 1

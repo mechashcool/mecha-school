@@ -1368,10 +1368,11 @@ def _push_chat_message(room: ChatRoom, msg: ChatMessage) -> None:
                  else f'رسالة جديدة من {sender_name}')
         body_text = (msg.body or '[مرفق]')[:150]
         data = {
-            'type':       ntype,
+            'type':       'message',   # Flutter routes on data.type
+            'route':      '/chat',     # Flutter navigates to this screen
+            'ntype':      ntype,       # internal sub-type
             'room_id':    str(room.id),
             'message_id': str(msg.id),
-            'screen':     'chat',
         }
 
         fcm_start = time.time() * 1000
