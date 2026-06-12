@@ -288,7 +288,11 @@
     {% endif %}
     {% endif %}
 
-    {# ── Attendance ───────────────────────────────────────────────────── #}
+    {# ── Attendance & discipline ──────────────────────────────────────── #}
+    {% if ('attendance' in enabled_modules and (current_user.has_permission('take_attendance') or current_user.has_permission('manage_attendance_settings'))) or
+          ('attendance_devices' in enabled_modules and current_user.is_admin_user) %}
+    <li class="nav-section-label">الحضور والانضباط</li>
+    {% endif %}
     {% if 'attendance' in enabled_modules and current_user.has_permission('take_attendance') %}
     <li class="nav-item">
       <a href="{{ url_for('attendance.index') }}"
@@ -328,6 +332,15 @@
         <i class="bi bi-camera-video-fill"></i> أجهزة الحضور
       </a>
     </li>
+    {% endif %}
+
+    {# ── School affairs (closes the attendance group above) ───────────── #}
+    {% if ('transport' in enabled_modules and current_user.has_permission('manage_transport')) or
+          ('inventory' in enabled_modules and current_user.is_admin_user) or
+          ('grades' in enabled_modules and current_user.has_permission('enter_grades')) or
+          ('homework' in enabled_modules and current_user.is_admin_user and school_cfg.action_enabled('homework', 'view')) or
+          ('chat' in enabled_modules and current_user.is_admin_user) %}
+    <li class="nav-section-label">الشؤون المدرسية</li>
     {% endif %}
 
     {# ── Transport ────────────────────────────────────────────────────── #}

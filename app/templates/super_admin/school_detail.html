@@ -85,210 +85,230 @@
   {% endif %}
 </div>
 
-{# ── Statistics row ─────────────────────────────────────────────────────── #}
-<div class="stats-grid mb-4" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));">
-  <div class="stat-card">
-    <div class="stat-icon" style="background:rgba(232,160,32,.12);color:#e8a020">
-      <i class="bi bi-people-fill"></i>
-    </div>
-    <div>
-      <div class="stat-value">{{ stats.students }}</div>
-      <div class="stat-label">طلاب نشطون</div>
-    </div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-icon" style="background:rgba(33,150,243,.12);color:#2196f3">
-      <i class="bi bi-person-fill"></i>
-    </div>
-    <div>
-      <div class="stat-value">{{ stats.users }}</div>
-      <div class="stat-label">مستخدمون</div>
-    </div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-icon" style="background:rgba(13,110,253,.12);color:#0d6efd">
-      <i class="bi bi-building"></i>
-    </div>
-    <div>
-      <div class="stat-value">{{ school.capacity if school.capacity else '∞' }}</div>
-      <div class="stat-label">السعة</div>
-    </div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-icon" style="background:rgba(26,171,109,.12);color:#1aab6d">
-      <i class="bi bi-cash-stack"></i>
-    </div>
-    <div>
-      <div class="stat-value">{{ "{:,.0f}".format(stats.total_paid) }}</div>
-      <div class="stat-label">محصّل</div>
-    </div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-icon" style="background:rgba(224,62,62,.12);color:#e03e3e">
-      <i class="bi bi-exclamation-circle"></i>
-    </div>
-    <div>
-      <div class="stat-value">{{ "{:,.0f}".format(stats.remaining) }}</div>
-      <div class="stat-label">متبقي</div>
-    </div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-icon" style="background:rgba(128,0,128,.12);color:purple">
-      <i class="bi bi-percent"></i>
-    </div>
-    <div>
-      <div class="stat-value">{{ stats.collection_pct }}%</div>
-      <div class="stat-label">نسبة التحصيل</div>
-    </div>
-  </div>
-</div>
+{# ── Tab navigation ─────────────────────────────────────────────────────── #}
+<ul class="nav nav-tabs mb-4" id="schoolDetailTabs" role="tablist">
+  <li class="nav-item" role="presentation">
+    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-overview"
+            type="button" role="tab" aria-controls="tab-overview" aria-selected="true">
+      <i class="bi bi-speedometer2 me-1"></i>نظرة عامة
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-years"
+            type="button" role="tab" aria-controls="tab-years" aria-selected="false">
+      <i class="bi bi-calendar-fill me-1"></i>الأعوام الدراسية
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-billing"
+            type="button" role="tab" aria-controls="tab-billing" aria-selected="false">
+      <i class="bi bi-receipt me-1"></i>الفوترة
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-users"
+            type="button" role="tab" aria-controls="tab-users" aria-selected="false">
+      <i class="bi bi-people me-1"></i>المستخدمون
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-settings"
+            type="button" role="tab" aria-controls="tab-settings" aria-selected="false">
+      <i class="bi bi-gear me-1"></i>الإعدادات
+    </button>
+  </li>
+</ul>
 
-<div class="row g-4">
+<div class="tab-content" id="schoolDetailTabContent">
 
-  {# ── Left column: pricing + academic years + users ─────────────────── #}
-  <div class="col-lg-4">
+  {# ═══ Tab: Overview — stats + pricing/capacity ═════════════════════════ #}
+  <div class="tab-pane fade show active" id="tab-overview" role="tabpanel">
 
-    {# Pricing / Capacity panel #}
-    <div class="card border-0 shadow-sm mb-3">
-      <div class="card-header bg-white">
-        <strong><i class="bi bi-sliders me-2"></i>السعة والتسعير</strong>
-      </div>
-      <div class="card-body">
-        <dl class="row mb-3">
-          <dt class="col-6 text-muted small">السعة</dt>
-          <dd class="col-6">{{ school.capacity if school.capacity else 'غير محددة' }}</dd>
-          <dt class="col-6 text-muted small">سعر الطالب</dt>
-          <dd class="col-6">{{ "{:,.0f}".format(school.price_per_student or 0) }} {{ school.currency_symbol }}</dd>
-          <dt class="col-6 text-muted small">المتوقع</dt>
-          <dd class="col-6 fw-bold">{{ "{:,.0f}".format(stats.expected) }} {{ school.currency_symbol }}</dd>
-        </dl>
-        <form method="POST"
-              action="{{ url_for('super_admin.update_school_pricing', school_id=school.id) }}">
-          <input type="hidden" name="csrf_token"
-                 value="{{ csrf_token() if csrf_token is defined else '' }}">
-          <div class="mb-2">
-            <label class="form-label small">السعة (0 = غير محدودة)</label>
-            <input type="number" name="capacity" class="form-control form-control-sm"
-                   value="{{ school.capacity or 0 }}" min="0">
-          </div>
-          <div class="mb-2">
-            <label class="form-label small">سعر الطالب ({{ school.currency_symbol }})</label>
-            <input type="number" name="price_per_student" class="form-control form-control-sm"
-                   value="{{ school.price_per_student or 0 }}" min="0" step="0.01">
-          </div>
-          <button type="submit" class="btn btn-sm btn-primary w-100">
-            <i class="bi bi-save me-1"></i>حفظ
-          </button>
-        </form>
-      </div>
-    </div>
-
-    {# Academic Years panel #}
-    <div class="card border-0 shadow-sm mb-3">
-      <div class="card-header bg-white d-flex justify-content-between align-items-center">
-        <strong><i class="bi bi-calendar-fill me-2"></i>الأعوام الدراسية</strong>
-        <button class="btn btn-sm btn-outline-primary" data-bs-toggle="collapse"
-                data-bs-target="#addYearForm">
-          <i class="bi bi-plus"></i>
-        </button>
-      </div>
-      <div class="collapse" id="addYearForm">
-        <div class="card-body border-bottom">
-          <form method="POST"
-                action="{{ url_for('super_admin.create_year', school_id=school.id) }}">
-            <input type="hidden" name="csrf_token"
-                   value="{{ csrf_token() if csrf_token is defined else '' }}">
-            <div class="mb-2">
-              <input type="text" name="year_name" class="form-control form-control-sm"
-                     placeholder="مثال: 2025-2026" required>
-            </div>
-            <div class="row g-1 mb-2">
-              <div class="col">
-                <input type="date" name="year_start" class="form-control form-control-sm"
-                       required>
-              </div>
-              <div class="col">
-                <input type="date" name="year_end" class="form-control form-control-sm"
-                       required>
-              </div>
-            </div>
-            <div class="form-check mb-2">
-              <input type="checkbox" name="is_current" class="form-check-input"
-                     id="isCurrentYear" value="1">
-              <label class="form-check-label small" for="isCurrentYear">العام الحالي</label>
-            </div>
-            <button type="submit" class="btn btn-sm btn-success w-100">
-              <i class="bi bi-plus-circle me-1"></i>إنشاء
-            </button>
-          </form>
+    {# ── Statistics row ─────────────────────────────────────────────────── #}
+    <div class="stats-grid mb-4" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));">
+      <div class="stat-card">
+        <div class="stat-icon" style="background:rgba(232,160,32,.12);color:#e8a020">
+          <i class="bi bi-people-fill"></i>
+        </div>
+        <div>
+          <div class="stat-value">{{ stats.students }}</div>
+          <div class="stat-label">طلاب نشطون</div>
         </div>
       </div>
-      <ul class="list-group list-group-flush">
-        {% for yr in all_years %}
-        <li class="list-group-item d-flex justify-content-between align-items-center gap-2 flex-wrap">
-          <span>
-            {{ yr.name }}
-            {% if yr.is_current %}
-            <span class="badge bg-success ms-1">الحالي</span>
-            {% endif %}
-          </span>
-          <div class="d-flex gap-1">
-            {% if not yr.is_current %}
-            <form method="POST"
-                  action="{{ url_for('super_admin.activate_year', school_id=school.id, year_id=yr.id) }}">
-              <input type="hidden" name="csrf_token"
-                     value="{{ csrf_token() if csrf_token is defined else '' }}">
-              <button type="submit" class="btn btn-xs btn-outline-success btn-sm py-0">
-                تفعيل
-              </button>
-            </form>
-            {% endif %}
-            <form method="POST"
-                  action="{{ url_for('super_admin.rollover_year', school_id=school.id, year_id=yr.id) }}"
-                  onsubmit="return confirm('سيتم نسخ الصفوف والشعب والمواد وأنواع الرسوم من أحدث عام سابق إلى «{{ yr.name }}»، وتحديث أقسام الطلاب تلقائياً.\n\nهل تريد المتابعة؟')">
-              <input type="hidden" name="csrf_token"
-                     value="{{ csrf_token() if csrf_token is defined else '' }}">
-              <button type="submit" class="btn btn-xs btn-outline-primary btn-sm py-0"
-                      title="نقل الهيكل من العام السابق">
-                <i class="bi bi-arrow-repeat me-1"></i>ترحيل
-              </button>
-            </form>
-          </div>
-        </li>
-        {% else %}
-        <li class="list-group-item text-muted small text-center">لا توجد أعوام دراسية</li>
-        {% endfor %}
-      </ul>
+      <div class="stat-card">
+        <div class="stat-icon" style="background:rgba(33,150,243,.12);color:#2196f3">
+          <i class="bi bi-person-fill"></i>
+        </div>
+        <div>
+          <div class="stat-value">{{ stats.users }}</div>
+          <div class="stat-label">مستخدمون</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon" style="background:rgba(13,110,253,.12);color:#0d6efd">
+          <i class="bi bi-building"></i>
+        </div>
+        <div>
+          <div class="stat-value">{{ school.capacity if school.capacity else '∞' }}</div>
+          <div class="stat-label">السعة</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon" style="background:rgba(26,171,109,.12);color:#1aab6d">
+          <i class="bi bi-cash-stack"></i>
+        </div>
+        <div>
+          <div class="stat-value">{{ "{:,.0f}".format(stats.total_paid) }}</div>
+          <div class="stat-label">محصّل</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon" style="background:rgba(224,62,62,.12);color:#e03e3e">
+          <i class="bi bi-exclamation-circle"></i>
+        </div>
+        <div>
+          <div class="stat-value">{{ "{:,.0f}".format(stats.remaining) }}</div>
+          <div class="stat-label">متبقي</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon" style="background:rgba(128,0,128,.12);color:purple">
+          <i class="bi bi-percent"></i>
+        </div>
+        <div>
+          <div class="stat-value">{{ stats.collection_pct }}%</div>
+          <div class="stat-label">نسبة التحصيل</div>
+        </div>
+      </div>
     </div>
 
-    {# Users panel #}
-    <div class="card border-0 shadow-sm">
-      <div class="card-header bg-white d-flex justify-content-between align-items-center">
-        <strong><i class="bi bi-people me-2"></i>مستخدمو المدرسة</strong>
-        <a href="{{ url_for('admin.create_user') }}" class="btn btn-sm btn-outline-primary">
-          <i class="bi bi-plus"></i>
-        </a>
-      </div>
-      <ul class="list-group list-group-flush" style="max-height:260px;overflow-y:auto;">
-        {% for u in users %}
-        <li class="list-group-item d-flex justify-content-between align-items-center py-2">
-          <div>
-            <span class="fw-semibold small">{{ u.full_name }}</span><br>
-            <small class="text-muted">{{ u.role.label if u.role else '' }}</small>
+    <div class="row g-4">
+      <div class="col-lg-5 col-md-7">
+        {# Pricing / Capacity panel #}
+        <div class="card border-0 shadow-sm mb-3">
+          <div class="card-header bg-white">
+            <strong><i class="bi bi-sliders me-2"></i>السعة والتسعير</strong>
           </div>
-          <span class="badge {{ 'bg-success' if u.is_active else 'bg-secondary' }}">
-            {{ 'نشط' if u.is_active else 'معطّل' }}
-          </span>
-        </li>
-        {% else %}
-        <li class="list-group-item text-muted small text-center">لا توجد مستخدمون.</li>
-        {% endfor %}
-      </ul>
+          <div class="card-body">
+            <dl class="row mb-3">
+              <dt class="col-6 text-muted small">السعة</dt>
+              <dd class="col-6">{{ school.capacity if school.capacity else 'غير محددة' }}</dd>
+              <dt class="col-6 text-muted small">سعر الطالب</dt>
+              <dd class="col-6">{{ "{:,.0f}".format(school.price_per_student or 0) }} {{ school.currency_symbol }}</dd>
+              <dt class="col-6 text-muted small">المتوقع</dt>
+              <dd class="col-6 fw-bold">{{ "{:,.0f}".format(stats.expected) }} {{ school.currency_symbol }}</dd>
+            </dl>
+            <form method="POST"
+                  action="{{ url_for('super_admin.update_school_pricing', school_id=school.id) }}">
+              <input type="hidden" name="csrf_token"
+                     value="{{ csrf_token() if csrf_token is defined else '' }}">
+              <div class="mb-2">
+                <label class="form-label small">السعة (0 = غير محدودة)</label>
+                <input type="number" name="capacity" class="form-control form-control-sm"
+                       value="{{ school.capacity or 0 }}" min="0">
+              </div>
+              <div class="mb-2">
+                <label class="form-label small">سعر الطالب ({{ school.currency_symbol }})</label>
+                <input type="number" name="price_per_student" class="form-control form-control-sm"
+                       value="{{ school.price_per_student or 0 }}" min="0" step="0.01">
+              </div>
+              <button type="submit" class="btn btn-sm btn-primary w-100">
+                <i class="bi bi-save me-1"></i>حفظ
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
-  {# ── Right column: billing ─────────────────────────────────────────── #}
-  <div class="col-lg-8">
+  {# ═══ Tab: Academic years ══════════════════════════════════════════════ #}
+  <div class="tab-pane fade" id="tab-years" role="tabpanel">
+    <div class="row g-4">
+      <div class="col-lg-6 col-md-8">
+        {# Academic Years panel #}
+        <div class="card border-0 shadow-sm mb-3">
+          <div class="card-header bg-white d-flex justify-content-between align-items-center">
+            <strong><i class="bi bi-calendar-fill me-2"></i>الأعوام الدراسية</strong>
+            <button class="btn btn-sm btn-outline-primary" data-bs-toggle="collapse"
+                    data-bs-target="#addYearForm">
+              <i class="bi bi-plus"></i>
+            </button>
+          </div>
+          <div class="collapse" id="addYearForm">
+            <div class="card-body border-bottom">
+              <form method="POST"
+                    action="{{ url_for('super_admin.create_year', school_id=school.id) }}">
+                <input type="hidden" name="csrf_token"
+                       value="{{ csrf_token() if csrf_token is defined else '' }}">
+                <div class="mb-2">
+                  <input type="text" name="year_name" class="form-control form-control-sm"
+                         placeholder="مثال: 2025-2026" required>
+                </div>
+                <div class="row g-1 mb-2">
+                  <div class="col">
+                    <input type="date" name="year_start" class="form-control form-control-sm"
+                           required>
+                  </div>
+                  <div class="col">
+                    <input type="date" name="year_end" class="form-control form-control-sm"
+                           required>
+                  </div>
+                </div>
+                <div class="form-check mb-2">
+                  <input type="checkbox" name="is_current" class="form-check-input"
+                         id="isCurrentYear" value="1">
+                  <label class="form-check-label small" for="isCurrentYear">العام الحالي</label>
+                </div>
+                <button type="submit" class="btn btn-sm btn-success w-100">
+                  <i class="bi bi-plus-circle me-1"></i>إنشاء
+                </button>
+              </form>
+            </div>
+          </div>
+          <ul class="list-group list-group-flush">
+            {% for yr in all_years %}
+            <li class="list-group-item d-flex justify-content-between align-items-center gap-2 flex-wrap">
+              <span>
+                {{ yr.name }}
+                {% if yr.is_current %}
+                <span class="badge bg-success ms-1">الحالي</span>
+                {% endif %}
+              </span>
+              <div class="d-flex gap-1">
+                {% if not yr.is_current %}
+                <form method="POST"
+                      action="{{ url_for('super_admin.activate_year', school_id=school.id, year_id=yr.id) }}">
+                  <input type="hidden" name="csrf_token"
+                         value="{{ csrf_token() if csrf_token is defined else '' }}">
+                  <button type="submit" class="btn btn-xs btn-outline-success btn-sm py-0">
+                    تفعيل
+                  </button>
+                </form>
+                {% endif %}
+                <form method="POST"
+                      action="{{ url_for('super_admin.rollover_year', school_id=school.id, year_id=yr.id) }}"
+                      onsubmit="return confirm('سيتم نسخ الصفوف والشعب والمواد وأنواع الرسوم من أحدث عام سابق إلى «{{ yr.name }}»، وتحديث أقسام الطلاب تلقائياً.\n\nهل تريد المتابعة؟')">
+                  <input type="hidden" name="csrf_token"
+                         value="{{ csrf_token() if csrf_token is defined else '' }}">
+                  <button type="submit" class="btn btn-xs btn-outline-primary btn-sm py-0"
+                          title="نقل الهيكل من العام السابق">
+                    <i class="bi bi-arrow-repeat me-1"></i>ترحيل
+                  </button>
+                </form>
+              </div>
+            </li>
+            {% else %}
+            <li class="list-group-item text-muted small text-center">لا توجد أعوام دراسية</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ═══ Tab: Billing ═════════════════════════════════════════════════════ #}
+  <div class="tab-pane fade" id="tab-billing" role="tabpanel">
     <div class="card border-0 shadow-sm">
       <div class="card-header bg-white d-flex justify-content-between align-items-center">
         <strong><i class="bi bi-receipt me-2"></i>سجلات الفواتير والاشتراكات</strong>
@@ -484,5 +504,111 @@
       </div>
     </div>
   </div>
+
+  {# ═══ Tab: Users ═══════════════════════════════════════════════════════ #}
+  <div class="tab-pane fade" id="tab-users" role="tabpanel">
+    <div class="row g-4">
+      <div class="col-lg-6 col-md-8">
+        {# Users panel #}
+        <div class="card border-0 shadow-sm">
+          <div class="card-header bg-white d-flex justify-content-between align-items-center">
+            <strong><i class="bi bi-people me-2"></i>مستخدمو المدرسة</strong>
+            <a href="{{ url_for('admin.create_user') }}" class="btn btn-sm btn-outline-primary">
+              <i class="bi bi-plus"></i>
+            </a>
+          </div>
+          <ul class="list-group list-group-flush" style="max-height:420px;overflow-y:auto;">
+            {% for u in users %}
+            <li class="list-group-item d-flex justify-content-between align-items-center py-2">
+              <div>
+                <span class="fw-semibold small">{{ u.full_name }}</span><br>
+                <small class="text-muted">{{ u.role.label if u.role else '' }}</small>
+              </div>
+              <span class="badge {{ 'bg-success' if u.is_active else 'bg-secondary' }}">
+                {{ 'نشط' if u.is_active else 'معطّل' }}
+              </span>
+            </li>
+            {% else %}
+            <li class="list-group-item text-muted small text-center">لا توجد مستخدمون.</li>
+            {% endfor %}
+          </ul>
+          <div class="card-footer bg-white text-center">
+            <a href="{{ url_for('admin.users_list') }}" class="btn btn-sm btn-outline-secondary">
+              <i class="bi bi-people-fill me-1"></i>إدارة المستخدمين والصلاحيات
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ═══ Tab: Settings — links to the school's configuration pages ═══════ #}
+  <div class="tab-pane fade" id="tab-settings" role="tabpanel">
+    <div class="row g-4">
+      <div class="col-lg-6 col-md-8">
+        <div class="card border-0 shadow-sm">
+          <div class="card-header bg-white">
+            <strong><i class="bi bi-gear me-2"></i>إعدادات المدرسة</strong>
+          </div>
+          <div class="list-group list-group-flush">
+            <a href="{{ url_for('schools.edit', school_id=school.id) }}"
+               class="list-group-item list-group-item-action d-flex align-items-center gap-3">
+              <i class="bi bi-pencil-square fs-5 text-primary"></i>
+              <div>
+                <div class="fw-semibold">تعديل بيانات المدرسة</div>
+                <small class="text-muted">الاسم، الشعار، بيانات الاتصال، المحافظة</small>
+              </div>
+            </a>
+            <a href="{{ url_for('schools.school_features', school_id=school.id) }}"
+               class="list-group-item list-group-item-action d-flex align-items-center gap-3">
+              <i class="bi bi-sliders fs-5 text-success"></i>
+              <div>
+                <div class="fw-semibold">ميزات ووحدات المدرسة</div>
+                <small class="text-muted">تفعيل وتعطيل الوحدات والميزات والباقات</small>
+              </div>
+            </a>
+            <a href="{{ url_for('schools.student_form_settings', school_id=school.id) }}"
+               class="list-group-item list-group-item-action d-flex align-items-center gap-3">
+              <i class="bi bi-card-checklist fs-5 text-warning"></i>
+              <div>
+                <div class="fw-semibold">إعدادات نموذج الطالب</div>
+                <small class="text-muted">الحقول الظاهرة في استمارة تسجيل الطالب</small>
+              </div>
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  // Tab persistence: restore from URL hash, then sessionStorage; save on change.
+  var key  = 'superAdminSchoolTab-{{ school.id }}';
+  var tabs = document.querySelectorAll('#schoolDetailTabs [data-bs-toggle="tab"]');
+  if (!tabs.length || typeof bootstrap === 'undefined') return;
+
+  function findTab(target) {
+    if (!target || !/^#tab-[a-z]+$/.test(target)) return null;
+    return document.querySelector('#schoolDetailTabs [data-bs-target="' + target + '"]');
+  }
+
+  var btn = findTab(location.hash) || findTab(sessionStorage.getItem(key));
+  if (btn && btn.getAttribute('data-bs-target') !== '#tab-overview') {
+    bootstrap.Tab.getOrCreateInstance(btn).show();
+  }
+
+  tabs.forEach(function (t) {
+    t.addEventListener('shown.bs.tab', function (e) {
+      var target = e.target.getAttribute('data-bs-target');
+      try { sessionStorage.setItem(key, target); } catch (err) {}
+      history.replaceState(null, '', target);
+    });
+  });
+})();
+</script>
 {% endblock %}
