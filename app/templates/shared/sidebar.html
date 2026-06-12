@@ -517,6 +517,11 @@
     </li>
     {% endif %}
 
+    {# School-scoped links: school managers always see them; the super admin
+       only when a specific school context is active (otherwise these pages are
+       empty/misleading in the global "all schools" view). #}
+    {% set _school_ctx = (not current_user.is_super_admin) or active_school_id %}
+    {% if _school_ctx %}
     <li class="nav-item">
       <a href="{{ url_for('admin.complaints_list') }}"
          class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.complaint') }}">
@@ -535,6 +540,7 @@
         <i class="bi bi-collection-play-fill"></i> لوحة المدرسة
       </a>
     </li>
+    {% endif %}
 
     {% if current_user.is_super_admin %}
     <li class="nav-item">
@@ -544,12 +550,14 @@
       </a>
     </li>
     {% endif %}
+    {% if _school_ctx %}
     <li class="nav-item">
       <a href="{{ url_for('admin.school_settings') }}"
          class="{{ 'active' if request.endpoint == 'admin.school_settings' }}">
         <i class="bi bi-buildings-fill"></i> هوية المدرسة
       </a>
     </li>
+    {% endif %}
 
     {# Super-admin only: roles management #}
     {% if current_user.is_super_admin %}

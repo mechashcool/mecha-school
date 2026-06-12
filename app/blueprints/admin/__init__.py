@@ -1517,7 +1517,11 @@ def _parse_dt(value):
 @login_required
 @admin_required
 def debug_school_board():
-    from flask import session as _sess
+    from flask import session as _sess, current_app, abort
+    # Diagnostic-only endpoint: never expose its internal scope dump in
+    # production. Available only when the app runs in debug/development.
+    if not current_app.debug:
+        abort(404)
     try:
         scope_id = _admin_scope_id()
     except Exception as e:
