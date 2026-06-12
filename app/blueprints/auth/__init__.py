@@ -1,17 +1,31 @@
 """
 Al-Muhandis – Authentication Blueprint
 """
+from urllib.parse import urlparse, urljoin
+
 from flask import (Blueprint, render_template, redirect,
                    url_for, flash, request, session)
 from flask_login import login_user, logout_user, login_required, current_user
 from app.models import db, User
 from app.utils.audit import log_action
+from app.utils.ratelimit import limiter, LOGIN_RATE_LIMIT
 from datetime import datetime
 
 auth_bp = Blueprint('auth', __name__, template_folder='../../templates/auth')
 
 
+def _is_safe_redirect_target(target):
+    """Allow redirects only to same-host relative paths (blocks open redirect)."""
+    if not target:
+        return False
+    ref_url = urlparse(request.host_url)
+    test_url = urlparse(urljoin(request.host_url, target))
+    return (test_url.scheme in ('http', 'https')
+            and ref_url.netloc == test_url.netloc)
+
+
 @auth_bp.route('/login', methods=['GET', 'POST'])
+@limiter.limit(LOGIN_RATE_LIMIT, methods=['POST'])
 def login():
     if current_user.is_authenticated:
         return _role_redirect(current_user)
@@ -33,7 +47,9 @@ def login():
             log_action('login', 'user', user.id, f'Login from {request.remote_addr}')
             flash('تم تسجيل الدخول بنجاح.', 'success')
             next_page = request.args.get('next')
-            return redirect(next_page or _role_redirect_url(user))
+            if next_page and _is_safe_redirect_target(next_page):
+                return redirect(next_page)
+            return redirect(_role_redirect_url(user))
         else:
             error = 'اسم المستخدم أو كلمة المرور غير صحيحة.'
 
@@ -72,6 +88,17 @@ def profile():
 
         new_password = request.form.get('new_password', '')
         if new_password:
+            # Require the current password before allowing a change, so a
+            # hijacked session cannot silently lock out the real owner.
+            current_password = request.form.get('current_password', '')
+            if not current_password or not current_user.check_password(current_password):
+                db.session.rollback()
+                flash('كلمة المرور الحالية غير صحيحة.', 'danger')
+                return redirect(url_for('auth.profile'))
+            if len(new_password) < 8:
+                db.session.rollback()
+                flash('يجب أن تتكون كلمة المرور الجديدة من 8 أحرف على الأقل.', 'danger')
+                return redirect(url_for('auth.profile'))
             current_user.set_password(new_password)
 
         db.session.commit()

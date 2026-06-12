@@ -70,8 +70,14 @@
           <hr>
           <p class="text-muted" style="font-size:13px">اتركها فارغة إذا لم تُرِد تغيير كلمة المرور</p>
           <div class="mb-3">
+            <label class="form-label">كلمة المرور الحالية</label>
+            <input type="password" name="current_password" class="form-control"
+                   autocomplete="current-password">
+          </div>
+          <div class="mb-3">
             <label class="form-label">كلمة المرور الجديدة</label>
-            <input type="password" name="new_password" class="form-control" minlength="6">
+            <input type="password" name="new_password" class="form-control" minlength="8"
+                   autocomplete="new-password">
           </div>
           <button type="submit" class="btn btn-primary w-100">
             <i class="bi bi-save-fill me-2"></i>حفظ التعديلات

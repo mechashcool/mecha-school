@@ -91,9 +91,11 @@ instance/
 *.sqlite
 
 # Sensitive Firebase/Admin keys
+firebase-key.json
 firebase-service-account*.json
 service-account*.json
 *serviceAccount*.json
+*-firebase-adminsdk-*.json
 
 # AI Face raw captures / debug dumps
 tools/captures/

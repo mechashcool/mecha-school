@@ -355,8 +355,8 @@ def create():
 
         # ── Save attachment ──────────────────────────────────────────────────
         if file and file.filename and not errors:
-            current_app.config['ALLOWED_EXTENSIONS'] = _ATTACH_ALL
-            attach_path = save_uploaded_file(file, subfolder='homework')
+            attach_path = save_uploaded_file(file, subfolder='homework',
+                                             allowed_exts=_ATTACH_ALL)
 
         # ── Persist ─────────────────────────────────────────────────────────
         teacher_id = emp.id if emp else None
@@ -485,8 +485,8 @@ def edit(hw_id):
                                    grades=grades, hw=hw, today=date.today())
 
         if file and file.filename:
-            current_app.config['ALLOWED_EXTENSIONS'] = _ATTACH_ALL
-            new_attach_path = save_uploaded_file(file, subfolder='homework')
+            new_attach_path = save_uploaded_file(file, subfolder='homework',
+                                                 allowed_exts=_ATTACH_ALL)
 
         hw.title       = title
         hw.subject_id  = subject_id or None

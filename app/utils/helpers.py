@@ -8,9 +8,11 @@ from flask import current_app, url_for
 from werkzeug.utils import secure_filename
 
 
-ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'}
+# NOTE: 'svg' is intentionally excluded — SVG files can embed <script> and are
+# an XSS vector when served from the same origin. Use raster formats instead.
+ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 ALLOWED_DOC_EXTENSIONS   = {'pdf', 'doc', 'docx', 'xls', 'xlsx'}
-LOGO_IMAGE_EXTENSIONS    = {'png', 'jpg', 'jpeg', 'webp', 'svg'}
+LOGO_IMAGE_EXTENSIONS    = {'png', 'jpg', 'jpeg', 'webp'}
 LOGO_MAX_BYTES           = 2 * 1024 * 1024  # 2 MB
 
 ALLOWED_BOARD_IMAGE_EXTENSIONS = {'jpg', 'jpeg', 'png', 'webp'}

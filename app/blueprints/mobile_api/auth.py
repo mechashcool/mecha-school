@@ -11,6 +11,7 @@ from flask import g, request
 
 from app.models import db, User, Employee, MobileDeviceToken
 from app.utils.helpers import resolve_photo_url
+from app.utils.ratelimit import limiter, LOGIN_RATE_LIMIT
 from .utils import encode_token, jwt_required, ok, err, photo_url
 
 # Circular import guard — routes are registered by __init__.py after the bp is created
@@ -53,6 +54,7 @@ def _user_payload(user: User) -> dict:
 # ─── Login ────────────────────────────────────────────────────────────────────
 
 @mobile_api_bp.route('/auth/login', methods=['POST'])
+@limiter.limit(LOGIN_RATE_LIMIT)
 def login():
     """
     Request body (JSON):
@@ -213,6 +215,7 @@ def register_device():
 # ─── Token refresh ────────────────────────────────────────────────────────────
 
 @mobile_api_bp.route('/auth/refresh', methods=['POST'])
+@limiter.limit(LOGIN_RATE_LIMIT)
 @jwt_required('refresh')
 def refresh():
     """

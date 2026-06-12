@@ -98,10 +98,15 @@ def process_student_scan(student_id_str, device_sn_str=None,
     if school is None:
         if not device_sn_str:
             return {"ok": False, "error": "device_sn required"}, 400
-        device = Device.query.filter_by(device_id=device_sn_str).first()
+        device = Device.query.filter_by(device_id=device_sn_str, is_active=True).first()
         if not device:
             return {"ok": False, "error": "invalid device"}, 403
         school = device.school
+        # Bind this request to the device's school so the student lookup below is
+        # tenant-scoped. Without this the lookup runs globally, allowing a caller
+        # with one school's device serial to read/write another school's students.
+        from app.utils.scoping import set_hardware_scope
+        set_hardware_scope(device)
 
     student = Student.query.filter_by(student_id=student_id_str).first()
     if not student:

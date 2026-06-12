@@ -6,13 +6,16 @@ import os
 from flask import Flask, request
 from flask_login import LoginManager
 from flask_migrate import Migrate
+from flask_wtf.csrf import CSRFProtect
 
 from app.models import db, bcrypt, User
 from app.utils.scoping import register_tenant_guards
+from app.utils.ratelimit import limiter
 from config.settings import config
 
 login_manager = LoginManager()
 migrate = Migrate()
+csrf = CSRFProtect()
 
 
 def create_app(config_name=None):
@@ -29,6 +32,8 @@ def create_app(config_name=None):
     bcrypt.init_app(app)
     migrate.init_app(app, db)
     login_manager.init_app(app)
+    csrf.init_app(app)
+    limiter.init_app(app)
     register_tenant_guards(app)
 
     login_manager.login_view = 'auth.login'
@@ -50,6 +55,17 @@ def create_app(config_name=None):
             .where(User.id == int(user_id))
             .execution_options(bypass_tenant_scope=True)
         ).scalar_one_or_none()
+
+    # ── CORS — mobile API only ─────────────────────────────────────────────────
+    # after_request always fires, including for Flask's automatic OPTIONS responses.
+    # JWT Bearer auth is stateless, so Allow-Origin: * is safe here.
+    @app.after_request
+    def _mobile_api_cors(response):
+        if request.path.startswith('/api/mobile/v1/'):
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+        return response
 
     # ── Blueprints ────────────────────────────────────────────────────────────
     from app.blueprints.auth import auth_bp
@@ -121,6 +137,14 @@ def create_app(config_name=None):
     app.register_blueprint(student_records_bp,     url_prefix='/student-registration-records')
     app.register_blueprint(buildings_bp,           url_prefix='/buildings')
     app.register_blueprint(shifts_bp,              url_prefix='/attendance-shifts')
+
+    # ── CSRF exemptions ───────────────────────────────────────────────────────
+    # These blueprints authenticate via request headers (JWT bearer token or a
+    # device API key), not session cookies, so they are not exposed to CSRF and
+    # must be exempt — native/mobile clients do not send a CSRF token.
+    csrf.exempt(api_bp)          # legacy mobile/parent JSON API
+    csrf.exempt(mobile_api_bp)   # JWT-authenticated mobile API
+    csrf.exempt(hardware_bp)     # X-Device-Key authenticated hardware endpoints
 
     # ── Jinja2 globals ────────────────────────────────────────────────────────
     from app.utils.helpers import resolve_photo_url
@@ -353,6 +377,22 @@ def create_app(config_name=None):
     @app.errorhandler(500)
     def server_error(e):
         return _render_error_page('shared/500.html'), 500
+
+    # ── Security response headers ─────────────────────────────────────────────
+    @app.after_request
+    def _set_security_headers(response):
+        # Conservative, widely-compatible headers. No Content-Security-Policy is
+        # set here because the UI relies on inline styles/scripts and CDN assets;
+        # adding a strict CSP must be done deliberately to avoid breaking pages.
+        response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
+        response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+        if not app.debug and config_name == 'production':
+            response.headers.setdefault(
+                'Strict-Transport-Security',
+                'max-age=31536000; includeSubDomains',
+            )
+        return response
 
     # ── Upload folder ─────────────────────────────────────────────────────────
     uploads_dir = os.path.join(app.root_path, 'static', 'uploads')

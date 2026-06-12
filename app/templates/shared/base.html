@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="csrf-token" content="{{ csrf_token() }}" />
   <title>{% block title %}{{ school.school_name if school else 'Mecha-School' }}{% endblock %} — {{ school.school_name if school else 'Mecha-School' }}</title>
   {% set _favicon_url = resolve_photo_url(school.logo_path) if school and school.logo_path else None %}
   {% if _favicon_url %}
@@ -558,6 +559,68 @@
       if (!confirm(btn.dataset.confirm || 'هل أنت متأكد؟')) e.preventDefault();
     });
   });
+
+  // ── CSRF protection ──────────────────────────────────────────────────────
+  // Server-side enforcement is done by Flask-WTF CSRFProtect. This injects the
+  // token into every state-changing form and same-origin AJAX request so the
+  // existing raw-HTML forms and fetch() calls keep working unchanged.
+  (function () {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    const token = meta ? meta.getAttribute('content') : '';
+    if (!token) return;
+
+    function ensureFormToken(form) {
+      if (!form || (form.method || '').toUpperCase() === 'GET') return;
+      if (form.querySelector('input[name="csrf_token"]')) return;
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'csrf_token';
+      input.value = token;
+      form.appendChild(input);
+    }
+
+    // Inject into forms already in the DOM…
+    document.querySelectorAll('form').forEach(ensureFormToken);
+    // …and as a safety net for forms added dynamically, inject on submit.
+    document.addEventListener('submit', e => {
+      if (e.target && e.target.tagName === 'FORM') ensureFormToken(e.target);
+    }, true);
+
+    // Add the CSRF header to same-origin, state-changing fetch() requests.
+    const SAFE = /^(GET|HEAD|OPTIONS|TRACE)$/i;
+    const _fetch = window.fetch;
+    if (_fetch) {
+      window.fetch = function (input, init) {
+        init = init || {};
+        const method = (init.method || (typeof input !== 'string' && input && input.method) || 'GET');
+        let sameOrigin = true;
+        try {
+          const url = new URL((typeof input === 'string' ? input : input.url), window.location.href);
+          sameOrigin = (url.origin === window.location.origin);
+        } catch (_) { /* relative URL → same origin */ }
+        if (!SAFE.test(method) && sameOrigin) {
+          const headers = new Headers(init.headers || (typeof input !== 'string' && input ? input.headers : undefined) || {});
+          if (!headers.has('X-CSRFToken')) headers.set('X-CSRFToken', token);
+          init.headers = headers;
+        }
+        return _fetch(input, init);
+      };
+    }
+
+    // Same for classic XMLHttpRequest POST/PUT/PATCH/DELETE.
+    const _open = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method) {
+      this.__csrfUnsafe = !SAFE.test(method || 'GET');
+      return _open.apply(this, arguments);
+    };
+    const _send = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function () {
+      if (this.__csrfUnsafe) {
+        try { this.setRequestHeader('X-CSRFToken', token); } catch (_) {}
+      }
+      return _send.apply(this, arguments);
+    };
+  })();
 </script>
 
 {% block extra_js %}{% endblock %}
