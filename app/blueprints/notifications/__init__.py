@@ -102,17 +102,35 @@ def index():
 
     notifs = q.paginate(page=page, per_page=20, error_out=False)
 
-    # Mark only the user's own inbox notifications as read. Admin history can
-    # include notifications sent to other users and must not consume them.
-    for n in notifs.items:
-        if not notification_is_addressed_to(n, current_user):
-            continue
-        exists = NotificationRead.query.filter_by(
-            notification_id=n.id, user_id=current_user.id).first()
-        if not exists:
-            db.session.add(NotificationRead(
-                notification_id=n.id, user_id=current_user.id))
-    db.session.commit()
+    # Mark ALL unread notifications visible to this user as read — not just the
+    # current page. This keeps the sidebar badge in sync: the badge count uses
+    # notification_visible_to across all pages; the mark-as-read must match that
+    # exact scope so the badge clears on the first page visit.
+    # Admin users (can_manage) see all school notifications but their badge only
+    # counts those addressed to them; using notification_visible_to here ensures
+    # we only touch the notifications that belong to the current user's inbox.
+    _read_ids_sub = (
+        db.session.query(NotificationRead.notification_id)
+        .filter_by(user_id=current_user.id)
+        .subquery()
+    )
+    _unread_q = (
+        Notification.query
+        .filter(notification_visible_to(current_user))
+        .filter(Notification.id.notin_(_read_ids_sub))
+    )
+    if school_id:
+        _unread_q = _unread_q.filter(Notification.school_id == school_id)
+    _unread_ids = _unread_q.with_entities(Notification.id).all()
+    if _unread_ids:
+        db.session.add_all([
+            NotificationRead(notification_id=nid, user_id=current_user.id)
+            for (nid,) in _unread_ids
+        ])
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
     return render_template('notifications/index.html',
                            notifs=notifs, can_manage=can_manage,
                            active_tab=tab)
