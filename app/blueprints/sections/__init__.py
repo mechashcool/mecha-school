@@ -7,7 +7,7 @@ from flask import (Blueprint, render_template, redirect, url_for,
 from flask_login import login_required
 from app.models import (
     db, Grade, Section, Subject, AcademicYear, Employee, Student,
-    Exam, Schedule, teacher_subjects, AttendanceShift,
+    Exam, Schedule, teacher_subjects, AttendanceShift, Homework,
 )
 from app.utils.decorators import (admin_required, get_current_school, get_active_year,
                                    historical_guard, module_required, action_required)
@@ -557,7 +557,40 @@ def edit_subject(sub_id):
 @module_required('subjects')
 @action_required('subjects', 'delete')
 def delete_subject(sub_id):
-    subject = Subject.query.get_or_404(sub_id)
+    school = get_current_school()
+    subject = Subject.query.filter_by(id=sub_id, school_id=school.id).first_or_404()
+
+    schedule_count = (Schedule.query
+                      .execution_options(include_all_years=True)
+                      .filter_by(subject_id=sub_id).count())
+    if schedule_count:
+        flash('لا يمكن حذف هذه المادة لأنها مرتبطة بجدول الحصص. '
+              'يرجى إزالة المادة من الجدول أولاً.', 'danger')
+        return redirect(url_for('sections.subjects'))
+
+    exam_count = (Exam.query
+                  .execution_options(include_all_years=True)
+                  .filter_by(subject_id=sub_id).count())
+    if exam_count:
+        flash('لا يمكن حذف هذه المادة لأنها مرتبطة بسجلات الامتحانات. '
+              'يرجى حذف الامتحانات المرتبطة بها أولاً.', 'danger')
+        return redirect(url_for('sections.subjects'))
+
+    homework_count = (Homework.query
+                      .execution_options(include_all_years=True)
+                      .filter_by(subject_id=sub_id).count())
+    if homework_count:
+        flash('لا يمكن حذف هذه المادة لأنها مرتبطة بسجلات الواجبات المنزلية. '
+              'يرجى حذف الواجبات المرتبطة بها أولاً.', 'danger')
+        return redirect(url_for('sections.subjects'))
+
+    teacher_count = (db.session.query(teacher_subjects)
+                     .filter(teacher_subjects.c.subject_id == sub_id).count())
+    if teacher_count:
+        flash('لا يمكن حذف هذه المادة لأنها مرتبطة بتوزيع المدرسين. '
+              'يرجى إزالة المدرسين المرتبطين بها أولاً.', 'danger')
+        return redirect(url_for('sections.subjects'))
+
     db.session.delete(subject)
     db.session.commit()
     flash('تم حذف المادة.', 'success')
