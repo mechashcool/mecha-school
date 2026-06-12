@@ -817,6 +817,38 @@ def room_detail(room_id):
                 .all())
     schedules = room.schedules.order_by(ChatRoomSchedule.day_of_week).all()
 
+    # Mark unread messages as read for current user (mirrors user_room logic).
+    # Scoped to this room's loaded message IDs — avoids pulling all user reads globally.
+    _unread_msg_ids = [
+        m.id for m in messages
+        if not m.is_deleted and m.sender_user_id != current_user.id
+    ]
+    if _unread_msg_ids:
+        _already_read = {
+            r.message_id for r in
+            ChatMessageRead.query
+            .filter(
+                ChatMessageRead.user_id == current_user.id,
+                ChatMessageRead.message_id.in_(_unread_msg_ids),
+            )
+            .all()
+        }
+        _new_reads = [
+            ChatMessageRead(message_id=mid, user_id=current_user.id)
+            for mid in _unread_msg_ids
+            if mid not in _already_read
+        ]
+        if _new_reads:
+            db.session.add_all(_new_reads)
+            try:
+                db.session.commit()
+                _log.debug(
+                    '[chat] room_detail: marked %d messages read room_id=%s user_id=%s',
+                    len(_new_reads), room.id, current_user.id,
+                )
+            except Exception:
+                db.session.rollback()
+
     return render_template('chat/room_detail.html',
                            room=room, messages=messages,
                            members=members, schedules=schedules,
