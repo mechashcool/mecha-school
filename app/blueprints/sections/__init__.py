@@ -214,16 +214,22 @@ def setup_iraqi_grades():
 @historical_guard
 @admin_required
 def setup_standard_subjects():
-    """Create missing standard subjects (linked to grades) for the selected academic year."""
+    """Create missing standard subjects for the active academic year of the current school."""
     from app.utils.iraqi_subjects import ensure_standard_subjects
 
-    year_id = request.form.get('academic_year_id', type=int)
-    if not year_id:
-        flash('يرجى اختيار العام الدراسي أولاً.', 'warning')
+    # Always use the active year for writes — never trust the URL/form year param,
+    # which may point at a non-current year causing subjects to be invisible in the list.
+    school = get_current_school()
+    if not school:
+        flash('تعذّر تحديد المدرسة الحالية.', 'danger')
         return redirect(url_for('sections.index'))
 
-    year = AcademicYear.query.get_or_404(year_id)
-    result = ensure_standard_subjects(year.school_id, year.id)
+    year = get_active_year(school.id)
+    if not year:
+        flash('لا يوجد عام دراسي نشط. يرجى تفعيل عام دراسي أولاً.', 'warning')
+        return redirect(url_for('sections.index'))
+
+    result = ensure_standard_subjects(school.id, year.id)
     db.session.commit()
 
     if result['created_subjects']:
@@ -232,10 +238,17 @@ def setup_standard_subjects():
         flash(f'تمت تهيئة المواد الدراسية بنجاح — '
               f'تم إضافة {result["created_subjects"]} مادة{skipped_note}.',
               'success')
+    elif result['skipped_grades']:
+        flash(
+            'لم يتم إضافة أي مادة — لم يتم العثور على الصفوف الدراسية القياسية. '
+            'يرجى تهيئة الصفوف الدراسية العراقية أولاً باستخدام زر "تهيئة الصفوف العراقية"، '
+            'ثم إعادة تهيئة المواد.',
+            'warning',
+        )
     else:
         flash('المواد الدراسية موجودة مسبقاً — لا يوجد شيء لإضافته.', 'info')
 
-    return redirect(url_for('sections.index', year_id=year_id))
+    return redirect(url_for('sections.index', year_id=year.id))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
