@@ -168,6 +168,38 @@
       </div>
       {% endif %}
 
+      <!-- Feature package (create only, optional) -->
+      {% if not school %}
+      <div class="card mb-4">
+        <div class="card-header">
+          <h6 class="mb-0"><i class="bi bi-box-seam me-2"></i>باقة الميزات (اختياري)</h6>
+        </div>
+        <div class="card-body">
+          {% if packages %}
+          <label class="form-label">اختر باقة جاهزة</label>
+          <select name="package_id" id="packageSelect" class="form-select">
+            <option value="">— بدون باقة (تحديد يدوي للوحدات) —</option>
+            {% for pkg in packages %}
+            <option value="{{ pkg.id }}"
+                    {{ 'selected' if selected_package_id and selected_package_id == pkg.id }}>
+              {{ pkg.name }}{% if pkg.description %} — {{ pkg.description[:60] }}{% if pkg.description|length > 60 %}…{% endif %}{% endif %}
+            </option>
+            {% endfor %}
+          </select>
+          <div class="form-text">
+            عند اختيار باقة سيتم <strong>تطبيق وحداتها وميزاتها وإعداداتها تلقائياً</strong> على المدرسة الجديدة،
+            وسيُتجاهَل التحديد اليدوي أدناه. يمكنك تعديل كل شيء لاحقاً من صفحة «إدارة ميزات المدارس».
+          </div>
+          {% else %}
+          <p class="text-muted mb-2">لا توجد باقات نشطة بعد.</p>
+          <a href="{{ url_for('schools.create_package') }}" class="btn btn-outline-primary btn-sm">
+            <i class="bi bi-plus-lg me-1"></i>إنشاء باقة جديدة
+          </a>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+
       <!-- Modules / Feature flags (create only) -->
       {% if not school and modules %}
       <div class="card mb-4" id="modulesCard">
@@ -362,6 +394,21 @@ if (colorInput && hexInput) {
   });
 
   updateBadge();
+})();
+
+/* Package selector: dim the manual module card when a package is chosen,
+   since the package drives modules/features on the server. */
+(function () {
+  const sel  = document.getElementById('packageSelect');
+  const card = document.getElementById('modulesCard');
+  if (!sel || !card) return;
+  function sync() {
+    const usingPackage = !!sel.value;
+    card.style.opacity = usingPackage ? '0.45' : '';
+    card.style.pointerEvents = usingPackage ? 'none' : '';
+  }
+  sel.addEventListener('change', sync);
+  sync();
 })();
 </script>
 {% endblock %}

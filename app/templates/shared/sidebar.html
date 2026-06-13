@@ -245,16 +245,24 @@
         <i class="bi bi-shield-lock-fill"></i> بوابة المشرف العام
       </a>
     </li>
+    {% set _feature_endpoints = ['schools.features_overview', 'schools.school_features'] %}
+    {% set _package_endpoints = ['schools.packages_list', 'schools.create_package', 'schools.edit_package', 'schools.delete_package'] %}
     <li class="nav-item">
       <a href="{{ url_for('schools.index') }}"
-         class="{{ 'active' if request.blueprint == 'schools' }}">
+         class="{{ 'active' if request.blueprint == 'schools' and request.endpoint not in _feature_endpoints and request.endpoint not in _package_endpoints }}">
         <i class="bi bi-buildings-fill"></i> إدارة المدارس
       </a>
     </li>
     <li class="nav-item">
       <a href="{{ url_for('schools.packages_list') }}"
-         class="{{ 'active' if request.endpoint in ['schools.packages_list', 'schools.create_package', 'schools.edit_package', 'schools.delete_package'] }}">
+         class="{{ 'active' if request.endpoint in _package_endpoints }}">
         <i class="bi bi-collection-fill"></i> باقات الميزات
+      </a>
+    </li>
+    <li class="nav-item">
+      <a href="{{ url_for('schools.features_overview') }}"
+         class="{{ 'active' if request.endpoint in _feature_endpoints }}">
+        <i class="bi bi-toggles2"></i> إدارة ميزات المدارس
       </a>
     </li>
     {% endif %}

@@ -18,7 +18,7 @@ All routes are super-admin only (role.name == 'super_admin').
 from flask import (Blueprint, render_template, redirect, url_for,
                    flash, request, session, jsonify)
 from flask_login import login_required, current_user
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime as dt
 
@@ -156,6 +156,14 @@ def clear_switch():
 #  CREATE SCHOOL
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _active_packages():
+    """Active feature packages for the school-create package selector."""
+    return (FeaturePackage.query
+            .filter_by(is_active=True)
+            .order_by(FeaturePackage.name)
+            .all())
+
+
 @schools_bp.route('/create', methods=['GET', 'POST'])
 @login_required
 @super_admin_required
@@ -176,11 +184,22 @@ def create():
         if code and School.query.filter_by(code=code).first():
             errors.append('School code is already in use.')
 
+        # Validate the selected package (if any) server-side before doing any work.
+        selected_package = None
+        pkg_id = request.form.get('package_id', type=int)
+        if pkg_id:
+            selected_package = FeaturePackage.query.filter_by(
+                id=pkg_id, is_active=True).first()
+            if selected_package is None:
+                errors.append('الباقة المحددة غير موجودة أو غير مفعّلة.')
+
         if errors:
             for e in errors:
                 flash(e, 'danger')
             return render_template('schools/form.html', school=None,
                                    modules=MODULES, presets=PRESETS,
+                                   packages=_active_packages(),
+                                   selected_package_id=pkg_id,
                                    selected_modules=set(request.form.getlist('modules')))
 
         from decimal import Decimal, InvalidOperation
@@ -234,12 +253,19 @@ def create():
                 db.session.flush()  # assign grade IDs so subjects can reference them
                 ensure_standard_subjects(school.id, new_ay.id)
 
-            # Save module selections (empty list = all disabled is intentional;
-            # caller must check at least one box, or leave all unchecked to mean
-            # "no modules configured yet" which the app treats as all-enabled).
-            enabled_keys = request.form.getlist('modules')
-            if enabled_keys:
-                save_school_modules(school.id, enabled_keys)
+            # Apply configuration. A selected package takes precedence and is
+            # applied atomically (modules + features + student form + module
+            # configs) so the new school is never left partially configured.
+            # When no package is selected, fall back to the manual module
+            # checkboxes (empty = "no modules configured yet" → treated as
+            # all-enabled by the app, preserving the original behavior).
+            if selected_package is not None:
+                school.package_id = selected_package.id
+                apply_package_to_school(school.id, selected_package)
+            else:
+                enabled_keys = request.form.getlist('modules')
+                if enabled_keys:
+                    save_school_modules(school.id, enabled_keys)
 
             db.session.commit()
         except Exception as exc:
@@ -247,7 +273,17 @@ def create():
             flash(f'Could not create school: {exc}', 'danger')
             return render_template('schools/form.html', school=None,
                                    modules=MODULES, presets=PRESETS,
-                                   selected_modules=set())
+                                   packages=_active_packages(),
+                                   selected_package_id=pkg_id,
+                                   selected_modules=set(request.form.getlist('modules')))
+
+        if selected_package is not None:
+            log_action('create', 'school', school.id,
+                       details=(f'created school "{name}" with package '
+                                f'"{selected_package.name}" (id={selected_package.id}) applied'))
+            flash(f'تم إنشاء المدرسة "{name}" وتطبيق الباقة "{selected_package.name}" بنجاح. '
+                  'يمكنك الآن تعديل الوحدات والميزات يدوياً.', 'success')
+            return redirect(url_for('schools.school_features', school_id=school.id, tab=1))
 
         log_action('create', 'school', school.id, details=f'created school "{name}"')
         flash(f'تم إنشاء المدرسة "{name}" بنجاح. يمكنك الآن ضبط الوحدات والميزات التفصيلية.', 'success')
@@ -255,6 +291,8 @@ def create():
 
     return render_template('schools/form.html', school=None,
                            modules=MODULES, presets=PRESETS,
+                           packages=_active_packages(),
+                           selected_package_id=None,
                            selected_modules=set())
 
 
@@ -640,6 +678,98 @@ def student_form_settings(school_id):
         hidden_fields=hidden_fields,
         required_fields=required_fields,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  CENTRAL SCHOOL FEATURE MANAGEMENT  (searchable/filterable school selector)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@schools_bp.route('/features-overview')
+@login_required
+@super_admin_required
+def features_overview():
+    """Central super-admin page: pick a school (search + filters) then manage
+    its modules/features via the existing per-school features page."""
+    from app.models import SchoolModule, SchoolFeature
+
+    search = request.args.get('q', '').strip()
+    gov    = request.args.get('governorate', '').strip()
+    pkg_id = request.args.get('package_id', type=int)
+    status = request.args.get('status', '').strip()
+    page   = request.args.get('page', 1, type=int)
+
+    q = School.query.execution_options(bypass_tenant_scope=True)
+    if search:
+        like = f'%{search}%'
+        q = q.filter(or_(School.school_name.ilike(like),
+                         School.school_name_ar.ilike(like),
+                         School.code.ilike(like)))
+    if gov:
+        if gov == 'غير محدد':
+            q = q.filter(School.governorate.is_(None))
+        else:
+            q = q.filter(School.governorate == gov)
+    if pkg_id:
+        q = q.filter(School.package_id == pkg_id)
+    if status == 'active':
+        q = q.filter(School.is_active.is_(True))
+    elif status == 'inactive':
+        q = q.filter(School.is_active.is_(False))
+
+    q = q.order_by(School.governorate.nullslast(), School.school_name)
+    pagination = q.paginate(page=page, per_page=20, error_out=False)
+    schools = pagination.items
+    school_ids = [s.id for s in schools]
+
+    total_modules  = len(MODULES)
+    total_features = len(FEATURES)
+
+    # Grouped counts for the schools on this page only (avoids N+1).
+    mod_total, mod_enabled, feat_total, feat_enabled = {}, {}, {}, {}
+    if school_ids:
+        for sid, cnt in (db.session.query(SchoolModule.school_id, func.count(SchoolModule.id))
+                         .filter(SchoolModule.school_id.in_(school_ids))
+                         .group_by(SchoolModule.school_id).all()):
+            mod_total[sid] = int(cnt or 0)
+        for sid, cnt in (db.session.query(SchoolModule.school_id, func.count(SchoolModule.id))
+                         .filter(SchoolModule.school_id.in_(school_ids),
+                                 SchoolModule.is_enabled.is_(True))
+                         .group_by(SchoolModule.school_id).all()):
+            mod_enabled[sid] = int(cnt or 0)
+        for sid, cnt in (db.session.query(SchoolFeature.school_id, func.count(SchoolFeature.id))
+                         .filter(SchoolFeature.school_id.in_(school_ids))
+                         .group_by(SchoolFeature.school_id).all()):
+            feat_total[sid] = int(cnt or 0)
+        for sid, cnt in (db.session.query(SchoolFeature.school_id, func.count(SchoolFeature.id))
+                         .filter(SchoolFeature.school_id.in_(school_ids),
+                                 SchoolFeature.is_enabled.is_(True))
+                         .group_by(SchoolFeature.school_id).all()):
+            feat_enabled[sid] = int(cnt or 0)
+
+    school_rows = []
+    for s in schools:
+        # No config rows = backward-compat "all enabled".
+        school_rows.append({
+            'school':           s,
+            'modules_enabled':  mod_enabled.get(s.id, 0) if mod_total.get(s.id) else total_modules,
+            'modules_total':    total_modules,
+            'features_enabled': feat_enabled.get(s.id, 0) if feat_total.get(s.id) else total_features,
+            'features_total':   total_features,
+        })
+
+    gov_rows = (db.session.query(School.governorate)
+                .filter(School.governorate.isnot(None))
+                .distinct().order_by(School.governorate).all())
+    governorates = [r[0] for r in gov_rows]
+    packages = FeaturePackage.query.order_by(FeaturePackage.name).all()
+
+    return render_template('schools/features_overview.html',
+                           school_rows=school_rows,
+                           pagination=pagination,
+                           governorates=governorates,
+                           packages=packages,
+                           q=search, gov=gov,
+                           pkg_id=pkg_id, status=status)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,175 @@
+{% extends "shared/base.html" %}
+{% block title %}إدارة ميزات المدارس{% endblock %}
+{% block page_title %}إدارة ميزات المدارس{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">
+      <i class="bi bi-toggles2 me-2"></i>إدارة ميزات المدارس
+    </h1>
+    <p class="text-muted mb-0">
+      اختر مدرسة لإدارة وحداتها وميزاتها وباقتها. ابحث أو صفِّ حسب المحافظة أو الباقة أو الحالة.
+    </p>
+  </div>
+  <a href="{{ url_for('schools.packages_list') }}" class="btn btn-outline-primary btn-sm">
+    <i class="bi bi-collection me-1"></i>باقات الميزات
+  </a>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }} alert-dismissible fade show">
+    {{ msg }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+{% endwith %}
+
+{# ── Filters ─────────────────────────────────────────────────────────────── #}
+<div class="card mb-4">
+  <div class="card-body">
+    <form method="GET" action="{{ url_for('schools.features_overview') }}" class="row g-2 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label small mb-1">بحث (الاسم أو الرمز)</label>
+        <input type="text" name="q" class="form-control form-control-sm"
+               value="{{ q }}" placeholder="اسم المدرسة أو الكود…">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small mb-1">المحافظة</label>
+        <select name="governorate" class="form-select form-select-sm">
+          <option value="">كل المحافظات</option>
+          <option value="غير محدد" {{ 'selected' if gov == 'غير محدد' }}>غير محدد</option>
+          {% for g in governorates %}
+          <option value="{{ g }}" {{ 'selected' if gov == g }}>{{ g }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small mb-1">الباقة</label>
+        <select name="package_id" class="form-select form-select-sm">
+          <option value="">كل الباقات</option>
+          {% for pkg in packages %}
+          <option value="{{ pkg.id }}" {{ 'selected' if pkg_id == pkg.id }}>{{ pkg.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small mb-1">الحالة</label>
+        <select name="status" class="form-select form-select-sm">
+          <option value="">الكل</option>
+          <option value="active"   {{ 'selected' if status == 'active' }}>نشطة</option>
+          <option value="inactive" {{ 'selected' if status == 'inactive' }}>غير نشطة</option>
+        </select>
+      </div>
+      <div class="col-12 d-flex gap-2 mt-2">
+        <button type="submit" class="btn btn-primary btn-sm">
+          <i class="bi bi-search me-1"></i>تطبيق
+        </button>
+        <a href="{{ url_for('schools.features_overview') }}" class="btn btn-outline-secondary btn-sm">
+          <i class="bi bi-arrow-counterclockwise me-1"></i>إعادة تعيين
+        </a>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ── School list ─────────────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <h6 class="mb-0"><i class="bi bi-buildings me-2"></i>المدارس</h6>
+    <span class="badge bg-secondary">{{ pagination.total }} مدرسة</span>
+  </div>
+  <div class="card-body p-0">
+    {% if school_rows %}
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0" style="font-size:14px">
+        <thead class="table-light">
+          <tr>
+            <th>المدرسة</th>
+            <th>الكود</th>
+            <th>المحافظة</th>
+            <th>الباقة</th>
+            <th class="text-center">الوحدات</th>
+            <th class="text-center">الميزات</th>
+            <th class="text-center">الحالة</th>
+            <th class="text-end">إجراء</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in school_rows %}
+          {% set s = row.school %}
+          <tr>
+            <td class="fw-600">{{ s.school_name_ar or s.school_name }}</td>
+            <td class="text-muted font-monospace small">{{ s.code or '—' }}</td>
+            <td>{{ s.governorate or 'غير محدد' }}</td>
+            <td>
+              {% if s.package %}
+              <span class="badge bg-primary"><i class="bi bi-box-seam me-1"></i>{{ s.package.name }}</span>
+              {% else %}
+              <span class="text-muted small">بدون باقة</span>
+              {% endif %}
+            </td>
+            <td class="text-center">
+              <span class="badge bg-info text-dark">{{ row.modules_enabled }}/{{ row.modules_total }}</span>
+            </td>
+            <td class="text-center">
+              <span class="badge bg-info text-dark">{{ row.features_enabled }}/{{ row.features_total }}</span>
+            </td>
+            <td class="text-center">
+              {% if s.is_active %}
+              <span class="badge bg-success">نشطة</span>
+              {% else %}
+              <span class="badge bg-secondary">متوقفة</span>
+              {% endif %}
+            </td>
+            <td class="text-end">
+              <a href="{{ url_for('schools.school_features', school_id=s.id) }}"
+                 class="btn btn-sm btn-primary">
+                <i class="bi bi-sliders me-1"></i>إدارة الميزات
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="p-4 text-center text-muted">
+      <i class="bi bi-inbox fs-3 d-block mb-2"></i>
+      لا توجد مدارس مطابقة لمعايير البحث.
+    </div>
+    {% endif %}
+  </div>
+
+  {% if pagination.pages and pagination.pages > 1 %}
+  <div class="card-footer">
+    <nav>
+      <ul class="pagination pagination-sm justify-content-center mb-0">
+        <li class="page-item {{ 'disabled' if not pagination.has_prev }}">
+          <a class="page-link"
+             href="{{ url_for('schools.features_overview', page=pagination.prev_num, q=q, governorate=gov, package_id=pkg_id, status=status) if pagination.has_prev else '#' }}">
+            السابق
+          </a>
+        </li>
+        {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+          {% if p %}
+          <li class="page-item {{ 'active' if p == pagination.page }}">
+            <a class="page-link"
+               href="{{ url_for('schools.features_overview', page=p, q=q, governorate=gov, package_id=pkg_id, status=status) }}">{{ p }}</a>
+          </li>
+          {% else %}
+          <li class="page-item disabled"><span class="page-link">…</span></li>
+          {% endif %}
+        {% endfor %}
+        <li class="page-item {{ 'disabled' if not pagination.has_next }}">
+          <a class="page-link"
+             href="{{ url_for('schools.features_overview', page=pagination.next_num, q=q, governorate=gov, package_id=pkg_id, status=status) if pagination.has_next else '#' }}">
+            التالي
+          </a>
+        </li>
+      </ul>
+    </nav>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

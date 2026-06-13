@@ -162,9 +162,14 @@ def build_config_from_form(form) -> dict:
 
 # ─── Apply package to school ──────────────────────────────────────────────────
 
-def apply_package_to_school(school_id: int, package) -> None:
+def apply_package_to_school(school_id: int, package) -> dict:
     """
     Snapshot a FeaturePackage onto a school.
+
+    This is the single, reusable package-application helper. It is used during
+    school creation, when changing/applying a package from the per-school
+    features page, and by any explicit reset-to-package action. Do not duplicate
+    this logic in routes.
 
     Copies the package config into:
       - SchoolModule rows  (via save_school_modules)
@@ -172,8 +177,16 @@ def apply_package_to_school(school_id: int, package) -> None:
       - SchoolStudentFormConfig row  (via module_configs.students)
       - SchoolModuleConfig rows      (via save_module_config for other modules)
 
-    Does NOT commit — caller must call db.session.commit().
+    The operation is an in-memory snapshot scoped strictly to ``school_id``;
+    it upserts (never duplicates) rows and does NOT commit — the caller must
+    call db.session.commit() so the whole unit of work stays atomic.
+
+    Returns a summary dict describing what was applied (for logging / flash).
+    Raises ValueError if ``package`` is falsy.
     """
+    if not package:
+        raise ValueError('apply_package_to_school requires a valid package')
+
     from app.models import db, SchoolStudentFormConfig
     from datetime import datetime as dt
 
@@ -183,17 +196,17 @@ def apply_package_to_school(school_id: int, package) -> None:
     modules_cfg = config.get('modules', {})
     if modules_cfg:
         enabled_modules = [k for k, v in modules_cfg.items() if v]
-        save_school_modules(school_id, enabled_modules)
     else:
-        save_school_modules(school_id, list(MODULES.keys()))  # fail-open
+        enabled_modules = list(MODULES.keys())  # fail-open
+    save_school_modules(school_id, enabled_modules)
 
     # ── Features ──────────────────────────────────────────────────────────────
     features_cfg = config.get('features', {})
     if features_cfg:
         enabled_features = [k for k, v in features_cfg.items() if v]
-        save_school_features(school_id, enabled_features)
     else:
-        save_school_features(school_id, list(FEATURES.keys()))  # fail-open
+        enabled_features = list(FEATURES.keys())  # fail-open
+    save_school_features(school_id, enabled_features)
 
     # ── Module configs ────────────────────────────────────────────────────────
     module_configs = config.get('module_configs', {})
@@ -216,9 +229,23 @@ def apply_package_to_school(school_id: int, package) -> None:
     row.updated_at      = dt.utcnow()
 
     # Save other module configs to SchoolModuleConfig table
+    applied_module_configs = 0
     for mk in CONFIGURABLE_MODULES:
         if mk in module_configs:
             save_module_config(school_id, mk, module_configs[mk])
+            applied_module_configs += 1
+
+    enabled_modules_set = {k for k in enabled_modules if k in MODULES}
+    enabled_features_set = {k for k in enabled_features if k in FEATURES}
+    return {
+        'package_id':        package.id,
+        'package_name':      package.name,
+        'enabled_modules':   len(enabled_modules_set),
+        'disabled_modules':  len(MODULES) - len(enabled_modules_set),
+        'enabled_features':  len(enabled_features_set),
+        'disabled_features': len(FEATURES) - len(enabled_features_set),
+        'module_configs':    applied_module_configs,
+    }
 
 
 # ─── Config summary helpers ────────────────────────────────────────────────────
