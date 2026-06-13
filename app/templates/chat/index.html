@@ -224,21 +224,49 @@
 
 <script>
 (function () {
-  /* ── Dropdown: Popper fixed strategy to escape table-responsive overflow ── */
-  if (typeof bootstrap !== 'undefined' && bootstrap.Dropdown) {
-    document.querySelectorAll('#groupsTableWrap [data-bs-toggle="dropdown"]').forEach(function (el) {
-      bootstrap.Dropdown.getOrCreateInstance(el, {
-        popperConfig: { strategy: 'fixed' }
-      });
-    });
-  }
-
-  /* ── Full-row navigation — skip clicks on interactive descendants ─────── */
+  /* ── Full-row navigation (no Bootstrap dep — attach immediately) ──────── */
   document.querySelectorAll('.group-row').forEach(function (row) {
     row.addEventListener('click', function (e) {
       if (e.target.closest('.dropdown, a, button, form')) return;
       var href = row.dataset.href;
       if (href) window.location.href = href;
+    });
+  });
+
+  /* ── Dropdown: must defer until after Bootstrap bundle loads (line 701) ─
+     The inline script executes before the Bootstrap <script> tag at the
+     bottom of <body>.  DOMContentLoaded fires after all synchronous scripts
+     have executed, so bootstrap.Dropdown is guaranteed to exist by then.    */
+  document.addEventListener('DOMContentLoaded', function () {
+    if (typeof bootstrap === 'undefined' || !bootstrap.Dropdown) return;
+
+    document.querySelectorAll('#groupsTableWrap [data-bs-toggle="dropdown"]').forEach(function (el) {
+      bootstrap.Dropdown.getOrCreateInstance(el, {
+        /*  popperConfig as a function: receives Bootstrap's RTL-aware default
+            config and returns a merged override — placement is preserved.    */
+        popperConfig: function (defaultConfig) {
+          var mods = (defaultConfig.modifiers || []).map(function (m) {
+            if (m.name === 'flip') {
+              return {
+                name: 'flip',
+                options: {
+                  /* allow the menu to flip to the top when space below is tight */
+                  fallbackPlacements: ['top-start', 'top-end', 'bottom-start', 'bottom-end'],
+                  boundary: 'clippingParents',
+                },
+              };
+            }
+            if (m.name === 'preventOverflow') {
+              return {
+                name: 'preventOverflow',
+                options: { rootBoundary: 'viewport', padding: 8 },
+              };
+            }
+            return m;  /* keep all other modifiers (offset, applyStyles, …) */
+          });
+          return Object.assign({}, defaultConfig, { strategy: 'fixed', modifiers: mods });
+        },
+      });
     });
   });
 })();
