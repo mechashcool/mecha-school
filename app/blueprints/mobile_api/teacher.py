@@ -35,7 +35,7 @@ Security rules
 from datetime import date, timedelta, timezone
 from datetime import datetime as _dt
 
-from flask import abort, g, request
+from flask import abort, g, jsonify, request
 from sqlalchemy import select
 
 from app.models import (
@@ -108,6 +108,47 @@ def _assert_exam_access(emp: Employee, exam_id: int) -> Exam:
     if exam.section_id not in _teacher_section_ids(emp):
         abort(403)
     return exam
+
+
+def _check_exam_conflict(school_id: int, academic_year_id: int, section_id: int,
+                         exam_date, exam_time, duration_minutes: int,
+                         exclude_exam_id: int | None = None) -> 'Exam | None':
+    """
+    Return the first Exam whose time range overlaps the proposed slot, or None.
+    Exams with null exam_time or null duration_minutes are skipped (cannot be time-compared).
+    Overlap rule: new_start < existing_end AND existing_start < new_end
+    """
+    q = Exam.query.filter(
+        Exam.school_id        == school_id,
+        Exam.academic_year_id == academic_year_id,
+        Exam.section_id       == section_id,
+        Exam.exam_date        == exam_date,
+        Exam.exam_time.isnot(None),
+        Exam.duration_minutes.isnot(None),
+    )
+    if exclude_exam_id:
+        q = q.filter(Exam.id != exclude_exam_id)
+
+    new_start = exam_time.hour * 60 + exam_time.minute
+    new_end   = new_start + duration_minutes
+
+    for e in q.all():
+        e_start = e.exam_time.hour * 60 + e.exam_time.minute
+        e_end   = e_start + e.duration_minutes
+        if new_start < e_end and e_start < new_end:
+            return e
+    return None
+
+
+def _conflict_dict(e: Exam) -> dict:
+    return {
+        'exam_id':          e.id,
+        'title':            e.display_name,
+        'subject_name':     e.subject.name if e.subject else None,
+        'exam_date':        e.exam_date.isoformat() if e.exam_date else None,
+        'exam_time':        e.exam_time.strftime('%H:%M') if e.exam_time else None,
+        'duration_minutes': e.duration_minutes,
+    }
 
 
 _DAY_NAMES = {
@@ -470,18 +511,107 @@ def teacher_exams():
                 'section':       e.section.name       if e.section else None,
                 'grade_name':    e.section.grade.name if e.section and e.section.grade else None,
                 'grade':         e.section.grade.name if e.section and e.section.grade else None,
-                'exam_date':     e.exam_date.isoformat() if e.exam_date else None,
-                'max_score':     float(e.max_marks),
-                'max_marks':     float(e.max_marks),
-                'pass_marks':    float(e.pass_marks),
-                'notes':         None,
-                'is_upcoming':   e.exam_date >= today if e.exam_date else None,
-                'result_count':  ExamResult.query.filter_by(exam_id=e.id).count(),
-                'created_at':    e.created_at.isoformat() if e.created_at else None,
+                'exam_date':       e.exam_date.isoformat() if e.exam_date else None,
+                'exam_time':       e.exam_time.strftime('%H:%M') if e.exam_time else None,
+                'duration_minutes': e.duration_minutes,
+                'max_score':       float(e.max_marks),
+                'max_marks':       float(e.max_marks),
+                'pass_marks':      float(e.pass_marks),
+                'notes':           None,
+                'is_upcoming':     e.exam_date >= today if e.exam_date else None,
+                'result_count':    ExamResult.query.filter_by(exam_id=e.id).count(),
+                'created_at':      e.created_at.isoformat() if e.created_at else None,
             }
             for e in exams
         ],
     )
+
+
+# ─── Conflict check (read-only) ───────────────────────────────────────────────
+
+@mobile_api_bp.route('/teacher/exams/check-conflict', methods=['GET'])
+@jwt_required()
+@role_required('teacher')
+def teacher_check_exam_conflict():
+    """
+    Check whether a proposed exam slot conflicts with existing exams for the same section.
+    Read-only — never modifies anything.
+
+    Query params:
+      section_id        int       required
+      exam_date         YYYY-MM-DD required
+      exam_time         HH:MM     required
+      duration_minutes  int       required
+      subject_id        int       optional (ignored in conflict logic, for caller context)
+      exclude_exam_id   int       optional (exclude this exam — useful for edit support)
+    """
+    emp = _get_employee()
+    if not emp:
+        return err('employee_profile_not_found', 404)
+
+    args = request.args
+
+    try:
+        section_id = int(args.get('section_id') or 0)
+    except (TypeError, ValueError):
+        return err('invalid section_id')
+    if not section_id:
+        return err('required_field_missing: section_id')
+    if section_id not in _teacher_section_ids(emp):
+        return err('forbidden — section not assigned to you', 403)
+
+    exam_date_s = (args.get('exam_date') or '').strip()
+    if not exam_date_s:
+        return err('required_field_missing: exam_date')
+    try:
+        exam_date_obj = _dt.strptime(exam_date_s, '%Y-%m-%d').date()
+    except ValueError:
+        return err('invalid exam_date — use YYYY-MM-DD')
+
+    exam_time_s = (args.get('exam_time') or '').strip()
+    if not exam_time_s:
+        return err('required_field_missing: exam_time')
+    try:
+        exam_time_obj = _dt.strptime(exam_time_s, '%H:%M').time()
+    except ValueError:
+        return err('invalid exam_time — use HH:MM')
+
+    try:
+        dur = int(args.get('duration_minutes') or 0)
+        if dur <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return err('duration_minutes must be a positive integer')
+
+    try:
+        exclude_id = int(args['exclude_exam_id']) if args.get('exclude_exam_id') else None
+    except (TypeError, ValueError):
+        return err('invalid exclude_exam_id')
+
+    user   = g.mobile_user
+    school = user.school
+    year   = school.current_year if school else None
+    if not year:
+        return err('no_active_academic_year', 400)
+
+    conflict = _check_exam_conflict(
+        school_id        = emp.school_id,
+        academic_year_id = year.id,
+        section_id       = section_id,
+        exam_date        = exam_date_obj,
+        exam_time        = exam_time_obj,
+        duration_minutes = dur,
+        exclude_exam_id  = exclude_id,
+    )
+
+    if conflict:
+        return ok(
+            has_conflict = True,
+            available    = False,
+            message      = 'There is another exam for this section at the same time',
+            conflict     = _conflict_dict(conflict),
+        )
+    return ok(has_conflict=False, available=True)
 
 
 # ─── Create exam ──────────────────────────────────────────────────────────────
@@ -518,6 +648,8 @@ def teacher_create_exam():
     max_marks    = payload.get('max_score') if payload.get('max_score') is not None else payload.get('max_marks', 100)
     pass_marks   = payload.get('pass_marks', 50)
     exam_type_id = payload.get('exam_type_id')
+    exam_time_s  = (payload.get('exam_time') or '').strip() or None
+    dur_raw      = payload.get('duration_minutes')
 
     # Per-field validation with spec-format errors
     if not title:
@@ -534,6 +666,24 @@ def teacher_create_exam():
             return err('max_score must be greater than 0')
     except (TypeError, ValueError):
         return err('invalid value: max_score')
+
+    # Parse optional exam_time
+    exam_time_obj = None
+    if exam_time_s:
+        try:
+            exam_time_obj = _dt.strptime(exam_time_s, '%H:%M').time()
+        except ValueError:
+            return err('invalid exam_time — use HH:MM')
+
+    # Parse optional duration_minutes
+    dur_val = None
+    if dur_raw is not None:
+        try:
+            dur_val = int(dur_raw)
+            if dur_val <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return err('duration_minutes must be a positive integer')
 
     # Security: teacher must have access to the section
     if section_id not in _teacher_section_ids(emp):
@@ -564,12 +714,32 @@ def teacher_create_exam():
     if not year:
         return err('no_active_academic_year', 400)
 
+    # Conflict check — only when both exam_time and duration_minutes are provided
+    if exam_time_obj is not None and dur_val is not None:
+        conflict = _check_exam_conflict(
+            school_id        = emp.school_id,
+            academic_year_id = year.id,
+            section_id       = section_id,
+            exam_date        = exam_date_obj,
+            exam_time        = exam_time_obj,
+            duration_minutes = dur_val,
+        )
+        if conflict:
+            return jsonify({
+                'ok':      False,
+                'error':   'exam_time_conflict',
+                'message': 'There is another exam for this section at the same time',
+                'conflict': _conflict_dict(conflict),
+            }), 409
+
     new_exam = Exam(
         school_id        = emp.school_id,
         academic_year_id = year.id,
         section_id       = section_id,
         subject_id       = subject_id,
         exam_date        = exam_date_obj,
+        exam_time        = exam_time_obj,
+        duration_minutes = dur_val,
         max_marks        = max_marks_val,
         pass_marks       = float(pass_marks),
         exam_name        = title,
@@ -591,12 +761,14 @@ def teacher_create_exam():
             'section_name': new_exam.section.name if new_exam.section else None,
             'section':      new_exam.section.name if new_exam.section else None,
             'grade_name':   new_exam.section.grade.name if new_exam.section and new_exam.section.grade else None,
-            'exam_date':    new_exam.exam_date.isoformat(),
-            'max_score':    float(new_exam.max_marks),
-            'max_marks':    float(new_exam.max_marks),
-            'pass_marks':   float(new_exam.pass_marks),
-            'notes':        None,
-            'created_at':   new_exam.created_at.isoformat() if new_exam.created_at else None,
+            'exam_date':        new_exam.exam_date.isoformat(),
+            'exam_time':        new_exam.exam_time.strftime('%H:%M') if new_exam.exam_time else None,
+            'duration_minutes': new_exam.duration_minutes,
+            'max_score':        float(new_exam.max_marks),
+            'max_marks':        float(new_exam.max_marks),
+            'pass_marks':       float(new_exam.pass_marks),
+            'notes':            None,
+            'created_at':       new_exam.created_at.isoformat() if new_exam.created_at else None,
         },
     ), 201
 
@@ -639,6 +811,8 @@ def teacher_exam_detail(exam_id):
             'grade_name':       exam.section.grade.name if exam.section and exam.section.grade else None,
             'grade':            exam.section.grade.name if exam.section and exam.section.grade else None,
             'exam_date':        exam.exam_date.isoformat() if exam.exam_date else None,
+            'exam_time':        exam.exam_time.strftime('%H:%M') if exam.exam_time else None,
+            'duration_minutes': exam.duration_minutes,
             'max_score':        float(exam.max_marks),
             'max_marks':        float(exam.max_marks),
             'pass_marks':       float(exam.pass_marks),
