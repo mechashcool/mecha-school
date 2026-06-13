@@ -300,10 +300,16 @@ def get_school_config(school_id: int | None) -> SchoolConfig:
     Return a SchoolConfig for the given school.
     Pass None (super admin / unauthenticated) to get a NullSchoolConfig that
     always returns True/False (no restrictions).
+
+    The instance is memoized per request (keyed by school_id) so its internal
+    lazy per-module cache is shared by every caller in the same request
+    instead of re-querying SchoolModuleConfig per caller.
     """
     if not school_id:
         return NullSchoolConfig()
-    return SchoolConfig(school_id)
+    from app.utils.request_cache import request_memo
+    return request_memo(('school_cfg', school_id),
+                        lambda: SchoolConfig(school_id))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

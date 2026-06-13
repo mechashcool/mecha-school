@@ -227,23 +227,40 @@ def get_enabled_features(school_id: int | None) -> set:
     all_keys = set(FEATURES.keys())
     if school_id is None:
         return all_keys
-    from app.models import SchoolFeature
-    rows = (SchoolFeature.query
-            .execution_options(bypass_tenant_scope=True)
-            .filter_by(school_id=school_id)
-            .all())
-    if not rows:
-        return all_keys  # Existing school with no feature config → grant all
-    # Apply parent-module filter to enabled rows.
-    from app.utils.modules import is_module_enabled
-    enabled = set()
-    for r in rows:
-        if not r.is_enabled:
-            continue
-        module_key = FEATURES.get(r.feature_key, {}).get("module", "")
-        if not module_key or is_module_enabled(school_id, module_key):
-            enabled.add(r.feature_key)
-    return enabled
+
+    from app.utils.request_cache import request_memo
+
+    def _load():
+        from app.models import SchoolFeature
+        rows = (SchoolFeature.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter_by(school_id=school_id)
+                .all())
+        if not rows:
+            return all_keys  # Existing school with no feature config → grant all
+        # Apply parent-module filter to enabled rows. Module flags are loaded
+        # ONCE for the whole school; the per-feature check is in memory only —
+        # same semantics as is_module_enabled (missing row → enabled).
+        from app.utils.modules import MODULES, get_module_flags
+        flags = get_module_flags(school_id)
+
+        def _module_on(module_key: str) -> bool:
+            if module_key not in MODULES:
+                return True
+            if module_key not in flags:
+                return True
+            return flags[module_key]
+
+        enabled = set()
+        for r in rows:
+            if not r.is_enabled:
+                continue
+            module_key = FEATURES.get(r.feature_key, {}).get("module", "")
+            if not module_key or _module_on(module_key):
+                enabled.add(r.feature_key)
+        return enabled
+
+    return request_memo(('enabled_features', school_id), _load)
 
 
 def save_school_features(school_id: int, enabled_keys: list) -> None:

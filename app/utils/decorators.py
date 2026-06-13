@@ -228,8 +228,12 @@ def get_current_school():
       - All other users: return their own school (current_user.school).
 
     Returns None for global super-admin views or fresh installs.
+    Memoized per request; the key embeds the super-admin school selector (or
+    the user's own school id) so a different selection is never served a
+    cached value from another one.
     """
     from app.models import School
+    from app.utils.request_cache import request_memo
 
     if not current_user.is_authenticated:
         return None
@@ -237,25 +241,36 @@ def get_current_school():
     if current_user.is_super_admin:
         # Super admin — may have switched to a specific school
         active_id = session.get('active_school_id')
-        if active_id:
-            school = School.query.get(active_id)
-            if school:
-                return school
-        # No active switch means "global super-admin", not the first school.
-        return None
+
+        def _load_super():
+            if active_id:
+                school = School.query.get(active_id)
+                if school:
+                    return school
+            # No active switch means "global super-admin", not the first school.
+            return None
+
+        return request_memo(('current_school', 'super', active_id), _load_super)
 
     # Regular user — always their own school
-    return current_user.school
+    return request_memo(('current_school', 'user', current_user.school_id),
+                        lambda: current_user.school)
 
 
 def get_active_year(school_id):
     """
     Return the current AcademicYear for the given school, or None.
     Always returns the year with is_current=True — use for write operations.
+    Memoized per request, keyed by school_id.
     """
     from app.models import AcademicYear
-    return AcademicYear.query.execution_options(bypass_tenant_scope=True)\
-        .filter_by(school_id=school_id, is_current=True).first()
+    from app.utils.request_cache import request_memo
+
+    def _load():
+        return AcademicYear.query.execution_options(bypass_tenant_scope=True)\
+            .filter_by(school_id=school_id, is_current=True).first()
+
+    return request_memo(('active_year', school_id), _load)
 
 
 def get_view_year(school_id):
@@ -264,15 +279,22 @@ def get_view_year(school_id):
     If the user has selected a historical year in the session, returns that year.
     Falls back to the current active year (same as get_active_year).
     Use this for read/display queries; use get_active_year for write operations.
+    Memoized per request, keyed by (school_id, view_year_id) so historical-year
+    switching always resolves against the year selected for THIS request.
     """
     from flask import g, has_request_context
     from app.models import AcademicYear
+    from app.utils.request_cache import request_memo
 
     if has_request_context():
         view_yid = getattr(g, 'tenant_scope_view_year_id', None)
         if view_yid:
-            year = AcademicYear.query.execution_options(bypass_tenant_scope=True)\
-                .filter_by(id=view_yid, school_id=school_id).first()
+            def _load():
+                return AcademicYear.query\
+                    .execution_options(bypass_tenant_scope=True)\
+                    .filter_by(id=view_yid, school_id=school_id).first()
+
+            year = request_memo(('view_year', school_id, view_yid), _load)
             if year:
                 return year
     return get_active_year(school_id)

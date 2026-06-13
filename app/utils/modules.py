@@ -154,10 +154,29 @@ PRESETS: dict[str, dict] = {
 
 # ─── DB helpers ───────────────────────────────────────────────────────────────
 
+def get_module_flags(school_id: int) -> dict:
+    """Return ``{module_key: is_enabled}`` for every SchoolModule row of the
+    school, loaded ONCE per request (request-memoized).
+
+    Plain dict of str→bool — safe to keep on ``flask.g`` for the request.
+    """
+    from app.utils.request_cache import request_memo
+
+    def _load():
+        from app.models import SchoolModule
+        rows = (SchoolModule.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter_by(school_id=school_id)
+                .all())
+        return {r.module_key: bool(r.is_enabled) for r in rows}
+
+    return request_memo(('module_flags', school_id), _load)
+
+
 def is_module_enabled(school_id: int | None, module_key: str) -> bool:
     """Return True if module_key is enabled for school_id.
 
-    Rules:
+    Rules (unchanged):
     - school_id=None (super admin global view) → always True.
     - Unknown module_key (not in MODULES) → True (never block unknown routes).
     - No SchoolModule row exists → True (backward compat for existing schools).
@@ -167,14 +186,10 @@ def is_module_enabled(school_id: int | None, module_key: str) -> bool:
         return True
     if module_key not in MODULES:
         return True
-    from app.models import SchoolModule
-    row = (SchoolModule.query
-           .execution_options(bypass_tenant_scope=True)
-           .filter_by(school_id=school_id, module_key=module_key)
-           .first())
-    if row is None:
+    flags = get_module_flags(school_id)
+    if module_key not in flags:
         return True  # No configuration row → enabled by default
-    return bool(row.is_enabled)
+    return flags[module_key]
 
 
 def get_enabled_modules(school_id: int | None) -> set:
@@ -187,14 +202,10 @@ def get_enabled_modules(school_id: int | None) -> set:
     all_keys = set(MODULES.keys())
     if school_id is None:
         return all_keys
-    from app.models import SchoolModule
-    rows = (SchoolModule.query
-            .execution_options(bypass_tenant_scope=True)
-            .filter_by(school_id=school_id)
-            .all())
-    if not rows:
+    flags = get_module_flags(school_id)
+    if not flags:
         return all_keys  # Existing school with no module config → grant all
-    return {r.module_key for r in rows if r.is_enabled}
+    return {key for key, enabled in flags.items() if enabled}
 
 
 def save_school_modules(school_id: int, enabled_keys: list) -> None:
