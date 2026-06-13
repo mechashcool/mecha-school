@@ -207,50 +207,88 @@ def create_exam():
     if request.method == 'POST':
         exam_name  = request.form.get('exam_name', '').strip()
         section_id = request.form.get('section_id', type=int)
+        grade_id   = request.form.get('grade_id', type=int)
         subject_id = request.form.get('subject_id', type=int)
 
-        if not exam_name:
-            flash('يرجى إدخال اسم الاختبار.', 'danger')
+        def _form_error(msg):
+            flash(msg, 'danger')
             return render_template('grades/exam_form.html',
                                    exam_types=exam_types, subjects=subjects,
                                    sections=sections, grades=grades, years=years)
 
-        if _is_teacher():
-            allowed_sections = get_teacher_section_ids(current_user)
-            allowed_subjects = _teacher_subject_ids()
-            if section_id not in allowed_sections or subject_id not in allowed_subjects:
-                abort(403)
-        else:
+        if not exam_name:
+            return _form_error('يرجى إدخال اسم الاختبار.')
+
+        # ── Resolve target sections ──────────────────────────────────────────
+        # Section selected → single exam for it.
+        # No section       → one exam per section of the selected grade.
+        if section_id:
             section = Section.query.filter_by(id=section_id,
                                               academic_year_id=active_year.id).first()
             if not section:
-                flash('الشعبة المختارة غير صالحة.', 'danger')
-                return render_template('grades/exam_form.html',
-                                       exam_types=exam_types, subjects=subjects,
-                                       sections=sections, grades=grades, years=years)
-            subject = Subject.query.filter_by(id=subject_id,
-                                              grade_id=section.grade_id).first()
-            if not subject:
-                flash('المادة المختارة لا تنتمي إلى صف الشعبة المختارة.', 'danger')
-                return render_template('grades/exam_form.html',
-                                       exam_types=exam_types, subjects=subjects,
-                                       sections=sections, grades=grades, years=years)
+                return _form_error('الشعبة المختارة غير صالحة.')
+            target_sections = [section]
+            target_grade_id = section.grade_id
+        else:
+            if not grade_id:
+                return _form_error('يرجى اختيار الصف أو الشعبة.')
+            grade = Grade.query.filter_by(id=grade_id, school_id=school.id,
+                                          academic_year_id=active_year.id).first()
+            if not grade:
+                return _form_error('الصف المختار غير صالح.')
+            target_sections = (Section.query
+                               .filter_by(grade_id=grade.id,
+                                          academic_year_id=active_year.id)
+                               .order_by(Section.name).all())
+            if not target_sections:
+                return _form_error('لا توجد شعب مسجلة لهذا الصف — أنشئ شعبة أولاً '
+                                   'قبل إنشاء اختبار له.')
+            target_grade_id = grade.id
 
-        exam = Exam(
-            school_id        = school.id,
-            exam_name        = exam_name,
-            exam_type_id     = request.form.get('exam_type_id', type=int) or None,
-            subject_id       = subject_id,
-            section_id       = section_id,
-            academic_year_id = request.form.get('academic_year_id', type=int),
-            exam_date        = dt.strptime(request.form.get('exam_date'), '%Y-%m-%d').date(),
-            max_marks        = float(request.form.get('max_marks', 100)),
-            pass_marks       = float(request.form.get('pass_marks', 50)),
-        )
-        db.session.add(exam)
+        if _is_teacher():
+            allowed_sections = get_teacher_section_ids(current_user)
+            allowed_subjects = _teacher_subject_ids()
+            if subject_id not in allowed_subjects:
+                abort(403)
+            # Teachers may only create exams for sections assigned to them.
+            target_sections = [s for s in target_sections if s.id in allowed_sections]
+            if not target_sections:
+                abort(403)
+        else:
+            subject = Subject.query.filter_by(id=subject_id,
+                                              grade_id=target_grade_id).first()
+            if not subject:
+                return _form_error('المادة المختارة لا تنتمي إلى الصف المختار.')
+
+        exam_type_id = request.form.get('exam_type_id', type=int) or None
+        year_id      = request.form.get('academic_year_id', type=int)
+        exam_date    = dt.strptime(request.form.get('exam_date'), '%Y-%m-%d').date()
+        max_marks    = float(request.form.get('max_marks', 100))
+        pass_marks   = float(request.form.get('pass_marks', 50))
+
+        created = []
+        for sec in target_sections:
+            exam = Exam(
+                school_id        = school.id,
+                exam_name        = exam_name,
+                exam_type_id     = exam_type_id,
+                subject_id       = subject_id,
+                section_id       = sec.id,
+                academic_year_id = year_id,
+                exam_date        = exam_date,
+                max_marks        = max_marks,
+                pass_marks       = pass_marks,
+            )
+            db.session.add(exam)
+            created.append(exam)
         db.session.commit()
-        flash('تم إنشاء الاختبار. يمكنك الآن إدخال الدرجات.', 'success')
-        return redirect(url_for('grades.enter_results', exam_id=exam.id))
+
+        if section_id:
+            flash('تم إنشاء الاختبار بنجاح.', 'success')
+            return redirect(url_for('grades.enter_results', exam_id=created[0].id))
+
+        flash(f'تم إنشاء الاختبار لجميع الشعب بنجاح ({len(created)} شعبة).', 'success')
+        return redirect(url_for('grades.index'))
 
     return render_template('grades/exam_form.html',
                            exam_types=exam_types, subjects=subjects,

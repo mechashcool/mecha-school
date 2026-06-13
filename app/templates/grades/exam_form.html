@@ -45,8 +45,8 @@
               </select>
             </div>
             <div class="col-md-4">
-              <label class="form-label">الصف</label>
-              <select id="grade-select" class="form-select">
+              <label class="form-label">الصف <span class="text-danger">*</span></label>
+              <select name="grade_id" id="grade-select" class="form-select" required>
                 <option value="">— اختر الصف —</option>
                 {% for g in grades %}
                 <option value="{{ g.id }}" data-stage="{{ g.stage or '' }}">{{ g.name }}</option>
@@ -54,15 +54,16 @@
               </select>
             </div>
             <div class="col-md-4">
-              <label class="form-label">الشعبة <span class="text-danger">*</span></label>
-              <select name="section_id" id="section-select" class="form-select" required>
-                <option value="">— اختر الشعبة —</option>
+              <label class="form-label">الشعبة <span class="text-muted small">(اختياري)</span></label>
+              <select name="section_id" id="section-select" class="form-select">
+                <option value="">كل الشعب</option>
                 {% for sec in sections %}
                 <option value="{{ sec.id }}" data-grade="{{ sec.grade_id }}">
                   {{ sec.grade.name }} — شعبة {{ sec.name }}
                 </option>
                 {% endfor %}
               </select>
+              <div class="form-text">اترك الحقل على «كل الشعب» لإنشاء الاختبار لكل شعب الصف المختار.</div>
             </div>
 
             {# ── Row 3: Subject (filtered by grade) ──────────────────────── #}
