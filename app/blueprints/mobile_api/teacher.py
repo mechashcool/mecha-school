@@ -13,6 +13,8 @@ GET  /teacher/students/<id>            student profile (only allowed sections)
 GET  /teacher/schedule                 my weekly timetable (subject_id, section_id, day_label included)
 GET  /teacher/my-attendance            my own employee-attendance records + summary (current academic year)
 GET  /teacher/exams                    exams for my sections (subject_id, section_id, title, max_score)
+GET  /teacher/exams/check-conflict     read-only time-overlap check (section_id, exam_date, exam_time, duration_minutes)
+GET  /teacher/exams/check-day          read-only same-day exams for a section (section_id, exam_date)
 POST /teacher/exams                    create an exam — accepts title + max_score; validates subject assignment
 GET  /teacher/exams/<id>               exam detail + entered results (subject_id, section_id, title)
 POST /teacher/exams/<id>/results       bulk-upsert grade entries (accepts score/note or marks/notes)
@@ -735,6 +737,101 @@ def teacher_check_exam_conflict():
             conflict     = _conflict_dict(conflict),
         )
     return ok(has_conflict=False, available=True)
+
+
+# ─── Same-day exam lookup (read-only, no time required) ──────────────────────
+
+@mobile_api_bp.route('/teacher/exams/check-day', methods=['GET'])
+@jwt_required()
+@role_required('teacher')
+def teacher_check_exam_day():
+    """
+    Return all exams already scheduled for a given section on a given date,
+    regardless of subject or exam time.
+
+    This is a soft informational check only — it never blocks creation.
+    The existing /teacher/exams/check-conflict endpoint (which requires
+    exam_time + duration_minutes) is what drives the POST 409 hard block.
+
+    Query params:
+      section_id  int        required
+      exam_date   YYYY-MM-DD required
+
+    Success response:
+      {
+        "ok": true,
+        "has_exams_same_day": true,
+        "same_day_exams": [
+          {"exam_id": 15, "title": "...", "subject_name": "...",
+           "exam_date": "2026-06-14", "exam_time": "09:00",
+           "duration_minutes": 45}
+        ]
+      }
+    Empty:
+      {"ok": true, "has_exams_same_day": false, "same_day_exams": []}
+    """
+    emp = _get_employee()
+    if not emp:
+        return err('employee_profile_not_found', 404)
+
+    args = request.args
+
+    try:
+        section_id = int(args.get('section_id') or 0)
+    except (TypeError, ValueError):
+        return err('invalid section_id')
+    if not section_id:
+        return err('required_field_missing: section_id')
+    if section_id not in _teacher_section_ids(emp):
+        return err('forbidden — section not assigned to you', 403)
+
+    exam_date_s = (args.get('exam_date') or '').strip()
+    if not exam_date_s:
+        return err('required_field_missing: exam_date')
+    try:
+        exam_date_obj = _dt.strptime(exam_date_s, '%Y-%m-%d').date()
+    except ValueError:
+        return err('invalid exam_date — use YYYY-MM-DD')
+
+    user   = g.mobile_user
+    school = user.school
+    year   = school.current_year if school else None
+    if not year:
+        return err('no_active_academic_year', 400)
+
+    # Explicit school + year + section + date scope — never relies on global
+    # ORM tenant filter, which is inert for mobile (JWT login happens inside
+    # the view, after before_request has already cached the scope).
+    exams = (Exam.query
+             .filter(
+                 Exam.school_id        == emp.school_id,
+                 Exam.academic_year_id == year.id,
+                 Exam.section_id       == section_id,
+                 Exam.exam_date        == exam_date_obj,
+             )
+             .all())
+
+    # Sort: exams with a known time first (ascending), then timeless, then by id.
+    exams.sort(key=lambda e: (
+        1 if e.exam_time is None else 0,
+        (e.exam_time.hour * 60 + e.exam_time.minute) if e.exam_time else 0,
+        e.id,
+    ))
+
+    return ok(
+        has_exams_same_day=bool(exams),
+        same_day_exams=[
+            {
+                'exam_id':          e.id,
+                'title':            e.display_name,
+                'subject_name':     e.subject.name if e.subject else None,
+                'exam_date':        e.exam_date.isoformat() if e.exam_date else None,
+                'exam_time':        e.exam_time.strftime('%H:%M') if e.exam_time else None,
+                'duration_minutes': e.duration_minutes,
+            }
+            for e in exams
+        ],
+    )
 
 
 # ─── Create exam ──────────────────────────────────────────────────────────────
