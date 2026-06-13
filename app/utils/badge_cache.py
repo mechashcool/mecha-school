@@ -53,6 +53,21 @@ def _evict(now):
         _store.pop(next(iter(_store)))
 
 
+def invalidate(predicate):
+    """Drop every cached entry whose key satisfies ``predicate(key)``.
+
+    Used to force a fresh recompute after a state-changing action so a badge
+    never lags behind the database for the user who just acted. ``predicate``
+    runs under the lock and must be cheap and side-effect free. Returns the
+    number of entries removed.
+    """
+    with _lock:
+        doomed = [k for k in _store if predicate(k)]
+        for k in doomed:
+            del _store[k]
+    return len(doomed)
+
+
 def clear():
     """Drop all entries (used by tests)."""
     with _lock:

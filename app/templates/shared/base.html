@@ -639,9 +639,9 @@
   </button>
   <div class="topbar-title">{% block page_title %}{% endblock %}</div>
   <div class="topbar-actions">
-    <a href="{{ url_for('notifications.index') }}" class="topbar-btn">
+    <a href="{{ url_for('notifications.index') }}" class="topbar-btn" data-badge-dot="notifications">
       <i class="bi bi-bell"></i>
-      {% if unread_notifications > 0 %}<span class="badge-dot"></span>{% endif %}
+      <span class="badge-dot"{% if not unread_notifications %} style="display:none"{% endif %}></span>
     </a>
     <a href="{{ url_for('auth.profile') }}" class="topbar-btn">
       <i class="bi bi-person"></i>
@@ -765,6 +765,12 @@
       if (e.target && e.target.tagName === 'FORM') ensureFormToken(e.target);
     }, true);
 
+    // A state-changing request likely changed a badge-relevant item; nudge the
+    // live-badge script to refresh promptly instead of waiting for the next poll.
+    function badgeChanged() {
+      if (window.MechaBadges && window.MechaBadges.refreshSoon) window.MechaBadges.refreshSoon();
+    }
+
     // Add the CSRF header to same-origin, state-changing fetch() requests.
     const SAFE = /^(GET|HEAD|OPTIONS|TRACE)$/i;
     const _fetch = window.fetch;
@@ -777,12 +783,15 @@
           const url = new URL((typeof input === 'string' ? input : input.url), window.location.href);
           sameOrigin = (url.origin === window.location.origin);
         } catch (_) { /* relative URL → same origin */ }
-        if (!SAFE.test(method) && sameOrigin) {
+        const unsafe = !SAFE.test(method) && sameOrigin;
+        if (unsafe) {
           const headers = new Headers(init.headers || (typeof input !== 'string' && input ? input.headers : undefined) || {});
           if (!headers.has('X-CSRFToken')) headers.set('X-CSRFToken', token);
           init.headers = headers;
         }
-        return _fetch(input, init);
+        const resp = _fetch(input, init);
+        if (unsafe) { resp.then(badgeChanged, badgeChanged); }  // refresh once it settles
+        return resp;
       };
     }
 
@@ -796,11 +805,89 @@
     XMLHttpRequest.prototype.send = function () {
       if (this.__csrfUnsafe) {
         try { this.setRequestHeader('X-CSRFToken', token); } catch (_) {}
+        try { this.addEventListener('loadend', badgeChanged); } catch (_) {}
       }
       return _send.apply(this, arguments);
     };
   })();
 </script>
+
+{% if current_user.is_authenticated %}
+<script>
+  // ── Live badge sync ───────────────────────────────────────────────────────
+  // Polls a lightweight JSON endpoint and updates the sidebar/topbar badges in
+  // place — no full page reload. Counts are computed server-side inside the
+  // user's own school/role scope (see app/blueprints/live), so isolation is
+  // preserved; the client only ever receives its own integer counts.
+  (function () {
+    var ENDPOINT = "{{ url_for('live.badges') }}";
+    var INTERVAL = 12000;        // base cadence while the tab is visible (ms)
+    var timer = null, inflight = false;
+
+    function apply(counts) {
+      counts = counts || {};
+      // Derived total for the collapsible "communication" group toggle.
+      var map = {
+        notifications: counts.unread_notifications || 0,
+        complaints:    counts.pending_complaints || 0,
+        leave:         counts.pending_leave_requests || 0,
+        chat:          counts.unread_chat || 0,
+        comm_total:   (counts.unread_chat || 0)
+                    + (counts.pending_complaints || 0)
+                    + (counts.pending_leave_requests || 0)
+      };
+      Object.keys(map).forEach(function (key) {
+        var n = map[key] || 0;
+        document.querySelectorAll('.nav-badge[data-badge="' + key + '"]').forEach(function (span) {
+          span.textContent = n;
+          span.style.display = n > 0 ? '' : 'none';
+        });
+      });
+      document.querySelectorAll('[data-badge-dot]').forEach(function (el) {
+        var n = map[el.getAttribute('data-badge-dot')] || 0;
+        var dot = el.querySelector('.badge-dot');
+        if (dot) dot.style.display = n > 0 ? '' : 'none';
+      });
+    }
+
+    function poll() {
+      if (inflight || document.hidden) return;
+      inflight = true;
+      fetch(ENDPOINT, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+        .then(function (r) {
+          if (r.status === 401 || r.status === 403) { stop(); return null; } // session ended
+          return r.ok ? r.json() : null;
+        })
+        .then(function (data) { if (data && data.counts) apply(data.counts); })
+        .catch(function () { /* transient error — retry on next tick */ })
+        .finally(function () { inflight = false; });
+    }
+
+    function start() { if (!timer) timer = setInterval(poll, INTERVAL); }
+    function stop()  { if (timer) { clearInterval(timer); timer = null; } }
+
+    // Re-sync on the moments that matter: returning to the tab, regaining focus,
+    // and back/forward-cache restores — so an action taken elsewhere reflects fast.
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) stop(); else { poll(); start(); }
+    });
+    window.addEventListener('focus', poll);
+    window.addEventListener('pageshow', poll);
+
+    // Fire a quick refresh after a local action: once almost immediately, then
+    // once more just past the live-cache TTL, so the new state is read even if
+    // the first refresh raced the cache. The server also invalidates this
+    // user's keys on the acting worker, so the first refresh is usually fresh.
+    function refreshSoon() { setTimeout(poll, 350); setTimeout(poll, 2600); }
+
+    // Hooks for flows that change a badge-relevant item.
+    window.MechaBadges = { refresh: poll, refreshSoon: refreshSoon };
+
+    poll();   // initial sync on load (corrects any stale server-rendered value)
+    start();
+  })();
+</script>
+{% endif %}
 
 {% block extra_js %}{% endblock %}
 </body>

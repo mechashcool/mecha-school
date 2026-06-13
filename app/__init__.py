@@ -104,6 +104,8 @@ def create_app(config_name=None):
     from app.blueprints.student_records   import student_records_bp
     from app.blueprints.buildings         import buildings_bp
     from app.blueprints.shifts            import shifts_bp
+    # Live badge polling — lightweight JSON for in-page badge sync
+    from app.blueprints.live              import live_bp
 
     app.register_blueprint(auth_bp,          url_prefix='/auth')
     app.register_blueprint(admin_bp,         url_prefix='/admin')
@@ -137,6 +139,7 @@ def create_app(config_name=None):
     app.register_blueprint(student_records_bp,     url_prefix='/student-registration-records')
     app.register_blueprint(buildings_bp,           url_prefix='/buildings')
     app.register_blueprint(shifts_bp,              url_prefix='/attendance-shifts')
+    app.register_blueprint(live_bp,                url_prefix='/live')
 
     # ── CSRF exemptions ───────────────────────────────────────────────────────
     # These blueprints authenticate via request headers (JWT bearer token or a
@@ -208,34 +211,6 @@ def create_app(config_name=None):
 
         if not skip_db_context:
             if current_user.is_authenticated:
-                try:
-                    from flask import g as _g
-                    from app.utils import badge_cache
-
-                    def _load_unread_notifications():
-                        from app.models import Notification, NotificationRead
-                        from app.utils.notification_visibility import notification_visible_to
-                        read_ids = db.session.query(NotificationRead.notification_id)\
-                                     .filter_by(user_id=current_user.id).subquery()
-                        return Notification.query\
-                            .filter(notification_visible_to(current_user))\
-                            .filter(Notification.id.notin_(read_ids))\
-                            .count()
-
-                    # Key dimensions: user (read-state + direct targeting),
-                    # tenant-scope school id (auto-scopes the Notification
-                    # query; changes when super admin switches school), and
-                    # role (drives the visibility filter).
-                    _badge_role = current_user.role.name if current_user.role else None
-                    _badge_sid  = getattr(_g, 'tenant_scope_school_id', None)
-                    unread_count = badge_cache.get_or_set(
-                        ('notif', current_user.id, _badge_sid, _badge_role),
-                        _load_unread_notifications,
-                    )
-                except Exception:
-                    db.session.rollback()
-                    unread_count = 0
-
                 try:
                     from app.models import AcademicYear, School, SchoolSettings
                     from app.utils.decorators import (
@@ -322,90 +297,21 @@ def create_app(config_name=None):
             from app.utils.school_config import NullSchoolConfig
             school_cfg = NullSchoolConfig()
 
-        # ── Sidebar badge counts ──────────────────────────────────────────────
-        # Complaint + leave request + chat-unread counters injected for badge rendering.
-        # Skipped for unauthenticated requests; each count wrapped in its own guard.
+        # ── Sidebar / topbar badge counts ──────────────────────────────────────
+        # All four counters (notifications, complaints, leave requests, unread
+        # chat) come from the shared helper so the live-polling endpoint and the
+        # server-rendered page can never disagree on logic or isolation rules.
+        # Page render uses the established 45 s badge_cache keys (live=False);
+        # each count is individually guarded and falls back to 0 on error.
         if current_user.is_authenticated and not skip_db_context:
-            try:
-                from app.models import (
-                    Complaint, LeaveRequest,
-                    ChatMessage, ChatMessageRead, ChatRoomMember,
-                )
-                _uid  = current_user.id
-                _sid  = (current_school.id
-                         if current_school and hasattr(current_school, 'id')
-                         else getattr(current_user, 'school_id', None))
-                _role = current_user.role.name if current_user.role else None
-
-                from app.utils import badge_cache
-
-                # Both queries below use bypass_tenant_scope +
-                # include_all_years with explicit school filters, so the
-                # counts depend only on (school, [parent user]) — the view
-                # year is intentionally NOT part of the key.
-                if _sid:
-                    if current_user.is_admin_user:
-                        def _load_admin_complaints():
-                            return (Complaint.query
-                                    .execution_options(bypass_tenant_scope=True, include_all_years=True)
-                                    .filter(Complaint.school_id == _sid,
-                                            Complaint.status.in_(['new', 'under_review']))
-                                    .count())
-
-                        def _load_admin_leaves():
-                            return (LeaveRequest.query
-                                    .execution_options(bypass_tenant_scope=True, include_all_years=True)
-                                    .filter(LeaveRequest.school_id == _sid,
-                                            LeaveRequest.status == 'pending')
-                                    .count())
-
-                        sidebar_counts['pending_complaints'] = badge_cache.get_or_set(
-                            ('complaints', _sid, 'admin'), _load_admin_complaints)
-                        sidebar_counts['pending_leave_requests'] = badge_cache.get_or_set(
-                            ('leave', _sid, 'admin'), _load_admin_leaves)
-                    elif _role == 'parent':
-                        def _load_parent_complaints():
-                            return (Complaint.query
-                                    .execution_options(bypass_tenant_scope=True, include_all_years=True)
-                                    .filter(Complaint.school_id == _sid,
-                                            Complaint.parent_id == _uid,
-                                            Complaint.status.in_(['new', 'under_review']))
-                                    .count())
-
-                        def _load_parent_leaves():
-                            return (LeaveRequest.query
-                                    .execution_options(bypass_tenant_scope=True, include_all_years=True)
-                                    .filter(LeaveRequest.school_id == _sid,
-                                            LeaveRequest.parent_id == _uid,
-                                            LeaveRequest.status == 'pending')
-                                    .count())
-
-                        sidebar_counts['pending_complaints'] = badge_cache.get_or_set(
-                            ('complaints', _sid, 'parent', _uid), _load_parent_complaints)
-                        sidebar_counts['pending_leave_requests'] = badge_cache.get_or_set(
-                            ('leave', _sid, 'parent', _uid), _load_parent_leaves)
-
-                if 'chat' in enabled_modules:
-                    def _load_unread_chat():
-                        _member_rooms = (db.session.query(ChatRoomMember.room_id)
-                                         .filter_by(user_id=_uid))
-                        _read_msgs = (db.session.query(ChatMessageRead.message_id)
-                                      .filter_by(user_id=_uid))
-                        return (ChatMessage.query
-                                .filter(
-                                    ChatMessage.room_id.in_(_member_rooms),
-                                    ChatMessage.is_deleted == False,
-                                    ChatMessage.sender_user_id != _uid,
-                                    ChatMessage.id.notin_(_read_msgs),
-                                )
-                                .count()) or 0
-
-                    # Chat tables are not tenant-scoped; membership and read
-                    # state are strictly per user → user id is the whole key.
-                    sidebar_counts['unread_chat'] = badge_cache.get_or_set(
-                        ('chat', _uid), _load_unread_chat)
-            except Exception:
-                db.session.rollback()
+            from app.utils.sidebar_badges import get_badge_counts
+            _counts = get_badge_counts(live=False)
+            unread_count = _counts['unread_notifications']
+            sidebar_counts = {
+                'pending_complaints':     _counts['pending_complaints'],
+                'pending_leave_requests': _counts['pending_leave_requests'],
+                'unread_chat':            _counts['unread_chat'],
+            }
 
         # True when a school user is viewing a historical (non-current) year.
         # Injected into all templates so they can hide write-action buttons.
@@ -494,6 +400,29 @@ def create_app(config_name=None):
                 'Strict-Transport-Security',
                 'max-age=31536000; includeSubDomains',
             )
+        return response
+
+    # ── Badge cache invalidation on state-changing requests ───────────────────
+    # When the logged-in user performs an action that can change one of their
+    # own badge counts (read / reply / resolve / approve / reject / …), drop
+    # their cached counts so the very next badge poll — or the page rendered
+    # right after a redirect — reflects reality immediately on this worker,
+    # rather than waiting out the cache TTL. Scoped to this user's keys only,
+    # so it adds no recompute traffic for anyone else and leaves the read-only
+    # navigation cache for unrelated users intact.
+    @app.after_request
+    def _invalidate_badges_after_write(response):
+        if request.method in ('GET', 'HEAD', 'OPTIONS', 'TRACE'):
+            return response
+        if request.endpoint == 'live.badges':
+            return response
+        try:
+            from flask_login import current_user
+            if current_user.is_authenticated:
+                from app.utils.sidebar_badges import invalidate_user_badges
+                invalidate_user_badges(current_user)
+        except Exception:
+            pass
         return response
 
     # ── Upload folder ─────────────────────────────────────────────────────────

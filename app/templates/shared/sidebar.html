@@ -7,6 +7,13 @@
    All permission / module visibility conditions are preserved verbatim
    from the flat layout — only the grouping/markup changed.
    ───────────────────────────────────────────────────────────────────── #}
+{# Live-updatable badge. Rendered for every badge slot (hidden when zero) and
+   tagged with data-badge so the polling script can update it in place without
+   a page reload. Multiple slots may share a key (e.g. "notifications" appears
+   in several nav branches); the script updates all of them. #}
+{% macro nav_badge(key, count) -%}
+<span class="nav-badge" data-badge="{{ key }}"{% if not count %} style="display:none"{% endif %}>{{ count or 0 }}</span>
+{%- endmacro %}
 <nav id="sidebar">
   <div class="sidebar-logo">
     {% set _sidebar_logo = resolve_photo_url(school.logo_path) if school and school.logo_path else None %}
@@ -114,9 +121,7 @@
       <a href="{{ _complaints_url }}"
          class="{{ 'active' if request.endpoint and request.endpoint.startswith('parent.complaint') }}">
         <i class="bi bi-chat-left-text-fill"></i> &#1575;&#1604;&#1588;&#1603;&#1575;&#1608;&#1609;
-        {% if sidebar_counts.pending_complaints > 0 %}
-        <span class="nav-badge">{{ sidebar_counts.pending_complaints }}</span>
-        {% endif %}
+        {{ nav_badge('complaints', sidebar_counts.pending_complaints) }}
       </a>
     </li>
     {% endif %}
@@ -126,9 +131,7 @@
       <a href="{{ _leave_url }}"
          class="{{ 'active' if request.endpoint and request.endpoint.startswith('parent.leave_request') }}">
         <i class="bi bi-calendar2-check-fill"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;
-        {% if sidebar_counts.pending_leave_requests > 0 %}
-        <span class="nav-badge">{{ sidebar_counts.pending_leave_requests }}</span>
-        {% endif %}
+        {{ nav_badge('leave', sidebar_counts.pending_leave_requests) }}
       </a>
     </li>
     {% endif %}
@@ -139,9 +142,7 @@
       <a href="{{ _chat_url }}"
          class="{{ 'active' if request.endpoint and request.endpoint.startswith('chat.user') }}">
         <i class="bi bi-chat-dots-fill"></i> المراسلات
-        {% if sidebar_counts.unread_chat > 0 %}
-        <span class="nav-badge">{{ sidebar_counts.unread_chat }}</span>
-        {% endif %}
+        {{ nav_badge('chat', sidebar_counts.unread_chat) }}
       </a>
     </li>
     {% endif %}
@@ -150,9 +151,7 @@
       <a href="{{ url_for('notifications.index') }}"
          class="{{ 'active' if request.blueprint == 'notifications' }}">
         <i class="bi bi-bell-fill"></i> الإشعارات
-        {% if unread_notifications > 0 %}
-        <span class="nav-badge">{{ unread_notifications }}</span>
-        {% endif %}
+        {{ nav_badge('notifications', unread_notifications) }}
       </a>
     </li>
     <li class="nav-item" style="margin-top:8px">
@@ -209,9 +208,7 @@
       <a href="{{ _teacher_chat_url }}"
          class="{{ 'active' if request.endpoint and request.endpoint.startswith('chat.user') }}">
         <i class="bi bi-chat-dots-fill"></i> المراسلات
-        {% if sidebar_counts.unread_chat > 0 %}
-        <span class="nav-badge">{{ sidebar_counts.unread_chat }}</span>
-        {% endif %}
+        {{ nav_badge('chat', sidebar_counts.unread_chat) }}
       </a>
     </li>
     {% endif %}
@@ -223,9 +220,7 @@
       <a href="{{ url_for('notifications.index') }}"
          class="{{ 'active' if request.blueprint == 'notifications' }}">
         <i class="bi bi-bell-fill"></i> الإشعارات
-        {% if unread_notifications > 0 %}
-        <span class="nav-badge">{{ unread_notifications }}</span>
-        {% endif %}
+        {{ nav_badge('notifications', unread_notifications) }}
       </a>
     </li>
     {% endif %}
@@ -525,7 +520,7 @@
       {% set _comm_badge = (sidebar_counts.unread_chat or 0) + (sidebar_counts.pending_complaints or 0) + (sidebar_counts.pending_leave_requests or 0) %}
       <button type="button" class="nav-group-toggle" aria-expanded="false">
         <i class="bi bi-chat-dots-fill group-icon"></i> التواصل
-        {% if _comm_badge > 0 %}<span class="nav-badge">{{ _comm_badge }}</span>{% endif %}
+        {{ nav_badge('comm_total', _comm_badge) }}
         <i class="bi bi-chevron-left chevron"></i>
       </button>
       <ul class="nav-group-items">
@@ -534,9 +529,7 @@
           <a href="{{ url_for('chat.index') }}"
              class="{{ 'active' if request.blueprint == 'chat' }}">
             <i class="bi bi-chat-dots"></i> المراسلات
-            {% if sidebar_counts.unread_chat > 0 %}
-            <span class="nav-badge">{{ sidebar_counts.unread_chat }}</span>
-            {% endif %}
+            {{ nav_badge('chat', sidebar_counts.unread_chat) }}
           </a>
         </li>
         {% endif %}
@@ -545,18 +538,14 @@
           <a href="{{ url_for('admin.complaints_list') }}"
              class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.complaint') }}">
             <i class="bi bi-chat-left-text"></i> &#1575;&#1604;&#1588;&#1603;&#1575;&#1608;&#1609;
-            {% if sidebar_counts.pending_complaints > 0 %}
-            <span class="nav-badge">{{ sidebar_counts.pending_complaints }}</span>
-            {% endif %}
+            {{ nav_badge('complaints', sidebar_counts.pending_complaints) }}
           </a>
         </li>
         <li class="nav-item">
           <a href="{{ url_for('admin.leave_requests_list') }}"
              class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.leave_request') }}">
             <i class="bi bi-calendar2-check"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;
-            {% if sidebar_counts.pending_leave_requests > 0 %}
-            <span class="nav-badge">{{ sidebar_counts.pending_leave_requests }}</span>
-            {% endif %}
+            {{ nav_badge('leave', sidebar_counts.pending_leave_requests) }}
           </a>
         </li>
         <li class="nav-item">
@@ -571,9 +560,7 @@
           <a href="{{ url_for('notifications.index') }}"
              class="{{ 'active' if request.blueprint == 'notifications' }}">
             <i class="bi bi-bell"></i> الإشعارات
-            {% if unread_notifications > 0 %}
-            <span class="nav-badge">{{ unread_notifications }}</span>
-            {% endif %}
+            {{ nav_badge('notifications', unread_notifications) }}
           </a>
         </li>
         {% endif %}
@@ -650,18 +637,14 @@
           <a href="{{ url_for('admin.complaints_list') }}"
              class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.complaint') }}">
             <i class="bi bi-chat-left-text"></i> &#1575;&#1604;&#1588;&#1603;&#1575;&#1608;&#1609;
-            {% if sidebar_counts.pending_complaints > 0 %}
-            <span class="nav-badge">{{ sidebar_counts.pending_complaints }}</span>
-            {% endif %}
+            {{ nav_badge('complaints', sidebar_counts.pending_complaints) }}
           </a>
         </li>
         <li class="nav-item">
           <a href="{{ url_for('admin.leave_requests_list') }}"
              class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.leave_request') }}">
             <i class="bi bi-calendar2-check"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;
-            {% if sidebar_counts.pending_leave_requests > 0 %}
-            <span class="nav-badge">{{ sidebar_counts.pending_leave_requests }}</span>
-            {% endif %}
+            {{ nav_badge('leave', sidebar_counts.pending_leave_requests) }}
           </a>
         </li>
         <li class="nav-item">
