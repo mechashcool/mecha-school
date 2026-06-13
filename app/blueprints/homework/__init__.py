@@ -113,6 +113,21 @@ def _is_admin() -> bool:
     return current_user.is_admin_user
 
 
+def _hw_exists(school_id: int, year_id: int, teacher_id, subject_id,
+               section_id, title: str, pub_dt) -> bool:
+    """True when an active homework with identical key fields already exists (duplicate guard)."""
+    return Homework.query.filter_by(
+        school_id=school_id,
+        academic_year_id=year_id,
+        teacher_id=teacher_id,
+        subject_id=subject_id or None,
+        section_id=section_id,
+        title=title,
+        publish_date=pub_dt,
+        is_active=True,
+    ).first() is not None
+
+
 def _get_school_and_year():
     school = get_current_school()
     if not school:
@@ -289,26 +304,44 @@ def create():
         Grade.query.filter_by(school_id=school.id, academic_year_id=year.id)
                    .order_by(Grade.name).all()
     )
+    stages = sorted({g.stage for g in grades if g.stage})
 
     if not is_admin and not sections:
         flash('لا توجد شعب مرتبطة بحسابك. لا يمكن إنشاء واجب.', 'warning')
         return redirect(url_for('homework.index'))
 
+    def _re_render(errors_list):
+        for e in errors_list:
+            flash(e, 'danger')
+        return render_template('homework/form.html',
+                               sections=sections, subjects=subjects,
+                               grades=grades, stages=stages,
+                               hw=None, today=date.today())
+
     if request.method == 'POST':
+        from datetime import datetime as _dt
+
         title        = request.form.get('title', '').strip()
         subject_id   = request.form.get('subject_id', type=int)
-        section_id   = request.form.get('section_id', type=int)
+        grade_id     = request.form.get('grade_id', type=int)
+        section_raw  = request.form.get('section_id', '').strip()
         publish_date = request.form.get('publish_date', '')
         due_date_str = request.form.get('due_date', '')
         description  = request.form.get('description', '').strip()
         file         = request.files.get('attachment')
 
+        batch_mode = section_raw == 'all'
+        try:
+            section_id = int(section_raw) if not batch_mode and section_raw else None
+        except ValueError:
+            section_id = None
+
         # ── Validation ──────────────────────────────────────────────────────
         errors = []
+        batch_sections: list = []
+
         if not title:
             errors.append('عنوان الواجب مطلوب.')
-        if not section_id:
-            errors.append('الشعبة مطلوبة.')
         if not publish_date:
             errors.append('تاريخ النشر مطلوب.')
         if not due_date_str:
@@ -317,27 +350,71 @@ def create():
         pub_dt = due_dt = None
         if publish_date:
             try:
-                from datetime import datetime as _dt
                 pub_dt = _dt.strptime(publish_date, '%Y-%m-%d').date()
             except ValueError:
                 errors.append('صيغة تاريخ النشر غير صحيحة.')
         if due_date_str:
             try:
-                from datetime import datetime as _dt
                 due_dt = _dt.strptime(due_date_str, '%Y-%m-%d').date()
             except ValueError:
                 errors.append('صيغة تاريخ التسليم غير صحيحة.')
         if pub_dt and due_dt and due_dt < pub_dt:
             errors.append('تاريخ التسليم يجب ألا يكون قبل تاريخ النشر.')
 
-        # Teacher scope validation
-        if not is_admin and emp:
-            if section_id and section_id not in _teacher_section_ids(emp):
-                errors.append('لا يمكنك تعيين واجب لشعبة غير مرتبطة بك.')
-            if subject_id and subject_id not in _teacher_subject_ids(emp):
-                errors.append('لا يمكنك تعيين واجب لمادة غير مرتبطة بك.')
+        # ── Section / batch validation ───────────────────────────────────────
+        if batch_mode:
+            if not grade_id:
+                errors.append('الصف مطلوب عند اختيار «جميع الشعب».')
+            else:
+                grade_obj = Grade.query.filter_by(
+                    id=grade_id, school_id=school.id, academic_year_id=year.id
+                ).first()
+                if not grade_obj:
+                    errors.append('الصف المحدد غير صالح أو لا ينتمي إلى هذه المدرسة.')
+                else:
+                    cand = Section.query.filter_by(
+                        grade_id=grade_id, school_id=school.id, academic_year_id=year.id
+                    ).order_by(Section.name).all()
+                    if not cand:
+                        errors.append(
+                            f'الصف «{grade_obj.name}» لا يحتوي على شعب. '
+                            'لا يمكن إنشاء الواجب لجميع الشعب.'
+                        )
+                    else:
+                        if not is_admin and emp:
+                            auth_ids = _teacher_section_ids(emp)
+                            cand = [s for s in cand if s.id in auth_ids]
+                        if not cand:
+                            errors.append('لا توجد شعب مخوّل لك في هذا الصف.')
+                        else:
+                            batch_sections = cand
+        else:
+            if not section_id:
+                errors.append('الشعبة مطلوبة.')
+            else:
+                sec_obj = Section.query.filter_by(
+                    id=section_id, school_id=school.id, academic_year_id=year.id
+                ).first()
+                if not sec_obj:
+                    errors.append('الشعبة المحددة غير صالحة.')
+                elif not is_admin and emp and section_id not in _teacher_section_ids(emp):
+                    errors.append('لا يمكنك تعيين واجب لشعبة غير مرتبطة بك.')
+                elif grade_id and sec_obj.grade_id != grade_id:
+                    errors.append('الشعبة المحددة لا تنتمي إلى الصف المحدد.')
 
-        # Attachment validation
+        # ── Subject validation ───────────────────────────────────────────────
+        if subject_id:
+            subj_obj = Subject.query.filter_by(
+                id=subject_id, school_id=school.id, academic_year_id=year.id
+            ).first()
+            if not subj_obj:
+                errors.append('المادة المحددة غير صالحة.')
+            elif not is_admin and emp and subject_id not in _teacher_subject_ids(emp):
+                errors.append('لا يمكنك تعيين واجب لمادة غير مرتبطة بك.')
+            elif grade_id and subj_obj.grade_id and subj_obj.grade_id != grade_id:
+                errors.append('المادة المحددة لا تنتمي إلى الصف المحدد.')
+
+        # ── Attachment validation ────────────────────────────────────────────
         attach_path = attach_type = None
         if file and file.filename:
             ext = _ext(file.filename)
@@ -347,47 +424,106 @@ def create():
                 attach_type = _attachment_type(file.filename)
 
         if errors:
-            for e in errors:
-                flash(e, 'danger')
-            return render_template('homework/form.html',
-                                   sections=sections, subjects=subjects,
-                                   grades=grades, hw=None, today=date.today())
+            return _re_render(errors)
 
         # ── Save attachment ──────────────────────────────────────────────────
-        if file and file.filename and not errors:
+        if file and file.filename:
             attach_path = save_uploaded_file(file, subfolder='homework',
                                              allowed_exts=_ATTACH_ALL)
 
-        # ── Persist ─────────────────────────────────────────────────────────
         teacher_id = emp.id if emp else None
-        hw = Homework(
-            school_id=school.id,
-            academic_year_id=year.id,
-            teacher_id=teacher_id,
-            subject_id=subject_id or None,
-            section_id=section_id or None,
-            title=title,
-            description=description or None,
-            publish_date=pub_dt,
-            due_date=due_dt,
-            attachment_path=attach_path,
-            attachment_type=attach_type,
-            is_active=True,
-        )
-        db.session.add(hw)
-        db.session.commit()  # commit homework first so hw.id is stable before notifying
 
+        # ── Persist ─────────────────────────────────────────────────────────
         try:
-            _notify_section_parents(hw, school.id)
-        except Exception as exc:
-            current_app.logger.warning('[homework] notification failed hw_id=%s: %s', hw.id, exc)
+            if batch_mode:
+                created_hws = []
+                skipped = 0
+                for sec in batch_sections:
+                    if _hw_exists(school.id, year.id, teacher_id, subject_id, sec.id, title, pub_dt):
+                        skipped += 1
+                        continue
+                    hw = Homework(
+                        school_id=school.id,
+                        academic_year_id=year.id,
+                        teacher_id=teacher_id,
+                        subject_id=subject_id or None,
+                        section_id=sec.id,
+                        title=title,
+                        description=description or None,
+                        publish_date=pub_dt,
+                        due_date=due_dt,
+                        attachment_path=attach_path,
+                        attachment_type=attach_type,
+                        is_active=True,
+                    )
+                    db.session.add(hw)
+                    created_hws.append(hw)
 
-        flash('تم إضافة الواجب بنجاح.', 'success')
+                db.session.commit()
+
+                created = len(created_hws)
+                if skipped and not created:
+                    flash('الواجب موجود بالفعل لجميع الشعب المحددة.', 'warning')
+                elif skipped:
+                    flash(
+                        f'تم إنشاء الواجب لـ {created} شعبة. '
+                        f'تم تخطي {skipped} شعبة (واجب مكرر).',
+                        'success',
+                    )
+                else:
+                    flash('تم إنشاء الواجب لجميع شعب الصف بنجاح.', 'success')
+
+                for hw in created_hws:
+                    try:
+                        _notify_section_parents(hw, school.id)
+                    except Exception as exc:
+                        current_app.logger.warning(
+                            '[homework] notify failed hw_id=%s: %s', hw.id, exc)
+
+            else:
+                if _hw_exists(school.id, year.id, teacher_id, subject_id, section_id, title, pub_dt):
+                    flash('هذا الواجب موجود بالفعل لهذه الشعبة.', 'warning')
+                    return redirect(url_for('homework.index'))
+
+                hw = Homework(
+                    school_id=school.id,
+                    academic_year_id=year.id,
+                    teacher_id=teacher_id,
+                    subject_id=subject_id or None,
+                    section_id=section_id or None,
+                    title=title,
+                    description=description or None,
+                    publish_date=pub_dt,
+                    due_date=due_dt,
+                    attachment_path=attach_path,
+                    attachment_type=attach_type,
+                    is_active=True,
+                )
+                db.session.add(hw)
+                db.session.commit()
+
+                try:
+                    _notify_section_parents(hw, school.id)
+                except Exception as exc:
+                    current_app.logger.warning(
+                        '[homework] notify failed hw_id=%s: %s', hw.id, exc)
+
+                flash('تم إضافة الواجب بنجاح.', 'success')
+
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception('[homework] create failed')
+            flash('حدث خطأ أثناء حفظ الواجب. يرجى المحاولة مجدداً.', 'danger')
+            return render_template('homework/form.html',
+                                   sections=sections, subjects=subjects,
+                                   grades=grades, stages=stages,
+                                   hw=None, today=date.today())
+
         return redirect(url_for('homework.index'))
 
     return render_template('homework/form.html',
                            sections=sections, subjects=subjects, grades=grades,
-                           hw=None, today=date.today())
+                           stages=stages, hw=None, today=date.today())
 
 
 @homework_bp.route('/<int:hw_id>/edit', methods=['GET', 'POST'])
@@ -426,6 +562,7 @@ def edit(hw_id):
         Grade.query.filter_by(school_id=school.id, academic_year_id=year.id)
                    .order_by(Grade.name).all()
     )
+    stages = sorted({g.stage for g in grades if g.stage})
 
     if request.method == 'POST':
         title        = request.form.get('title', '').strip()
@@ -482,7 +619,8 @@ def edit(hw_id):
                 flash(e, 'danger')
             return render_template('homework/form.html',
                                    sections=sections, subjects=subjects,
-                                   grades=grades, hw=hw, today=date.today())
+                                   grades=grades, stages=stages,
+                                   hw=hw, today=date.today())
 
         if file and file.filename:
             new_attach_path = save_uploaded_file(file, subfolder='homework',
@@ -507,7 +645,7 @@ def edit(hw_id):
 
     return render_template('homework/form.html',
                            sections=sections, subjects=subjects, grades=grades,
-                           hw=hw, today=date.today())
+                           stages=stages, hw=hw, today=date.today())
 
 
 @homework_bp.route('/<int:hw_id>/delete', methods=['POST'])

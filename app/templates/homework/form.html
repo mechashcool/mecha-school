@@ -52,7 +52,59 @@
                      value="{{ hw.title if hw else '' }}">
             </div>
 
-            {# Subject #}
+            {# Stage — derived from Grade.stage; UI filter only, not submitted #}
+            {% set _hw_stage = hw.section.grade.stage if hw and hw.section and hw.section.grade else '' %}
+            {% if stages %}
+            <div class="col-md-6">
+              <label class="form-label">المرحلة الدراسية</label>
+              <select id="stageSelect" class="form-select">
+                <option value="">— جميع المراحل —</option>
+                {% for st in stages %}
+                <option value="{{ st }}" {{ 'selected' if _hw_stage == st }}>{{ st }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            {% endif %}
+
+            {# Grade — now submitted as grade_id for server-side scope validation #}
+            {% if school_cfg.field_visible('homework', 'grade') %}
+            <div class="col-md-6">
+              <label class="form-label">الصف <span class="text-danger">*</span></label>
+              <select id="gradeSelect" name="grade_id" class="form-select">
+                <option value="">— اختر الصف —</option>
+                {% for g in grades %}
+                <option value="{{ g.id }}"
+                        data-stage="{{ g.stage or '' }}"
+                  {{ 'selected' if hw and hw.section and hw.section.grade_id == g.id }}>
+                  {{ g.name }}{% if g.stage %} — {{ g.stage }}{% endif %}
+                </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">اختر الصف لتصفية الشعب والمواد.</div>
+            </div>
+            {% endif %}
+
+            {# Section — includes «جميع الشعب» in create mode #}
+            {% if school_cfg.field_visible('homework', 'section') %}
+            <div class="col-md-6">
+              <label class="form-label">الشعبة <span class="text-danger">*</span></label>
+              <select name="section_id" id="sectionSelect" class="form-select" required>
+                <option value="">— اختر الشعبة أو جميع الشعب —</option>
+                {% if not hw %}
+                <option value="all" id="allSectionsOpt" hidden disabled>«جميع الشعب»</option>
+                {% endif %}
+                {% for sec in sections %}
+                <option value="{{ sec.id }}"
+                        data-grade="{{ sec.grade_id }}"
+                  {{ 'selected' if hw and hw.section_id == sec.id }}>
+                  {{ sec.name }}{% if sec.grade %} — {{ sec.grade.name }}{% endif %}
+                </option>
+                {% endfor %}
+              </select>
+            </div>
+            {% endif %}
+
+            {# Subject — filtered by selected Grade #}
             {% if school_cfg.field_visible('homework', 'subject') %}
             <div class="col-md-6">
               <label class="form-label">المادة</label>
@@ -72,40 +124,6 @@
                 لا توجد مواد مرتبطة بحسابك — يمكنك تحديد الشعبة فقط.
               </div>
               {% endif %}
-            </div>
-            {% endif %}
-
-            {# Grade / Stage — UI-only filter, no name submitted #}
-            {% if school_cfg.field_visible('homework', 'grade') %}
-            <div class="col-md-6">
-              <label class="form-label">المرحلة / الصف</label>
-              <select id="gradeSelect" class="form-select">
-                <option value="">— اختر الصف —</option>
-                {% for g in grades %}
-                <option value="{{ g.id }}"
-                  {{ 'selected' if hw and hw.section and hw.section.grade_id == g.id }}>
-                  {{ g.name }}{% if g.stage %} — {{ g.stage }}{% endif %}
-                </option>
-                {% endfor %}
-              </select>
-              <div class="form-text">يُستخدم لتصفية الشعب أدناه.</div>
-            </div>
-            {% endif %}
-
-            {# Section #}
-            {% if school_cfg.field_visible('homework', 'section') %}
-            <div class="col-md-6">
-              <label class="form-label">الشعبة <span class="text-danger">*</span></label>
-              <select name="section_id" id="sectionSelect" class="form-select" required>
-                <option value="">— اختر الشعبة —</option>
-                {% for sec in sections %}
-                <option value="{{ sec.id }}"
-                        data-grade="{{ sec.grade_id }}"
-                  {{ 'selected' if hw and hw.section_id == sec.id }}>
-                  {{ sec.name }}{% if sec.grade %} — {{ sec.grade.name }}{% endif %}
-                </option>
-                {% endfor %}
-              </select>
             </div>
             {% endif %}
 
@@ -247,55 +265,97 @@
 
 <script>
 (function () {
-  var gradeEl   = document.getElementById('gradeSelect');
-  var sectionEl = document.getElementById('sectionSelect');
-  var subjectEl = document.getElementById('subjectSelect');
+  var stageEl    = document.getElementById('stageSelect');
+  var gradeEl    = document.getElementById('gradeSelect');
+  var sectionEl  = document.getElementById('sectionSelect');
+  var subjectEl  = document.getElementById('subjectSelect');
+  var allSectOpt = document.getElementById('allSectionsOpt');
 
-  /* ── Grade → Section cascade ─────────────────────────────────────────── */
-  function filterSections() {
-    if (!gradeEl || !sectionEl) return;
-    var gid = gradeEl.value;
-    var opts = sectionEl.querySelectorAll('option[data-grade]');
-    var currentVal = sectionEl.value;
-    opts.forEach(function (opt) {
-      var match = !gid || String(opt.dataset.grade) === String(gid);
-      opt.hidden = !match;
-      if (opt.disabled !== undefined) opt.disabled = !match;
+  /* ── Stage → Grade cascade ──────────────────────────────────────────── */
+  function filterGrades() {
+    if (!stageEl || !gradeEl) return;
+    var stage = stageEl.value;
+    gradeEl.querySelectorAll('option[data-stage]').forEach(function (opt) {
+      var match = !stage || opt.dataset.stage === stage;
+      opt.hidden   = !match;
+      opt.disabled = !match;
     });
-    /* Deselect if the currently-selected section is now filtered out */
-    if (currentVal) {
-      var sel = sectionEl.querySelector('option[value="' + currentVal + '"]');
-      if (sel && sel.hidden) sectionEl.value = '';
+    var cur = gradeEl.querySelector('option[value="' + gradeEl.value + '"]');
+    if (cur && cur.hidden) {
+      gradeEl.value = '';
     }
   }
 
-  /* ── Grade → Subject cascade (soft: just hide non-matching) ─────────── */
+  /* ── Grade → Section cascade ────────────────────────────────────────── */
+  function filterSections() {
+    if (!gradeEl || !sectionEl) return;
+    var gid = gradeEl.value;
+    var visible = 0;
+    sectionEl.querySelectorAll('option[data-grade]').forEach(function (opt) {
+      var match = !gid || String(opt.dataset.grade) === String(gid);
+      opt.hidden   = !match;
+      opt.disabled = !match;
+      if (match) visible++;
+    });
+    /* Deselect if current selection is now hidden */
+    var cur = sectionEl.value;
+    if (cur && cur !== 'all') {
+      var curOpt = sectionEl.querySelector('option[value="' + cur + '"]');
+      if (curOpt && curOpt.hidden) sectionEl.value = '';
+    }
+    /* Show «جميع الشعب» only when a grade is selected and it has visible sections */
+    if (allSectOpt) {
+      if (gid && visible > 0) {
+        allSectOpt.hidden   = false;
+        allSectOpt.disabled = false;
+      } else {
+        allSectOpt.hidden   = true;
+        allSectOpt.disabled = true;
+        if (sectionEl.value === 'all') sectionEl.value = '';
+      }
+    }
+  }
+
+  /* ── Grade → Subject cascade ────────────────────────────────────────── */
   function filterSubjects() {
     if (!gradeEl || !subjectEl) return;
     var gid = gradeEl.value;
-    var opts = subjectEl.querySelectorAll('option[data-grade]');
-    opts.forEach(function (opt) {
-      /* subjects with no grade_id (data-grade="") are always visible */
-      var match = !gid || !opt.dataset.grade || String(opt.dataset.grade) === String(gid);
-      opt.hidden = !match;
+    subjectEl.querySelectorAll('option[data-grade]').forEach(function (opt) {
+      /* when a grade is selected, only subjects linked to that grade are shown;
+         subjects with no grade_id are hidden until no grade is selected */
+      var match = !gid || (opt.dataset.grade && String(opt.dataset.grade) === String(gid));
+      opt.hidden   = !match;
+      opt.disabled = !match;
     });
-    var sel = subjectEl.querySelector('option[value="' + subjectEl.value + '"]');
-    if (sel && sel.hidden) subjectEl.value = '';
+    var cur = subjectEl.querySelector('option[value="' + subjectEl.value + '"]');
+    if (cur && cur.hidden) subjectEl.value = '';
   }
 
+  /* ── Wire Stage change ──────────────────────────────────────────────── */
+  if (stageEl) {
+    stageEl.addEventListener('change', function () {
+      gradeEl.value = '';
+      filterGrades();
+      filterSections();
+      filterSubjects();
+    });
+  }
+
+  /* ── Wire Grade change ──────────────────────────────────────────────── */
   if (gradeEl) {
     gradeEl.addEventListener('change', function () {
       filterSections();
       filterSubjects();
     });
-    /* Apply filters immediately if a grade is pre-selected (edit page) */
+    /* Apply on load if a grade is pre-selected (edit page restore) */
     if (gradeEl.value) {
+      filterGrades();
       filterSections();
       filterSubjects();
     }
   }
 
-  /* ── Due date >= publish date ─────────────────────────────────────────── */
+  /* ── Due date >= publish date ────────────────────────────────────────── */
   var form = document.querySelector('form');
   if (form) {
     form.addEventListener('submit', function (e) {
