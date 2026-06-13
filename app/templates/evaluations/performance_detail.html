@@ -1,0 +1,80 @@
+{% extends "shared/base.html" %}
+{% block title %}تفاصيل الأداء — {{ employee.full_name }}{% endblock %}
+{% block page_title %}تفاصيل أداء المدرس{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ employee.full_name }}</h1>
+    <p class="page-subtitle">
+      {{ subject.name }} — {{ grade.name if grade else '—' }} / {{ section.name }}
+      {% if view_year %}· العام الدراسي {{ view_year.name }}{% endif %}
+    </p>
+  </div>
+  <a href="{{ url_for('evaluations.index', school_id=selected_school_id) if is_super_admin and selected_school_id else url_for('evaluations.index') }}"
+     class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-right me-1"></i>رجوع للتقييم
+  </a>
+</div>
+
+{% include 'evaluations/_tabs.html' %}
+
+<div class="card">
+  <div class="card-header">
+    <i class="bi bi-journal-check text-accent"></i>
+    امتحانات المادة لهذه الشعبة ({{ exams|length }})
+  </div>
+  <div class="table-wrapper" style="border:none;border-radius:0">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>الاختبار</th>
+          <th>التاريخ</th>
+          <th>الدرجة العظمى</th>
+          <th>درجة النجاح</th>
+          <th>عدد النتائج</th>
+          <th>متوسط الدرجات</th>
+          <th>الناجحون</th>
+          <th>نسبة النجاح</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in exams %}
+        <tr>
+          <td class="fw-600">{{ row.exam.display_name }}</td>
+          <td style="font-size:12.5px;color:#64748b">
+            {{ row.exam.exam_date.strftime('%Y-%m-%d') if row.exam.exam_date }}
+          </td>
+          <td>{{ row.exam.max_marks }}</td>
+          <td>{{ row.exam.pass_marks }}</td>
+          <td class="text-center">{{ row.result_count }}</td>
+          <td>
+            {% if row.avg_pct is not none %}
+            <span class="fw-600">{{ row.avg_pct }}%</span>
+            {% else %}
+            <span class="badge-status badge-pending">لم تُرصد النتائج</span>
+            {% endif %}
+          </td>
+          <td class="text-center">{{ row.pass_count if row.result_count else '—' }}</td>
+          <td>
+            {% if row.pass_pct is not none %}
+            <span class="fw-600"
+                  style="color:{% if row.pass_pct >= 70 %}#16a06a{% elif row.pass_pct >= 50 %}#e8a020{% else %}#de3d3d{% endif %}">
+              {{ row.pass_pct }}%
+            </span>
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8" class="text-center text-muted py-5">
+            <i class="bi bi-journal-x" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا توجد امتحانات لهذه المادة في هذه الشعبة بعد.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

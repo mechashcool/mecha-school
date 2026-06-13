@@ -1,141 +1,192 @@
 {% extends "shared/base.html" %}
-{% block title %}تقييم الموظفين{% endblock %}
-{% block page_title %}تقييمات الموظفين{% endblock %}
+{% block title %}تقييم أداء المعلمين{% endblock %}
+{% block page_title %}تقييم أداء المعلمين{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">تقييمات الأداء</h1>
-    <p class="page-subtitle">متابعة وتقييم أداء الكوادر التدريسية والإدارية</p>
+    <h1 class="page-title">تقييم أداء المعلمين</h1>
+    <p class="page-subtitle">
+      تقييم محسوب من نتائج اختبارات الطلاب — سجل واحد لكل (مدرس × مادة × شعبة)
+      {% if view_year %}· العام الدراسي {{ view_year.name }}{% endif %}
+    </p>
   </div>
-  {% if not is_historical_year %}
-  <a href="{{ url_for('evaluations.create', school_id=selected_school_id) if is_super_admin and selected_school_id else url_for('evaluations.create') }}" class="btn btn-primary">
-    <i class="bi bi-plus-circle-fill me-2"></i>تقييم جديد
-  </a>
-  {% endif %}
 </div>
 
+{% include 'evaluations/_tabs.html' %}
+
 {% if is_super_admin %}
-<form method="GET" class="mb-3">
+<form method="GET" class="mb-3" style="max-width:380px">
   <select name="school_id" class="form-select" onchange="this.form.submit()">
-    <option value="">Select school</option>
+    <option value="">اختر مدرسة...</option>
     {% for school in schools %}
     <option value="{{ school.id }}" {{ 'selected' if selected_school_id == school.id }}>
-      {{ school.school_name }}
+      {{ school.school_name_ar or school.school_name }}
     </option>
     {% endfor %}
   </select>
 </form>
 {% endif %}
 
-<div class="card">
-  <div class="table-wrapper">
+{% if unattributed > 0 %}
+<div class="alert alert-warning d-flex align-items-center gap-2 mb-3">
+  <i class="bi bi-exclamation-triangle-fill"></i>
+  <span>
+    يوجد <strong>{{ unattributed }}</strong> اختبار غير مُسند لأي مدرس
+    (المادة والشعبة بدون تكليف في إسناد المعلمين)، لذلك لا يظهر ضمن التقييم.
+    أكمل إسناد المعلمين للمواد والشعب لاحتساب هذه الاختبارات.
+  </span>
+</div>
+{% endif %}
+
+{# ── Main performance table — one row per teacher×subject×section ───────── #}
+<div class="card mb-4">
+  <div class="card-header">
+    <i class="bi bi-graph-up-arrow text-accent"></i>
+    سجلات الأداء التعليمي
+    {% if rows %}<span class="badge bg-secondary-subtle text-secondary ms-2">{{ rows|length }}</span>{% endif %}
+  </div>
+  <div class="table-wrapper" style="border:none;border-radius:0">
     <table class="table table-hover">
       <thead>
         <tr>
-          <th>الموظف</th><th>الفترة</th><th>الأداء</th>
-          <th>الانضباط</th><th>الحضور</th><th>التقييم النهائي</th>
-          <th>المُقيِّم</th><th>التاريخ</th><th>الإجراءات</th>
+          <th>المدرس</th>
+          <th>المادة</th>
+          <th>الصف</th>
+          <th>الشعبة</th>
+          <th>عدد الامتحانات</th>
+          <th>عدد النتائج</th>
+          <th>عدد الطلاب</th>
+          <th>متوسط الدرجات</th>
+          <th>نسبة النجاح</th>
+          <th>نشاط الامتحانات</th>
+          <th>التقييم النهائي</th>
+          <th>التصنيف</th>
+          <th>الإجراءات</th>
         </tr>
       </thead>
       <tbody>
-        {% for ev in evals.items %}
-        {% set score = ev.final_score | float %}
+        {% for r in rows %}
         <tr>
           <td>
-            <div class="fw-600">{{ ev.employee.full_name }}</div>
-            <div style="font-size:12px;color:#9aabb8">{{ ev.employee.job_title }}</div>
+            <div class="fw-600">{{ r.teacher_name }}</div>
+            {% if r.job_title %}
+            <div style="font-size:12px;color:#9aabb8">{{ r.job_title }}</div>
+            {% endif %}
+          </td>
+          <td>{{ r.subject_name }}</td>
+          <td>{{ r.grade_name }}</td>
+          <td>{{ r.section_name }}</td>
+          <td class="text-center">{{ r.exam_count }}</td>
+          <td class="text-center">{{ r.result_count }}</td>
+          <td class="text-center">{{ r.student_count }}</td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div style="width:56px;height:6px;border-radius:3px;background:#f0f4f8;overflow:hidden">
+                <div style="width:{{ r.avg_pct }}%;height:100%;background:#1a3a5c;border-radius:3px"></div>
+              </div>
+              <span style="font-size:12.5px;font-weight:700">{{ r.avg_pct }}%</span>
+            </div>
           </td>
           <td>
-            <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
-              {{ ev.period }}
+            <div class="d-flex align-items-center gap-2">
+              <div style="width:56px;height:6px;border-radius:3px;background:#f0f4f8;overflow:hidden">
+                <div style="width:{{ r.pass_pct }}%;height:100%;background:#16a06a;border-radius:3px"></div>
+              </div>
+              <span style="font-size:12.5px;font-weight:700">{{ r.pass_pct }}%</span>
+            </div>
+          </td>
+          <td>
+            <span style="font-size:12.5px;font-weight:600"
+                  title="عدد الامتحانات مقابل هدف 4 امتحانات (4 فأكثر = 100%)">{{ r.activity }}%</span>
+          </td>
+          <td>
+            <span style="font-size:18px;font-weight:800;
+              color:{% if r.final >= 75 %}#16a06a{% elif r.final >= 60 %}#e8a020{% else %}#de3d3d{% endif %}">
+              {{ r.final }}
             </span>
+            <span style="font-size:11px;color:#9aabb8">/100</span>
           </td>
+          <td><span class="badge-status {{ r.rating_css }}">{{ r.rating_label }}</span></td>
           <td>
-            <div class="d-flex align-items-center gap-2">
-              <div style="width:60px;height:6px;border-radius:3px;background:#f0f4f8;overflow:hidden">
-                <div style="width:{{ ev.performance * 10 }}%;height:100%;
-                            background:#1a3a5c;border-radius:3px"></div>
-              </div>
-              <span style="font-size:12.5px;font-weight:700">{{ ev.performance }}/10</span>
-            </div>
-          </td>
-          <td>
-            <div class="d-flex align-items-center gap-2">
-              <div style="width:60px;height:6px;border-radius:3px;background:#f0f4f8;overflow:hidden">
-                <div style="width:{{ ev.discipline * 10 }}%;height:100%;
-                            background:#e8a020;border-radius:3px"></div>
-              </div>
-              <span style="font-size:12.5px;font-weight:700">{{ ev.discipline }}/10</span>
-            </div>
-          </td>
-          <td>
-            <div class="d-flex align-items-center gap-2">
-              <div style="width:60px;height:6px;border-radius:3px;background:#f0f4f8;overflow:hidden">
-                <div style="width:{{ ev.attendance_score * 10 }}%;height:100%;
-                            background:#1aab6d;border-radius:3px"></div>
-              </div>
-              <span style="font-size:12.5px;font-weight:700">{{ ev.attendance_score }}/10</span>
-            </div>
-          </td>
-          <td>
-            <span style="font-size:20px;font-weight:900;
-              color:{% if score >= 8 %}#1aab6d{% elif score >= 6 %}#e8a020{% else %}#e03e3e{% endif %}">
-              {{ ev.final_score }}
-            </span>
-            <span style="font-size:11px;color:#9aabb8">/10</span>
-            <div style="font-size:11px;font-weight:600;
-              color:{% if score >= 8 %}#1aab6d{% elif score >= 6 %}#e8a020{% else %}#e03e3e{% endif %}">
-              {% if score >= 8 %}ممتاز{% elif score >= 7 %}جيد جداً{% elif score >= 6 %}جيد{% elif score >= 5 %}مقبول{% else %}ضعيف{% endif %}
-            </div>
-          </td>
-          <td style="font-size:12.5px">{{ ev.evaluator.full_name if ev.evaluator else 'System' }}</td>
-          <td style="font-size:12px;color:#9aabb8">
-            {{ ev.created_at.strftime('%Y-%m-%d') }}
-          </td>
-          <td>
-            <div class="d-flex gap-1">
-              {% if not is_historical_year %}
-              <a href="{{ url_for('evaluations.edit', ev_id=ev.id) }}"
-                 class="btn btn-sm btn-outline-primary">
-                <i class="bi bi-pencil"></i>
-              </a>
-              <form method="POST"
-                    action="{{ url_for('evaluations.delete', ev_id=ev.id) }}" class="d-inline">
-                <button class="btn btn-sm btn-outline-danger"
-                        data-confirm="حذف هذا التقييم؟">
-                  <i class="bi bi-trash"></i>
-                </button>
-              </form>
-              {% endif %}
-            </div>
+            <a href="{{ url_for('evaluations.performance_detail',
+                                employee_id=r.employee_id,
+                                subject_id=r.subject_id,
+                                section_id=r.section_id,
+                                school_id=selected_school_id) if is_super_admin and selected_school_id
+                       else url_for('evaluations.performance_detail',
+                                    employee_id=r.employee_id,
+                                    subject_id=r.subject_id,
+                                    section_id=r.section_id) }}"
+               class="btn btn-sm btn-outline-primary" title="تفاصيل الامتحانات">
+              <i class="bi bi-eye"></i>
+            </a>
           </td>
         </tr>
         {% else %}
         <tr>
-          <td colspan="9" class="text-center text-muted py-5">
-            <i class="bi bi-star" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-            لا توجد تقييمات بعد
+          <td colspan="13" class="text-center text-muted py-5">
+            <i class="bi bi-graph-up" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا توجد نتائج اختبارات مُسندة لمعلمين بعد —
+            تأكد من إسناد المعلمين للمواد والشعب ومن إدخال نتائج الاختبارات.
           </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
-  {% if evals.pages > 1 %}
-  <div class="card-footer">
-    <ul class="pagination pagination-sm mb-0 justify-content-center">
-      {% for p in evals.iter_pages() %}
-        {% if p %}
-        <li class="page-item {{ 'active' if p == evals.page }}">
-          <a class="page-link" href="{{ url_for('evaluations.index', page=p, school_id=selected_school_id) if is_super_admin and selected_school_id else url_for('evaluations.index', page=p) }}">{{ p }}</a>
-        </li>
-        {% else %}
-        <li class="page-item disabled"><span class="page-link">…</span></li>
-        {% endif %}
-      {% endfor %}
-    </ul>
+</div>
+
+{# ── Assignments with no usable results ─────────────────────────────────── #}
+{% if pending %}
+<div class="card border-warning">
+  <div class="card-header" style="background:#fdf6e8;color:#815b10">
+    <i class="bi bi-hourglass-split me-1"></i>
+    تكليفات بدون نتائج بعد ({{ pending|length }})
+    <span class="text-muted ms-2" style="font-size:12px;font-weight:400">
+      معلمون مكلفون بمواد وشعب لكن لا توجد امتحانات أو لم تُرصد نتائجها
+    </span>
   </div>
-  {% endif %}
+  <div class="table-wrapper" style="border:none;border-radius:0">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>المدرس</th>
+          <th>المادة</th>
+          <th>الصف</th>
+          <th>الشعبة</th>
+          <th>عدد الامتحانات</th>
+          <th>الحالة</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in pending %}
+        <tr>
+          <td class="fw-600">{{ r.teacher_name }}</td>
+          <td>{{ r.subject_name }}</td>
+          <td>{{ r.grade_name }}</td>
+          <td>{{ r.section_name }}</td>
+          <td class="text-center">{{ r.exam_count }}</td>
+          <td>
+            {% if r.exam_count == 0 %}
+            <span class="badge-status badge-cancelled">لا توجد امتحانات</span>
+            {% else %}
+            <span class="badge-status badge-pending">امتحانات بدون نتائج</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{# ── Scoring legend ──────────────────────────────────────────────────────── #}
+<div class="text-muted mt-3" style="font-size:12px">
+  <i class="bi bi-info-circle me-1"></i>
+  التقييم النهائي = 45% متوسط الدرجات + 45% نسبة النجاح + 10% نشاط الامتحانات.
+  نشاط الامتحانات: امتحان واحد = 25 · امتحانان = 50 · ثلاثة = 75 · أربعة فأكثر = 100.
+  التصنيف: ممتاز ≥ 85 · جيد جداً ≥ 75 · جيد ≥ 60 · أقل من 60 يحتاج متابعة.
 </div>
 {% endblock %}

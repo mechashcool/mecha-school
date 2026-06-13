@@ -1,0 +1,15 @@
+{# Evaluations sub-navigation — included at the top of both evaluation pages. #}
+<ul class="nav nav-pills gap-2 mb-4" style="font-size:13.5px">
+  <li class="nav-item">
+    <a class="nav-link {{ 'active' if request.endpoint in ['evaluations.index', 'evaluations.performance_detail'] }}"
+       href="{{ url_for('evaluations.index', school_id=selected_school_id) if is_super_admin and selected_school_id else url_for('evaluations.index') }}">
+      <i class="bi bi-graph-up-arrow me-1"></i>أداء المعلمين
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {{ 'active' if request.endpoint == 'evaluations.manual' }}"
+       href="{{ url_for('evaluations.manual', school_id=selected_school_id) if is_super_admin and selected_school_id else url_for('evaluations.manual') }}">
+      <i class="bi bi-clipboard-check me-1"></i>التقييم اليدوي
+    </a>
+  </li>
+</ul>

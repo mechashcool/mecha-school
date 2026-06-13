@@ -5,7 +5,7 @@
 {% block content %}
 <div class="page-header">
   <div><h1 class="page-title">{{ 'تعديل تقييم' if record else 'إنشاء تقييم أداء' }}</h1></div>
-  <a href="{{ url_for('evaluations.index', school_id=selected_school_id) if is_super_admin and selected_school_id else url_for('evaluations.index') }}" class="btn btn-outline-secondary">
+  <a href="{{ url_for('evaluations.manual', school_id=selected_school_id) if is_super_admin and selected_school_id else url_for('evaluations.manual') }}" class="btn btn-outline-secondary">
     <i class="bi bi-arrow-right me-1"></i>رجوع
   </a>
 </div>
@@ -135,7 +135,7 @@
               <i class="bi bi-check-circle-fill me-2"></i>
               {{ 'حفظ التعديلات' if record else 'حفظ التقييم' }}
             </button>
-            <a href="{{ url_for('evaluations.index', school_id=selected_school_id) if is_super_admin and selected_school_id else url_for('evaluations.index') }}"
+            <a href="{{ url_for('evaluations.manual', school_id=selected_school_id) if is_super_admin and selected_school_id else url_for('evaluations.manual') }}"
                class="btn btn-outline-secondary px-4">إلغاء</a>
           </div>
         </form>
