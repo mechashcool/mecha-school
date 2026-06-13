@@ -1680,6 +1680,50 @@ class EmployeeEvaluation(db.Model):
     academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
 
 
+class EmployeeLeaveRequest(db.Model):
+    """Leave requests submitted by employees (e.g. teachers) for admin review.
+
+    Distinct from the parent/student ``LeaveRequest`` model: ownership is the
+    Employee, not a parent + student. School-scoped only (employees persist
+    across academic years); ``academic_year_id`` is recorded for reporting but
+    queries are not year-filtered so a teacher always sees their full history.
+    """
+    __tablename__ = 'employee_leave_requests'
+    __school_scoped__ = True
+
+    id               = db.Column(db.Integer, primary_key=True)
+    employee_id      = db.Column(db.Integer, db.ForeignKey('employees.id'),
+                                 nullable=False, index=True)
+    school_id        = db.Column(db.Integer, db.ForeignKey('schools.id'),
+                                 nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'),
+                                 nullable=True, index=True)
+    leave_type       = db.Column(db.String(30), nullable=False)
+    from_date        = db.Column(db.Date, nullable=False)
+    to_date          = db.Column(db.Date, nullable=False)
+    reason           = db.Column(db.Text, nullable=False)
+    details          = db.Column(db.Text, nullable=True)
+    attachment_path  = db.Column(db.String(500), nullable=True)
+    status           = db.Column(db.String(30), nullable=False,
+                                 default='pending', index=True)
+    admin_response   = db.Column(db.Text, nullable=True)
+    rejection_reason = db.Column(db.Text, nullable=True)
+    reviewed_by      = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    reviewed_at      = db.Column(db.DateTime, nullable=True)
+    created_at       = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    updated_at       = db.Column(db.DateTime, default=datetime.utcnow,
+                                 onupdate=datetime.utcnow)
+
+    employee      = db.relationship('Employee', foreign_keys=[employee_id],
+                                    backref=db.backref('leave_requests', lazy='dynamic'))
+    school        = db.relationship('School', foreign_keys=[school_id])
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    reviewer      = db.relationship('User', foreign_keys=[reviewed_by])
+
+    def __repr__(self):
+        return f'<EmployeeLeaveRequest {self.id} employee={self.employee_id}>'
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  13. IN-APP NOTIFICATIONS
 # ═════════════════════════════════════════════════════════════════════════════

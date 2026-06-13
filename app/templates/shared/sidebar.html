@@ -557,6 +557,12 @@
           </a>
         </li>
         <li class="nav-item">
+          <a href="{{ url_for('admin.employee_leave_requests_list') }}"
+             class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.employee_leave_request') }}">
+            <i class="bi bi-calendar2-check"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1573;&#1580;&#1575;&#1586;&#1577; &#1575;&#1604;&#1605;&#1608;&#1592;&#1601;&#1610;&#1606;
+          </a>
+        </li>
+        <li class="nav-item">
           <a href="{{ url_for('admin.school_board_videos') }}"
              class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.school_board') }}">
             <i class="bi bi-collection-play"></i> لوحة المدرسة
@@ -653,6 +659,12 @@
              class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.leave_request') }}">
             <i class="bi bi-calendar2-check"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;
             {{ nav_badge('leave', sidebar_counts.pending_leave_requests) }}
+          </a>
+        </li>
+        <li class="nav-item">
+          <a href="{{ url_for('admin.employee_leave_requests_list') }}"
+             class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.employee_leave_request') }}">
+            <i class="bi bi-calendar2-check"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1573;&#1580;&#1575;&#1586;&#1577; &#1575;&#1604;&#1605;&#1608;&#1592;&#1601;&#1610;&#1606;
           </a>
         </li>
         <li class="nav-item">

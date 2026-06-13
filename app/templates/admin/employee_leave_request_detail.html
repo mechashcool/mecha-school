@@ -1,0 +1,87 @@
+{% extends "shared/base.html" %}
+{% block title %}تفاصيل طلب إجازة موظف{% endblock %}
+{% block page_title %}تفاصيل طلب إجازة موظف{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">طلب إجازة</h1>
+    <p class="page-subtitle">{{ leave_request.employee.full_name if leave_request.employee else '-' }}</p>
+  </div>
+  <a href="{{ url_for('admin.employee_leave_requests_list') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <div class="text-muted">الموظف</div>
+            <div class="fw-600">{{ leave_request.employee.full_name if leave_request.employee else '-' }}</div>
+          </div>
+          <div class="col-md-6">
+            <div class="text-muted">نوع الإجازة</div>
+            <div class="fw-600">{{ type_labels.get(leave_request.leave_type, leave_request.leave_type) }}</div>
+          </div>
+          <div class="col-md-6">
+            <div class="text-muted">من تاريخ</div>
+            <div class="fw-600">{{ leave_request.from_date.strftime('%Y-%m-%d') if leave_request.from_date else '-' }}</div>
+          </div>
+          <div class="col-md-6">
+            <div class="text-muted">إلى تاريخ</div>
+            <div class="fw-600">{{ leave_request.to_date.strftime('%Y-%m-%d') if leave_request.to_date else '-' }}</div>
+          </div>
+          <div class="col-12">
+            <div class="text-muted">السبب</div>
+            <div style="white-space:pre-wrap">{{ leave_request.reason or '-' }}</div>
+          </div>
+          {% if leave_request.details %}
+          <div class="col-12">
+            <div class="text-muted">تفاصيل إضافية</div>
+            <div style="white-space:pre-wrap">{{ leave_request.details }}</div>
+          </div>
+          {% endif %}
+        </div>
+        {% if leave_request.attachment_path %}
+        <hr>
+        <a href="{{ resolve_photo_url(leave_request.attachment_path) or leave_request.attachment_path }}"
+           target="_blank" class="btn btn-sm btn-outline-primary">
+          <i class="bi bi-paperclip me-1"></i>عرض المرفق
+        </a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="mb-3">تحديث الطلب</h5>
+        <form method="POST">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+          <div class="mb-3">
+            <label class="form-label">الحالة</label>
+            <select name="status" class="form-select" required>
+              <option value="approved" {% if leave_request.status == 'approved' %}selected{% endif %}>{{ status_labels.get('approved') }}</option>
+              <option value="rejected" {% if leave_request.status == 'rejected' %}selected{% endif %}>{{ status_labels.get('rejected') }}</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">رد الإدارة</label>
+            <textarea name="admin_response" class="form-control" rows="4">{{ leave_request.admin_response or '' }}</textarea>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">سبب الرفض (عند الرفض)</label>
+            <textarea name="rejection_reason" class="form-control" rows="3">{{ leave_request.rejection_reason or '' }}</textarea>
+          </div>
+          <button class="btn btn-primary">
+            <i class="bi bi-check2-circle me-1"></i>حفظ
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

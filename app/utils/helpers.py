@@ -68,6 +68,78 @@ def _supabase_upload(file_bytes: bytes, object_path: str, content_type: str,
         return None
 
 
+def _supabase_delete(object_path: str, bucket: str | None = None) -> bool:
+    """Delete an object from Supabase Storage. Returns True on success.
+
+    Never raises and never logs the service key or full credentials.
+    """
+    import requests as _req
+    url = current_app.config.get('SUPABASE_URL', '').rstrip('/')
+    key = current_app.config.get('SUPABASE_SERVICE_KEY', '')
+    if bucket is None:
+        bucket = current_app.config.get('SUPABASE_BUCKET', 'uploads')
+    if not url or not key:
+        return False
+    try:
+        resp = _req.delete(
+            f"{url}/storage/v1/object/{bucket}/{object_path}",
+            headers={'Authorization': f'Bearer {key}', 'apikey': key},
+            timeout=30,
+        )
+        if resp.status_code not in (200, 204):
+            current_app.logger.warning(
+                f"Supabase delete failed {resp.status_code} for object in bucket "
+                f"{bucket}"
+            )
+            return False
+        return True
+    except Exception as exc:
+        current_app.logger.warning(f"Supabase delete error: {exc}")
+        return False
+
+
+def delete_uploaded_file(stored_value: str | None, bucket: str | None = None) -> bool:
+    """Best-effort delete of a previously stored upload.
+
+    Accepts the exact value persisted by ``save_uploaded_file``:
+      - A Supabase public URL  →  the object is removed from its bucket.
+      - A local relative path ('uploads/...') → the file is removed from disk.
+
+    Returns True on success, False otherwise. Never raises. The original
+    filename / path supplied by a client must never be passed here — only the
+    server-generated value stored in the database.
+    """
+    if not stored_value:
+        return False
+    if stored_value.startswith(('http://', 'https://')):
+        # Expected shape: {url}/storage/v1/object/public/{bucket}/{object_path}
+        marker = '/storage/v1/object/public/'
+        idx = stored_value.find(marker)
+        if idx == -1:
+            return False
+        remainder = stored_value[idx + len(marker):]
+        parsed_bucket, _, object_path = remainder.partition('/')
+        if not parsed_bucket or not object_path:
+            return False
+        return _supabase_delete(object_path, bucket=bucket or parsed_bucket)
+    # Local relative path under static/.
+    try:
+        full_path = os.path.normpath(
+            os.path.join(current_app.root_path, 'static', stored_value)
+        )
+        static_root = os.path.normpath(os.path.join(current_app.root_path, 'static'))
+        # Guard against path traversal: must stay inside static/.
+        if not full_path.startswith(static_root + os.sep):
+            return False
+        if os.path.isfile(full_path):
+            os.remove(full_path)
+            return True
+        return False
+    except Exception as exc:
+        current_app.logger.warning(f"Local upload delete error: {exc}")
+        return False
+
+
 def save_uploaded_file(file, subfolder='misc', prefix=None, bucket=None,
                        allowed_exts=None, max_size=None):
     """

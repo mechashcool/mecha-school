@@ -20,7 +20,8 @@ def _models():
     from app.models import (
         AcademicYear, Announcement, AttendanceDevice, AuditLog, Complaint,
         Device, DeviceEventLog, DeviceStudentMapping, Employee,
-        EmployeeAttendance, EmployeeDocument, EmployeeEvaluation, Exam,
+        EmployeeAttendance, EmployeeDocument, EmployeeEvaluation,
+        EmployeeLeaveRequest, Exam,
         ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord,
         FeeType, Grade, InventoryCategory, InventoryCount, InventoryItem,
         InventoryMovement, LeaveRequest, Notification, PayrollItem,
@@ -35,7 +36,8 @@ def _models():
     school_scoped = (
         AcademicYear, Announcement, AttendanceDevice, AuditLog, Complaint,
         Device, DeviceEventLog, DeviceStudentMapping, Employee,
-        EmployeeAttendance, EmployeeDocument, EmployeeEvaluation, Exam,
+        EmployeeAttendance, EmployeeDocument, EmployeeEvaluation,
+        EmployeeLeaveRequest, Exam,
         ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord,
         FeeType, Grade, InventoryCategory, InventoryCount, InventoryItem,
         InventoryMovement, LeaveRequest, Notification, PayrollItem,

@@ -1,0 +1,53 @@
+{% extends "shared/base.html" %}
+{% block title %}طلبات إجازة الموظفين{% endblock %}
+{% block page_title %}طلبات إجازة الموظفين{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">طلبات إجازة الموظفين</h1>
+    <p class="page-subtitle">طلبات الإجازة المقدمة من المعلمين والموظفين</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>الموظف</th>
+          <th>النوع</th>
+          <th>من</th>
+          <th>إلى</th>
+          <th>الحالة</th>
+          <th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for leave_request in requests %}
+        <tr>
+          <td>{{ leave_request.employee.full_name if leave_request.employee else '-' }}</td>
+          <td>{{ type_labels.get(leave_request.leave_type, leave_request.leave_type) }}</td>
+          <td>{{ leave_request.from_date.strftime('%Y-%m-%d') if leave_request.from_date else '-' }}</td>
+          <td>{{ leave_request.to_date.strftime('%Y-%m-%d') if leave_request.to_date else '-' }}</td>
+          <td><span class="badge-status badge-active">{{ status_labels.get(leave_request.status, leave_request.status) }}</span></td>
+          <td>
+            <a href="{{ url_for('admin.employee_leave_request_detail', request_id=leave_request.id) }}"
+               class="btn btn-sm btn-outline-primary" title="عرض">
+              <i class="bi bi-eye"></i>
+            </a>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="text-center text-muted py-5">
+            <i class="bi bi-calendar2-check" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا توجد طلبات إجازة.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

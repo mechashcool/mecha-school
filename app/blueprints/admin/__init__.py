@@ -14,6 +14,7 @@ from app.models import (db, User, Role, Permission, Employee, Student, Subject,
                          FeeInstallment, StudentAttendance, Revenue, Expense,
                          Notification, AcademicYear, School, Section,
                          teacher_subjects, Complaint, LeaveRequest,
+                         EmployeeLeaveRequest,
                          SchoolVideo, SchoolAnnouncement, SchoolContentRead,
                          SchoolBuilding, UserBuildingAccess)
 from app.utils.decorators import (admin_required, staff_required,
@@ -1017,6 +1018,97 @@ def leave_request_detail(request_id):
         return redirect(url_for('admin.leave_request_detail', request_id=leave_request.id))
 
     return render_template('admin/leave_request_detail.html',
+                           leave_request=leave_request,
+                           status_labels=LEAVE_STATUS,
+                           type_labels=LEAVE_TYPES)
+
+
+# ── Employee (teacher) leave requests ─────────────────────────────────────────
+
+def _notify_employee_user(user_id, school_id, title, body, fcm_data=None):
+    """In-app + FCM notification to a single staff user in the same school."""
+    if not user_id:
+        return
+    db.session.add(Notification(
+        school_id=school_id,
+        title=title,
+        body=body,
+        ntype='employee_leave_request',
+        target_user_id=user_id,
+        created_by=current_user.id,
+    ))
+    try:
+        from app.services.fcm_service import is_enabled, send_push_to_user
+        if is_enabled():
+            data = fcm_data or {'type': 'employee_leave_request',
+                                'school_id': str(school_id)}
+            send_push_to_user(user_id, title, body, data)
+    except Exception:
+        pass
+
+
+@admin_bp.route('/employee-leave-requests')
+@login_required
+@admin_required
+def employee_leave_requests_list():
+    school_id = _admin_scope_id()
+    query = EmployeeLeaveRequest.query
+    if school_id:
+        query = query.filter_by(school_id=school_id)
+    requests = query.order_by(EmployeeLeaveRequest.created_at.desc()).all()
+    return render_template('admin/employee_leave_requests_list.html',
+                           requests=requests,
+                           status_labels=LEAVE_STATUS,
+                           type_labels=LEAVE_TYPES)
+
+
+@admin_bp.route('/employee-leave-requests/<int:request_id>', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def employee_leave_request_detail(request_id):
+    school_id = _admin_scope_id()
+    query = EmployeeLeaveRequest.query.filter_by(id=request_id)
+    if school_id:
+        query = query.filter_by(school_id=school_id)
+    leave_request = query.first_or_404()
+
+    if request.method == 'POST':
+        new_status = request.form.get('status', '').strip()
+        admin_response = request.form.get('admin_response', '').strip()
+        rejection_reason = request.form.get('rejection_reason', '').strip()
+        if new_status not in {'approved', 'rejected'}:
+            flash('يرجى اختيار موافقة أو رفض.', 'danger')
+            return redirect(url_for('admin.employee_leave_request_detail',
+                                    request_id=leave_request.id))
+
+        changed = new_status != leave_request.status
+        leave_request.status = new_status
+        leave_request.admin_response = admin_response or None
+        leave_request.rejection_reason = (
+            rejection_reason or None) if new_status == 'rejected' else None
+        leave_request.reviewed_by = current_user.id
+        leave_request.reviewed_at = datetime.utcnow()
+
+        if changed:
+            employee = leave_request.employee
+            target_user_id = employee.user_id if employee else None
+            _notify_employee_user(
+                target_user_id,
+                leave_request.school_id,
+                'تحديث طلب الإجازة',
+                f'تم تحديث طلب الإجازة بحالة: {LEAVE_STATUS[new_status]}.',
+                fcm_data={
+                    'type':       'employee_leave_request_update',
+                    'request_id': str(leave_request.id),
+                    'screen':     'leave_requests',
+                },
+            )
+        db.session.commit()
+        flash('تم تحديث طلب الإجازة بنجاح.', 'success')
+        return redirect(url_for('admin.employee_leave_request_detail',
+                                request_id=leave_request.id))
+
+    return render_template('admin/employee_leave_request_detail.html',
                            leave_request=leave_request,
                            status_labels=LEAVE_STATUS,
                            type_labels=LEAVE_TYPES)
