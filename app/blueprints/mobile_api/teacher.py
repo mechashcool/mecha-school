@@ -11,6 +11,7 @@ GET  /teacher/sections                 sections I teach (homeroom + subject) wit
 GET  /teacher/sections/<id>/students   students in one of my sections
 GET  /teacher/students/<id>            student profile (only allowed sections)
 GET  /teacher/schedule                 my weekly timetable (subject_id, section_id, day_label included)
+GET  /teacher/my-attendance            my own employee-attendance records + summary (current academic year)
 GET  /teacher/exams                    exams for my sections (subject_id, section_id, title, max_score)
 POST /teacher/exams                    create an exam — accepts title + max_score; validates subject assignment
 GET  /teacher/exams/<id>               exam detail + entered results (subject_id, section_id, title)
@@ -40,7 +41,9 @@ from sqlalchemy import select
 
 from app.models import (
     db,
+    AcademicYear,
     Employee,
+    EmployeeAttendance,
     Exam,
     ExamResult,
     Homework,
@@ -163,6 +166,32 @@ _DAY_NAMES_EN = {
 
 def _fmt_time(t) -> str | None:
     return t.strftime('%H:%M') if t else None
+
+
+def _emp_att_status(raw: str | None) -> str:
+    """
+    Normalize a stored employee-attendance status for the mobile client.
+
+    Stored values in EmployeeAttendance.status are 'present' | 'late' | 'absent'.
+    The value is lower-cased/trimmed defensively and returned. Any value other
+    than present/late/absent is passed through unchanged and is NOT counted in
+    the summary present/late/absent buckets (still counted in total_days).
+    """
+    return (raw or '').strip().lower()
+
+
+def _emp_att_notes(rec: EmployeeAttendance) -> str:
+    """
+    Safe notes value for the mobile client.
+
+    AiFace device records store an internal dedup marker ("AI Face HH:MM:SS")
+    in the notes column — an implementation detail that must not be exposed.
+    For aiface-sourced rows we return an empty string; manual notes are returned
+    as-is. NULL notes become an empty string.
+    """
+    if rec.source == 'aiface':
+        return ''
+    return rec.notes or ''
 
 
 def _teacher_subjects(emp: Employee) -> list[dict]:
@@ -459,6 +488,100 @@ def teacher_schedule():
             }
             for sch in schedules
         ],
+    )
+
+
+# ─── My (own) employee attendance ─────────────────────────────────────────────
+
+@mobile_api_bp.route('/teacher/my-attendance', methods=['GET'])
+@jwt_required()
+@role_required('teacher')
+def teacher_my_attendance():
+    """
+    The authenticated teacher's OWN employee-attendance records for the current
+    academic year.
+
+    Security:
+      • Teacher/employee identity is resolved entirely from the JWT via
+        _get_employee() (Employee.user_id link). No teacher_id / employee_id /
+        user_id / school_id is ever read from the query string, route, headers,
+        or body — any such client value is ignored.
+      • The query is explicitly scoped to the employee's own school_id,
+        employee_id, AND the school's current academic_year_id, so it cannot
+        return another teacher's or another school's rows even though the ORM
+        global tenant scope is inert on mobile (JWT login happens after the
+        before_request scope is cached).
+
+    Response (200):
+      {
+        "ok": true,
+        "records": [
+          {"id": 1, "date": "2026-06-12", "check_in": "08:00",
+           "check_out": "13:30", "status": "present", "notes": ""}
+        ],
+        "summary": {"total_days": 20, "present_days": 18,
+                    "late_days": 2, "absent_days": 0}
+      }
+
+    No linked employee profile (404):
+      {"ok": false, "error": "teacher_employee_profile_not_found",
+       "message": "No employee profile is associated with this account"}
+    """
+    emp = _get_employee()
+    if not emp:
+        return jsonify({
+            'ok':      False,
+            'error':   'teacher_employee_profile_not_found',
+            'message': 'No employee profile is associated with this account',
+        }), 404
+
+    empty_summary = {'total_days': 0, 'present_days': 0, 'late_days': 0, 'absent_days': 0}
+
+    # Employee attendance is academic-year scoped. Resolve the school's current
+    # active year explicitly (mobile has no historical view-year selection).
+    # If the school has no active year configured, fail closed with no data.
+    year = AcademicYear.query.filter_by(school_id=emp.school_id, is_current=True).first()
+    if not year:
+        return ok(records=[], summary=dict(empty_summary))
+
+    # Explicit isolation: own school_id + own employee_id + current year.
+    records = (EmployeeAttendance.query
+               .filter_by(school_id=emp.school_id,
+                          employee_id=emp.id,
+                          academic_year_id=year.id)
+               .order_by(EmployeeAttendance.date.desc())
+               .all())
+
+    out = []
+    present_days = late_days = absent_days = 0
+    for r in records:
+        status = _emp_att_status(r.status)
+        if status == 'present':
+            present_days += 1
+        elif status == 'late':
+            late_days += 1
+        elif status == 'absent':
+            absent_days += 1
+        out.append({
+            'id':        r.id,
+            'date':      r.date.isoformat() if r.date else None,
+            'check_in':  _fmt_time(r.check_in),
+            'check_out': _fmt_time(r.check_out),
+            'status':    status,
+            'notes':     _emp_att_notes(r),
+        })
+
+    # total_days = number of attendance rows for the current academic year.
+    # Equals distinct attendance dates because of the (employee_id, date)
+    # unique constraint, so duplicate device punches cannot inflate it.
+    return ok(
+        records=out,
+        summary={
+            'total_days':   len(records),
+            'present_days': present_days,
+            'late_days':    late_days,
+            'absent_days':  absent_days,
+        },
     )
 
 
