@@ -107,7 +107,7 @@
 </div>
 
 {% if group_stats %}
-<div class="table-responsive">
+<div class="table-responsive" id="groupsTableWrap">
   <table class="table table-hover align-middle">
     <thead class="table-light">
       <tr>
@@ -124,7 +124,7 @@
     <tbody>
       {% for stat in group_stats %}
       {% set room = stat.room %}
-      <tr>
+      <tr class="group-row" data-href="{{ url_for('chat.room_detail', room_id=room.id) }}">
         <td>
           <a href="{{ url_for('chat.room_detail', room_id=room.id) }}" class="fw-semibold text-decoration-none">
             {{ room.name }}
@@ -218,5 +218,29 @@
 <style>
 .private-room-card { transition: box-shadow .15s, transform .15s; }
 .private-room-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,.12) !important; transform: translateY(-1px); }
+.group-row { cursor: pointer; }
+.group-row:hover > td { background-color: rgba(var(--bs-primary-rgb), .04); }
 </style>
+
+<script>
+(function () {
+  /* ── Dropdown: Popper fixed strategy to escape table-responsive overflow ── */
+  if (typeof bootstrap !== 'undefined' && bootstrap.Dropdown) {
+    document.querySelectorAll('#groupsTableWrap [data-bs-toggle="dropdown"]').forEach(function (el) {
+      bootstrap.Dropdown.getOrCreateInstance(el, {
+        popperConfig: { strategy: 'fixed' }
+      });
+    });
+  }
+
+  /* ── Full-row navigation — skip clicks on interactive descendants ─────── */
+  document.querySelectorAll('.group-row').forEach(function (row) {
+    row.addEventListener('click', function (e) {
+      if (e.target.closest('.dropdown, a, button, form')) return;
+      var href = row.dataset.href;
+      if (href) window.location.href = href;
+    });
+  });
+})();
+</script>
 {% endblock %}
