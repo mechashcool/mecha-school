@@ -155,15 +155,16 @@ def generate_fee_receipt(installment, school_settings=None, print_date=None) -> 
     from reportlab.pdfbase.ttfonts import TTFont
     from flask import current_app
 
+    from app.utils.arabic_numbers import amount_to_words_iqd
+
     arabic_font_registered = _register_arabic_fonts(pdfmetrics, TTFont)
 
     # Set pagesize=A4 in portrait mode
     pagesize = portrait(A4)
     page_width, page_height = pagesize
-    
-    # Ensure all content stays within the top 400 points of the page to avoid page breaks
-    # Use a single Frame and PageTemplate that doesn't overflow
-    max_content_height = 400  # points - this ensures single page output
+
+    # 450 pt gives enough vertical room for the amount-in-words row (may wrap to 2 lines)
+    max_content_height = 450  # points - this ensures single page output
     frame = Frame(1*cm, page_height - max_content_height - 1*cm, 
                   page_width - 2*cm, max_content_height,
                   leftPadding=0, bottomPadding=0, rightPadding=0, topPadding=0)
@@ -291,6 +292,19 @@ def generate_fee_receipt(installment, school_settings=None, print_date=None) -> 
         else:
             return Paragraph(processed_text, ParagraphStyle('data_cell', fontSize=8, textColor=colors.black, alignment=0))
     
+    # Amount in words — derived from the persisted received_amount (not client input)
+    _paid_int = int(float(installment.received_amount or 0))
+    _amount_words = amount_to_words_iqd(_paid_int)
+    _amount_words_text = (_amount_words + ' فقط لا غير') if _amount_words else '—'
+
+    # Right-aligned Arabic style for the amount-in-words data cell
+    if arabic_font_registered:
+        _words_cell_style = ParagraphStyle('_wcs', fontName='Amiri', fontSize=9,
+                                           alignment=2, textColor=colors.black)
+    else:
+        _words_cell_style = ParagraphStyle('_wcs', fontSize=9,
+                                           alignment=2, textColor=colors.black)
+
     data = [
         [create_arabic_paragraph('رقم الإيصال / Receipt No', arabic_bold), create_data_paragraph(installment.receipt_no or '—')],
         [create_arabic_paragraph('اسم الطالب / Student Name', arabic_bold), create_data_paragraph(student.full_name)],
@@ -298,6 +312,8 @@ def generate_fee_receipt(installment, school_settings=None, print_date=None) -> 
         [create_arabic_paragraph('نوع الرسم / Fee Type', arabic_bold), create_data_paragraph(fee_record.fee_type.name)],
         [create_arabic_paragraph('القسط / Installment', arabic_bold), create_data_paragraph(f"#{installment.installment_no}")],
         [create_arabic_paragraph('المبلغ المدفوع / Amount Paid', arabic_bold), create_data_paragraph(f"{float(installment.received_amount):,.2f} {school_settings.currency_symbol if school_settings else 'د.ع'}")],
+        [create_arabic_paragraph('المبلغ كتابةً / Amount in Words', arabic_bold),
+         Paragraph(_shape_arabic_text(_amount_words_text), _words_cell_style)],
         [create_arabic_paragraph('المبلغ المتبقي / Remaining Balance', arabic_bold), create_data_paragraph(f"{remaining:,.2f} {school_settings.currency_symbol if school_settings else 'د.ع'}")],
         [create_arabic_paragraph('تاريخ الاستحقاق / Due Date', arabic_bold), create_data_paragraph(installment.due_date.strftime('%Y-%m-%d') if installment.due_date else '—')],
         [create_arabic_paragraph('تاريخ إصدار الوصل / Receipt Issue Date', arabic_bold), create_data_paragraph(issue_date.strftime('%Y-%m-%d'))],
