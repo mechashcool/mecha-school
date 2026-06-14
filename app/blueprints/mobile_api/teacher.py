@@ -457,35 +457,91 @@ def teacher_student_profile(student_id):
 @jwt_required()
 @role_required('teacher')
 def teacher_schedule():
-    """The teacher's weekly timetable (periods where teacher_id == emp.id)."""
+    """
+    The teacher's weekly timetable for the current academic year.
+
+    Security:
+      • Teacher/employee identity is resolved entirely from the JWT via
+        _get_employee() (Employee.user_id link). No teacher_id / employee_id /
+        user_id / school_id / academic_year_id is ever read from the client.
+      • The query is explicitly scoped to the employee's own school_id,
+        employee_id (teacher_id), AND the school's current academic_year_id,
+        so historical-year rows are excluded and no other teacher's schedule
+        can be returned. The ORM global tenant scope is inert on mobile (JWT
+        login happens inside the view, after before_request has already cached
+        the scope) — explicit column filters are mandatory.
+      • Both section-based (section_id set, grade_id NULL) and grade-based
+        (grade_id set, section_id NULL) schedule rows are handled safely.
+    """
     emp = _get_employee()
     if not emp:
-        return err('employee_profile_not_found', 404)
+        return jsonify({
+            'ok':      False,
+            'error':   'teacher_employee_profile_not_found',
+            'message': 'No employee profile is associated with this account',
+        }), 404
 
+    # Resolve the school's current active academic year explicitly.
+    # Mobile has no historical view-year selection; if no active year exists,
+    # return an empty schedule rather than leaking historical data.
+    year = AcademicYear.query.filter_by(school_id=emp.school_id, is_current=True).first()
+    if not year:
+        return ok(schedule=[])
+
+    # Explicit three-column isolation:
+    #   school_id        → prevent cross-school leakage
+    #   academic_year_id → only current year's timetable
+    #   teacher_id       → only this teacher's periods
     schedules = (Schedule.query
-                 .filter_by(teacher_id=emp.id)
+                 .filter(
+                     Schedule.school_id        == emp.school_id,
+                     Schedule.academic_year_id == year.id,
+                     Schedule.teacher_id       == emp.id,
+                 )
                  .order_by(Schedule.day_of_week, Schedule.start_time)
                  .all())
+
+    def _grade_id(sch: Schedule) -> int | None:
+        # Grade-based entry: grade_id is stored directly on the row.
+        if sch.grade_id:
+            return sch.grade_id
+        # Section-based entry: derive from the linked section's grade.
+        if sch.section and sch.section.grade_id:
+            return sch.section.grade_id
+        return None
+
+    def _grade_name(sch: Schedule) -> str | None:
+        # Grade-based entry: use the directly linked grade relationship.
+        if sch.grade_id and sch.grade:
+            return sch.grade.name
+        # Section-based entry: derive from the linked section's grade.
+        if sch.section and sch.section.grade:
+            return sch.section.grade.name
+        return None
 
     return ok(
         schedule=[
             {
                 'id':           sch.id,
-                'day':          sch.day_of_week,
+                # 'day' returns the English lowercase name per the Flutter spec.
+                # 'day_int' exposes the raw 0-6 integer for callers that need it.
+                'day':          _DAY_NAMES_EN.get(sch.day_of_week, ''),
+                'day_int':      sch.day_of_week,
                 'day_en':       _DAY_NAMES_EN.get(sch.day_of_week, ''),
                 'day_label':    _DAY_NAMES.get(sch.day_of_week, ''),
                 'day_name':     _DAY_NAMES.get(sch.day_of_week, ''),
-                'subject_id':   sch.subject_id,
-                'subject_name': sch.subject.name       if sch.subject else None,
-                'subject':      sch.subject.name       if sch.subject else None,
-                'subject_code': sch.subject.code       if sch.subject else None,
-                'section_id':   sch.section_id,
-                'section_name': sch.section.name       if sch.section else None,
-                'section':      sch.section.name       if sch.section else None,
-                'grade_name':   sch.section.grade.name if sch.section and sch.section.grade else None,
-                'grade':        sch.section.grade.name if sch.section and sch.section.grade else None,
                 'start_time':   _fmt_time(sch.start_time),
                 'end_time':     _fmt_time(sch.end_time),
+                'grade_id':     _grade_id(sch),
+                'grade_name':   _grade_name(sch),
+                'grade':        _grade_name(sch),
+                'section_id':   sch.section_id,
+                'section_name': sch.section.name if sch.section else None,
+                'section':      sch.section.name if sch.section else None,
+                'subject_id':   sch.subject_id,
+                'subject_name': sch.subject.name if sch.subject else None,
+                'subject':      sch.subject.name if sch.subject else None,
+                'subject_code': sch.subject.code if sch.subject else None,
                 'room':         sch.room,
             }
             for sch in schedules
