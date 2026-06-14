@@ -1082,25 +1082,44 @@ def leave_records():
 
     active_year = get_active_year(school_id) if school_id else None
 
+    stages = []
+    stage = ''
+
     if tab == 'students':
         q = request.args.get('q', '').strip()
+        stage = request.args.get('stage', '').strip()
         grade_id = request.args.get('grade_id', type=int)
         section_id = request.args.get('section_id', type=int)
 
         if school_id and active_year:
-            grades = (Grade.query
-                      .execution_options(include_all_years=True)
-                      .filter_by(school_id=school_id, academic_year_id=active_year.id)
-                      .order_by(Grade.stage, Grade.name)
-                      .all())
-        if grade_id and school_id:
-            sections = (Section.query
-                        .execution_options(include_all_years=True)
-                        .filter_by(grade_id=grade_id, school_id=school_id)
-                        .order_by(Section.name)
-                        .all())
+            all_grades = (Grade.query
+                          .execution_options(include_all_years=True)
+                          .filter_by(school_id=school_id, academic_year_id=active_year.id)
+                          .order_by(Grade.stage, Grade.name)
+                          .all())
+            stages = sorted(set(g.stage for g in all_grades if g.stage))
+            if stage:
+                grades = [g for g in all_grades if g.stage == stage]
+            else:
+                grades = all_grades
+        if grade_id and school_id and active_year:
+            # Verify grade belongs to this school/year before using it
+            valid_grade = (Grade.query
+                           .execution_options(include_all_years=True)
+                           .filter_by(id=grade_id, school_id=school_id,
+                                      academic_year_id=active_year.id)
+                           .first())
+            if valid_grade:
+                sections = (Section.query
+                            .execution_options(include_all_years=True)
+                            .filter_by(grade_id=grade_id, school_id=school_id,
+                                       academic_year_id=active_year.id)
+                            .order_by(Section.name)
+                            .all())
+            else:
+                grade_id = None
 
-        searched = bool(q or grade_id or section_id)
+        searched = bool(q or stage or grade_id or section_id)
         if searched and school_id:
             skip = False
             student_q = (Student.query
@@ -1118,6 +1137,23 @@ def leave_records():
                 if grade_section_ids:
                     student_q = student_q.filter(
                         Student.section_id.in_(grade_section_ids))
+                else:
+                    skip = True
+            elif stage and active_year:
+                stage_grade_ids = [g.id for g in grades]
+                if stage_grade_ids:
+                    stage_section_ids = [s.id for s in
+                                         Section.query
+                                         .execution_options(include_all_years=True)
+                                         .filter(Section.grade_id.in_(stage_grade_ids),
+                                                 Section.school_id == school_id,
+                                                 Section.academic_year_id == active_year.id)
+                                         .all()]
+                    if stage_section_ids:
+                        student_q = student_q.filter(
+                            Student.section_id.in_(stage_section_ids))
+                    else:
+                        skip = True
                 else:
                     skip = True
             students = ([] if skip
@@ -1151,6 +1187,8 @@ def leave_records():
     return render_template('admin/leave_records.html',
                            tab=tab,
                            q=q,
+                           stage=stage,
+                           stages=stages,
                            grade_id=grade_id,
                            section_id=section_id,
                            grades=grades,
@@ -1685,6 +1723,27 @@ def employee_leave_archive(employee_id):
 
 
 # ── AJAX helpers for cascading student-leave dropdowns ─────────────────────────
+
+@admin_bp.route('/api/leave/grades-for-stage')
+@login_required
+@admin_required
+def api_leave_grades_for_stage():
+    """Return grades for a stage (JSON) — scoped by school + active year."""
+    school_id = _admin_scope_id()
+    stage = request.args.get('stage', '').strip()
+    if not school_id or not stage:
+        return jsonify([])
+    active_year = get_active_year(school_id)
+    if not active_year:
+        return jsonify([])
+    grades = (Grade.query
+              .execution_options(include_all_years=True)
+              .filter_by(school_id=school_id, academic_year_id=active_year.id,
+                         stage=stage)
+              .order_by(Grade.name)
+              .all())
+    return jsonify([{'id': g.id, 'name': g.name} for g in grades])
+
 
 @admin_bp.route('/api/leave/sections-for-grade')
 @login_required

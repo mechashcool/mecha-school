@@ -52,18 +52,25 @@
         <input type="text" name="q" class="form-control"
                value="{{ q }}" placeholder="ابحث بالاسم أو الكود...">
       </div>
-      <div class="col-md-3">
+      <div class="col-md-2">
+        <label class="form-label">المرحلة</label>
+        <select name="stage" id="recordStageSelect" class="form-select">
+          <option value="">— كل المراحل —</option>
+          {% for s in stages %}
+          <option value="{{ s }}" {{ 'selected' if stage == s }}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
         <label class="form-label">الصف</label>
         <select name="grade_id" id="recordGradeSelect" class="form-select">
           <option value="">— كل الصفوف —</option>
           {% for g in grades %}
-          <option value="{{ g.id }}" {{ 'selected' if grade_id == g.id }}>
-            {% if g.stage %}{{ g.stage }} / {% endif %}{{ g.name }}
-          </option>
+          <option value="{{ g.id }}" {{ 'selected' if grade_id == g.id }}>{{ g.name }}</option>
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-3">
+      <div class="col-md-2">
         <label class="form-label">الشعبة</label>
         <select name="section_id" id="recordSectionSelect" class="form-select">
           <option value="">— كل الشعب —</option>
@@ -141,28 +148,53 @@
 </div>
 {% endif %}
 
-{# JS: populate section dropdown when grade changes (reuses existing AJAX endpoint) #}
-{% if grades %}
+{# JS: Stage → Grade → Section cascade #}
 <script>
-document.getElementById('recordGradeSelect').addEventListener('change', function () {
-  var gradeId = this.value;
-  var sel = document.getElementById('recordSectionSelect');
-  sel.innerHTML = '<option value="">— كل الشعب —</option>';
-  if (!gradeId) return;
-  fetch('{{ url_for("admin.api_leave_sections_for_grade") }}?grade_id=' + encodeURIComponent(gradeId))
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      data.forEach(function (s) {
-        var opt = document.createElement('option');
-        opt.value = s.id;
-        opt.textContent = s.name;
-        sel.appendChild(opt);
-      });
-    })
-    .catch(function () {});
-});
+(function () {
+  var stageSelect   = document.getElementById('recordStageSelect');
+  var gradeSelect   = document.getElementById('recordGradeSelect');
+  var sectionSelect = document.getElementById('recordSectionSelect');
+
+  function resetSelect(sel, placeholder) {
+    sel.innerHTML = '<option value="">' + placeholder + '</option>';
+  }
+
+  stageSelect.addEventListener('change', function () {
+    var stageVal = this.value;
+    resetSelect(gradeSelect, '— كل الصفوف —');
+    resetSelect(sectionSelect, '— كل الشعب —');
+    if (!stageVal) return;
+    fetch('{{ url_for("admin.api_leave_grades_for_stage") }}?stage=' + encodeURIComponent(stageVal))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        data.forEach(function (g) {
+          var opt = document.createElement('option');
+          opt.value = g.id;
+          opt.textContent = g.name;
+          gradeSelect.appendChild(opt);
+        });
+      })
+      .catch(function () {});
+  });
+
+  gradeSelect.addEventListener('change', function () {
+    var gradeId = this.value;
+    resetSelect(sectionSelect, '— كل الشعب —');
+    if (!gradeId) return;
+    fetch('{{ url_for("admin.api_leave_sections_for_grade") }}?grade_id=' + encodeURIComponent(gradeId))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        data.forEach(function (s) {
+          var opt = document.createElement('option');
+          opt.value = s.id;
+          opt.textContent = s.name;
+          sectionSelect.appendChild(opt);
+        });
+      })
+      .catch(function () {});
+  });
+}());
 </script>
-{% endif %}
 
 {# ════════════════════════════════════════════════════════════════════════
    EMPLOYEES TAB
