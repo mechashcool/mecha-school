@@ -1,0 +1,255 @@
+{% extends "shared/base.html" %}
+{% block title %}سجلات الإجازات{% endblock %}
+{% block page_title %}سجلات الإجازات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">سجلات الإجازات</h1>
+    <p class="page-subtitle">ابحث عن شخص لعرض سجل إجازاته الكامل</p>
+  </div>
+</div>
+
+{# ── Module sub-navigation ── #}
+<div class="d-flex align-items-center gap-4 border-bottom mb-4 pb-2">
+  <a href="{{ url_for('admin.leave_requests_list') }}"
+     class="fw-600 text-decoration-none text-muted pb-2 mb-n2">
+    <i class="bi bi-list-check me-1"></i>الطلبات الحالية
+  </a>
+  <a href="{{ url_for('admin.leave_records') }}"
+     class="fw-600 text-decoration-none text-primary border-bottom border-2 border-primary pb-2 mb-n2">
+    <i class="bi bi-archive me-1"></i>سجلات الإجازات
+  </a>
+</div>
+
+{# ── Person-type tabs ── #}
+<ul class="nav nav-tabs mb-4">
+  <li class="nav-item">
+    <a href="{{ url_for('admin.leave_records', tab='students') }}"
+       class="nav-link {{ 'active' if tab == 'students' }}">
+      <i class="bi bi-person-lines-fill me-1"></i>سجلات الطلاب
+    </a>
+  </li>
+  <li class="nav-item">
+    <a href="{{ url_for('admin.leave_records', tab='employees') }}"
+       class="nav-link {{ 'active' if tab == 'employees' }}">
+      <i class="bi bi-briefcase me-1"></i>سجلات الموظفين
+    </a>
+  </li>
+</ul>
+
+{# ════════════════════════════════════════════════════════════════════════
+   STUDENTS TAB
+   ════════════════════════════════════════════════════════════════════════ #}
+{% if tab == 'students' %}
+
+<form method="GET" class="card mb-4">
+  <input type="hidden" name="tab" value="students">
+  <div class="card-body">
+    <div class="row g-3 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label">اسم الطالب أو الكود</label>
+        <input type="text" name="q" class="form-control"
+               value="{{ q }}" placeholder="ابحث بالاسم أو الكود...">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">الصف</label>
+        <select name="grade_id" id="recordGradeSelect" class="form-select">
+          <option value="">— كل الصفوف —</option>
+          {% for g in grades %}
+          <option value="{{ g.id }}" {{ 'selected' if grade_id == g.id }}>
+            {% if g.stage %}{{ g.stage }} / {% endif %}{{ g.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">الشعبة</label>
+        <select name="section_id" id="recordSectionSelect" class="form-select">
+          <option value="">— كل الشعب —</option>
+          {% for s in sections %}
+          <option value="{{ s.id }}" {{ 'selected' if section_id == s.id }}>{{ s.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2 d-flex gap-2">
+        <button type="submit" class="btn btn-primary flex-fill">
+          <i class="bi bi-search me-1"></i>بحث
+        </button>
+        <a href="{{ url_for('admin.leave_records', tab='students') }}"
+           class="btn btn-outline-secondary" title="مسح">×</a>
+      </div>
+    </div>
+  </div>
+</form>
+
+{# ── Student search results ── #}
+{% if searched %}
+  {% if students %}
+  <div class="card">
+    <div class="card-body py-2 px-3 border-bottom">
+      <span class="small text-muted">{{ students|length }} طالب
+        {% if students|length == 200 %} (الحد الأقصى للنتائج 200){% endif %}
+      </span>
+    </div>
+    <div class="table-wrapper">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>الطالب</th>
+            <th>الكود</th>
+            <th>المرحلة / الصف / الشعبة</th>
+            <th>سجل الإجازات</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for student in students %}
+          {% set section = student.section %}
+          {% set grade   = section.grade if section else none %}
+          <tr>
+            <td class="fw-600">{{ student.full_name }}</td>
+            <td class="text-muted small">{{ student.student_id }}</td>
+            <td class="small">
+              {% if grade %}{{ grade.stage or '' }}{% endif %}
+              {% if grade and section %} / {{ grade.name }} / {{ section.name }}
+              {% elif grade %} / {{ grade.name }}
+              {% elif section %} {{ section.name }}
+              {% else %}-{% endif %}
+            </td>
+            <td>
+              <a href="{{ url_for('admin.student_leave_archive', student_id=student.id, ref='records') }}"
+                 class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-archive me-1"></i>عرض السجل
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="text-center text-muted py-5">
+    <i class="bi bi-search" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+    لا توجد نتائج مطابقة للبحث.
+  </div>
+  {% endif %}
+{% else %}
+<div class="text-center text-muted py-5">
+  <i class="bi bi-person-lines-fill" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+  ابحث عن طالب لعرض سجل إجازاته الكامل.
+</div>
+{% endif %}
+
+{# JS: populate section dropdown when grade changes (reuses existing AJAX endpoint) #}
+{% if grades %}
+<script>
+document.getElementById('recordGradeSelect').addEventListener('change', function () {
+  var gradeId = this.value;
+  var sel = document.getElementById('recordSectionSelect');
+  sel.innerHTML = '<option value="">— كل الشعب —</option>';
+  if (!gradeId) return;
+  fetch('{{ url_for("admin.api_leave_sections_for_grade") }}?grade_id=' + encodeURIComponent(gradeId))
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      data.forEach(function (s) {
+        var opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = s.name;
+        sel.appendChild(opt);
+      });
+    })
+    .catch(function () {});
+});
+</script>
+{% endif %}
+
+{# ════════════════════════════════════════════════════════════════════════
+   EMPLOYEES TAB
+   ════════════════════════════════════════════════════════════════════════ #}
+{% else %}
+
+<form method="GET" class="card mb-4">
+  <input type="hidden" name="tab" value="employees">
+  <div class="card-body">
+    <div class="row g-3 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label">اسم الموظف أو الكود</label>
+        <input type="text" name="q" class="form-control"
+               value="{{ q }}" placeholder="ابحث بالاسم أو الكود...">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">المسمى الوظيفي</label>
+        <input type="text" name="job_title" class="form-control"
+               value="{{ job_title }}" placeholder="مسمى وظيفي...">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">القسم</label>
+        <input type="text" name="department" class="form-control"
+               value="{{ department }}" placeholder="القسم...">
+      </div>
+      <div class="col-md-2 d-flex gap-2">
+        <button type="submit" class="btn btn-primary flex-fill">
+          <i class="bi bi-search me-1"></i>بحث
+        </button>
+        <a href="{{ url_for('admin.leave_records', tab='employees') }}"
+           class="btn btn-outline-secondary" title="مسح">×</a>
+      </div>
+    </div>
+  </div>
+</form>
+
+{# ── Employee search results ── #}
+{% if searched %}
+  {% if employees %}
+  <div class="card">
+    <div class="card-body py-2 px-3 border-bottom">
+      <span class="small text-muted">{{ employees|length }} موظف
+        {% if employees|length == 200 %} (الحد الأقصى للنتائج 200){% endif %}
+      </span>
+    </div>
+    <div class="table-wrapper">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>الموظف</th>
+            <th>الكود</th>
+            <th>المسمى الوظيفي</th>
+            <th>القسم</th>
+            <th>سجل الإجازات</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for emp in employees %}
+          <tr>
+            <td class="fw-600">{{ emp.full_name }}</td>
+            <td class="text-muted small">{{ emp.employee_id }}</td>
+            <td class="small">{{ emp.job_title or '-' }}</td>
+            <td class="small">{{ emp.department or '-' }}</td>
+            <td>
+              <a href="{{ url_for('admin.employee_leave_archive', employee_id=emp.id, ref='records') }}"
+                 class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-archive me-1"></i>عرض السجل
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="text-center text-muted py-5">
+    <i class="bi bi-search" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+    لا توجد نتائج مطابقة للبحث.
+  </div>
+  {% endif %}
+{% else %}
+<div class="text-center text-muted py-5">
+  <i class="bi bi-briefcase" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+  ابحث عن موظف لعرض سجل إجازاته الكامل.
+</div>
+{% endif %}
+
+{% endif %}
+{% endblock %}

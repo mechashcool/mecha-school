@@ -5,6 +5,7 @@
 {% block content %}
 {% set section = student.section %}
 {% set grade   = section.grade if section else none %}
+{% set _back_url = url_for('admin.leave_records', tab='students') if request.args.get('ref') == 'records' else url_for('admin.leave_requests_list', tab='students') %}
 
 <div class="page-header">
   <div>
@@ -15,7 +16,7 @@
     <a href="{{ url_for('admin.leave_request_create_admin') }}" class="btn btn-primary">
       <i class="bi bi-plus-lg me-1"></i>إضافة إجازة
     </a>
-    <a href="{{ url_for('admin.leave_requests_list', tab='students') }}" class="btn btn-outline-secondary">
+    <a href="{{ _back_url }}" class="btn btn-outline-secondary">
       <i class="bi bi-arrow-right me-1"></i>رجوع
     </a>
   </div>

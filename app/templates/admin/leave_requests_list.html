@@ -6,7 +6,7 @@
 <div class="page-header">
   <div>
     <h1 class="page-title">طلبات الإجازة</h1>
-    <p class="page-subtitle">إجازات الطلاب والموظفين</p>
+    <p class="page-subtitle">الطلبات الحالية والمعلقة</p>
   </div>
   {% if tab == 'employees' %}
   <a href="{{ url_for('admin.employee_leave_request_create_admin') }}" class="btn btn-primary">
@@ -19,7 +19,19 @@
   {% endif %}
 </div>
 
-{# ── Tab navigation ── #}
+{# ── Module sub-navigation ── #}
+<div class="d-flex align-items-center gap-4 border-bottom mb-4 pb-2">
+  <a href="{{ url_for('admin.leave_requests_list') }}"
+     class="fw-600 text-decoration-none text-primary border-bottom border-2 border-primary pb-2 mb-n2">
+    <i class="bi bi-list-check me-1"></i>الطلبات الحالية
+  </a>
+  <a href="{{ url_for('admin.leave_records') }}"
+     class="fw-600 text-decoration-none text-muted pb-2 mb-n2">
+    <i class="bi bi-archive me-1"></i>سجلات الإجازات
+  </a>
+</div>
+
+{# ── Person-type tabs ── #}
 <ul class="nav nav-tabs mb-4">
   <li class="nav-item">
     <a href="{{ url_for('admin.leave_requests_list', tab='students') }}"
@@ -48,14 +60,8 @@
    ════════════════════════════════════════════════════════════════════════ #}
 {% if tab == 'students' %}
 
-{# ── Summary cards ── #}
+{# ── Status filter cards (show all-time stats; clicking filters the table) ── #}
 <div class="row g-3 mb-4">
-  <div class="col-6 col-md-3">
-    <div class="card text-center py-3">
-      <div class="fw-700 fs-24">{{ student_stats.total }}</div>
-      <div class="text-muted small">إجمالي الطلبات</div>
-    </div>
-  </div>
   <div class="col-6 col-md-3">
     <a href="{{ url_for('admin.leave_requests_list', tab='students', status='pending') }}"
        class="card text-center py-3 text-decoration-none d-block {{ 'border-warning' if status_filter == 'pending' }}">
@@ -77,24 +83,30 @@
       <div class="text-muted small">مرفوضة</div>
     </a>
   </div>
-</div>
-
-{# ── Status filter bar ── #}
-<div class="mb-3 d-flex gap-2 flex-wrap">
-  <a href="{{ url_for('admin.leave_requests_list', tab='students') }}"
-     class="btn btn-sm {{ 'btn-secondary' if not status_filter else 'btn-outline-secondary' }}">
-    الكل ({{ student_stats.total }})
-  </a>
-  {% for key, label in status_labels.items() %}
-  <a href="{{ url_for('admin.leave_requests_list', tab='students', status=key) }}"
-     class="btn btn-sm {{ 'btn-secondary' if status_filter == key else 'btn-outline-secondary' }}">
-    {{ label }}
-  </a>
-  {% endfor %}
+  <div class="col-6 col-md-3">
+    <a href="{{ url_for('admin.leave_requests_list', tab='students', status='all') }}"
+       class="card text-center py-3 text-decoration-none d-block {{ 'border-secondary' if status_filter == 'all' }}">
+      <div class="fw-700 fs-24">{{ student_stats.total }}</div>
+      <div class="text-muted small">الكل</div>
+    </a>
+  </div>
 </div>
 
 {# ── Student request table ── #}
 <div class="card">
+  <div class="card-body py-2 px-3 border-bottom d-flex align-items-center justify-content-between">
+    <span class="small text-muted">
+      {{ student_requests|length }} طلب
+      {% if status_filter == 'pending' %}<span class="text-warning fw-600">قيد الانتظار</span>
+      {% elif status_filter == 'approved' %}<span class="text-success fw-600">موافق عليها</span>
+      {% elif status_filter == 'rejected' %}<span class="text-danger fw-600">مرفوضة</span>
+      {% else %}<span class="fw-600">(الكل)</span>{% endif %}
+    </span>
+    <a href="{{ url_for('admin.leave_records', tab='students') }}"
+       class="btn btn-sm btn-outline-secondary">
+      <i class="bi bi-archive me-1"></i>سجلات الطلاب
+    </a>
+  </div>
   <div class="table-wrapper">
     <table class="table table-hover mb-0">
       <thead>
@@ -119,7 +131,7 @@
           <td class="text-muted small">{{ lr.id }}</td>
           <td>
             {% if student %}
-            <a href="{{ url_for('admin.student_leave_archive', student_id=student.id) }}"
+            <a href="{{ url_for('admin.student_leave_archive', student_id=student.id, ref='requests') }}"
                class="fw-600 text-decoration-none link-primary"
                title="أرشيف إجازات {{ student.full_name }}">
               {{ student.full_name }}
@@ -158,7 +170,7 @@
         <tr>
           <td colspan="9" class="text-center text-muted py-5">
             <i class="bi bi-calendar2-check" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-            لا توجد طلبات إجازة.
+            {% if status_filter == 'pending' %}لا توجد طلبات معلقة.{% else %}لا توجد طلبات.{% endif %}
           </td>
         </tr>
         {% endfor %}
@@ -172,14 +184,8 @@
    ════════════════════════════════════════════════════════════════════════ #}
 {% else %}
 
-{# ── Summary cards ── #}
+{# ── Status filter cards ── #}
 <div class="row g-3 mb-4">
-  <div class="col-6 col-md-3">
-    <div class="card text-center py-3">
-      <div class="fw-700 fs-24">{{ emp_stats.total }}</div>
-      <div class="text-muted small">إجمالي الطلبات</div>
-    </div>
-  </div>
   <div class="col-6 col-md-3">
     <a href="{{ url_for('admin.leave_requests_list', tab='employees', status='pending') }}"
        class="card text-center py-3 text-decoration-none d-block {{ 'border-warning' if status_filter == 'pending' }}">
@@ -201,24 +207,30 @@
       <div class="text-muted small">مرفوضة</div>
     </a>
   </div>
-</div>
-
-{# ── Status filter bar ── #}
-<div class="mb-3 d-flex gap-2 flex-wrap">
-  <a href="{{ url_for('admin.leave_requests_list', tab='employees') }}"
-     class="btn btn-sm {{ 'btn-secondary' if not status_filter else 'btn-outline-secondary' }}">
-    الكل ({{ emp_stats.total }})
-  </a>
-  {% for key, label in status_labels.items() %}
-  <a href="{{ url_for('admin.leave_requests_list', tab='employees', status=key) }}"
-     class="btn btn-sm {{ 'btn-secondary' if status_filter == key else 'btn-outline-secondary' }}">
-    {{ label }}
-  </a>
-  {% endfor %}
+  <div class="col-6 col-md-3">
+    <a href="{{ url_for('admin.leave_requests_list', tab='employees', status='all') }}"
+       class="card text-center py-3 text-decoration-none d-block {{ 'border-secondary' if status_filter == 'all' }}">
+      <div class="fw-700 fs-24">{{ emp_stats.total }}</div>
+      <div class="text-muted small">الكل</div>
+    </a>
+  </div>
 </div>
 
 {# ── Employee request table ── #}
 <div class="card">
+  <div class="card-body py-2 px-3 border-bottom d-flex align-items-center justify-content-between">
+    <span class="small text-muted">
+      {{ emp_requests|length }} طلب
+      {% if status_filter == 'pending' %}<span class="text-warning fw-600">قيد الانتظار</span>
+      {% elif status_filter == 'approved' %}<span class="text-success fw-600">موافق عليها</span>
+      {% elif status_filter == 'rejected' %}<span class="text-danger fw-600">مرفوضة</span>
+      {% else %}<span class="fw-600">(الكل)</span>{% endif %}
+    </span>
+    <a href="{{ url_for('admin.leave_records', tab='employees') }}"
+       class="btn btn-sm btn-outline-secondary">
+      <i class="bi bi-archive me-1"></i>سجلات الموظفين
+    </a>
+  </div>
   <div class="table-wrapper">
     <table class="table table-hover mb-0">
       <thead>
@@ -241,7 +253,7 @@
           <td class="text-muted small">{{ lr.id }}</td>
           <td>
             {% if emp %}
-            <a href="{{ url_for('admin.employee_leave_archive', employee_id=emp.id) }}"
+            <a href="{{ url_for('admin.employee_leave_archive', employee_id=emp.id, ref='requests') }}"
                class="fw-600 text-decoration-none link-primary"
                title="أرشيف إجازات {{ emp.full_name }}">
               {{ emp.full_name }}
@@ -274,7 +286,7 @@
         <tr>
           <td colspan="9" class="text-center text-muted py-5">
             <i class="bi bi-calendar2-check" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-            لا توجد طلبات إجازة.
+            {% if status_filter == 'pending' %}لا توجد طلبات معلقة.{% else %}لا توجد طلبات.{% endif %}
           </td>
         </tr>
         {% endfor %}

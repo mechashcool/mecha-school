@@ -6,7 +6,7 @@ Handles: Dashboard, User Management, Role/Permission Management,
 from flask import (Blueprint, render_template, redirect, url_for,
                    flash, request, jsonify)
 from flask_login import login_required, current_user
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from datetime import date, timedelta, datetime
 import json
 import logging
@@ -1006,43 +1006,45 @@ def complaint_detail(complaint_id):
 @login_required
 @admin_required
 def leave_requests_list():
-    """Unified leave requests page: student and employee leaves in one tabbed view."""
+    """Pending-first unified leave requests page: student and employee leaves."""
     school_id = _admin_scope_id()
 
     tab = request.args.get('tab', 'students').strip()
     if tab not in ('students', 'employees'):
         tab = 'students'
-    status_filter = request.args.get('status', '').strip()
 
-    # ── Student leave data ────────────────────────────────────────────────
-    student_q = LeaveRequest.query.execution_options(include_all_years=True)
+    # 'pending' (default) | 'approved' | 'rejected' | 'all'
+    status_filter = request.args.get('status', 'pending').strip()
+    if status_filter not in list(LEAVE_STATUS.keys()) + ['all']:
+        status_filter = 'pending'
+
+    # ── Student leaves: load ALL for accurate stats, filter display in Python ──
+    sq = LeaveRequest.query.execution_options(include_all_years=True)
     if school_id:
-        student_q = student_q.filter_by(school_id=school_id)
-    student_status = status_filter if tab == 'students' else ''
-    if student_status and student_status in LEAVE_STATUS:
-        student_q = student_q.filter_by(status=student_status)
-    student_requests = student_q.order_by(LeaveRequest.created_at.desc()).all()
+        sq = sq.filter_by(school_id=school_id)
+    all_student = sq.order_by(LeaveRequest.created_at.desc()).all()
     student_stats = {
-        'total':    len(student_requests),
-        'pending':  sum(1 for r in student_requests if r.status == 'pending'),
-        'approved': sum(1 for r in student_requests if r.status == 'approved'),
-        'rejected': sum(1 for r in student_requests if r.status == 'rejected'),
+        'total':    len(all_student),
+        'pending':  sum(1 for r in all_student if r.status == 'pending'),
+        'approved': sum(1 for r in all_student if r.status == 'approved'),
+        'rejected': sum(1 for r in all_student if r.status == 'rejected'),
     }
+    student_requests = (all_student if status_filter == 'all'
+                        else [r for r in all_student if r.status == status_filter])
 
-    # ── Employee leave data ───────────────────────────────────────────────
-    emp_q = EmployeeLeaveRequest.query
+    # ── Employee leaves ─────────────────────────────────────────────────────────
+    eq = EmployeeLeaveRequest.query
     if school_id:
-        emp_q = emp_q.filter_by(school_id=school_id)
-    emp_status = status_filter if tab == 'employees' else ''
-    if emp_status and emp_status in LEAVE_STATUS:
-        emp_q = emp_q.filter_by(status=emp_status)
-    emp_requests = emp_q.order_by(EmployeeLeaveRequest.created_at.desc()).all()
+        eq = eq.filter_by(school_id=school_id)
+    all_emp = eq.order_by(EmployeeLeaveRequest.created_at.desc()).all()
     emp_stats = {
-        'total':    len(emp_requests),
-        'pending':  sum(1 for r in emp_requests if r.status == 'pending'),
-        'approved': sum(1 for r in emp_requests if r.status == 'approved'),
-        'rejected': sum(1 for r in emp_requests if r.status == 'rejected'),
+        'total':    len(all_emp),
+        'pending':  sum(1 for r in all_emp if r.status == 'pending'),
+        'approved': sum(1 for r in all_emp if r.status == 'approved'),
+        'rejected': sum(1 for r in all_emp if r.status == 'rejected'),
     }
+    emp_requests = (all_emp if status_filter == 'all'
+                    else [r for r in all_emp if r.status == status_filter])
 
     return render_template('admin/leave_requests_list.html',
                            tab=tab,
@@ -1054,6 +1056,110 @@ def leave_requests_list():
                            status_labels=LEAVE_STATUS,
                            type_labels=LEAVE_TYPES,
                            source_labels=LEAVE_SOURCE_LABELS)
+
+
+@admin_bp.route('/leave-records')
+@login_required
+@admin_required
+def leave_records():
+    """Leave records search: find a person and view their complete leave history."""
+    school_id = _admin_scope_id()
+
+    tab = request.args.get('tab', 'students').strip()
+    if tab not in ('students', 'employees'):
+        tab = 'students'
+
+    q = ''
+    grade_id = None
+    section_id = None
+    job_title = ''
+    department = ''
+    grades = []
+    sections = []
+    students = None   # None = no search yet; list = search performed
+    employees = None
+    searched = False
+
+    active_year = get_active_year(school_id) if school_id else None
+
+    if tab == 'students':
+        q = request.args.get('q', '').strip()
+        grade_id = request.args.get('grade_id', type=int)
+        section_id = request.args.get('section_id', type=int)
+
+        if school_id and active_year:
+            grades = (Grade.query
+                      .execution_options(include_all_years=True)
+                      .filter_by(school_id=school_id, academic_year_id=active_year.id)
+                      .order_by(Grade.stage, Grade.name)
+                      .all())
+        if grade_id and school_id:
+            sections = (Section.query
+                        .execution_options(include_all_years=True)
+                        .filter_by(grade_id=grade_id, school_id=school_id)
+                        .order_by(Section.name)
+                        .all())
+
+        searched = bool(q or grade_id or section_id)
+        if searched and school_id:
+            skip = False
+            student_q = (Student.query
+                         .execution_options(bypass_tenant_scope=True)
+                         .filter_by(school_id=school_id))
+            if q:
+                student_q = student_q.filter(or_(
+                    Student.full_name.ilike(f'%{q}%'),
+                    Student.student_id.ilike(f'%{q}%'),
+                ))
+            if section_id:
+                student_q = student_q.filter_by(section_id=section_id)
+            elif grade_id:
+                grade_section_ids = [s.id for s in sections]
+                if grade_section_ids:
+                    student_q = student_q.filter(
+                        Student.section_id.in_(grade_section_ids))
+                else:
+                    skip = True
+            students = ([] if skip
+                        else student_q.order_by(Student.full_name).limit(200).all())
+        elif searched:
+            students = []
+
+    else:  # employees
+        q = request.args.get('q', '').strip()
+        job_title = request.args.get('job_title', '').strip()
+        department = request.args.get('department', '').strip()
+
+        searched = bool(q or job_title or department)
+        if searched and school_id:
+            emp_q = (Employee.query
+                     .execution_options(bypass_tenant_scope=True)
+                     .filter_by(school_id=school_id))
+            if q:
+                emp_q = emp_q.filter(or_(
+                    Employee.full_name.ilike(f'%{q}%'),
+                    Employee.employee_id.ilike(f'%{q}%'),
+                ))
+            if job_title:
+                emp_q = emp_q.filter(Employee.job_title.ilike(f'%{job_title}%'))
+            if department:
+                emp_q = emp_q.filter(Employee.department.ilike(f'%{department}%'))
+            employees = emp_q.order_by(Employee.full_name).limit(200).all()
+        elif searched:
+            employees = []
+
+    return render_template('admin/leave_records.html',
+                           tab=tab,
+                           q=q,
+                           grade_id=grade_id,
+                           section_id=section_id,
+                           grades=grades,
+                           sections=sections,
+                           students=students,
+                           job_title=job_title,
+                           department=department,
+                           employees=employees,
+                           searched=searched)
 
 
 @admin_bp.route('/leave-requests/<int:request_id>', methods=['GET', 'POST'])
