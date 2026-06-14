@@ -201,7 +201,7 @@ def create_app(config_name=None):
         real_active_year = None   # CURRENT active year only; for write-guards
         all_schools      = []
         all_school_years = []     # all years for this school; for year-switcher
-        sidebar_counts   = {'pending_complaints': 0, 'pending_leave_requests': 0, 'unread_chat': 0}
+        sidebar_counts   = {'pending_complaints': 0, 'pending_leave_requests': 0, 'pending_employee_leave_requests': 0, 'unread_chat': 0}
 
         skip_db_context = (
             request.endpoint is None
@@ -308,9 +308,10 @@ def create_app(config_name=None):
             _counts = get_badge_counts(live=False)
             unread_count = _counts['unread_notifications']
             sidebar_counts = {
-                'pending_complaints':     _counts['pending_complaints'],
-                'pending_leave_requests': _counts['pending_leave_requests'],
-                'unread_chat':            _counts['unread_chat'],
+                'pending_complaints':              _counts['pending_complaints'],
+                'pending_leave_requests':          _counts['pending_leave_requests'],
+                'pending_employee_leave_requests': _counts['pending_employee_leave_requests'],
+                'unread_chat':                     _counts['unread_chat'],
             }
 
         # True when a school user is viewing a historical (non-current) year.

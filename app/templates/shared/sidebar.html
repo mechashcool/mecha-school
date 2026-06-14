@@ -570,31 +570,20 @@
     </li>
     {% endif %}
 
-    {# ═══ Leave Requests — dedicated group ══════════════════════════════ #}
+    {# ═══ Leave Requests — single unified link ══════════════════════════ #}
     {% if current_user.is_admin_user %}
-    <li class="nav-group" data-group="leaves">
-      {% set _leaves_badge = (sidebar_counts.pending_leave_requests or 0) + (sidebar_counts.pending_employee_leave_requests or 0) %}
-      <button type="button" class="nav-group-toggle" aria-expanded="false">
-        <i class="bi bi-calendar2-check group-icon"></i> طلبات الإجازة
+    {% set _leaves_badge = (sidebar_counts.pending_leave_requests or 0) + (sidebar_counts.pending_employee_leave_requests or 0) %}
+    <li class="nav-item">
+      <a href="{{ url_for('admin.leave_requests_list') }}"
+         class="{{ 'active' if request.endpoint and request.endpoint in (
+           'admin.leave_requests_list','admin.leave_request_detail',
+           'admin.leave_request_create_admin','admin.student_leave_archive',
+           'admin.employee_leave_requests_list','admin.employee_leave_request_detail',
+           'admin.employee_leave_request_create_admin','admin.employee_leave_archive'
+         ) }}">
+        <i class="bi bi-calendar2-check"></i> طلبات الإجازة
         {{ nav_badge('leaves_total', _leaves_badge) }}
-        <i class="bi bi-chevron-left chevron"></i>
-      </button>
-      <ul class="nav-group-items">
-        <li class="nav-item">
-          <a href="{{ url_for('admin.leave_requests_list') }}"
-             class="{{ 'active' if request.endpoint and (request.endpoint in ('admin.leave_requests_list','admin.leave_request_detail','admin.leave_request_create_admin','admin.student_leave_archive')) }}">
-            <i class="bi bi-person-lines-fill"></i> طلبات إجازة الطلاب
-            {{ nav_badge('leave', sidebar_counts.pending_leave_requests) }}
-          </a>
-        </li>
-        <li class="nav-item">
-          <a href="{{ url_for('admin.employee_leave_requests_list') }}"
-             class="{{ 'active' if request.endpoint and (request.endpoint in ('admin.employee_leave_requests_list','admin.employee_leave_request_detail','admin.employee_leave_request_create_admin','admin.employee_leave_archive')) }}">
-            <i class="bi bi-briefcase"></i> طلبات إجازة الموظفين
-            {{ nav_badge('employee_leave', sidebar_counts.pending_employee_leave_requests) }}
-          </a>
-        </li>
-      </ul>
+      </a>
     </li>
     {% endif %}
 

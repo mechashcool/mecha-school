@@ -1006,26 +1006,51 @@ def complaint_detail(complaint_id):
 @login_required
 @admin_required
 def leave_requests_list():
+    """Unified leave requests page: student and employee leaves in one tabbed view."""
     school_id = _admin_scope_id()
+
+    tab = request.args.get('tab', 'students').strip()
+    if tab not in ('students', 'employees'):
+        tab = 'students'
     status_filter = request.args.get('status', '').strip()
 
-    query = LeaveRequest.query.execution_options(include_all_years=True)
+    # ── Student leave data ────────────────────────────────────────────────
+    student_q = LeaveRequest.query.execution_options(include_all_years=True)
     if school_id:
-        query = query.filter_by(school_id=school_id)
-    if status_filter and status_filter in LEAVE_STATUS:
-        query = query.filter_by(status=status_filter)
-
-    all_requests = query.order_by(LeaveRequest.created_at.desc()).all()
-    stats = {
-        'total':    len(all_requests),
-        'pending':  sum(1 for r in all_requests if r.status == 'pending'),
-        'approved': sum(1 for r in all_requests if r.status == 'approved'),
-        'rejected': sum(1 for r in all_requests if r.status == 'rejected'),
+        student_q = student_q.filter_by(school_id=school_id)
+    student_status = status_filter if tab == 'students' else ''
+    if student_status and student_status in LEAVE_STATUS:
+        student_q = student_q.filter_by(status=student_status)
+    student_requests = student_q.order_by(LeaveRequest.created_at.desc()).all()
+    student_stats = {
+        'total':    len(student_requests),
+        'pending':  sum(1 for r in student_requests if r.status == 'pending'),
+        'approved': sum(1 for r in student_requests if r.status == 'approved'),
+        'rejected': sum(1 for r in student_requests if r.status == 'rejected'),
     }
+
+    # ── Employee leave data ───────────────────────────────────────────────
+    emp_q = EmployeeLeaveRequest.query
+    if school_id:
+        emp_q = emp_q.filter_by(school_id=school_id)
+    emp_status = status_filter if tab == 'employees' else ''
+    if emp_status and emp_status in LEAVE_STATUS:
+        emp_q = emp_q.filter_by(status=emp_status)
+    emp_requests = emp_q.order_by(EmployeeLeaveRequest.created_at.desc()).all()
+    emp_stats = {
+        'total':    len(emp_requests),
+        'pending':  sum(1 for r in emp_requests if r.status == 'pending'),
+        'approved': sum(1 for r in emp_requests if r.status == 'approved'),
+        'rejected': sum(1 for r in emp_requests if r.status == 'rejected'),
+    }
+
     return render_template('admin/leave_requests_list.html',
-                           requests=all_requests,
-                           stats=stats,
+                           tab=tab,
                            status_filter=status_filter,
+                           student_requests=student_requests,
+                           student_stats=student_stats,
+                           emp_requests=emp_requests,
+                           emp_stats=emp_stats,
                            status_labels=LEAVE_STATUS,
                            type_labels=LEAVE_TYPES,
                            source_labels=LEAVE_SOURCE_LABELS)
@@ -1407,7 +1432,7 @@ def employee_leave_request_create_admin():
     school_id = _admin_scope_id()
     if not school_id:
         flash('لا يمكن تحديد المدرسة.', 'danger')
-        return redirect(url_for('admin.employee_leave_requests_list'))
+        return redirect(url_for('admin.leave_requests_list', tab='employees'))
 
     active_year = get_active_year(school_id)
     employees = (Employee.query
@@ -1495,7 +1520,7 @@ def employee_leave_request_create_admin():
             )
         db.session.commit()
         flash('تم إضافة طلب الإجازة للموظف بنجاح.', 'success')
-        return redirect(url_for('admin.employee_leave_requests_list'))
+        return redirect(url_for('admin.leave_requests_list', tab='employees'))
 
     return render_template('admin/employee_leave_create_admin.html',
                            employees=employees,

@@ -828,13 +828,16 @@
       counts = counts || {};
       // Derived total for the collapsible "communication" group toggle.
       var map = {
-        notifications: counts.unread_notifications || 0,
-        complaints:    counts.pending_complaints || 0,
-        leave:         counts.pending_leave_requests || 0,
-        chat:          counts.unread_chat || 0,
-        comm_total:   (counts.unread_chat || 0)
-                    + (counts.pending_complaints || 0)
-                    + (counts.pending_leave_requests || 0)
+        notifications:  counts.unread_notifications || 0,
+        complaints:     counts.pending_complaints || 0,
+        leave:          counts.pending_leave_requests || 0,
+        employee_leave: counts.pending_employee_leave_requests || 0,
+        leaves_total:  (counts.pending_leave_requests || 0)
+                     + (counts.pending_employee_leave_requests || 0),
+        chat:           counts.unread_chat || 0,
+        comm_total:    (counts.unread_chat || 0)
+                     + (counts.pending_complaints || 0)
+                     + (counts.pending_leave_requests || 0)
       };
       Object.keys(map).forEach(function (key) {
         var n = map[key] || 0;

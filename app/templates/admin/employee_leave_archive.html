@@ -1,5 +1,5 @@
 {% extends "shared/base.html" %}
-{% block title %}أرشيف إجازات الموظف{% endblock %}
+{% block title %}أرشيف إجازات الموظف — {{ employee.full_name }}{% endblock %}
 {% block page_title %}أرشيف إجازات الموظف{% endblock %}
 
 {% block content %}
@@ -12,29 +12,37 @@
     <a href="{{ url_for('admin.employee_leave_request_create_admin') }}" class="btn btn-primary">
       <i class="bi bi-plus-lg me-1"></i>إضافة إجازة
     </a>
-    <a href="{{ url_for('admin.employee_leave_requests_list') }}" class="btn btn-outline-secondary">
+    <a href="{{ url_for('admin.leave_requests_list', tab='employees') }}" class="btn btn-outline-secondary">
       <i class="bi bi-arrow-right me-1"></i>رجوع
     </a>
   </div>
 </div>
 
-{# ── Employee info card ── #}
+{# ── Employee identity card ── #}
 <div class="card mb-4">
   <div class="card-body">
     <div class="row g-3">
-      <div class="col-md-3">
+      <div class="col-6 col-md-2">
         <div class="text-muted small">كود الموظف</div>
         <div class="fw-600">{{ employee.employee_id }}</div>
       </div>
-      <div class="col-md-3">
+      <div class="col-6 col-md-3">
         <div class="text-muted small">الاسم</div>
         <div class="fw-600">{{ employee.full_name }}</div>
       </div>
-      <div class="col-md-3">
+      {% if employee.job_title %}
+      <div class="col-6 col-md-3">
         <div class="text-muted small">المسمى الوظيفي</div>
-        <div class="fw-600">{{ employee.job_title or '-' }}</div>
+        <div class="fw-600">{{ employee.job_title }}</div>
       </div>
-      <div class="col-md-3">
+      {% endif %}
+      {% if employee.department %}
+      <div class="col-6 col-md-2">
+        <div class="text-muted small">القسم</div>
+        <div class="fw-600">{{ employee.department }}</div>
+      </div>
+      {% endif %}
+      <div class="col-6 col-md-2">
         <div class="text-muted small">الحالة</div>
         <div class="fw-600">{{ employee.status or '-' }}</div>
       </div>
@@ -42,7 +50,7 @@
   </div>
 </div>
 
-{# ── Summary cards ── #}
+{# ── Summary cards (this employee only) ── #}
 <div class="row g-3 mb-4">
   <div class="col-6 col-md-3">
     <div class="card text-center py-3">
@@ -111,7 +119,7 @@
   </div>
 </form>
 
-{# ── Archive table ── #}
+{# ── Leave history table ── #}
 <div class="card">
   <div class="table-wrapper">
     <table class="table table-hover mb-0">
@@ -159,8 +167,16 @@
               <span class="badge-status badge-inactive">{{ status_labels.get(lr.status) }}</span>
             {% endif %}
           </td>
-          <td>{{ lr.admin_response or '-' }}</td>
-          <td>{{ lr.rejection_reason or '-' }}</td>
+          <td>
+            {% if lr.admin_response %}
+            <span title="{{ lr.admin_response }}" style="cursor:help">{{ lr.admin_response | truncate(40) }}</span>
+            {% else %}-{% endif %}
+          </td>
+          <td>
+            {% if lr.rejection_reason %}
+            <span title="{{ lr.rejection_reason }}" style="cursor:help">{{ lr.rejection_reason | truncate(40) }}</span>
+            {% else %}-{% endif %}
+          </td>
           <td class="small text-muted">{{ source_labels.get(lr.source or 'employee', lr.source or 'موظف') }}</td>
           <td class="text-nowrap small">{{ lr.created_at.strftime('%Y-%m-%d') if lr.created_at else '-' }}</td>
           <td class="text-nowrap small">{{ lr.reviewed_at.strftime('%Y-%m-%d') if lr.reviewed_at else '-' }}</td>

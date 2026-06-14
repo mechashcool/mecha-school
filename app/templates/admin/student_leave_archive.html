@@ -1,8 +1,11 @@
 {% extends "shared/base.html" %}
-{% block title %}أرشيف إجازات الطالب{% endblock %}
+{% block title %}أرشيف إجازات الطالب — {{ student.full_name }}{% endblock %}
 {% block page_title %}أرشيف إجازات الطالب{% endblock %}
 
 {% block content %}
+{% set section = student.section %}
+{% set grade   = section.grade if section else none %}
+
 <div class="page-header">
   <div>
     <h1 class="page-title">أرشيف إجازات الطالب</h1>
@@ -12,33 +15,43 @@
     <a href="{{ url_for('admin.leave_request_create_admin') }}" class="btn btn-primary">
       <i class="bi bi-plus-lg me-1"></i>إضافة إجازة
     </a>
-    <a href="{{ url_for('admin.leave_requests_list') }}" class="btn btn-outline-secondary">
+    <a href="{{ url_for('admin.leave_requests_list', tab='students') }}" class="btn btn-outline-secondary">
       <i class="bi bi-arrow-right me-1"></i>رجوع
     </a>
   </div>
 </div>
 
-{# ── Student info card ── #}
+{# ── Student identity card ── #}
 <div class="card mb-4">
   <div class="card-body">
     <div class="row g-3">
-      <div class="col-md-3">
+      <div class="col-6 col-md-2">
         <div class="text-muted small">كود الطالب</div>
         <div class="fw-600">{{ student.student_id }}</div>
       </div>
-      <div class="col-md-3">
+      <div class="col-6 col-md-3">
         <div class="text-muted small">الاسم</div>
         <div class="fw-600">{{ student.full_name }}</div>
       </div>
-      {% if student.section %}
-      <div class="col-md-3">
-        <div class="text-muted small">الشعبة</div>
-        <div class="fw-600">
-          {% if student.section.grade %}{{ student.section.grade.name }} / {% endif %}{{ student.section.name }}
-        </div>
+      {% if grade and grade.stage %}
+      <div class="col-6 col-md-2">
+        <div class="text-muted small">المرحلة</div>
+        <div class="fw-600">{{ grade.stage }}</div>
       </div>
       {% endif %}
-      <div class="col-md-3">
+      {% if grade %}
+      <div class="col-6 col-md-2">
+        <div class="text-muted small">الصف</div>
+        <div class="fw-600">{{ grade.name }}</div>
+      </div>
+      {% endif %}
+      {% if section %}
+      <div class="col-6 col-md-2">
+        <div class="text-muted small">الشعبة</div>
+        <div class="fw-600">{{ section.name }}</div>
+      </div>
+      {% endif %}
+      <div class="col-6 col-md-1">
         <div class="text-muted small">الحالة</div>
         <div class="fw-600">{{ student.status or '-' }}</div>
       </div>
@@ -46,7 +59,7 @@
   </div>
 </div>
 
-{# ── Summary cards ── #}
+{# ── Summary cards (this student only) ── #}
 <div class="row g-3 mb-4">
   <div class="col-6 col-md-3">
     <div class="card text-center py-3">
@@ -115,7 +128,7 @@
   </div>
 </form>
 
-{# ── Archive table ── #}
+{# ── Leave history table ── #}
 <div class="card">
   <div class="table-wrapper">
     <table class="table table-hover mb-0">
@@ -128,7 +141,6 @@
           <th>الملاحظات / السبب</th>
           <th>الحالة</th>
           <th>رد الإدارة</th>
-          <th>سبب الرفض</th>
           <th>المصدر</th>
           <th>تاريخ الطلب</th>
           <th>تاريخ المراجعة</th>
@@ -145,9 +157,7 @@
           <td class="text-nowrap">{{ lr.to_date.strftime('%Y-%m-%d') if lr.to_date else '-' }}</td>
           <td>
             {% if lr.notes %}
-            <span title="{{ lr.notes }}" style="cursor:help">
-              {{ lr.notes | truncate(40) }}
-            </span>
+            <span title="{{ lr.notes }}" style="cursor:help">{{ lr.notes | truncate(40) }}</span>
             {% else %}-{% endif %}
           </td>
           <td>
@@ -159,8 +169,11 @@
               <span class="badge-status badge-inactive">{{ status_labels.get(lr.status) }}</span>
             {% endif %}
           </td>
-          <td>{{ lr.manager_note or '-' }}</td>
-          <td>{{ lr.manager_note if lr.status == 'rejected' else '-' }}</td>
+          <td>
+            {% if lr.manager_note %}
+            <span title="{{ lr.manager_note }}" style="cursor:help">{{ lr.manager_note | truncate(40) }}</span>
+            {% else %}-{% endif %}
+          </td>
           <td class="small text-muted">{{ source_labels.get(lr.source or 'parent', lr.source or 'ولي الأمر') }}</td>
           <td class="text-nowrap small">{{ lr.created_at.strftime('%Y-%m-%d') if lr.created_at else '-' }}</td>
           <td class="text-nowrap small">{{ lr.reviewed_at.strftime('%Y-%m-%d') if lr.reviewed_at else '-' }}</td>
@@ -181,7 +194,7 @@
         </tr>
         {% else %}
         <tr>
-          <td colspan="13" class="text-center text-muted py-5">
+          <td colspan="12" class="text-center text-muted py-5">
             <i class="bi bi-calendar2-check" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
             لا توجد سجلات إجازة لهذا الطالب.
           </td>
