@@ -18,33 +18,36 @@
     <form method="POST" enctype="multipart/form-data" id="adminLeaveForm">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
 
-      {# ── Cascading selectors: Grade → Section → Student ── #}
+      {# ── Cascading selectors: Stage → Grade → Section → Student ── #}
+      <div class="mb-3">
+        <label class="form-label">المرحلة <span class="text-danger">*</span></label>
+        <select name="stage" id="stageSelect" class="form-select" required>
+          <option value="">اختر المرحلة</option>
+          {% for s in stages %}
+          <option value="{{ s }}" {% if form_data.get('stage') == s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
       <div class="mb-3">
         <label class="form-label">الصف <span class="text-danger">*</span></label>
-        <select name="grade_id" id="gradeSelect" class="form-select" required>
-          <option value="">— اختر الصف —</option>
-          {% for g in grades %}
-          <option value="{{ g.id }}"
-            {% if (form_data.get('grade_id') or '') == (g.id|string) %}selected{% endif %}>
-            {% if g.stage %}{{ g.stage }} — {% endif %}{{ g.name }}
-          </option>
-          {% endfor %}
+        <select name="grade_id" id="gradeSelect" class="form-select" required disabled>
+          <option value="">اختر الصف</option>
         </select>
       </div>
 
       <div class="mb-3">
         <label class="form-label">الشعبة <span class="text-danger">*</span></label>
         <select name="section_id" id="sectionSelect" class="form-select" required disabled>
-          <option value="">— اختر الشعبة —</option>
+          <option value="">اختر الشعبة</option>
         </select>
       </div>
 
       <div class="mb-3">
         <label class="form-label">الطالب <span class="text-danger">*</span></label>
         <select name="student_id" id="studentSelect" class="form-select" required disabled>
-          <option value="">— اختر الطالب —</option>
+          <option value="">اختر الطالب</option>
         </select>
-        <input type="hidden" name="student_id" id="studentIdHidden">
       </div>
 
       <hr>
@@ -102,25 +105,50 @@
 {% block scripts %}
 <script>
 (function () {
-  const gradeEl   = document.getElementById('gradeSelect');
-  const sectionEl = document.getElementById('sectionSelect');
-  const studentEl = document.getElementById('studentSelect');
+  var GRADES = {{ grades_json | safe }};
+
+  var stageEl   = document.getElementById('stageSelect');
+  var gradeEl   = document.getElementById('gradeSelect');
+  var sectionEl = document.getElementById('sectionSelect');
+  var studentEl = document.getElementById('studentSelect');
+
+  var sectionsUrl = '{{ url_for("admin.api_leave_sections_for_grade") }}';
+  var studentsUrl = '{{ url_for("admin.api_leave_students_for_section") }}';
 
   function resetSelect(el, placeholder) {
     el.innerHTML = '<option value="">' + placeholder + '</option>';
     el.disabled = true;
   }
 
+  function populateGrades(stage) {
+    resetSelect(gradeEl, 'اختر الصف');
+    resetSelect(sectionEl, 'اختر الشعبة');
+    resetSelect(studentEl, 'اختر الطالب');
+    if (!stage) return;
+    var matching = GRADES.filter(function (g) { return g.stage === stage; });
+    matching.forEach(function (g) {
+      var opt = document.createElement('option');
+      opt.value = g.id;
+      opt.textContent = g.name;
+      gradeEl.appendChild(opt);
+    });
+    gradeEl.disabled = matching.length === 0;
+  }
+
+  stageEl.addEventListener('change', function () {
+    populateGrades(this.value);
+  });
+
   gradeEl.addEventListener('change', function () {
-    resetSelect(sectionEl, '— اختر الشعبة —');
-    resetSelect(studentEl, '— اختر الطالب —');
-    const gid = this.value;
+    resetSelect(sectionEl, 'اختر الشعبة');
+    resetSelect(studentEl, 'اختر الطالب');
+    var gid = this.value;
     if (!gid) return;
-    fetch('{{ url_for("admin.api_leave_sections_for_grade") }}?grade_id=' + gid)
-      .then(r => r.json())
-      .then(data => {
-        data.forEach(s => {
-          const opt = document.createElement('option');
+    fetch(sectionsUrl + '?grade_id=' + gid)
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        data.forEach(function (s) {
+          var opt = document.createElement('option');
           opt.value = s.id;
           opt.textContent = s.name;
           sectionEl.appendChild(opt);
@@ -130,14 +158,14 @@
   });
 
   sectionEl.addEventListener('change', function () {
-    resetSelect(studentEl, '— اختر الطالب —');
-    const sid = this.value;
+    resetSelect(studentEl, 'اختر الطالب');
+    var sid = this.value;
     if (!sid) return;
-    fetch('{{ url_for("admin.api_leave_students_for_section") }}?section_id=' + sid)
-      .then(r => r.json())
-      .then(data => {
-        data.forEach(s => {
-          const opt = document.createElement('option');
+    fetch(studentsUrl + '?section_id=' + sid)
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        data.forEach(function (s) {
+          var opt = document.createElement('option');
           opt.value = s.id;
           opt.textContent = s.name + (s.code ? ' (' + s.code + ')' : '');
           studentEl.appendChild(opt);
@@ -145,6 +173,49 @@
         studentEl.disabled = data.length === 0;
       });
   });
+
+  // Restore full cascade on validation re-render
+  var savedStage     = {{ (form_data.get('stage') or '') | tojson }};
+  var savedGradeId   = {{ (form_data.get('grade_id') or '') | tojson }};
+  var savedSectionId = {{ (form_data.get('section_id') or '') | tojson }};
+  var savedStudentId = {{ (form_data.get('student_id') or '') | tojson }};
+
+  if (savedStage) {
+    populateGrades(savedStage);
+    if (savedGradeId) {
+      gradeEl.value = String(savedGradeId);
+      if (gradeEl.value) {
+        fetch(sectionsUrl + '?grade_id=' + savedGradeId)
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            data.forEach(function (s) {
+              var opt = document.createElement('option');
+              opt.value = s.id;
+              opt.textContent = s.name;
+              sectionEl.appendChild(opt);
+            });
+            sectionEl.disabled = data.length === 0;
+            if (savedSectionId) {
+              sectionEl.value = String(savedSectionId);
+              if (sectionEl.value) {
+                fetch(studentsUrl + '?section_id=' + savedSectionId)
+                  .then(function (r) { return r.json(); })
+                  .then(function (data) {
+                    data.forEach(function (s) {
+                      var opt = document.createElement('option');
+                      opt.value = s.id;
+                      opt.textContent = s.name + (s.code ? ' (' + s.code + ')' : '');
+                      studentEl.appendChild(opt);
+                    });
+                    studentEl.disabled = data.length === 0;
+                    if (savedStudentId) studentEl.value = String(savedStudentId);
+                  });
+              }
+            }
+          });
+      }
+    }
+  }
 })();
 </script>
 {% endblock %}

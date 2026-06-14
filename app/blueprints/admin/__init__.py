@@ -8,6 +8,7 @@ from flask import (Blueprint, render_template, redirect, url_for,
 from flask_login import login_required, current_user
 from sqlalchemy import func
 from datetime import date, timedelta, datetime
+import json
 import logging
 
 from app.models import (db, User, Role, Permission, Employee, Student, Subject,
@@ -1211,16 +1212,25 @@ def leave_request_create_admin():
     active_year = get_active_year(school_id)
 
     grades = []
+    stages = []
+    grades_json = '[]'
     if active_year:
         grades = (Grade.query
                   .execution_options(include_all_years=True)
                   .filter_by(school_id=school_id, academic_year_id=active_year.id)
                   .order_by(Grade.stage, Grade.name)
                   .all())
+        stages = sorted(set(g.stage for g in grades if g.stage))
+        grades_json = json.dumps([
+            {'id': g.id, 'name': g.name, 'stage': g.stage or ''}
+            for g in grades
+        ])
 
     if request.method == 'POST':
-        student_id  = request.form.get('student_id', type=int)
+        stage_val   = request.form.get('stage', '').strip()
+        grade_id    = request.form.get('grade_id', type=int)
         section_id  = request.form.get('section_id', type=int)
+        student_id  = request.form.get('student_id', type=int)
         leave_type  = request.form.get('leave_type', '').strip()
         from_date   = _parse_leave_date(request.form.get('from_date'))
         to_date     = _parse_leave_date(request.form.get('to_date'))
@@ -1230,7 +1240,39 @@ def leave_request_create_admin():
             f'admin-leave-{school_id}')
 
         errors = []
-        student = None
+        grade = section = student = None
+
+        if not active_year:
+            errors.append('لا يوجد عام دراسي نشط.')
+
+        # Validate grade belongs to school/year and stage matches the posted value
+        if grade_id and active_year:
+            grade = (Grade.query
+                     .execution_options(include_all_years=True)
+                     .filter_by(id=grade_id, school_id=school_id,
+                                academic_year_id=active_year.id)
+                     .first())
+            if not grade:
+                errors.append('الصف غير موجود أو لا ينتمي لهذه المدرسة.')
+            elif stage_val and grade.stage != stage_val:
+                errors.append('الصف لا ينتمي للمرحلة المحددة.')
+        else:
+            errors.append('يرجى اختيار الصف.')
+
+        # Validate section belongs to the selected grade and school/year
+        if section_id and grade:
+            section = (Section.query
+                       .execution_options(include_all_years=True)
+                       .filter_by(id=section_id, grade_id=grade.id,
+                                  school_id=school_id,
+                                  academic_year_id=active_year.id)
+                       .first())
+            if not section:
+                errors.append('الشعبة لا تنتمي للصف المحدد.')
+        elif not section_id:
+            errors.append('يرجى اختيار الشعبة.')
+
+        # Validate student belongs to section and school
         if student_id:
             student = (Student.query
                        .execution_options(bypass_tenant_scope=True)
@@ -1255,14 +1297,13 @@ def leave_request_create_admin():
             errors.append('حالة الطلب غير صالحة.')
         if upload_error:
             errors.append(upload_error)
-        if not active_year:
-            errors.append('لا يوجد عام دراسي نشط.')
 
         if errors:
             for err in errors:
                 flash(err, 'danger')
             return render_template('admin/leave_request_create_admin.html',
-                                   grades=grades,
+                                   stages=stages,
+                                   grades_json=grades_json,
                                    type_labels=LEAVE_TYPES,
                                    status_labels=LEAVE_STATUS,
                                    form_data=request.form), 422
@@ -1302,7 +1343,8 @@ def leave_request_create_admin():
         return redirect(url_for('admin.leave_requests_list'))
 
     return render_template('admin/leave_request_create_admin.html',
-                           grades=grades,
+                           stages=stages,
+                           grades_json=grades_json,
                            type_labels=LEAVE_TYPES,
                            status_labels=LEAVE_STATUS,
                            form_data={})
