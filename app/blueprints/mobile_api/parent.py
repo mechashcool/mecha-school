@@ -41,6 +41,7 @@ from app.models import (
     Schedule,
     Student,
     StudentAttendance,
+    StudentTransport,
     parent_students,
 )
 from app.utils.notification_visibility import notification_visible_to
@@ -849,3 +850,72 @@ def parent_child_delete_complaint(student_id, complaint_id):
     db.session.delete(complaint)
     db.session.commit()
     return ok(message='complaint_deleted')
+
+
+# ─── Transportation ───────────────────────────────────────────────────────────
+
+@mobile_api_bp.route('/parent/children/<int:student_id>/transportation', methods=['GET'])
+@jwt_required()
+@role_required('parent')
+def parent_child_transportation(student_id):
+    """
+    Active transport route assigned to the authenticated parent's child.
+
+    Security:
+      • _assert_owns_student() verifies the parent_students junction (parent
+        owns the child) AND student.school_id == user.school_id before any
+        transport data is accessed. A 404 is returned for unowned children so
+        the response does not reveal whether another parent's child exists.
+      • The StudentTransport query adds explicit school_id, student_id, and
+        status='active' filters. The ORM global tenant scope is inert on mobile
+        (jwt_required sets current_user inside the view, after before_request
+        has already cached the scope), so all isolation is enforced explicitly.
+      • The loaded route's school_id is re-verified against the authenticated
+        user's school as defense-in-depth against any FK-only trust.
+      • No internal IDs, license plates, route internals, or sensitive vehicle
+        data are exposed; only driver_name, phone, and vehicle_name are returned.
+      • StudentTransport is not year-scoped (no academic_year_id column) — the
+        transport assignment is a school-level record, consistent with the web
+        transport module.
+
+    200 – child has active transport:
+      { "ok": true, "transportation": {"driver_name": "...", "phone": "...", "vehicle_name": "..."} }
+
+    200 – no active transport assignment:
+      { "ok": true, "transportation": null }
+    """
+    user    = g.mobile_user
+    student = _assert_owns_student(student_id)
+
+    # Find the student's active transport assignment.
+    # Explicit school_id + student_id + status prevents cross-school leakage
+    # and excludes inactive/cancelled subscriptions.
+    link = (StudentTransport.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(
+                school_id  = user.school_id,
+                student_id = student.id,
+                status     = 'active',
+            )
+            .first())
+
+    if not link:
+        return ok(transportation=None)
+
+    route = link.route
+    # Defense-in-depth: the route must belong to the parent's school.
+    # This guards against a StudentTransport row whose route_id FK resolves
+    # to a route from a different school (should be impossible by schema but
+    # is checked explicitly to fail closed).
+    if not route or route.school_id != user.school_id:
+        return ok(transportation=None)
+
+    return ok(
+        transportation={
+            'driver_name':  route.driver_name,
+            'phone':        route.driver_phone,
+            # vehicle_type is the make/model string (e.g. "تويوتا هايس").
+            # vehicle_number is the licence plate — excluded per spec.
+            'vehicle_name': route.vehicle_type,
+        },
+    )
