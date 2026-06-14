@@ -876,7 +876,7 @@ class LeaveRequest(db.Model):
     __year_scoped__ = True
 
     id               = db.Column(db.Integer, primary_key=True)
-    parent_id        = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    parent_id        = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)
     student_id       = db.Column(db.Integer, db.ForeignKey('students.id'), nullable=False, index=True)
     school_id        = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False, index=True)
     academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'), nullable=False, index=True)
@@ -892,12 +892,16 @@ class LeaveRequest(db.Model):
     created_at       = db.Column(db.DateTime, default=datetime.utcnow, index=True)
     updated_at       = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    source             = db.Column(db.String(20), nullable=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+
     parent = db.relationship('User', foreign_keys=[parent_id],
                              backref=db.backref('leave_requests', lazy='dynamic'))
     student = db.relationship('Student', foreign_keys=[student_id])
     school = db.relationship('School', foreign_keys=[school_id])
     academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
     reviewer = db.relationship('User', foreign_keys=[reviewed_by])
+    created_by_user = db.relationship('User', foreign_keys=[created_by_user_id])
 
     def __repr__(self):
         return f'<LeaveRequest {self.id} student={self.student_id}>'
@@ -1714,11 +1718,15 @@ class EmployeeLeaveRequest(db.Model):
     updated_at       = db.Column(db.DateTime, default=datetime.utcnow,
                                  onupdate=datetime.utcnow)
 
+    source             = db.Column(db.String(20), nullable=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+
     employee      = db.relationship('Employee', foreign_keys=[employee_id],
                                     backref=db.backref('leave_requests', lazy='dynamic'))
     school        = db.relationship('School', foreign_keys=[school_id])
     academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
     reviewer      = db.relationship('User', foreign_keys=[reviewed_by])
+    created_by_user = db.relationship('User', foreign_keys=[created_by_user_id])
 
     def __repr__(self):
         return f'<EmployeeLeaveRequest {self.id} employee={self.employee_id}>'

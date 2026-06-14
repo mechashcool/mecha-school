@@ -20,7 +20,11 @@
         <div class="row g-3">
           <div class="col-md-6">
             <div class="text-muted">&#1608;&#1604;&#1610; &#1575;&#1604;&#1571;&#1605;&#1585;</div>
+            {% if leave_request.source == 'admin' %}
+            <div class="fw-600 text-muted">&#8212; <small>(&#1575;&#1604;&#1573;&#1583;&#1575;&#1585;&#1577;)</small></div>
+            {% else %}
             <div class="fw-600">{{ leave_request.parent.full_name if leave_request.parent else '-' }}</div>
+            {% endif %}
           </div>
           <div class="col-md-6">
             <div class="text-muted">&#1606;&#1608;&#1593; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;</div>

@@ -525,7 +525,7 @@
     {# ═══ Group: Communication ══════════════════════════════════════════ #}
     {% if current_user.is_admin_user or ('notifications' in enabled_modules) %}
     <li class="nav-group" data-group="comm">
-      {% set _comm_badge = (sidebar_counts.unread_chat or 0) + (sidebar_counts.pending_complaints or 0) + (sidebar_counts.pending_leave_requests or 0) %}
+      {% set _comm_badge = (sidebar_counts.unread_chat or 0) + (sidebar_counts.pending_complaints or 0) %}
       <button type="button" class="nav-group-toggle" aria-expanded="false">
         <i class="bi bi-chat-dots-fill group-icon"></i> التواصل
         {{ nav_badge('comm_total', _comm_badge) }}
@@ -549,19 +549,7 @@
             {{ nav_badge('complaints', sidebar_counts.pending_complaints) }}
           </a>
         </li>
-        <li class="nav-item">
-          <a href="{{ url_for('admin.leave_requests_list') }}"
-             class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.leave_request') }}">
-            <i class="bi bi-calendar2-check"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;
-            {{ nav_badge('leave', sidebar_counts.pending_leave_requests) }}
-          </a>
-        </li>
-        <li class="nav-item">
-          <a href="{{ url_for('admin.employee_leave_requests_list') }}"
-             class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.employee_leave_request') }}">
-            <i class="bi bi-calendar2-check"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1573;&#1580;&#1575;&#1586;&#1577; &#1575;&#1604;&#1605;&#1608;&#1592;&#1601;&#1610;&#1606;
-          </a>
-        </li>
+        {# leave items are in the dedicated طلبات الإجازة nav-group #}
         <li class="nav-item">
           <a href="{{ url_for('admin.school_board_videos') }}"
              class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.school_board') }}">
@@ -578,6 +566,34 @@
           </a>
         </li>
         {% endif %}
+      </ul>
+    </li>
+    {% endif %}
+
+    {# ═══ Leave Requests — dedicated group ══════════════════════════════ #}
+    {% if current_user.is_admin_user %}
+    <li class="nav-group" data-group="leaves">
+      {% set _leaves_badge = (sidebar_counts.pending_leave_requests or 0) + (sidebar_counts.pending_employee_leave_requests or 0) %}
+      <button type="button" class="nav-group-toggle" aria-expanded="false">
+        <i class="bi bi-calendar2-check group-icon"></i> طلبات الإجازة
+        {{ nav_badge('leaves_total', _leaves_badge) }}
+        <i class="bi bi-chevron-left chevron"></i>
+      </button>
+      <ul class="nav-group-items">
+        <li class="nav-item">
+          <a href="{{ url_for('admin.leave_requests_list') }}"
+             class="{{ 'active' if request.endpoint and (request.endpoint in ('admin.leave_requests_list','admin.leave_request_detail','admin.leave_request_create_admin','admin.student_leave_archive')) }}">
+            <i class="bi bi-person-lines-fill"></i> طلبات إجازة الطلاب
+            {{ nav_badge('leave', sidebar_counts.pending_leave_requests) }}
+          </a>
+        </li>
+        <li class="nav-item">
+          <a href="{{ url_for('admin.employee_leave_requests_list') }}"
+             class="{{ 'active' if request.endpoint and (request.endpoint in ('admin.employee_leave_requests_list','admin.employee_leave_request_detail','admin.employee_leave_request_create_admin','admin.employee_leave_archive')) }}">
+            <i class="bi bi-briefcase"></i> طلبات إجازة الموظفين
+            {{ nav_badge('employee_leave', sidebar_counts.pending_employee_leave_requests) }}
+          </a>
+        </li>
       </ul>
     </li>
     {% endif %}
@@ -654,19 +670,7 @@
             {{ nav_badge('complaints', sidebar_counts.pending_complaints) }}
           </a>
         </li>
-        <li class="nav-item">
-          <a href="{{ url_for('admin.leave_requests_list') }}"
-             class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.leave_request') }}">
-            <i class="bi bi-calendar2-check"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1575;&#1604;&#1573;&#1580;&#1575;&#1586;&#1577;
-            {{ nav_badge('leave', sidebar_counts.pending_leave_requests) }}
-          </a>
-        </li>
-        <li class="nav-item">
-          <a href="{{ url_for('admin.employee_leave_requests_list') }}"
-             class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.employee_leave_request') }}">
-            <i class="bi bi-calendar2-check"></i> &#1591;&#1604;&#1576;&#1575;&#1578; &#1573;&#1580;&#1575;&#1586;&#1577; &#1575;&#1604;&#1605;&#1608;&#1592;&#1601;&#1610;&#1606;
-          </a>
-        </li>
+        {# leave items are in the dedicated طلبات الإجازة nav-group #}
         <li class="nav-item">
           <a href="{{ url_for('admin.school_board_videos') }}"
              class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.school_board') }}">

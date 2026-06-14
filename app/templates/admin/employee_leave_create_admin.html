@@ -1,0 +1,87 @@
+{% extends "shared/base.html" %}
+{% block title %}إضافة إجازة لموظف{% endblock %}
+{% block page_title %}إضافة إجازة لموظف{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">إضافة إجازة لموظف</h1>
+    <p class="page-subtitle">تسجيل إجازة بواسطة الإدارة</p>
+  </div>
+  <a href="{{ url_for('admin.employee_leave_requests_list') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="card" style="max-width:700px">
+  <div class="card-body">
+    <form method="POST" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+
+      <div class="mb-3">
+        <label class="form-label">الموظف <span class="text-danger">*</span></label>
+        <select name="employee_id" class="form-select" required>
+          <option value="">— اختر الموظف —</option>
+          {% for emp in employees %}
+          <option value="{{ emp.id }}"
+            {% if (form_data.get('employee_id') or '') == (emp.id|string) %}selected{% endif %}>
+            {{ emp.full_name }}{% if emp.employee_id %} ({{ emp.employee_id }}){% endif %}
+            {% if emp.job_title %} — {{ emp.job_title }}{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label">نوع الإجازة <span class="text-danger">*</span></label>
+          <select name="leave_type" class="form-select" required>
+            <option value="">— اختر —</option>
+            {% for key, label in type_labels.items() %}
+            <option value="{{ key }}" {{ 'selected' if form_data.get('leave_type') == key }}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">الحالة <span class="text-danger">*</span></label>
+          <select name="status" class="form-select" required>
+            {% for key, label in status_labels.items() %}
+            <option value="{{ key }}" {{ 'selected' if (form_data.get('status') or 'pending') == key }}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">من تاريخ <span class="text-danger">*</span></label>
+          <input type="date" name="from_date" class="form-control" required
+                 value="{{ form_data.get('from_date', '') }}">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">إلى تاريخ <span class="text-danger">*</span></label>
+          <input type="date" name="to_date" class="form-control" required
+                 value="{{ form_data.get('to_date', '') }}">
+        </div>
+        <div class="col-12">
+          <label class="form-label">السبب <span class="text-danger">*</span></label>
+          <textarea name="reason" class="form-control" rows="3" required>{{ form_data.get('reason', '') }}</textarea>
+        </div>
+        <div class="col-12">
+          <label class="form-label">تفاصيل إضافية</label>
+          <textarea name="details" class="form-control" rows="2">{{ form_data.get('details', '') }}</textarea>
+        </div>
+        <div class="col-12">
+          <label class="form-label">المرفق (صورة أو PDF)</label>
+          <input type="file" name="attachment" class="form-control"
+                 accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx">
+        </div>
+      </div>
+
+      <div class="mt-4">
+        <button type="submit" class="btn btn-primary">
+          <i class="bi bi-check2-circle me-1"></i>حفظ الإجازة
+        </button>
+        <a href="{{ url_for('admin.employee_leave_requests_list') }}" class="btn btn-outline-secondary ms-2">إلغاء</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

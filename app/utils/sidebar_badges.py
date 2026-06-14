@@ -50,6 +50,7 @@ def _empty_counts() -> dict:
         'unread_notifications': 0,
         'pending_complaints': 0,
         'pending_leave_requests': 0,
+        'pending_employee_leave_requests': 0,
         'unread_chat': 0,
     }
 
@@ -87,7 +88,7 @@ def invalidate_user_badges(user) -> None:
         base = key[0][5:] if key[0].startswith('live:') else key[0]
         if base in ('notif', 'chat'):
             return len(key) > 1 and key[1] == uid
-        if base in ('complaints', 'leave'):
+        if base in ('complaints', 'leave', 'emp_leave'):
             # Parent keys: (base, sid, 'parent', uid). Admin keys: (base, sid, 'admin').
             if len(key) >= 4 and key[3] == uid:
                 return True
@@ -163,6 +164,8 @@ def get_badge_counts(*, live: bool = False) -> dict:
         # user]) — the view year is intentionally NOT part of the key.
         if sid:
             if current_user.is_admin_user:
+                from app.models import EmployeeLeaveRequest
+
                 def _load_admin_complaints():
                     return (Complaint.query
                             .execution_options(bypass_tenant_scope=True, include_all_years=True)
@@ -177,10 +180,19 @@ def get_badge_counts(*, live: bool = False) -> dict:
                                     LeaveRequest.status == 'pending')
                             .count())
 
+                def _load_admin_emp_leaves():
+                    return (EmployeeLeaveRequest.query
+                            .execution_options(bypass_tenant_scope=True)
+                            .filter(EmployeeLeaveRequest.school_id == sid,
+                                    EmployeeLeaveRequest.status == 'pending')
+                            .count())
+
                 counts['pending_complaints'] = badge_cache.get_or_set(
                     (prefix + 'complaints', sid, 'admin'), _load_admin_complaints, ttl=ttl)
                 counts['pending_leave_requests'] = badge_cache.get_or_set(
                     (prefix + 'leave', sid, 'admin'), _load_admin_leaves, ttl=ttl)
+                counts['pending_employee_leave_requests'] = badge_cache.get_or_set(
+                    (prefix + 'emp_leave', sid, 'admin'), _load_admin_emp_leaves, ttl=ttl)
             elif role == 'parent':
                 def _load_parent_complaints():
                     return (Complaint.query

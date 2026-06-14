@@ -1,0 +1,150 @@
+{% extends "shared/base.html" %}
+{% block title %}إضافة إجازة لطالب{% endblock %}
+{% block page_title %}إضافة إجازة لطالب{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">إضافة إجازة لطالب</h1>
+    <p class="page-subtitle">تسجيل إجازة بواسطة الإدارة</p>
+  </div>
+  <a href="{{ url_for('admin.leave_requests_list') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="card" style="max-width:700px">
+  <div class="card-body">
+    <form method="POST" enctype="multipart/form-data" id="adminLeaveForm">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+
+      {# ── Cascading selectors: Grade → Section → Student ── #}
+      <div class="mb-3">
+        <label class="form-label">الصف <span class="text-danger">*</span></label>
+        <select name="grade_id" id="gradeSelect" class="form-select" required>
+          <option value="">— اختر الصف —</option>
+          {% for g in grades %}
+          <option value="{{ g.id }}"
+            {% if (form_data.get('grade_id') or '') == (g.id|string) %}selected{% endif %}>
+            {% if g.stage %}{{ g.stage }} — {% endif %}{{ g.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">الشعبة <span class="text-danger">*</span></label>
+        <select name="section_id" id="sectionSelect" class="form-select" required disabled>
+          <option value="">— اختر الشعبة —</option>
+        </select>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label">الطالب <span class="text-danger">*</span></label>
+        <select name="student_id" id="studentSelect" class="form-select" required disabled>
+          <option value="">— اختر الطالب —</option>
+        </select>
+        <input type="hidden" name="student_id" id="studentIdHidden">
+      </div>
+
+      <hr>
+
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label">نوع الإجازة <span class="text-danger">*</span></label>
+          <select name="leave_type" class="form-select" required>
+            <option value="">— اختر —</option>
+            {% for key, label in type_labels.items() %}
+            <option value="{{ key }}" {{ 'selected' if form_data.get('leave_type') == key }}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">الحالة <span class="text-danger">*</span></label>
+          <select name="status" class="form-select" required>
+            {% for key, label in status_labels.items() %}
+            <option value="{{ key }}" {{ 'selected' if (form_data.get('status') or 'pending') == key }}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">من تاريخ <span class="text-danger">*</span></label>
+          <input type="date" name="from_date" class="form-control" required
+                 value="{{ form_data.get('from_date', '') }}">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">إلى تاريخ <span class="text-danger">*</span></label>
+          <input type="date" name="to_date" class="form-control" required
+                 value="{{ form_data.get('to_date', '') }}">
+        </div>
+        <div class="col-12">
+          <label class="form-label">الملاحظات / السبب</label>
+          <textarea name="notes" class="form-control" rows="3">{{ form_data.get('notes', '') }}</textarea>
+        </div>
+        <div class="col-12">
+          <label class="form-label">المرفق (صورة أو PDF)</label>
+          <input type="file" name="attachment" class="form-control"
+                 accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx">
+        </div>
+      </div>
+
+      <div class="mt-4">
+        <button type="submit" class="btn btn-primary">
+          <i class="bi bi-check2-circle me-1"></i>حفظ الإجازة
+        </button>
+        <a href="{{ url_for('admin.leave_requests_list') }}" class="btn btn-outline-secondary ms-2">إلغاء</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const gradeEl   = document.getElementById('gradeSelect');
+  const sectionEl = document.getElementById('sectionSelect');
+  const studentEl = document.getElementById('studentSelect');
+
+  function resetSelect(el, placeholder) {
+    el.innerHTML = '<option value="">' + placeholder + '</option>';
+    el.disabled = true;
+  }
+
+  gradeEl.addEventListener('change', function () {
+    resetSelect(sectionEl, '— اختر الشعبة —');
+    resetSelect(studentEl, '— اختر الطالب —');
+    const gid = this.value;
+    if (!gid) return;
+    fetch('{{ url_for("admin.api_leave_sections_for_grade") }}?grade_id=' + gid)
+      .then(r => r.json())
+      .then(data => {
+        data.forEach(s => {
+          const opt = document.createElement('option');
+          opt.value = s.id;
+          opt.textContent = s.name;
+          sectionEl.appendChild(opt);
+        });
+        sectionEl.disabled = data.length === 0;
+      });
+  });
+
+  sectionEl.addEventListener('change', function () {
+    resetSelect(studentEl, '— اختر الطالب —');
+    const sid = this.value;
+    if (!sid) return;
+    fetch('{{ url_for("admin.api_leave_students_for_section") }}?section_id=' + sid)
+      .then(r => r.json())
+      .then(data => {
+        data.forEach(s => {
+          const opt = document.createElement('option');
+          opt.value = s.id;
+          opt.textContent = s.name + (s.code ? ' (' + s.code + ')' : '');
+          studentEl.appendChild(opt);
+        });
+        studentEl.disabled = data.length === 0;
+      });
+  });
+})();
+</script>
+{% endblock %}

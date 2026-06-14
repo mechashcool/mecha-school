@@ -1,0 +1,194 @@
+{% extends "shared/base.html" %}
+{% block title %}أرشيف إجازات الموظف{% endblock %}
+{% block page_title %}أرشيف إجازات الموظف{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">أرشيف إجازات الموظف</h1>
+    <p class="page-subtitle fw-600">{{ employee.full_name }}</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('admin.employee_leave_request_create_admin') }}" class="btn btn-primary">
+      <i class="bi bi-plus-lg me-1"></i>إضافة إجازة
+    </a>
+    <a href="{{ url_for('admin.employee_leave_requests_list') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>رجوع
+    </a>
+  </div>
+</div>
+
+{# ── Employee info card ── #}
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="row g-3">
+      <div class="col-md-3">
+        <div class="text-muted small">كود الموظف</div>
+        <div class="fw-600">{{ employee.employee_id }}</div>
+      </div>
+      <div class="col-md-3">
+        <div class="text-muted small">الاسم</div>
+        <div class="fw-600">{{ employee.full_name }}</div>
+      </div>
+      <div class="col-md-3">
+        <div class="text-muted small">المسمى الوظيفي</div>
+        <div class="fw-600">{{ employee.job_title or '-' }}</div>
+      </div>
+      <div class="col-md-3">
+        <div class="text-muted small">الحالة</div>
+        <div class="fw-600">{{ employee.status or '-' }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Summary cards ── #}
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="card text-center py-3">
+      <div class="fw-700 fs-24">{{ stats.total }}</div>
+      <div class="text-muted small">إجمالي</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card text-center py-3">
+      <div class="fw-700 fs-24 text-warning">{{ stats.pending }}</div>
+      <div class="text-muted small">قيد الانتظار</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card text-center py-3">
+      <div class="fw-700 fs-24 text-success">{{ stats.approved }}</div>
+      <div class="text-muted small">موافق عليها</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card text-center py-3">
+      <div class="fw-700 fs-24 text-danger">{{ stats.rejected }}</div>
+      <div class="text-muted small">مرفوضة</div>
+    </div>
+  </div>
+</div>
+
+{# ── Filters ── #}
+<form method="GET" class="card mb-3">
+  <div class="card-body">
+    <div class="row g-2 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label small">الحالة</label>
+        <select name="status" class="form-select form-select-sm">
+          <option value="">الكل</option>
+          {% for key, label in status_labels.items() %}
+          <option value="{{ key }}" {{ 'selected' if status_filter == key }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small">نوع الإجازة</label>
+        <select name="leave_type" class="form-select form-select-sm">
+          <option value="">الكل</option>
+          {% for key, label in type_labels.items() %}
+          <option value="{{ key }}" {{ 'selected' if type_filter == key }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small">من تاريخ</label>
+        <input type="date" name="date_from" class="form-control form-control-sm"
+               value="{{ date_from_filter.strftime('%Y-%m-%d') if date_from_filter else '' }}">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small">إلى تاريخ</label>
+        <input type="date" name="date_to" class="form-control form-control-sm"
+               value="{{ date_to_filter.strftime('%Y-%m-%d') if date_to_filter else '' }}">
+      </div>
+      <div class="col-md-2 d-flex gap-2">
+        <button type="submit" class="btn btn-sm btn-primary flex-fill">تصفية</button>
+        <a href="{{ url_for('admin.employee_leave_archive', employee_id=employee.id) }}"
+           class="btn btn-sm btn-outline-secondary">×</a>
+      </div>
+    </div>
+  </div>
+</form>
+
+{# ── Archive table ── #}
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>نوع الإجازة</th>
+          <th>من</th>
+          <th>إلى</th>
+          <th>السبب</th>
+          <th>تفاصيل</th>
+          <th>الحالة</th>
+          <th>رد الإدارة</th>
+          <th>سبب الرفض</th>
+          <th>المصدر</th>
+          <th>تاريخ الطلب</th>
+          <th>تاريخ المراجعة</th>
+          <th>مرفق</th>
+          <th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for lr in archive %}
+        <tr>
+          <td class="text-muted small">{{ lr.id }}</td>
+          <td>{{ type_labels.get(lr.leave_type, lr.leave_type) }}</td>
+          <td class="text-nowrap">{{ lr.from_date.strftime('%Y-%m-%d') if lr.from_date else '-' }}</td>
+          <td class="text-nowrap">{{ lr.to_date.strftime('%Y-%m-%d') if lr.to_date else '-' }}</td>
+          <td>
+            {% if lr.reason %}
+            <span title="{{ lr.reason }}" style="cursor:help">{{ lr.reason | truncate(40) }}</span>
+            {% else %}-{% endif %}
+          </td>
+          <td>
+            {% if lr.details %}
+            <span title="{{ lr.details }}" style="cursor:help">{{ lr.details | truncate(30) }}</span>
+            {% else %}-{% endif %}
+          </td>
+          <td>
+            {% if lr.status == 'pending' %}
+              <span class="badge-status badge-pending">{{ status_labels.get(lr.status) }}</span>
+            {% elif lr.status == 'approved' %}
+              <span class="badge-status badge-active">{{ status_labels.get(lr.status) }}</span>
+            {% else %}
+              <span class="badge-status badge-inactive">{{ status_labels.get(lr.status) }}</span>
+            {% endif %}
+          </td>
+          <td>{{ lr.admin_response or '-' }}</td>
+          <td>{{ lr.rejection_reason or '-' }}</td>
+          <td class="small text-muted">{{ source_labels.get(lr.source or 'employee', lr.source or 'موظف') }}</td>
+          <td class="text-nowrap small">{{ lr.created_at.strftime('%Y-%m-%d') if lr.created_at else '-' }}</td>
+          <td class="text-nowrap small">{{ lr.reviewed_at.strftime('%Y-%m-%d') if lr.reviewed_at else '-' }}</td>
+          <td>
+            {% if lr.attachment_path %}
+            <a href="{{ resolve_photo_url(lr.attachment_path) or lr.attachment_path }}"
+               target="_blank" class="btn btn-xs btn-outline-primary" title="عرض المرفق">
+              <i class="bi bi-paperclip"></i>
+            </a>
+            {% else %}-{% endif %}
+          </td>
+          <td>
+            <a href="{{ url_for('admin.employee_leave_request_detail', request_id=lr.id) }}"
+               class="btn btn-sm btn-outline-primary" title="مراجعة">
+              <i class="bi bi-eye"></i>
+            </a>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="14" class="text-center text-muted py-5">
+            <i class="bi bi-calendar2-check" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا توجد سجلات إجازة لهذا الموظف.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -12,8 +12,8 @@ import logging
 
 from app.models import (db, User, Role, Permission, Employee, Student, Subject,
                          FeeInstallment, StudentAttendance, Revenue, Expense,
-                         Notification, AcademicYear, School, Section,
-                         teacher_subjects, Complaint, LeaveRequest,
+                         Notification, AcademicYear, School, Section, Grade,
+                         teacher_subjects, parent_students, Complaint, LeaveRequest,
                          EmployeeLeaveRequest,
                          SchoolVideo, SchoolAnnouncement, SchoolContentRead,
                          SchoolBuilding, UserBuildingAccess)
@@ -57,6 +57,12 @@ LEAVE_STATUS = {
     'pending': '\u0642\u064a\u062f \u0627\u0644\u0627\u0646\u062a\u0638\u0627\u0631',
     'approved': '\u0645\u0648\u0627\u0641\u0642 \u0639\u0644\u064a\u0647',
     'rejected': '\u0645\u0631\u0641\u0648\u0636',
+}
+
+LEAVE_SOURCE_LABELS = {
+    'parent':   '\u0648\u0644\u064a \u0627\u0644\u0623\u0645\u0631 / \u062c\u0648\u0627\u0644',
+    'employee': '\u0627\u0644\u0645\u0648\u0638\u0641 / \u062c\u0648\u0627\u0644',
+    'admin':    '\u0627\u0644\u0625\u062f\u0627\u0631\u0629',
 }
 
 
@@ -116,6 +122,42 @@ def _notify_parent(parent_id, school_id, title, body, fcm_data=None):
 
 def _valid_email(email):
     return bool(email and '@' in email and '.' in email.rsplit('@', 1)[-1])
+
+
+# ── Leave request helpers ──────────────────────────────────────────────────────
+
+def _parse_leave_date(value):
+    try:
+        return datetime.strptime(value or '', '%Y-%m-%d').date()
+    except ValueError:
+        return None
+
+
+def _admin_save_leave_attachment(prefix):
+    """Save an optional leave attachment uploaded by the admin.
+
+    Accepts images and PDF/Office documents. Returns (path_or_None, error_or_None).
+    """
+    from app.utils.helpers import (save_uploaded_file,
+                                   ALLOWED_IMAGE_EXTENSIONS, ALLOWED_DOC_EXTENSIONS)
+    file = request.files.get('attachment')
+    if not file or not file.filename:
+        return None, None
+    allowed = ALLOWED_IMAGE_EXTENSIONS | ALLOWED_DOC_EXTENSIONS
+    saved = save_uploaded_file(file, 'leave_requests', prefix=prefix,
+                               allowed_exts=allowed)
+    if not saved:
+        return None, 'المرفق غير صالح أو حجمه كبير جداً.'
+    return saved, None
+
+
+def _notify_student_parents(student, school_id, title, body, fcm_data=None):
+    """Notify every parent linked to this student (in-app + FCM)."""
+    parent_ids = db.session.query(parent_students.c.user_id).filter(
+        parent_students.c.student_id == student.id
+    ).all()
+    for (pid,) in parent_ids:
+        _notify_parent(pid, school_id, title, body, fcm_data)
 
 
 def _unique_ids(ids):
@@ -964,14 +1006,28 @@ def complaint_detail(complaint_id):
 @admin_required
 def leave_requests_list():
     school_id = _admin_scope_id()
+    status_filter = request.args.get('status', '').strip()
+
     query = LeaveRequest.query.execution_options(include_all_years=True)
     if school_id:
         query = query.filter_by(school_id=school_id)
-    requests = query.order_by(LeaveRequest.created_at.desc()).all()
+    if status_filter and status_filter in LEAVE_STATUS:
+        query = query.filter_by(status=status_filter)
+
+    all_requests = query.order_by(LeaveRequest.created_at.desc()).all()
+    stats = {
+        'total':    len(all_requests),
+        'pending':  sum(1 for r in all_requests if r.status == 'pending'),
+        'approved': sum(1 for r in all_requests if r.status == 'approved'),
+        'rejected': sum(1 for r in all_requests if r.status == 'rejected'),
+    }
     return render_template('admin/leave_requests_list.html',
-                           requests=requests,
+                           requests=all_requests,
+                           stats=stats,
+                           status_filter=status_filter,
                            status_labels=LEAVE_STATUS,
-                           type_labels=LEAVE_TYPES)
+                           type_labels=LEAVE_TYPES,
+                           source_labels=LEAVE_SOURCE_LABELS)
 
 
 @admin_bp.route('/leave-requests/<int:request_id>', methods=['GET', 'POST'])
@@ -1000,19 +1056,29 @@ def leave_request_detail(request_id):
         leave_request.reviewed_by = current_user.id
         leave_request.reviewed_at = datetime.utcnow()
 
+        notification_kwargs = dict(
+            title='\u062a\u062d\u062f\u064a\u062b \u0637\u0644\u0628 \u0627\u0644\u0625\u062c\u0627\u0632\u0629',
+            body=f'\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u0637\u0644\u0628 \u0627\u0644\u0625\u062c\u0627\u0632\u0629 \u0628\u062d\u0627\u0644\u0629: {LEAVE_STATUS[new_status]}.',
+            fcm_data={
+                'type':       'leave_request_update',
+                'request_id': str(leave_request.id),
+                'student_id': str(leave_request.student_id),
+                'screen':     'leave_requests',
+            },
+        )
         if changed:
-            _notify_parent(
-                leave_request.parent_id,
-                leave_request.school_id,
-                '\u062a\u062d\u062f\u064a\u062b \u0637\u0644\u0628 \u0627\u0644\u0625\u062c\u0627\u0632\u0629',
-                f'\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u0637\u0644\u0628 \u0627\u0644\u0625\u062c\u0627\u0632\u0629 \u0628\u062d\u0627\u0644\u0629: {LEAVE_STATUS[new_status]}.',
-                fcm_data={
-                    'type':       'leave_request_update',
-                    'request_id': str(leave_request.id),
-                    'student_id': str(leave_request.student_id),
-                    'screen':     'leave_requests',
-                },
-            )
+            if leave_request.source == 'admin' and leave_request.student:
+                _notify_student_parents(
+                    leave_request.student,
+                    leave_request.school_id,
+                    **notification_kwargs,
+                )
+            else:
+                _notify_parent(
+                    leave_request.parent_id,
+                    leave_request.school_id,
+                    **notification_kwargs,
+                )
         db.session.commit()
         flash('\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u0637\u0644\u0628 \u0627\u0644\u0625\u062c\u0627\u0632\u0629 \u0628\u0646\u062c\u0627\u062d.', 'success')
         return redirect(url_for('admin.leave_request_detail', request_id=leave_request.id))
@@ -1020,7 +1086,8 @@ def leave_request_detail(request_id):
     return render_template('admin/leave_request_detail.html',
                            leave_request=leave_request,
                            status_labels=LEAVE_STATUS,
-                           type_labels=LEAVE_TYPES)
+                           type_labels=LEAVE_TYPES,
+                           source_labels=LEAVE_SOURCE_LABELS)
 
 
 # ── Employee (teacher) leave requests ─────────────────────────────────────────
@@ -1052,14 +1119,28 @@ def _notify_employee_user(user_id, school_id, title, body, fcm_data=None):
 @admin_required
 def employee_leave_requests_list():
     school_id = _admin_scope_id()
+    status_filter = request.args.get('status', '').strip()
+
     query = EmployeeLeaveRequest.query
     if school_id:
         query = query.filter_by(school_id=school_id)
-    requests = query.order_by(EmployeeLeaveRequest.created_at.desc()).all()
+    if status_filter and status_filter in LEAVE_STATUS:
+        query = query.filter_by(status=status_filter)
+
+    all_requests = query.order_by(EmployeeLeaveRequest.created_at.desc()).all()
+    stats = {
+        'total':    len(all_requests),
+        'pending':  sum(1 for r in all_requests if r.status == 'pending'),
+        'approved': sum(1 for r in all_requests if r.status == 'approved'),
+        'rejected': sum(1 for r in all_requests if r.status == 'rejected'),
+    }
     return render_template('admin/employee_leave_requests_list.html',
-                           requests=requests,
+                           requests=all_requests,
+                           stats=stats,
+                           status_filter=status_filter,
                            status_labels=LEAVE_STATUS,
-                           type_labels=LEAVE_TYPES)
+                           type_labels=LEAVE_TYPES,
+                           source_labels=LEAVE_SOURCE_LABELS)
 
 
 @admin_bp.route('/employee-leave-requests/<int:request_id>', methods=['GET', 'POST'])
@@ -1111,7 +1192,379 @@ def employee_leave_request_detail(request_id):
     return render_template('admin/employee_leave_request_detail.html',
                            leave_request=leave_request,
                            status_labels=LEAVE_STATUS,
-                           type_labels=LEAVE_TYPES)
+                           type_labels=LEAVE_TYPES,
+                           source_labels=LEAVE_SOURCE_LABELS)
+
+
+# ── Admin-created leave requests ──────────────────────────────────────────────
+
+@admin_bp.route('/leave-requests/create', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def leave_request_create_admin():
+    """Admin creates a leave request on behalf of a student."""
+    school_id = _admin_scope_id()
+    if not school_id:
+        flash('لا يمكن تحديد المدرسة.', 'danger')
+        return redirect(url_for('admin.leave_requests_list'))
+
+    active_year = get_active_year(school_id)
+
+    grades = []
+    if active_year:
+        grades = (Grade.query
+                  .execution_options(include_all_years=True)
+                  .filter_by(school_id=school_id, academic_year_id=active_year.id)
+                  .order_by(Grade.stage, Grade.name)
+                  .all())
+
+    if request.method == 'POST':
+        student_id  = request.form.get('student_id', type=int)
+        section_id  = request.form.get('section_id', type=int)
+        leave_type  = request.form.get('leave_type', '').strip()
+        from_date   = _parse_leave_date(request.form.get('from_date'))
+        to_date     = _parse_leave_date(request.form.get('to_date'))
+        notes       = request.form.get('notes', '').strip() or None
+        status_val  = request.form.get('status', 'pending').strip()
+        attachment, upload_error = _admin_save_leave_attachment(
+            f'admin-leave-{school_id}')
+
+        errors = []
+        student = None
+        if student_id:
+            student = (Student.query
+                       .execution_options(bypass_tenant_scope=True)
+                       .filter_by(id=student_id, school_id=school_id)
+                       .first())
+            if not student:
+                errors.append('الطالب غير موجود أو لا ينتمي لهذه المدرسة.')
+            elif section_id and student.section_id != section_id:
+                errors.append('الطالب لا ينتمي للشعبة المحددة.')
+        else:
+            errors.append('يرجى اختيار الطالب.')
+
+        if leave_type not in LEAVE_TYPES:
+            errors.append('نوع الإجازة غير صالح.')
+        if not from_date:
+            errors.append('تاريخ البداية مطلوب.')
+        if not to_date:
+            errors.append('تاريخ النهاية مطلوب.')
+        if from_date and to_date and to_date < from_date:
+            errors.append('تاريخ النهاية يجب أن يكون بعد تاريخ البداية.')
+        if status_val not in LEAVE_STATUS:
+            errors.append('حالة الطلب غير صالحة.')
+        if upload_error:
+            errors.append(upload_error)
+        if not active_year:
+            errors.append('لا يوجد عام دراسي نشط.')
+
+        if errors:
+            for err in errors:
+                flash(err, 'danger')
+            return render_template('admin/leave_request_create_admin.html',
+                                   grades=grades,
+                                   type_labels=LEAVE_TYPES,
+                                   status_labels=LEAVE_STATUS,
+                                   form_data=request.form), 422
+
+        leave_obj = LeaveRequest(
+            parent_id=None,
+            student_id=student.id,
+            school_id=school_id,
+            academic_year_id=active_year.id,
+            leave_type=leave_type,
+            from_date=from_date,
+            to_date=to_date,
+            notes=notes,
+            attachment_path=attachment,
+            status=status_val,
+            source='admin',
+            created_by_user_id=current_user.id,
+        )
+        if status_val in ('approved', 'rejected'):
+            leave_obj.reviewed_by = current_user.id
+            leave_obj.reviewed_at = datetime.utcnow()
+
+        db.session.add(leave_obj)
+        _notify_student_parents(
+            student,
+            school_id,
+            title='طلب إجازة من الإدارة',
+            body=f'أضافت الإدارة طلب إجازة للطالب {student.full_name}.',
+            fcm_data={
+                'type':       'leave_request_update',
+                'student_id': str(student.id),
+                'screen':     'leave_requests',
+            },
+        )
+        db.session.commit()
+        flash('تم إضافة طلب الإجازة بنجاح.', 'success')
+        return redirect(url_for('admin.leave_requests_list'))
+
+    return render_template('admin/leave_request_create_admin.html',
+                           grades=grades,
+                           type_labels=LEAVE_TYPES,
+                           status_labels=LEAVE_STATUS,
+                           form_data={})
+
+
+@admin_bp.route('/students/<int:student_id>/leave-archive')
+@login_required
+@admin_required
+def student_leave_archive(student_id):
+    """Complete leave history for one student — scoped by school."""
+    school_id = _admin_scope_id()
+    student = (Student.query
+               .execution_options(bypass_tenant_scope=True)
+               .filter_by(id=student_id, school_id=school_id)
+               .first_or_404())
+
+    status_filter    = request.args.get('status', '').strip()
+    type_filter      = request.args.get('leave_type', '').strip()
+    date_from_filter = _parse_leave_date(request.args.get('date_from'))
+    date_to_filter   = _parse_leave_date(request.args.get('date_to'))
+
+    q = (LeaveRequest.query
+         .execution_options(bypass_tenant_scope=True, include_all_years=True)
+         .filter_by(student_id=student.id, school_id=school_id))
+
+    if status_filter and status_filter in LEAVE_STATUS:
+        q = q.filter_by(status=status_filter)
+    if type_filter and type_filter in LEAVE_TYPES:
+        q = q.filter_by(leave_type=type_filter)
+    if date_from_filter:
+        q = q.filter(LeaveRequest.from_date >= date_from_filter)
+    if date_to_filter:
+        q = q.filter(LeaveRequest.to_date <= date_to_filter)
+
+    archive = q.order_by(LeaveRequest.created_at.desc()).all()
+    stats = {
+        'total':    len(archive),
+        'pending':  sum(1 for r in archive if r.status == 'pending'),
+        'approved': sum(1 for r in archive if r.status == 'approved'),
+        'rejected': sum(1 for r in archive if r.status == 'rejected'),
+    }
+    return render_template('admin/student_leave_archive.html',
+                           student=student,
+                           archive=archive,
+                           stats=stats,
+                           status_filter=status_filter,
+                           type_filter=type_filter,
+                           date_from_filter=date_from_filter,
+                           date_to_filter=date_to_filter,
+                           status_labels=LEAVE_STATUS,
+                           type_labels=LEAVE_TYPES,
+                           source_labels=LEAVE_SOURCE_LABELS)
+
+
+@admin_bp.route('/employee-leave-requests/create', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def employee_leave_request_create_admin():
+    """Admin creates a leave request on behalf of an employee."""
+    school_id = _admin_scope_id()
+    if not school_id:
+        flash('لا يمكن تحديد المدرسة.', 'danger')
+        return redirect(url_for('admin.employee_leave_requests_list'))
+
+    active_year = get_active_year(school_id)
+    employees = (Employee.query
+                 .execution_options(bypass_tenant_scope=True)
+                 .filter_by(school_id=school_id, status='active')
+                 .order_by(Employee.full_name)
+                 .all())
+
+    if request.method == 'POST':
+        employee_id = request.form.get('employee_id', type=int)
+        leave_type  = request.form.get('leave_type', '').strip()
+        from_date   = _parse_leave_date(request.form.get('from_date'))
+        to_date     = _parse_leave_date(request.form.get('to_date'))
+        reason      = request.form.get('reason', '').strip()
+        details     = request.form.get('details', '').strip() or None
+        status_val  = request.form.get('status', 'pending').strip()
+        attachment, upload_error = _admin_save_leave_attachment(
+            f'admin-emp-leave-{school_id}')
+
+        errors = []
+        employee = None
+        if employee_id:
+            employee = (Employee.query
+                        .execution_options(bypass_tenant_scope=True)
+                        .filter_by(id=employee_id, school_id=school_id)
+                        .first())
+            if not employee:
+                errors.append('الموظف غير موجود أو لا ينتمي لهذه المدرسة.')
+        else:
+            errors.append('يرجى اختيار الموظف.')
+
+        if leave_type not in LEAVE_TYPES:
+            errors.append('نوع الإجازة غير صالح.')
+        if not from_date:
+            errors.append('تاريخ البداية مطلوب.')
+        if not to_date:
+            errors.append('تاريخ النهاية مطلوب.')
+        if from_date and to_date and to_date < from_date:
+            errors.append('تاريخ النهاية يجب أن يكون بعد تاريخ البداية.')
+        if not reason:
+            errors.append('السبب مطلوب.')
+        if status_val not in LEAVE_STATUS:
+            errors.append('حالة الطلب غير صالحة.')
+        if upload_error:
+            errors.append(upload_error)
+
+        if errors:
+            for err in errors:
+                flash(err, 'danger')
+            return render_template('admin/employee_leave_create_admin.html',
+                                   employees=employees,
+                                   type_labels=LEAVE_TYPES,
+                                   status_labels=LEAVE_STATUS,
+                                   form_data=request.form), 422
+
+        leave_obj = EmployeeLeaveRequest(
+            employee_id=employee.id,
+            school_id=school_id,
+            academic_year_id=active_year.id if active_year else None,
+            leave_type=leave_type,
+            from_date=from_date,
+            to_date=to_date,
+            reason=reason,
+            details=details,
+            attachment_path=attachment,
+            status=status_val,
+            source='admin',
+            created_by_user_id=current_user.id,
+        )
+        if status_val in ('approved', 'rejected'):
+            leave_obj.reviewed_by = current_user.id
+            leave_obj.reviewed_at = datetime.utcnow()
+
+        db.session.add(leave_obj)
+        if employee.user_id:
+            _notify_employee_user(
+                employee.user_id,
+                school_id,
+                'طلب إجازة من الإدارة',
+                'أضافت الإدارة طلب إجازة باسمك.',
+                fcm_data={
+                    'type':   'employee_leave_request_update',
+                    'screen': 'leave_requests',
+                },
+            )
+        db.session.commit()
+        flash('تم إضافة طلب الإجازة للموظف بنجاح.', 'success')
+        return redirect(url_for('admin.employee_leave_requests_list'))
+
+    return render_template('admin/employee_leave_create_admin.html',
+                           employees=employees,
+                           type_labels=LEAVE_TYPES,
+                           status_labels=LEAVE_STATUS,
+                           form_data={})
+
+
+@admin_bp.route('/employees/<int:employee_id>/leave-archive')
+@login_required
+@admin_required
+def employee_leave_archive(employee_id):
+    """Complete leave history for one employee — scoped by school."""
+    school_id = _admin_scope_id()
+    employee = (Employee.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter_by(id=employee_id, school_id=school_id)
+                .first_or_404())
+
+    status_filter    = request.args.get('status', '').strip()
+    type_filter      = request.args.get('leave_type', '').strip()
+    date_from_filter = _parse_leave_date(request.args.get('date_from'))
+    date_to_filter   = _parse_leave_date(request.args.get('date_to'))
+
+    q = (EmployeeLeaveRequest.query
+         .execution_options(bypass_tenant_scope=True)
+         .filter_by(employee_id=employee.id, school_id=school_id))
+
+    if status_filter and status_filter in LEAVE_STATUS:
+        q = q.filter_by(status=status_filter)
+    if type_filter and type_filter in LEAVE_TYPES:
+        q = q.filter_by(leave_type=type_filter)
+    if date_from_filter:
+        q = q.filter(EmployeeLeaveRequest.from_date >= date_from_filter)
+    if date_to_filter:
+        q = q.filter(EmployeeLeaveRequest.to_date <= date_to_filter)
+
+    archive = q.order_by(EmployeeLeaveRequest.created_at.desc()).all()
+    stats = {
+        'total':    len(archive),
+        'pending':  sum(1 for r in archive if r.status == 'pending'),
+        'approved': sum(1 for r in archive if r.status == 'approved'),
+        'rejected': sum(1 for r in archive if r.status == 'rejected'),
+    }
+    return render_template('admin/employee_leave_archive.html',
+                           employee=employee,
+                           archive=archive,
+                           stats=stats,
+                           status_filter=status_filter,
+                           type_filter=type_filter,
+                           date_from_filter=date_from_filter,
+                           date_to_filter=date_to_filter,
+                           status_labels=LEAVE_STATUS,
+                           type_labels=LEAVE_TYPES,
+                           source_labels=LEAVE_SOURCE_LABELS)
+
+
+# ── AJAX helpers for cascading student-leave dropdowns ─────────────────────────
+
+@admin_bp.route('/api/leave/sections-for-grade')
+@login_required
+@admin_required
+def api_leave_sections_for_grade():
+    """Return sections for a grade (JSON) — scoped by school + active year."""
+    school_id = _admin_scope_id()
+    grade_id = request.args.get('grade_id', type=int)
+    if not school_id or not grade_id:
+        return jsonify([])
+    active_year = get_active_year(school_id)
+    if not active_year:
+        return jsonify([])
+    grade = (Grade.query
+             .execution_options(include_all_years=True)
+             .filter_by(id=grade_id, school_id=school_id,
+                        academic_year_id=active_year.id)
+             .first())
+    if not grade:
+        return jsonify([])
+    sections = (Section.query
+                .execution_options(include_all_years=True)
+                .filter_by(grade_id=grade.id, school_id=school_id,
+                           academic_year_id=active_year.id)
+                .order_by(Section.name)
+                .all())
+    return jsonify([{'id': s.id, 'name': s.name} for s in sections])
+
+
+@admin_bp.route('/api/leave/students-for-section')
+@login_required
+@admin_required
+def api_leave_students_for_section():
+    """Return students in a section (JSON) — scoped by school."""
+    school_id = _admin_scope_id()
+    section_id = request.args.get('section_id', type=int)
+    if not school_id or not section_id:
+        return jsonify([])
+    section = (Section.query
+               .execution_options(include_all_years=True)
+               .filter_by(id=section_id, school_id=school_id)
+               .first())
+    if not section:
+        return jsonify([])
+    students = (Student.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter_by(section_id=section.id, school_id=school_id)
+                .order_by(Student.full_name)
+                .all())
+    return jsonify([
+        {'id': s.id, 'name': s.full_name, 'code': s.student_id}
+        for s in students
+    ])
 
 
 @admin_bp.route('/roles')
