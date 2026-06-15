@@ -1,4 +1,5 @@
 {% extends "shared/base.html" %}
+{% from 'fees/_fees_table.html' import fees_table_body, fees_modal_and_js %}
 {% block title %}{{ student.full_name }}{% endblock %}
 {% block page_title %}ملف الطالب{% endblock %}
 
@@ -180,7 +181,7 @@
 </div>
 
 {# ════════════════════════════════════════════════════════════════════════
-   سجل الرسوم والأقساط — visible only to users with manage_fees permission
+   سجل الرسوم والأقساط — same table/modal/JS as fees/index.html
    ════════════════════════════════════════════════════════════════════════ #}
 {% if current_user.has_permission('manage_fees') %}
 <div class="row mt-4">
@@ -195,137 +196,11 @@
         </a>
         {% endif %}
       </div>
-
-      {% if fee_records_with_inst %}
-      <div class="card-body p-0">
-        <div class="accordion accordion-flush" id="feeAccordion">
-
-          {% for fee, installments in fee_records_with_inst %}
-          {% set net     = fee.net_amount %}
-          {% set paid    = fee.total_paid %}
-          {% set remain  = fee.remaining %}
-          {% set paid_f  = paid|float %}
-          {% set remain_f = remain|float %}
-
-          <div class="accordion-item">
-            <h2 class="accordion-header" id="feeHead{{ fee.id }}">
-              <button class="accordion-button collapsed" type="button"
-                      data-bs-toggle="collapse"
-                      data-bs-target="#feeBody{{ fee.id }}"
-                      aria-expanded="false"
-                      aria-controls="feeBody{{ fee.id }}">
-                <div class="d-flex flex-wrap align-items-center gap-3 w-100 pe-3">
-                  <span class="fw-700" style="min-width:140px">{{ fee.fee_type.name if fee.fee_type else '—' }}</span>
-                  <span class="text-muted small">{{ fee.academic_year.name if fee.academic_year else '—' }}</span>
-                  {% if remain_f <= 0 %}
-                  <span class="badge-status badge-active ms-auto" style="flex-shrink:0">مسدّد</span>
-                  {% elif paid_f > 0 %}
-                  <span class="badge-status badge-pending ms-auto" style="flex-shrink:0">مدفوع جزئياً</span>
-                  {% else %}
-                  <span class="badge-status badge-inactive ms-auto" style="flex-shrink:0">غير مدفوع</span>
-                  {% endif %}
-                  <span class="small text-muted" style="flex-shrink:0">
-                    صافي: <strong>{{ '{:,.0f}'.format(net|float) }}</strong>
-                    &nbsp;|&nbsp;
-                    مدفوع: <strong class="text-success">{{ '{:,.0f}'.format(paid_f) }}</strong>
-                    &nbsp;|&nbsp;
-                    متبقي: <strong class="{{ 'text-danger' if remain_f > 0 else 'text-muted' }}">{{ '{:,.0f}'.format(remain_f) }}</strong>
-                  </span>
-                </div>
-              </button>
-            </h2>
-
-            <div id="feeBody{{ fee.id }}" class="accordion-collapse collapse"
-                 aria-labelledby="feeHead{{ fee.id }}" data-bs-parent="#feeAccordion">
-              <div class="accordion-body p-0">
-
-                {# ── Fee summary row ── #}
-                <div class="px-4 py-2 border-bottom" style="background:var(--bg-subtle,#f8f9fa);font-size:13px">
-                  <span class="me-4"><i class="bi bi-tag me-1 text-muted"></i>نوع الرسم: <strong>{{ fee.fee_type.name if fee.fee_type else '—' }}</strong></span>
-                  <span class="me-4"><i class="bi bi-calendar-range me-1 text-muted"></i>السنة الدراسية: <strong>{{ fee.academic_year.name if fee.academic_year else '—' }}</strong></span>
-                  <span class="me-4"><i class="bi bi-cash me-1 text-muted"></i>الإجمالي: <strong>{{ '{:,.0f}'.format(fee.total_amount|float) }}</strong></span>
-                  {% if fee.discount and fee.discount > 0 %}
-                  <span class="me-4 text-success"><i class="bi bi-percent me-1"></i>الخصم: <strong>{{ '{:,.0f}'.format(fee.discount|float) }}</strong></span>
-                  {% endif %}
-                  <span class="me-4"><i class="bi bi-calendar3 me-1 text-muted"></i>تاريخ الإضافة: <strong>{{ fee.created_at.strftime('%Y-%m-%d') }}</strong></span>
-                  <span><i class="bi bi-list-ol me-1 text-muted"></i>عدد الأقساط: <strong>{{ installments|length }}</strong></span>
-                </div>
-
-                {# ── Installments table ── #}
-                {% if installments %}
-                <div class="table-wrapper">
-                  <table class="table table-hover mb-0" style="font-size:13px">
-                    <thead>
-                      <tr>
-                        <th>#</th>
-                        <th>تاريخ الاستحقاق</th>
-                        <th>مبلغ القسط</th>
-                        <th>المستلم</th>
-                        <th>المتبقي</th>
-                        <th>الحالة</th>
-                        <th>تاريخ الدفع</th>
-                        <th>الإيصال</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {% for inst in installments %}
-                      {% set i_recv    = inst.received_amount|float if inst.received_amount else 0 %}
-                      {% set i_remain  = inst.amount|float - i_recv %}
-                      <tr>
-                        <td class="fw-600">{{ inst.installment_no }}</td>
-                        <td>{{ inst.due_date.strftime('%Y-%m-%d') if inst.due_date else '—' }}</td>
-                        <td>{{ '{:,.0f}'.format(inst.amount|float) }}</td>
-                        <td class="text-success fw-600">{{ '{:,.0f}'.format(i_recv) }}</td>
-                        <td class="{{ 'text-danger' if i_remain > 0 else 'text-muted' }}">{{ '{:,.0f}'.format(i_remain) }}</td>
-                        <td>
-                          {% if inst.status == 'paid' %}
-                          <span class="badge-status badge-active" style="font-size:11px">مسدّد</span>
-                          {% elif inst.status == 'partial' %}
-                          <span class="badge-status badge-pending" style="font-size:11px">جزئي</span>
-                          {% elif inst.status == 'overdue' %}
-                          <span class="badge-status badge-inactive" style="font-size:11px">متأخر</span>
-                          {% else %}
-                          <span class="badge-status" style="font-size:11px;background:#f0f4f8;color:#6b7a8d;border:1px solid #d1dbe6">معلق</span>
-                          {% endif %}
-                        </td>
-                        <td class="text-muted">{{ inst.paid_date.strftime('%Y-%m-%d') if inst.paid_date else '—' }}</td>
-                        <td>
-                          {% if inst.receipt_no %}
-                          <a href="{{ url_for('fees.generate_receipt', inst_id=inst.id) }}"
-                             target="_blank"
-                             class="btn btn-xs btn-outline-secondary"
-                             style="font-size:11px;padding:2px 8px">
-                            <i class="bi bi-receipt me-1"></i>{{ inst.receipt_no }}
-                          </a>
-                          {% else %}
-                          <span class="text-muted">—</span>
-                          {% endif %}
-                        </td>
-                      </tr>
-                      {% endfor %}
-                    </tbody>
-                  </table>
-                </div>
-                {% else %}
-                <div class="px-4 py-3 text-muted small">لا توجد أقساط مسجلة لهذا السجل.</div>
-                {% endif %}
-
-              </div>
-            </div>
-          </div>
-          {% endfor %}
-
-        </div>{# /accordion #}
-      </div>
-      {% else %}
-      <div class="card-body text-center text-muted py-5">
-        <i class="bi bi-cash-stack" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-        لا توجد رسوم أو أقساط مسجلة لهذا الطالب.
-      </div>
-      {% endif %}
+      {{ fees_table_body(fee_records_with_inst, show_student_col=False) }}
     </div>
   </div>
 </div>
+{{ fees_modal_and_js() }}
 {% endif %}
 
 {# ── Modals + JS ─────────────────────────────────────────────────────────── #}

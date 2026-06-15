@@ -101,13 +101,30 @@ def index():
     
     records   = query.order_by(FeeRecord.created_at.desc())\
                      .paginate(page=page, per_page=20, error_out=False)
+
+    # Batch-fetch installments for the current page to avoid N+1 queries.
+    _page_ids = [r.id for r in records.items]
+    _page_inst = []
+    if _page_ids:
+        _page_inst = (
+            FeeInstallment.query
+            .filter(FeeInstallment.fee_record_id.in_(_page_ids))
+            .order_by(FeeInstallment.installment_no)
+            .all()
+        )
+    _inst_map = {}
+    for _i in _page_inst:
+        _inst_map.setdefault(_i.fee_record_id, []).append(_i)
+    fee_entries = [(r, _inst_map.get(r.id, [])) for r in records.items]
+
     fee_types = FeeType.query.all()
     years_q   = AcademicYear.query
     if school:
         years_q = years_q.filter_by(school_id=school.id)
     years = years_q.order_by(AcademicYear.start_date.desc()).all()
     return render_template('fees/index.html',
-                           records=records, fee_types=fee_types,
+                           records=records, fee_entries=fee_entries,
+                           fee_types=fee_types,
                            years=years, search=search,
                            fee_type_filter=fee_type_filter,
                            payment_status=payment_status,
