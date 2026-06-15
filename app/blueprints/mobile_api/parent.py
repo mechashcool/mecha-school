@@ -611,6 +611,7 @@ def _leave_dict(r) -> dict:
         'status':           r.status,
         'status_label':     _LEAVE_STATUS.get(r.status, r.status),
         'admin_note':       r.manager_note,
+        'source':           r.source or 'parent',
         'created_at':       (r.created_at.replace(tzinfo=timezone.utc).isoformat()
                              if r.created_at else None),
     }
@@ -656,7 +657,7 @@ def parent_child_leave_requests(student_id):
     user = g.mobile_user
     rows = (LeaveRequest.query
             .execution_options(bypass_tenant_scope=True, include_all_years=True)
-            .filter_by(parent_id=user.id, student_id=s.id, school_id=user.school_id)
+            .filter_by(student_id=s.id, school_id=user.school_id)
             .order_by(LeaveRequest.created_at.desc())
             .all())
     return ok(count=len(rows), requests=[_leave_dict(r) for r in rows])
@@ -727,8 +728,7 @@ def parent_child_leave_request_detail(student_id, request_id):
     user = g.mobile_user
     leave = (LeaveRequest.query
              .execution_options(bypass_tenant_scope=True, include_all_years=True)
-             .filter_by(id=request_id, parent_id=user.id,
-                        student_id=s.id, school_id=user.school_id)
+             .filter_by(id=request_id, student_id=s.id, school_id=user.school_id)
              .first())
     if not leave:
         return err('leave_request_not_found', 404)
