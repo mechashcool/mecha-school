@@ -263,7 +263,10 @@ def generate_fee_receipt(installment, school_settings=None, print_date=None) -> 
     fee_record = installment.fee_record
     
     # Calculate remaining balance after this payment
-    total_paid = sum(float(i.received_amount or 0) for i in fee_record.installments)
+    total_paid = sum(
+        float(i.received_amount or 0)
+        for i in fee_record.installments.execution_options(include_all_years=True)
+    )
     remaining = float(fee_record.net_amount) - total_paid
     
     def process_arabic_text(text):

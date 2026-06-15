@@ -388,7 +388,16 @@ def generate_receipt(inst_id):
     from app.models import SchoolSettings
     from flask import send_file, abort
     
-    inst = FeeInstallment.query.get_or_404(inst_id)
+    inst = (
+        FeeInstallment.query
+        .execution_options(include_all_years=True)
+        .options(
+            joinedload(FeeInstallment.fee_record)
+            .joinedload(FeeRecord.student)
+        )
+        .filter(FeeInstallment.id == inst_id)
+        .first_or_404()
+    )
     if not inst.receipt_no:
         abort(404, "No receipt available for this installment")
 
