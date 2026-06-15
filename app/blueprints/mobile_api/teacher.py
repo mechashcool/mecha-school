@@ -464,14 +464,19 @@ def teacher_schedule():
       • Teacher/employee identity is resolved entirely from the JWT via
         _get_employee() (Employee.user_id link). No teacher_id / employee_id /
         user_id / school_id / academic_year_id is ever read from the client.
-      • The query is explicitly scoped to the employee's own school_id,
-        employee_id (teacher_id), AND the school's current academic_year_id,
-        so historical-year rows are excluded and no other teacher's schedule
-        can be returned. The ORM global tenant scope is inert on mobile (JWT
-        login happens inside the view, after before_request has already cached
-        the scope) — explicit column filters are mandatory.
+      • Schedule.teacher_id is optional (NULL when admin does not assign a teacher
+        to a period). The query uses three OR branches: (1) teacher_id == emp.id —
+        explicit assignments always included; (2) section_id in teacher's sections
+        AND teacher_id IS NULL; (3) grade_id in teacher's grades AND section_id IS
+        NULL AND teacher_id IS NULL. Entries explicitly assigned to a DIFFERENT
+        employee are never included (branches 2 and 3 require teacher_id IS NULL).
+      • The query is explicitly scoped to school_id and academic_year_id so that
+        no other school's or year's data can be returned. The ORM global tenant
+        scope is inert on mobile (JWT login happens inside the view, after
+        before_request has already cached g.tenant_scope_school_id = None) —
+        explicit column filters are mandatory.
       • Both section-based (section_id set, grade_id NULL) and grade-based
-        (grade_id set, section_id NULL) schedule rows are handled safely.
+        (grade_id set, section_id NULL) schedule rows are returned.
     """
     emp = _get_employee()
     if not emp:
@@ -488,15 +493,66 @@ def teacher_schedule():
     if not year:
         return ok(schedule=[])
 
-    # Explicit three-column isolation:
-    #   school_id        → prevent cross-school leakage
-    #   academic_year_id → only current year's timetable
-    #   teacher_id       → only this teacher's periods
+    # Schedule.teacher_id is optional (NULL when the web UI does not assign a
+    # teacher to a period). Filtering by teacher_id == emp.id alone returns an
+    # empty result set whenever teacher_id was left NULL in the web.
+    #
+    # The authoritative teacher-scope is the set of sections/grades this teacher
+    # is responsible for, derived entirely server-side from their homeroom and
+    # subject assignments — consistent with how all other teacher endpoints work.
+    #
+    # Isolation:
+    #   school_id        → explicit column filter; prevent cross-school leakage
+    #   academic_year_id → explicit column filter; current year only
+    #   section/grade    → server-side from _teacher_section_ids(); no client input
+    section_ids = list(_teacher_section_ids(emp))
+
+    # Three ownership branches (OR):
+    #   1. teacher_id == emp.id — entry explicitly assigned to this teacher;
+    #      always included regardless of section/grade membership.
+    #   2. section_id IN teacher's sections AND teacher_id IS NULL — unassigned
+    #      section-based entry; section membership is the scope.
+    #   3. grade_id IN teacher's grades AND section_id IS NULL AND teacher_id IS NULL —
+    #      unassigned whole-grade entry; grade membership (derived from teacher's
+    #      sections) is the scope.
+    # Entries with teacher_id pointing to a DIFFERENT employee are excluded because
+    # branches 2 and 3 require teacher_id IS NULL.
+    or_clauses = [Schedule.teacher_id == emp.id]
+
+    if section_ids:
+        or_clauses.append(
+            db.and_(
+                Schedule.section_id.in_(section_ids),
+                Schedule.teacher_id.is_(None),
+            )
+        )
+
+        # Derive grade_ids so that unassigned whole-grade rows are included.
+        # Explicit school_id guard — ORM scope is inert for mobile requests.
+        grade_sections = (
+            Section.query
+            .filter(
+                Section.id.in_(section_ids),
+                Section.school_id == emp.school_id,
+            )
+            .all()
+        )
+        grade_ids = list({s.grade_id for s in grade_sections if s.grade_id})
+
+        if grade_ids:
+            or_clauses.append(
+                db.and_(
+                    Schedule.grade_id.in_(grade_ids),
+                    Schedule.section_id.is_(None),
+                    Schedule.teacher_id.is_(None),
+                )
+            )
+
     schedules = (Schedule.query
                  .filter(
                      Schedule.school_id        == emp.school_id,
                      Schedule.academic_year_id == year.id,
-                     Schedule.teacher_id       == emp.id,
+                     db.or_(*or_clauses),
                  )
                  .order_by(Schedule.day_of_week, Schedule.start_time)
                  .all())
