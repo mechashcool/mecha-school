@@ -21,6 +21,22 @@
               <label class="form-label">الطالب <span class="text-danger">*</span></label>
               <input type="hidden" name="student_id" id="studentId"
                      value="{{ selected_student.id if selected_student is defined and selected_student else '' }}">
+              {% if locked_student is defined and locked_student %}
+              {# Locked: student was preselected from creation flow — no search, no change #}
+              {% set selected_section = selected_student.section %}
+              {% set selected_grade = selected_section.grade if selected_section else none %}
+              <div class="selected-student">
+                <i class="bi bi-person-check-fill"></i>
+                <span>
+                  {{ selected_student.full_name }}
+                  <small>
+                    {{ selected_grade.name if selected_grade else '' }}
+                    {% if selected_section %} - {{ selected_section.name }}{% endif %}
+                    &nbsp;·&nbsp;{{ selected_student.student_id }}
+                  </small>
+                </span>
+              </div>
+              {% else %}
               <div class="student-search">
                 <div class="input-group">
                   <span class="input-group-text"><i class="bi bi-search"></i></span>
@@ -55,6 +71,7 @@
                 <option value="{{ s.id }}">{{ s.full_name }} ({{ s.student_id }})</option>
                 {% endfor %}
               </select>
+              {% endif %}
             </div>
             <div class="col-md-6">
               <label class="form-label">نوع الرسم <span class="text-danger">*</span></label>
@@ -209,12 +226,11 @@
 }
 </style>
 <script>
+{% if not (locked_student is defined and locked_student) %}
 const studentSearchUrl = "{{ url_for('fees.search_students') }}";
 const studentSearch = document.getElementById('studentSearch');
-const studentId = document.getElementById('studentId');
 const studentResults = document.getElementById('studentResults');
 const selectedStudent = document.getElementById('selectedStudent');
-const feeForm = document.getElementById('feeForm');
 let studentSearchTimer = null;
 
 function hideStudentResults() {
@@ -231,7 +247,7 @@ function studentMeta(student) {
 }
 
 function chooseStudent(student) {
-  studentId.value = student.id;
+  document.getElementById('studentId').value = student.id;
   studentSearch.value = student.full_name;
   selectedStudent.classList.remove('d-none');
   selectedStudent.innerHTML = `
@@ -266,7 +282,7 @@ function renderStudentResults(students) {
 
 function searchStudents() {
   const q = studentSearch.value.trim();
-  studentId.value = '';
+  document.getElementById('studentId').value = '';
   selectedStudent.classList.add('d-none');
   selectedStudent.innerHTML = '';
   if (q.length < 2) {
@@ -299,7 +315,7 @@ if (studentResults) {
 if (selectedStudent) {
   selectedStudent.addEventListener('click', event => {
     if (!event.target.closest('#clearStudent')) return;
-    studentId.value = '';
+    document.getElementById('studentId').value = '';
     studentSearch.value = '';
     selectedStudent.classList.add('d-none');
     selectedStudent.innerHTML = '';
@@ -311,15 +327,17 @@ document.addEventListener('click', event => {
   if (!event.target.closest('.student-search')) hideStudentResults();
 });
 
+const feeForm = document.getElementById('feeForm');
 if (feeForm) {
   feeForm.addEventListener('submit', event => {
-    if (!studentId.value) {
+    if (!document.getElementById('studentId').value) {
       event.preventDefault();
       studentSearch.focus();
       renderStudentResults([]);
     }
   });
 }
+{% endif %}
 
 // ── Iraqi Dinar amount-to-words (mirrors arabic_numbers.py:amount_to_words_iqd) ──
 const _IQD_ONES = ['','واحد','اثنان','ثلاثة','أربعة','خمسة','ستة','سبعة','ثمانية','تسعة',

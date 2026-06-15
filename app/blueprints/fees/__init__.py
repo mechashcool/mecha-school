@@ -183,8 +183,21 @@ def create():
         flash('تم إنشاء سجل الرسوم بنجاح.', 'success')
         return redirect(url_for('fees.index'))
 
+    # Preselect a student when arriving from the student creation flow.
+    # The student_id is validated server-side against school + active year.
+    prefill_id = request.args.get('student_id', type=int)
+    prefilled_student = None
+    if prefill_id:
+        prefilled_student = (
+            _active_fee_student_query(school, year)
+            .filter(Student.id == prefill_id)
+            .first()
+        )
+
     return render_template('fees/form.html',
-                           fee_types=fee_types, years=years)
+                           fee_types=fee_types, years=years,
+                           selected_student=prefilled_student,
+                           locked_student=prefilled_student is not None)
 
 
 @fees_bp.route('/students/search')

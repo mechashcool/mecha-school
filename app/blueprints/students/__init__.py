@@ -432,7 +432,7 @@ def create():
             flash(f'تم إنشاء حساب ولي الأمر بنجاح. اسم المستخدم: {parent_username}', 'success')
         if _linked_parent_name:
             flash(f'تم ربط الطالب بولي الأمر {_linked_parent_name} بنجاح.', 'success')
-        return redirect(url_for('students.index'))
+        return redirect(url_for('students.create_success', student_id=student.id))
 
     return render_template('students/form.html', student=None, sections=sections,
                            grades=grades, stages=['ابتدائية', 'متوسطة', 'إعدادية'],
@@ -444,6 +444,21 @@ def create():
                            buildings_enabled=buildings_on,
                            buildings_list=buildings_for_form,
                            selected_building_id=None)
+
+
+@students_bp.route('/<int:student_id>/create-success')
+@login_required
+@permission_required('add_student')
+def create_success(student_id):
+    """Success landing page shown immediately after a new student is created."""
+    school = get_current_school()
+    student = (Student.query
+               .execution_options(include_all_years=True)
+               .filter_by(id=student_id)
+               .first_or_404())
+    if school and student.school_id != school.id:
+        abort(403)
+    return render_template('students/create_success.html', student=student)
 
 
 @students_bp.route('/<int:student_id>/edit', methods=['GET', 'POST'])
