@@ -553,11 +553,12 @@ def _validate_relationship_scope(session_, obj):
                 'StudentSuspension must match student school')
     elif isinstance(obj, (Complaint, LeaveRequest)):
         student = obj.student or load(Student, obj.student_id)
-        parent = obj.parent or load(User, obj.parent_id)
         require(student and student.school_id == obj.school_id,
                 'Parent request must match student school')
-        require(parent and parent.school_id == obj.school_id,
-                'Parent request must match parent school')
+        if obj.parent_id:
+            parent = obj.parent or load(User, obj.parent_id)
+            require(parent and parent.school_id == obj.school_id,
+                    'Parent request must match parent school')
     elif isinstance(obj, InventoryItem):
         category = obj.category or load(InventoryCategory, obj.category_id)
         require(category and category.school_id == obj.school_id,
