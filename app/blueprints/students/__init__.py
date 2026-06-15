@@ -4,7 +4,8 @@ from flask import (Blueprint, render_template, redirect, url_for,
 from flask_login import login_required, current_user
 from sqlalchemy.orm import joinedload
 from app.models import (db, Student, Section, Grade, AcademicYear, StudentDocument,
-                        parent_students, User, Role, AttendanceDevice, DeviceStudentMapping)
+                        parent_students, User, Role, AttendanceDevice, DeviceStudentMapping,
+                        FeeRecord, FeeInstallment)
 from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    get_current_school, get_active_year, get_view_year,
                                    historical_guard)
@@ -801,7 +802,43 @@ def view(student_id):
             return redirect(url_for('students.index'))
 
     docs = student.documents.order_by(StudentDocument.uploaded_at.desc()).all()
-    return render_template('students/view.html', student=student, docs=docs)
+
+    # Fee records — only loaded for users authorised to manage fees.
+    # Scoped by student.id + student.school_id; spans all academic years.
+    fee_records_with_inst = []
+    if current_user.has_permission('manage_fees'):
+        _fee_records = (
+            FeeRecord.query
+            .execution_options(include_all_years=True)
+            .filter_by(student_id=student.id, school_id=student.school_id)
+            .options(
+                joinedload(FeeRecord.fee_type),
+                joinedload(FeeRecord.academic_year),
+            )
+            .order_by(FeeRecord.created_at.desc())
+            .all()
+        )
+        if _fee_records:
+            _fee_ids = [fr.id for fr in _fee_records]
+            _all_inst = (
+                FeeInstallment.query
+                .execution_options(include_all_years=True)
+                .filter(
+                    FeeInstallment.fee_record_id.in_(_fee_ids),
+                    FeeInstallment.school_id == student.school_id,
+                )
+                .order_by(FeeInstallment.installment_no)
+                .all()
+            )
+            _inst_map = {}
+            for _inst in _all_inst:
+                _inst_map.setdefault(_inst.fee_record_id, []).append(_inst)
+            fee_records_with_inst = [
+                (fr, _inst_map.get(fr.id, [])) for fr in _fee_records
+            ]
+
+    return render_template('students/view.html', student=student, docs=docs,
+                           fee_records_with_inst=fee_records_with_inst)
 
 
 @students_bp.route('/<int:student_id>/archive', methods=['POST'])
