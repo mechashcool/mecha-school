@@ -264,7 +264,19 @@ def pay_installment(inst_id):
         is distinguishable.
     """
     try:
-        inst = FeeInstallment.query.get_or_404(inst_id)
+        # Use include_all_years so installments from prior academic years (which are
+        # legitimately visible on the student profile) can be paid when the current
+        # view year is the active year.  The ORM school filter still applies.
+        inst = (
+            FeeInstallment.query
+            .execution_options(include_all_years=True)
+            .options(
+                joinedload(FeeInstallment.fee_record)
+                .joinedload(FeeRecord.student)
+            )
+            .filter(FeeInstallment.id == inst_id)
+            .first_or_404()
+        )
 
         # Building scope — restricted users cannot pay for students outside their buildings.
         _student = inst.fee_record.student if inst.fee_record else None
