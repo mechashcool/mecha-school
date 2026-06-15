@@ -76,15 +76,25 @@
               </div>
               {% else %}
               <div class="student-search">
-                <div class="input-group">
-                  <span class="input-group-text"><i class="bi bi-search"></i></span>
-                  <input type="search" id="studentSearch" class="form-control"
-                         placeholder="ابحث عن الطالب بالاسم أو الرمز"
-                         autocomplete="off"
-                         value="{{ selected_student.full_name if selected_student is defined and selected_student else '' }}">
+                <!-- Search mode: shown when no section is selected -->
+                <div id="searchMode">
+                  <div class="input-group">
+                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+                    <input type="search" id="studentSearch" class="form-control"
+                           placeholder="ابحث عن الطالب بالاسم أو الرمز"
+                           autocomplete="off"
+                           value="{{ selected_student.full_name if selected_student is defined and selected_student else '' }}">
+                  </div>
+                  <div id="studentSearchHint" class="form-text text-muted mt-1 d-none"></div>
+                  <div id="studentResults" class="student-results d-none"></div>
                 </div>
-                <div id="studentSearchHint" class="form-text text-muted mt-1 d-none"></div>
-                <div id="studentResults" class="student-results d-none"></div>
+                <!-- Dropdown mode: shown when a section is selected -->
+                <div id="dropdownMode" class="d-none">
+                  <select id="studentDropdown" class="form-select" disabled>
+                    <option value="">— اختر الطالب —</option>
+                  </select>
+                </div>
+                <!-- Selected student card: shared between both modes -->
                 <div id="selectedStudent" class="selected-student {{ '' if selected_student is defined and selected_student else 'd-none' }}">
                   {% if selected_student is defined and selected_student %}
                   {% set selected_section = selected_student.section %}
@@ -321,6 +331,44 @@ function resetSection() {
   sectionFilter.disabled = true;
   sectionIdInput.value = '';
   clearStudentSelection();
+  showSearchMode();
+}
+
+function showSearchMode() {
+  document.getElementById('searchMode').classList.remove('d-none');
+  document.getElementById('dropdownMode').classList.add('d-none');
+  const dd = document.getElementById('studentDropdown');
+  dd.innerHTML = '<option value="">— اختر الطالب —</option>';
+  dd.disabled = true;
+}
+
+function showDropdownMode(secId) {
+  document.getElementById('searchMode').classList.add('d-none');
+  const dm = document.getElementById('dropdownMode');
+  dm.classList.remove('d-none');
+  const dd = document.getElementById('studentDropdown');
+  dd.disabled = true;
+  dd.innerHTML = '<option value="">— جاري التحميل... —</option>';
+  fetch(`${studentSearchUrl}?section_id=${encodeURIComponent(secId)}`, { headers: { 'Accept': 'application/json' } })
+    .then(r => r.ok ? r.json() : { results: [] })
+    .then(data => {
+      const students = data.results || [];
+      if (!students.length) {
+        dd.innerHTML = '<option value="">— لا يوجد طلاب في هذه الشعبة —</option>';
+        return;
+      }
+      dd.innerHTML = '<option value="">— اختر الطالب —</option>';
+      students.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = encodeURIComponent(JSON.stringify(s));
+        opt.textContent = `${s.full_name} — ${s.student_id || ''}`;
+        dd.appendChild(opt);
+      });
+      dd.disabled = false;
+    })
+    .catch(() => {
+      dd.innerHTML = '<option value="">— خطأ في تحميل الطلاب —</option>';
+    });
 }
 
 stageFilter.addEventListener('change', function() {
@@ -363,7 +411,13 @@ gradeFilter.addEventListener('change', function() {
 
 sectionFilter.addEventListener('change', function() {
   clearStudentSelection();
-  sectionIdInput.value = this.value || '';
+  const secId = this.value;
+  sectionIdInput.value = secId || '';
+  if (secId) {
+    showDropdownMode(secId);
+  } else {
+    showSearchMode();
+  }
 });
 
 // ── Student search ────────────────────────────────────────────────────────────
@@ -375,6 +429,8 @@ function hideStudentResults() {
 function clearStudentSelection() {
   document.getElementById('studentId').value = '';
   if (studentSearch) studentSearch.value = '';
+  const dd = document.getElementById('studentDropdown');
+  if (dd) dd.value = '';
   selectedStudentEl.classList.add('d-none');
   selectedStudentEl.innerHTML = '';
   hideStudentResults();
@@ -449,11 +505,34 @@ if (studentResults) {
   });
 }
 
+// Dropdown mode: choose student from section select
+const studentDropdownEl = document.getElementById('studentDropdown');
+if (studentDropdownEl) {
+  studentDropdownEl.addEventListener('change', function() {
+    if (!this.value) { clearStudentSelection(); return; }
+    const student = JSON.parse(decodeURIComponent(this.value));
+    document.getElementById('studentId').value = student.id;
+    selectedStudentEl.classList.remove('d-none');
+    selectedStudentEl.innerHTML = `
+      <i class="bi bi-person-check-fill"></i>
+      <span>
+        ${student.full_name}
+        <small>${studentMeta(student)}</small>
+      </span>
+      <button type="button" id="clearStudent" class="btn btn-sm btn-outline-secondary">تغيير</button>`;
+  });
+}
+
 if (selectedStudentEl) {
   selectedStudentEl.addEventListener('click', event => {
     if (!event.target.closest('#clearStudent')) return;
     clearStudentSelection();
-    studentSearch.focus();
+    const dropdownVisible = !document.getElementById('dropdownMode').classList.contains('d-none');
+    if (dropdownVisible) {
+      studentDropdownEl.focus();
+    } else if (studentSearch) {
+      studentSearch.focus();
+    }
   });
 }
 
@@ -466,8 +545,13 @@ if (feeForm) {
   feeForm.addEventListener('submit', event => {
     if (!document.getElementById('studentId').value) {
       event.preventDefault();
-      studentSearch.focus();
-      renderStudentResults([]);
+      const dropdownVisible = !document.getElementById('dropdownMode').classList.contains('d-none');
+      if (dropdownVisible) {
+        studentDropdownEl.focus();
+      } else {
+        studentSearch.focus();
+        renderStudentResults([]);
+      }
     }
   });
 }

@@ -293,10 +293,12 @@ def search_students():
         return jsonify({'results': []})
 
     term = request.args.get('q', '').strip()
-    if len(term) < 2:
-        return jsonify({'results': []})
-
     section_id = request.args.get('section_id', type=int)
+
+    # Require at least 2 chars for open search; allow empty term only when loading
+    # all students for a specific section dropdown (section_id must still be validated).
+    if len(term) < 2 and not section_id:
+        return jsonify({'results': []})
 
     query = _active_fee_student_query(school, year)
 
@@ -309,16 +311,16 @@ def search_students():
             return jsonify({'results': []})
         query = query.filter(Student.section_id == section_id)
 
-    students = (
-        query
-        .filter(
+    if term:
+        query = query.filter(
             Student.full_name.ilike(f'%{term}%') |
             Student.student_id.ilike(f'%{term}%')
         )
-        .order_by(Student.full_name)
-        .limit(20)
-        .all()
-    )
+
+    # When loading all students in a section (no term), allow up to 200;
+    # for name/code search, cap at 20 results.
+    limit = 200 if (section_id and not term) else 20
+    students = query.order_by(Student.full_name).limit(limit).all()
     return jsonify({'results': [_student_payload(student) for student in students]})
 
 
