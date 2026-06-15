@@ -2,6 +2,12 @@
 {% block title %}إضافة إجازة لطالب{% endblock %}
 {% block page_title %}إضافة إجازة لطالب{% endblock %}
 
+{% block extra_css %}
+<style>
+#searchDropdown div:hover { background: #f0f4ff; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page-header">
   <div>
@@ -18,11 +24,11 @@
     <form method="POST" enctype="multipart/form-data" id="adminLeaveForm">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
 
-      {# ── Cascading selectors: Stage → Grade → Section → Student ── #}
+      {# ── Cascading selectors: Stage → Grade → Section ── #}
       <div class="mb-3">
-        <label class="form-label">المرحلة <span class="text-danger">*</span></label>
-        <select name="stage" id="stageSelect" class="form-select" required>
-          <option value="">اختر المرحلة</option>
+        <label class="form-label">المرحلة</label>
+        <select name="stage" id="stageSelect" class="form-select">
+          <option value="">— اختر المرحلة (اختياري) —</option>
           {% for s in stages %}
           <option value="{{ s }}" {% if form_data.get('stage') == s %}selected{% endif %}>{{ s }}</option>
           {% endfor %}
@@ -30,24 +36,54 @@
       </div>
 
       <div class="mb-3">
-        <label class="form-label">الصف <span class="text-danger">*</span></label>
-        <select name="grade_id" id="gradeSelect" class="form-select" required disabled>
+        <label class="form-label">الصف</label>
+        <select name="grade_id" id="gradeSelect" class="form-select" disabled>
           <option value="">اختر الصف</option>
         </select>
       </div>
 
       <div class="mb-3">
-        <label class="form-label">الشعبة <span class="text-danger">*</span></label>
-        <select name="section_id" id="sectionSelect" class="form-select" required disabled>
+        <label class="form-label">الشعبة</label>
+        <select name="section_id" id="sectionSelect" class="form-select" disabled>
           <option value="">اختر الشعبة</option>
         </select>
+        <div class="form-text">اختيار الشعبة يُحمّل قائمة طلاب الشعبة. بدون شعبة يمكن البحث المباشر.</div>
       </div>
 
+      {# ── Student selection — dual mode ── #}
       <div class="mb-3">
         <label class="form-label">الطالب <span class="text-danger">*</span></label>
-        <select name="student_id" id="studentSelect" class="form-select" required disabled>
-          <option value="">اختر الطالب</option>
-        </select>
+
+        {# Always-submitted hidden field #}
+        <input type="hidden" name="student_id"      id="studentIdHidden"      value="{{ form_data.get('student_id', '') }}">
+        <input type="hidden" name="student_display" id="studentDisplayHidden" value="{{ form_data.get('student_display', '') }}">
+
+        {# Search mode — default when no section is selected #}
+        <div id="searchWrapper">
+          <div class="position-relative">
+            <input type="text" id="studentSearchInput" class="form-control"
+                   placeholder="ابحث باسم الطالب أو الكود…" autocomplete="off">
+            <div id="searchDropdown"
+                 style="display:none;position:absolute;top:100%;right:0;left:0;z-index:9999;
+                        background:#fff;border:1px solid #ccc;border-radius:0 0 4px 4px;
+                        max-height:220px;overflow-y:auto;box-shadow:0 4px 10px rgba(0,0,0,.1);">
+            </div>
+          </div>
+          <div id="searchSelected" class="mt-1 small text-success fw-600" style="min-height:18px;"></div>
+          <div id="searchError"    class="mt-1 small text-danger"  style="display:none;">
+            يرجى اختيار الطالب من نتائج البحث.
+          </div>
+        </div>
+
+        {# Dropdown mode — active when a section is selected #}
+        <div id="dropdownWrapper" style="display:none">
+          <select id="sectionStudentSelect" class="form-select" disabled>
+            <option value="">— اختر الطالب —</option>
+          </select>
+          <div id="dropdownError" class="mt-1 small text-danger" style="display:none;">
+            يرجى اختيار الطالب.
+          </div>
+        </div>
       </div>
 
       <hr>
@@ -102,7 +138,7 @@
 </div>
 {% endblock %}
 
-{% block scripts %}
+{% block extra_js %}
 <script>
 (function () {
   var GRADES = {{ grades_json | safe }};
@@ -110,10 +146,62 @@
   var stageEl   = document.getElementById('stageSelect');
   var gradeEl   = document.getElementById('gradeSelect');
   var sectionEl = document.getElementById('sectionSelect');
-  var studentEl = document.getElementById('studentSelect');
+
+  var studentIdInput      = document.getElementById('studentIdHidden');
+  var studentDisplayInput = document.getElementById('studentDisplayHidden');
+
+  // Search-mode elements
+  var searchWrapper  = document.getElementById('searchWrapper');
+  var searchInput    = document.getElementById('studentSearchInput');
+  var searchDropdown = document.getElementById('searchDropdown');
+  var searchSelected = document.getElementById('searchSelected');
+  var searchError    = document.getElementById('searchError');
+
+  // Dropdown-mode elements
+  var dropdownWrapper  = document.getElementById('dropdownWrapper');
+  var sectionStudentEl = document.getElementById('sectionStudentSelect');
+  var dropdownError    = document.getElementById('dropdownError');
 
   var sectionsUrl = '{{ url_for("admin.api_leave_sections_for_grade") }}';
   var studentsUrl = '{{ url_for("admin.api_leave_students_for_section") }}';
+  var searchUrl   = '{{ url_for("admin.api_leave_students_search") }}';
+
+  var _searchTimer = null;
+
+  // ── Mode switching ─────────────────────────────────────────────────────────
+
+  function showSearchMode() {
+    searchWrapper.style.display = 'block';
+    dropdownWrapper.style.display = 'none';
+    searchError.style.display = 'none';
+    dropdownError.style.display = 'none';
+  }
+
+  function showDropdownMode() {
+    searchWrapper.style.display = 'none';
+    dropdownWrapper.style.display = 'block';
+    searchError.style.display = 'none';
+    dropdownError.style.display = 'none';
+  }
+
+  // ── Student reset ──────────────────────────────────────────────────────────
+
+  function clearStudent() {
+    studentIdInput.value = '';
+    studentDisplayInput.value = '';
+    searchInput.value = '';
+    searchSelected.textContent = '';
+    searchDropdown.style.display = 'none';
+    searchDropdown.innerHTML = '';
+    searchInput.classList.remove('is-invalid');
+    sectionStudentEl.innerHTML = '<option value="">— اختر الطالب —</option>';
+    sectionStudentEl.disabled = true;
+    sectionStudentEl.classList.remove('is-invalid');
+    searchError.style.display = 'none';
+    dropdownError.style.display = 'none';
+  }
+
+  // ── Cascade helpers ────────────────────────────────────────────────────────
 
   function resetSelect(el, placeholder) {
     el.innerHTML = '<option value="">' + placeholder + '</option>';
@@ -123,7 +211,8 @@
   function populateGrades(stage) {
     resetSelect(gradeEl, 'اختر الصف');
     resetSelect(sectionEl, 'اختر الشعبة');
-    resetSelect(studentEl, 'اختر الطالب');
+    clearStudent();
+    showSearchMode();
     if (!stage) return;
     var matching = GRADES.filter(function (g) { return g.stage === stage; });
     matching.forEach(function (g) {
@@ -135,13 +224,18 @@
     gradeEl.disabled = matching.length === 0;
   }
 
+  // ── Stage change ───────────────────────────────────────────────────────────
+
   stageEl.addEventListener('change', function () {
     populateGrades(this.value);
   });
 
+  // ── Grade change ───────────────────────────────────────────────────────────
+
   gradeEl.addEventListener('change', function () {
     resetSelect(sectionEl, 'اختر الشعبة');
-    resetSelect(studentEl, 'اختر الطالب');
+    clearStudent();
+    showSearchMode();
     var gid = this.value;
     if (!gid) return;
     fetch(sectionsUrl + '?grade_id=' + gid)
@@ -157,10 +251,16 @@
       });
   });
 
+  // ── Section change ─────────────────────────────────────────────────────────
+
   sectionEl.addEventListener('change', function () {
-    resetSelect(studentEl, 'اختر الطالب');
+    clearStudent();
     var sid = this.value;
-    if (!sid) return;
+    if (!sid) {
+      showSearchMode();
+      return;
+    }
+    showDropdownMode();
     fetch(studentsUrl + '?section_id=' + sid)
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -168,18 +268,113 @@
           var opt = document.createElement('option');
           opt.value = s.id;
           opt.textContent = s.name + (s.code ? ' (' + s.code + ')' : '');
-          studentEl.appendChild(opt);
+          sectionStudentEl.appendChild(opt);
         });
-        studentEl.disabled = data.length === 0;
+        sectionStudentEl.disabled = data.length === 0;
       });
   });
 
-  // Restore full cascade on validation re-render
+  // ── Dropdown student selection ─────────────────────────────────────────────
+
+  sectionStudentEl.addEventListener('change', function () {
+    studentIdInput.value = this.value;
+    var sel = this.options[this.selectedIndex];
+    studentDisplayInput.value = sel ? sel.textContent : '';
+    sectionStudentEl.classList.remove('is-invalid');
+    dropdownError.style.display = 'none';
+  });
+
+  // ── Search-mode autocomplete ───────────────────────────────────────────────
+
+  searchInput.addEventListener('input', function () {
+    var q = this.value.trim();
+    // Clear previously selected student when typing again
+    studentIdInput.value = '';
+    studentDisplayInput.value = '';
+    searchSelected.textContent = '';
+    searchInput.classList.remove('is-invalid');
+    searchError.style.display = 'none';
+
+    if (q.length < 2) {
+      searchDropdown.style.display = 'none';
+      searchDropdown.innerHTML = '';
+      return;
+    }
+
+    clearTimeout(_searchTimer);
+    _searchTimer = setTimeout(function () {
+      fetch(searchUrl + '?q=' + encodeURIComponent(q))
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          searchDropdown.innerHTML = '';
+          if (!data.length) {
+            var msg = document.createElement('div');
+            msg.style.cssText = 'padding:8px 12px;color:#888;font-size:13px;';
+            msg.textContent = 'لا توجد نتائج';
+            searchDropdown.appendChild(msg);
+            searchDropdown.style.display = 'block';
+            return;
+          }
+          data.forEach(function (s) {
+            var item = document.createElement('div');
+            item.style.cssText = 'padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #f0f0f0;';
+            item.textContent = s.name + ' (' + s.code + ')';
+            item.addEventListener('mousedown', function (e) {
+              e.preventDefault();
+              studentIdInput.value = s.id;
+              var display = s.name + ' (' + s.code + ')';
+              studentDisplayInput.value = display;
+              searchInput.value = display;
+              searchSelected.textContent = '✓ تم اختيار الطالب';
+              searchDropdown.style.display = 'none';
+              searchDropdown.innerHTML = '';
+              searchInput.classList.remove('is-invalid');
+              searchError.style.display = 'none';
+            });
+            searchDropdown.appendChild(item);
+          });
+          searchDropdown.style.display = 'block';
+        });
+    }, 300);
+  });
+
+  searchInput.addEventListener('blur', function () {
+    setTimeout(function () {
+      searchDropdown.style.display = 'none';
+    }, 200);
+  });
+
+  // ── Form submit guard ──────────────────────────────────────────────────────
+
+  document.getElementById('adminLeaveForm').addEventListener('submit', function (e) {
+    if (!studentIdInput.value) {
+      e.preventDefault();
+      if (dropdownWrapper.style.display !== 'none') {
+        sectionStudentEl.classList.add('is-invalid');
+        dropdownError.style.display = 'block';
+      } else {
+        searchInput.classList.add('is-invalid');
+        searchError.style.display = 'block';
+        searchInput.focus();
+      }
+    }
+  });
+
+  // ── Restore state on validation re-render ─────────────────────────────────
+
   var savedStage     = {{ (form_data.get('stage') or '') | tojson }};
   var savedGradeId   = {{ (form_data.get('grade_id') or '') | tojson }};
   var savedSectionId = {{ (form_data.get('section_id') or '') | tojson }};
   var savedStudentId = {{ (form_data.get('student_id') or '') | tojson }};
+  var savedDisplay   = {{ (form_data.get('student_display') or '') | tojson }};
 
+  // Direct-search mode: restore display without cascade
+  if (savedStudentId && !savedSectionId && savedDisplay) {
+    searchInput.value = savedDisplay;
+    searchSelected.textContent = '✓ تم اختيار الطالب';
+  }
+
+  // Cascade restore (dropdown mode or cascade was partially filled)
   if (savedStage) {
     populateGrades(savedStage);
     if (savedGradeId) {
@@ -198,6 +393,7 @@
             if (savedSectionId) {
               sectionEl.value = String(savedSectionId);
               if (sectionEl.value) {
+                showDropdownMode();
                 fetch(studentsUrl + '?section_id=' + savedSectionId)
                   .then(function (r) { return r.json(); })
                   .then(function (data) {
@@ -205,10 +401,13 @@
                       var opt = document.createElement('option');
                       opt.value = s.id;
                       opt.textContent = s.name + (s.code ? ' (' + s.code + ')' : '');
-                      studentEl.appendChild(opt);
+                      sectionStudentEl.appendChild(opt);
                     });
-                    studentEl.disabled = data.length === 0;
-                    if (savedStudentId) studentEl.value = String(savedStudentId);
+                    sectionStudentEl.disabled = data.length === 0;
+                    if (savedStudentId) {
+                      sectionStudentEl.value = String(savedStudentId);
+                      studentIdInput.value = savedStudentId;
+                    }
                   });
               }
             }

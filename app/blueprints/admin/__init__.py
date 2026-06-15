@@ -1414,7 +1414,7 @@ def leave_request_create_admin():
         if not active_year:
             errors.append('لا يوجد عام دراسي نشط.')
 
-        # Validate grade belongs to school/year and stage matches the posted value
+        # Grade is optional (direct-search mode skips cascade).
         if grade_id and active_year:
             grade = (Grade.query
                      .execution_options(include_all_years=True)
@@ -1425,10 +1425,8 @@ def leave_request_create_admin():
                 errors.append('الصف غير موجود أو لا ينتمي لهذه المدرسة.')
             elif stage_val and grade.stage != stage_val:
                 errors.append('الصف لا ينتمي للمرحلة المحددة.')
-        else:
-            errors.append('يرجى اختيار الصف.')
 
-        # Validate section belongs to the selected grade and school/year
+        # Section is optional — only validate when provided and grade resolved.
         if section_id and grade:
             section = (Section.query
                        .execution_options(include_all_years=True)
@@ -1438,18 +1436,18 @@ def leave_request_create_admin():
                        .first())
             if not section:
                 errors.append('الشعبة لا تنتمي للصف المحدد.')
-        elif not section_id:
-            errors.append('يرجى اختيار الشعبة.')
+        elif section_id and not grade:
+            errors.append('الشعبة لا تنتمي للصف المحدد.')
 
-        # Validate student belongs to section and school
+        # Student is always required; must belong to this school and be active.
         if student_id:
             student = (Student.query
                        .execution_options(bypass_tenant_scope=True)
-                       .filter_by(id=student_id, school_id=school_id)
+                       .filter_by(id=student_id, school_id=school_id, status='active')
                        .first())
             if not student:
                 errors.append('الطالب غير موجود أو لا ينتمي لهذه المدرسة.')
-            elif section_id and student.section_id != section_id:
+            elif section and student.section_id != section.id:
                 errors.append('الطالب لا ينتمي للشعبة المحددة.')
         else:
             errors.append('يرجى اختيار الطالب.')
@@ -1792,6 +1790,31 @@ def api_leave_students_for_section():
                 .execution_options(bypass_tenant_scope=True)
                 .filter_by(section_id=section.id, school_id=school_id)
                 .order_by(Student.full_name)
+                .all())
+    return jsonify([
+        {'id': s.id, 'name': s.full_name, 'code': s.student_id}
+        for s in students
+    ])
+
+
+@admin_bp.route('/api/leave/students-search')
+@login_required
+@admin_required
+def api_leave_students_search():
+    """Search active students by name or code (JSON) — scoped by school."""
+    school_id = _admin_scope_id()
+    q = request.args.get('q', '').strip()
+    if not school_id or len(q) < 2:
+        return jsonify([])
+    students = (Student.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter_by(school_id=school_id, status='active')
+                .filter(or_(
+                    Student.full_name.ilike(f'%{q}%'),
+                    Student.student_id.ilike(f'%{q}%'),
+                ))
+                .order_by(Student.full_name)
+                .limit(20)
                 .all())
     return jsonify([
         {'id': s.id, 'name': s.full_name, 'code': s.student_id}
