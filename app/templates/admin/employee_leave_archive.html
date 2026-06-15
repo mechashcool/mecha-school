@@ -2,15 +2,101 @@
 {% block title %}أرشيف إجازات الموظف — {{ employee.full_name }}{% endblock %}
 {% block page_title %}أرشيف إجازات الموظف{% endblock %}
 
+{% block extra_css %}
+<style>
+@media print {
+  #sidebar, #sidebar-overlay, #topbar, #flash-container { display: none !important; }
+  #main-content { margin: 0 !important; padding: 0 !important; width: 100% !important; }
+  body { background: #fff !important; }
+  @page { size: A4 landscape; margin: 12mm 15mm; }
+  .card { border: none !important; box-shadow: none !important; }
+  .table-wrapper { overflow: visible !important; }
+  table.leave-table { border-collapse: collapse !important; width: 100% !important; }
+  table.leave-table th, table.leave-table td {
+    border: 1px solid #555 !important;
+    padding: 5px 6px !important;
+    font-size: 10px !important;
+    vertical-align: top !important;
+    word-break: break-word !important;
+    white-space: normal !important;
+  }
+  table.leave-table thead { display: table-header-group !important; }
+  table.leave-table tr { page-break-inside: avoid; }
+  .badge-status {
+    border: 1px solid #777 !important;
+    background: transparent !important;
+    color: #000 !important;
+  }
+}
+</style>
+{% endblock %}
+
 {% block content %}
 {% set _back_url = url_for('admin.leave_records', tab='employees') if request.args.get('ref') == 'records' else url_for('admin.leave_requests_list', tab='employees') %}
 
-<div class="page-header">
+{# ── Print-only header ── #}
+<div class="d-none d-print-block" style="font-family:'Cairo',sans-serif;color:#000;margin-bottom:14px;">
+  <div style="text-align:center;border-bottom:2px solid #000;padding-bottom:8px;margin-bottom:10px;">
+    <div style="font-size:18px;font-weight:700;">{{ employee.school.school_name }}</div>
+    <div style="font-size:14px;font-weight:600;margin-top:3px;">أرشيف إجازات الموظف</div>
+    <div style="font-size:10px;color:#555;margin-top:2px;">تاريخ الطباعة: <span id="printDateTime">—</span></div>
+  </div>
+
+  <table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:8px;">
+    <tr>
+      <td style="width:12%;font-weight:700;padding:3px 8px;">اسم الموظف:</td>
+      <td style="width:22%;padding:3px 8px;">{{ employee.full_name }}</td>
+      <td style="width:10%;font-weight:700;padding:3px 8px;">كود الموظف:</td>
+      <td style="width:15%;padding:3px 8px;">{{ employee.employee_id }}</td>
+      <td style="width:8%;font-weight:700;padding:3px 8px;">الحالة:</td>
+      <td style="padding:3px 8px;">{{ employee.status or '-' }}</td>
+    </tr>
+    <tr>
+      {% if employee.job_title %}
+      <td style="font-weight:700;padding:3px 8px;">المسمى الوظيفي:</td>
+      <td style="padding:3px 8px;">{{ employee.job_title }}</td>
+      {% else %}
+      <td colspan="2"></td>
+      {% endif %}
+      {% if employee.department %}
+      <td style="font-weight:700;padding:3px 8px;">القسم:</td>
+      <td style="padding:3px 8px;">{{ employee.department }}</td>
+      {% else %}
+      <td colspan="2"></td>
+      {% endif %}
+      <td colspan="2"></td>
+    </tr>
+  </table>
+
+  {% if status_filter or type_filter or date_from_filter or date_to_filter %}
+  <div style="font-size:10px;border:1px solid #999;padding:4px 10px;border-radius:4px;margin-bottom:8px;">
+    <strong>التصفية المطبقة:</strong>
+    {% if status_filter %}الحالة: {{ status_labels.get(status_filter, status_filter) }}{% endif %}
+    {% if type_filter %} &nbsp;|&nbsp; نوع الإجازة: {{ type_labels.get(type_filter, type_filter) }}{% endif %}
+    {% if date_from_filter %} &nbsp;|&nbsp; من: {{ date_from_filter.strftime('%Y-%m-%d') }}{% endif %}
+    {% if date_to_filter %} &nbsp;|&nbsp; إلى: {{ date_to_filter.strftime('%Y-%m-%d') }}{% endif %}
+  </div>
+  {% endif %}
+
+  <div style="font-size:11px;font-weight:600;border:1px solid #ccc;padding:5px 10px;border-radius:4px;margin-bottom:10px;">
+    إجمالي السجلات: {{ stats.total }}
+    &nbsp;&nbsp;|&nbsp;&nbsp; قيد الانتظار: {{ stats.pending }}
+    &nbsp;&nbsp;|&nbsp;&nbsp; موافق عليها: {{ stats.approved }}
+    &nbsp;&nbsp;|&nbsp;&nbsp; مرفوضة: {{ stats.rejected }}
+  </div>
+  <hr style="border:1px solid #333;margin:0 0 10px 0;">
+</div>
+
+{# ── Page header ── #}
+<div class="page-header d-print-none">
   <div>
     <h1 class="page-title">أرشيف إجازات الموظف</h1>
     <p class="page-subtitle fw-600">{{ employee.full_name }}</p>
   </div>
   <div class="d-flex gap-2">
+    <button type="button" class="btn btn-outline-secondary" onclick="window.print()">
+      <i class="bi bi-printer me-1"></i>طباعة السجل
+    </button>
     <a href="{{ url_for('admin.employee_leave_request_create_admin') }}" class="btn btn-primary">
       <i class="bi bi-plus-lg me-1"></i>إضافة إجازة
     </a>
@@ -21,7 +107,7 @@
 </div>
 
 {# ── Employee identity card ── #}
-<div class="card mb-4">
+<div class="card mb-4 d-print-none">
   <div class="card-body">
     <div class="row g-3">
       <div class="col-6 col-md-2">
@@ -52,8 +138,8 @@
   </div>
 </div>
 
-{# ── Summary cards (this employee only) ── #}
-<div class="row g-3 mb-4">
+{# ── Summary cards ── #}
+<div class="row g-3 mb-4 d-print-none">
   <div class="col-6 col-md-3">
     <div class="card text-center py-3">
       <div class="fw-700 fs-24">{{ stats.total }}</div>
@@ -81,7 +167,7 @@
 </div>
 
 {# ── Filters ── #}
-<form method="GET" class="card mb-3">
+<form method="GET" class="card mb-3 d-print-none">
   <div class="card-body">
     <div class="row g-2 align-items-end">
       <div class="col-md-3">
@@ -124,10 +210,10 @@
 {# ── Leave history table ── #}
 <div class="card">
   <div class="table-wrapper">
-    <table class="table table-hover mb-0">
+    <table class="table table-hover mb-0 leave-table">
       <thead>
         <tr>
-          <th>#</th>
+          <th class="d-print-none">#</th>
           <th>نوع الإجازة</th>
           <th>من</th>
           <th>إلى</th>
@@ -140,24 +226,26 @@
           <th>تاريخ الطلب</th>
           <th>تاريخ المراجعة</th>
           <th>مرفق</th>
-          <th>الإجراءات</th>
+          <th class="d-print-none">الإجراءات</th>
         </tr>
       </thead>
       <tbody>
         {% for lr in archive %}
         <tr>
-          <td class="text-muted small">{{ lr.id }}</td>
+          <td class="text-muted small d-print-none">{{ lr.id }}</td>
           <td>{{ type_labels.get(lr.leave_type, lr.leave_type) }}</td>
           <td class="text-nowrap">{{ lr.from_date.strftime('%Y-%m-%d') if lr.from_date else '-' }}</td>
           <td class="text-nowrap">{{ lr.to_date.strftime('%Y-%m-%d') if lr.to_date else '-' }}</td>
           <td>
             {% if lr.reason %}
-            <span title="{{ lr.reason }}" style="cursor:help">{{ lr.reason | truncate(40) }}</span>
+            <span class="d-print-none" title="{{ lr.reason }}" style="cursor:help">{{ lr.reason | truncate(40) }}</span>
+            <span class="d-none d-print-inline">{{ lr.reason }}</span>
             {% else %}-{% endif %}
           </td>
           <td>
             {% if lr.details %}
-            <span title="{{ lr.details }}" style="cursor:help">{{ lr.details | truncate(30) }}</span>
+            <span class="d-print-none" title="{{ lr.details }}" style="cursor:help">{{ lr.details | truncate(30) }}</span>
+            <span class="d-none d-print-inline">{{ lr.details }}</span>
             {% else %}-{% endif %}
           </td>
           <td>
@@ -171,12 +259,14 @@
           </td>
           <td>
             {% if lr.admin_response %}
-            <span title="{{ lr.admin_response }}" style="cursor:help">{{ lr.admin_response | truncate(40) }}</span>
+            <span class="d-print-none" title="{{ lr.admin_response }}" style="cursor:help">{{ lr.admin_response | truncate(40) }}</span>
+            <span class="d-none d-print-inline">{{ lr.admin_response }}</span>
             {% else %}-{% endif %}
           </td>
           <td>
             {% if lr.rejection_reason %}
-            <span title="{{ lr.rejection_reason }}" style="cursor:help">{{ lr.rejection_reason | truncate(40) }}</span>
+            <span class="d-print-none" title="{{ lr.rejection_reason }}" style="cursor:help">{{ lr.rejection_reason | truncate(40) }}</span>
+            <span class="d-none d-print-inline">{{ lr.rejection_reason }}</span>
             {% else %}-{% endif %}
           </td>
           <td class="small text-muted">{{ source_labels.get(lr.source or 'employee', lr.source or 'موظف') }}</td>
@@ -185,12 +275,13 @@
           <td>
             {% if lr.attachment_path %}
             <a href="{{ resolve_photo_url(lr.attachment_path) or lr.attachment_path }}"
-               target="_blank" class="btn btn-xs btn-outline-primary" title="عرض المرفق">
+               target="_blank" class="btn btn-xs btn-outline-primary d-print-none" title="عرض المرفق">
               <i class="bi bi-paperclip"></i>
             </a>
+            <span class="d-none d-print-inline">يوجد مرفق</span>
             {% else %}-{% endif %}
           </td>
-          <td>
+          <td class="d-print-none">
             <a href="{{ url_for('admin.employee_leave_request_detail', request_id=lr.id) }}"
                class="btn btn-sm btn-outline-primary" title="مراجعة">
               <i class="bi bi-eye"></i>
@@ -209,4 +300,22 @@
     </table>
   </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  function setDateTime() {
+    var el = document.getElementById('printDateTime');
+    if (el) {
+      el.textContent = new Date().toLocaleString('ar-EG', {
+        year: 'numeric', month: 'long', day: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+      });
+    }
+  }
+  window.addEventListener('beforeprint', setDateTime);
+  setDateTime();
+})();
+</script>
 {% endblock %}
