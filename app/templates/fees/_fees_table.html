@@ -29,8 +29,14 @@
     </thead>
     <tbody>
       {% for rec, insts in fee_entries %}
-      {% set paid      = rec.total_paid %}
-      {% set remaining = rec.remaining %}
+      {# Compute totals from the pre-fetched insts list so no lazy DB query fires.
+         rec.total_paid / rec.remaining use a lazy='dynamic' relationship that is
+         subject to the year filter — they return 0 for historical-year records. #}
+      {% set _p = namespace(v=0) %}
+      {% for _i in insts %}{% set _p.v = _p.v + (_i.received_amount | float) %}{% endfor %}
+      {% set paid      = _p.v %}
+      {% set net       = (rec.total_amount | float) - (rec.discount | float if rec.discount else 0) %}
+      {% set remaining = net - paid %}
       <tr>
         {% if show_student_col %}
         <td>
