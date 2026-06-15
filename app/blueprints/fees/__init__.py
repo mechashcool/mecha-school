@@ -8,7 +8,7 @@ from datetime import date, datetime as dt
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
-from app.models import (db, FeeRecord, FeeInstallment, FeeType, Student, AcademicYear, SchoolSettings, Revenue, RevenueCategory, Section, School)
+from app.models import (db, FeeRecord, FeeInstallment, FeeType, Student, AcademicYear, SchoolSettings, Revenue, RevenueCategory, Section, Grade, School)
 from app.utils.decorators import (permission_required, get_current_school,
                                    get_active_year, get_view_year, historical_guard,
                                    admin_required)
@@ -151,15 +151,35 @@ def create():
         selected_student_id = request.form.get('student_id', type=int)
         selected_fee_type_id = request.form.get('fee_type_id', type=int)
         selected_year_id = request.form.get('academic_year_id', type=int) or (year.id if year else None)
+
         selected_student = (
             _active_fee_student_query(school, year)
             .filter(Student.id == selected_student_id)
             .first()
         ) if selected_student_id else None
+
         if not selected_student:
             flash('يرجى اختيار طالب من طلاب المدرسة والسنة الدراسية الحالية.', 'danger')
             return render_template('fees/form.html',
                                    fee_types=fee_types, years=years), 400
+
+        # Section ownership validation (only when cascade filters were used, not in locked-student mode).
+        submitted_section_id = request.form.get('section_id', type=int)
+        if submitted_section_id:
+            valid_section = Section.query.filter_by(
+                id=submitted_section_id,
+                school_id=school.id,
+                academic_year_id=year.id,
+            ).first()
+            if not valid_section:
+                flash('الشعبة المحددة غير صالحة أو لا تنتمي لهذه المدرسة والسنة الدراسية.', 'danger')
+                return render_template('fees/form.html',
+                                       fee_types=fee_types, years=years), 400
+            if selected_student.section_id != submitted_section_id:
+                flash('الطالب لا ينتمي إلى الشعبة المحددة.', 'danger')
+                return render_template('fees/form.html',
+                                       fee_types=fee_types, years=years), 400
+
         if FeeRecord.query.filter_by(student_id=selected_student_id,
                                      fee_type_id=selected_fee_type_id,
                                      academic_year_id=selected_year_id).first():
@@ -167,32 +187,78 @@ def create():
             return render_template('fees/form.html',
                                    fee_types=fee_types, years=years,
                                    selected_student=selected_student)
+
+        # ── Discount calculation (server-side, safe Decimal arithmetic) ──────
+        try:
+            total_amount = Decimal(request.form.get('total_amount', '0') or '0')
+        except InvalidOperation:
+            flash('المبلغ الإجمالي غير صالح.', 'danger')
+            return render_template('fees/form.html',
+                                   fee_types=fee_types, years=years,
+                                   selected_student=selected_student), 400
+
+        discount_type = request.form.get('discount_type', 'fixed')
+        try:
+            discount_value = Decimal(request.form.get('discount_value', '0') or '0')
+        except InvalidOperation:
+            flash('قيمة الخصم غير صالحة.', 'danger')
+            return render_template('fees/form.html',
+                                   fee_types=fee_types, years=years,
+                                   selected_student=selected_student), 400
+
+        if discount_type == 'percentage':
+            if discount_value < 0 or discount_value > 100:
+                flash('نسبة الخصم يجب أن تكون بين 0 و100.', 'danger')
+                return render_template('fees/form.html',
+                                       fee_types=fee_types, years=years,
+                                       selected_student=selected_student), 400
+            discount = (total_amount * discount_value / Decimal('100')).quantize(Decimal('0.01'))
+        else:
+            discount = discount_value
+            if discount < 0:
+                flash('الخصم لا يمكن أن يكون سالباً.', 'danger')
+                return render_template('fees/form.html',
+                                       fee_types=fee_types, years=years,
+                                       selected_student=selected_student), 400
+            if discount > total_amount:
+                flash('الخصم لا يمكن أن يتجاوز المبلغ الإجمالي.', 'danger')
+                return render_template('fees/form.html',
+                                       fee_types=fee_types, years=years,
+                                       selected_student=selected_student), 400
+
+        net_amount = total_amount - discount
+        if net_amount < 0:
+            flash('الصافي لا يمكن أن يكون سالباً.', 'danger')
+            return render_template('fees/form.html',
+                                   fee_types=fee_types, years=years,
+                                   selected_student=selected_student), 400
+
         record = FeeRecord(
             student_id       = selected_student_id,
             fee_type_id      = selected_fee_type_id,
             academic_year_id = selected_year_id,
             school_id        = school.id if school else None,
-            total_amount     = float(request.form.get('total_amount', 0)),
-            discount         = float(request.form.get('discount', 0) or 0),
+            total_amount     = float(total_amount),
+            discount         = float(discount),   # always stored as final monetary amount
             notes            = request.form.get('notes', '').strip(),
         )
         db.session.add(record)
         db.session.flush()
 
-        # Build installments
+        # Build installments from the server-computed net amount.
         num_inst = max(1, min(12, int(request.form.get('num_installments', 1) or 1)))
-        net      = record.net_amount
+        net      = record.net_amount          # uses model property: total_amount - discount
         each     = round(net / num_inst, 2)
         for i in range(1, num_inst + 1):
             due_str = request.form.get(f'due_date_{i}')
             due     = dt.strptime(due_str, '%Y-%m-%d').date() if due_str else date.today()
             inst = FeeInstallment(
-                fee_record_id  = record.id,
-                school_id      = record.school_id,
+                fee_record_id    = record.id,
+                school_id        = record.school_id,
                 academic_year_id = record.academic_year_id,
-                installment_no = i,
-                amount         = each,
-                due_date       = due,
+                installment_no   = i,
+                amount           = each,
+                due_date         = due,
             )
             db.session.add(inst)
 
@@ -230,14 +296,96 @@ def search_students():
     if len(term) < 2:
         return jsonify({'results': []})
 
+    section_id = request.args.get('section_id', type=int)
+
+    query = _active_fee_student_query(school, year)
+
+    if section_id:
+        # Verify section belongs to this school + active year before applying filter.
+        valid_section = Section.query.filter_by(
+            id=section_id, school_id=school.id, academic_year_id=year.id
+        ).first()
+        if not valid_section:
+            return jsonify({'results': []})
+        query = query.filter(Student.section_id == section_id)
+
     students = (
-        _active_fee_student_query(school, year)
-        .filter(Student.full_name.ilike(f'%{term}%'))
+        query
+        .filter(
+            Student.full_name.ilike(f'%{term}%') |
+            Student.student_id.ilike(f'%{term}%')
+        )
         .order_by(Student.full_name)
         .limit(20)
         .all()
     )
     return jsonify({'results': [_student_payload(student) for student in students]})
+
+
+@fees_bp.route('/api/stages')
+@login_required
+@permission_required('manage_fees')
+def api_stages():
+    """Distinct stage values for the current school and active year (for cascading dropdown)."""
+    school = get_current_school()
+    year = get_active_year(school.id) if school else None
+    if not school or not year:
+        return jsonify([])
+    rows = (
+        db.session.query(Grade.stage)
+        .filter(
+            Grade.school_id == school.id,
+            Grade.academic_year_id == year.id,
+            Grade.stage.isnot(None),
+            Grade.stage != '',
+        )
+        .distinct()
+        .order_by(Grade.stage)
+        .all()
+    )
+    return jsonify([{'value': r[0], 'label': r[0]} for r in rows])
+
+
+@fees_bp.route('/api/grades')
+@login_required
+@permission_required('manage_fees')
+def api_grades():
+    """Grades for a given stage, scoped to the current school and active year."""
+    school = get_current_school()
+    year = get_active_year(school.id) if school else None
+    stage = request.args.get('stage', '').strip()
+    if not school or not year or not stage:
+        return jsonify([])
+    grades = (
+        Grade.query
+        .filter_by(school_id=school.id, academic_year_id=year.id, stage=stage)
+        .order_by(Grade.name)
+        .all()
+    )
+    return jsonify([{'id': g.id, 'name': g.name} for g in grades])
+
+
+@fees_bp.route('/api/sections')
+@login_required
+@permission_required('manage_fees')
+def api_sections():
+    """Sections for a given grade_id, scoped to the current school and active year."""
+    school = get_current_school()
+    year = get_active_year(school.id) if school else None
+    grade_id = request.args.get('grade_id', type=int)
+    if not school or not year or not grade_id:
+        return jsonify([])
+    grade = Grade.query.filter_by(id=grade_id, school_id=school.id,
+                                  academic_year_id=year.id).first()
+    if not grade:
+        return jsonify([])
+    sections = (
+        Section.query
+        .filter_by(grade_id=grade_id, school_id=school.id, academic_year_id=year.id)
+        .order_by(Section.name)
+        .all()
+    )
+    return jsonify([{'id': s.id, 'name': s.name} for s in sections])
 
 
 @fees_bp.route('/pay/<int:inst_id>', methods=['POST'])

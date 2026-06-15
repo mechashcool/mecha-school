@@ -17,12 +17,50 @@
       <div class="card-body">
         <form method="POST" id="feeForm">
           <div class="row g-3 mb-4">
+
+            <!-- ── Academic Year ──────────────────────────────────────────── -->
             <div class="col-md-6">
+              <label class="form-label">العام الدراسي <span class="text-danger">*</span></label>
+              <select name="academic_year_id" class="form-select" required>
+                <option value="">— اختر العام —</option>
+                {% for y in years %}
+                <option value="{{ y.id }}" {{ 'selected' if y.is_current }}>
+                  {{ y.name }}{{ ' (الحالي)' if y.is_current }}
+                </option>
+                {% endfor %}
+              </select>
+            </div>
+
+            <!-- ── Stage → Grade → Section cascade (search mode only) ─────── -->
+            {% if not (locked_student is defined and locked_student) %}
+            <div class="col-md-4">
+              <label class="form-label">المرحلة</label>
+              <select id="stageFilter" class="form-select">
+                <option value="">— اختر المرحلة —</option>
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">الصف</label>
+              <select id="gradeFilter" class="form-select" disabled>
+                <option value="">— اختر الصف —</option>
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">الشعبة</label>
+              <select id="sectionFilter" class="form-select" disabled>
+                <option value="">— اختر الشعبة —</option>
+              </select>
+            </div>
+            <input type="hidden" name="section_id" id="sectionId" value="">
+            {% endif %}
+
+            <!-- ── Student ───────────────────────────────────────────────── -->
+            <div class="col-12">
               <label class="form-label">الطالب <span class="text-danger">*</span></label>
               <input type="hidden" name="student_id" id="studentId"
                      value="{{ selected_student.id if selected_student is defined and selected_student else '' }}">
               {% if locked_student is defined and locked_student %}
-              {# Locked: student was preselected from creation flow — no search, no change #}
+              {# Locked: student was preselected — no search, no filters required #}
               {% set selected_section = selected_student.section %}
               {% set selected_grade = selected_section.grade if selected_section else none %}
               <div class="selected-student">
@@ -41,10 +79,11 @@
                 <div class="input-group">
                   <span class="input-group-text"><i class="bi bi-search"></i></span>
                   <input type="search" id="studentSearch" class="form-control"
-                         placeholder="&#1575;&#1576;&#1581;&#1579; &#1593;&#1606; &#1575;&#1604;&#1591;&#1575;&#1604;&#1576; &#1576;&#1575;&#1604;&#1575;&#1587;&#1605;"
+                         placeholder="ابحث عن الطالب بالاسم أو الرمز"
                          autocomplete="off"
                          value="{{ selected_student.full_name if selected_student is defined and selected_student else '' }}">
                 </div>
+                <div id="studentSearchHint" class="form-text text-muted mt-1 d-none"></div>
                 <div id="studentResults" class="student-results d-none"></div>
                 <div id="selectedStudent" class="selected-student {{ '' if selected_student is defined and selected_student else 'd-none' }}">
                   {% if selected_student is defined and selected_student %}
@@ -59,20 +98,15 @@
                     </small>
                   </span>
                   <button type="button" id="clearStudent" class="btn btn-sm btn-outline-secondary">
-                    &#1578;&#1594;&#1610;&#1610;&#1585;
+                    تغيير
                   </button>
                   {% endif %}
                 </div>
               </div>
-              {# Search-only selector: students are loaded on demand. #}
-              <select class="d-none" tabindex="-1" aria-hidden="true">
-                <option value="">— اختر الطالب —</option>
-                {% for s in students %}
-                <option value="{{ s.id }}">{{ s.full_name }} ({{ s.student_id }})</option>
-                {% endfor %}
-              </select>
               {% endif %}
             </div>
+
+            <!-- ── Fee Type ──────────────────────────────────────────────── -->
             <div class="col-md-6">
               <label class="form-label">نوع الرسم <span class="text-danger">*</span></label>
               <select name="fee_type_id" class="form-select" required>
@@ -82,32 +116,55 @@
                 {% endfor %}
               </select>
             </div>
+
+            <!-- ── Total Amount ──────────────────────────────────────────── -->
             <div class="col-md-6">
-              <label class="form-label">العام الدراسي <span class="text-danger">*</span></label>
-              <select name="academic_year_id" class="form-select" required>
-                <option value="">— اختر العام —</option>
-                {% for y in years %}
-                <option value="{{ y.id }}" {{ 'selected' if y.is_current }}>
-                  {{ y.name }}{{ ' (الحالي)' if y.is_current }}
-                </option>
-                {% endfor %}
-              </select>
-            </div>
-            <div class="col-md-3">
               <label class="form-label">المبلغ الإجمالي <span class="text-danger">*</span></label>
               <input type="number" name="total_amount" id="totalAmount" class="form-control"
                      min="0" step="0.01" required oninput="calcNet()">
               <div id="amountInWords" class="amount-in-words-preview d-none" dir="rtl"></div>
             </div>
-            <div class="col-md-3">
-              <label class="form-label">الخصم</label>
-              <input type="number" name="discount" id="discount" class="form-control"
-                     min="0" step="0.01" value="0" oninput="calcNet()">
+
+            <!-- ── Discount Type ─────────────────────────────────────────── -->
+            <div class="col-12">
+              <label class="form-label">نوع الخصم</label>
+              <div class="d-flex gap-4 mt-1">
+                <div class="form-check">
+                  <input class="form-check-input" type="radio" name="discount_type"
+                         id="discountFixed" value="fixed" checked onchange="onDiscountTypeChange()">
+                  <label class="form-check-label" for="discountFixed">مبلغ ثابت</label>
+                </div>
+                <div class="form-check">
+                  <input class="form-check-input" type="radio" name="discount_type"
+                         id="discountPct" value="percentage" onchange="onDiscountTypeChange()">
+                  <label class="form-check-label" for="discountPct">نسبة مئوية</label>
+                </div>
+              </div>
             </div>
-            <div class="col-md-6">
+
+            <!-- ── Discount Value ────────────────────────────────────────── -->
+            <div class="col-md-4">
+              <label class="form-label" id="discountValueLabel">قيمة الخصم</label>
+              <div class="input-group">
+                <input type="number" name="discount_value" id="discountValue" class="form-control"
+                       min="0" step="0.01" value="0" oninput="calcNet()">
+                <span class="input-group-text" id="discountUnit">د.ع</span>
+              </div>
+            </div>
+
+            <!-- ── Calculated Discount Amount (percentage mode only) ──────── -->
+            <div class="col-md-4 d-none" id="calcDiscountRow">
+              <label class="form-label">قيمة الخصم المحسوبة</label>
+              <div class="form-control bg-light text-danger fw-700" id="calcDiscountAmount">—</div>
+            </div>
+
+            <!-- ── Net Amount ────────────────────────────────────────────── -->
+            <div class="col-md-4">
               <label class="form-label">الصافي بعد الخصم</label>
               <div class="form-control bg-light fw-700 text-primary-custom" id="netAmount">—</div>
             </div>
+
+            <!-- ── Installment Count ─────────────────────────────────────── -->
             <div class="col-md-6">
               <label class="form-label">عدد الأقساط <span class="text-danger">*</span></label>
               <select name="num_installments" id="numInst" class="form-select"
@@ -126,6 +183,8 @@
                 <option value="12">12 قسطاً</option>
               </select>
             </div>
+
+            <!-- ── Notes ────────────────────────────────────────────────── -->
             <div class="col-12">
               <label class="form-label">ملاحظات</label>
               <textarea name="notes" class="form-control" rows="2"></textarea>
@@ -195,17 +254,9 @@
   gap: 12px;
 }
 .student-result-item:hover,
-.student-result-item:focus {
-  background: #f0f4f8;
-}
-.student-result-name {
-  font-weight: 700;
-  color: var(--text);
-}
-.student-result-meta {
-  color: var(--text-muted);
-  font-size: 12px;
-}
+.student-result-item:focus { background: #f0f4f8; }
+.student-result-name { font-weight: 700; color: var(--text); }
+.student-result-meta { color: var(--text-muted); font-size: 12px; }
 .selected-student {
   margin-top: 8px;
   border: 1px solid #cfe8dc;
@@ -227,20 +278,111 @@
 </style>
 <script>
 {% if not (locked_student is defined and locked_student) %}
+// ── API base URLs ─────────────────────────────────────────────────────────────
+const stagesUrl   = "{{ url_for('fees.api_stages') }}";
+const gradesUrl   = "{{ url_for('fees.api_grades') }}";
+const sectionsUrl = "{{ url_for('fees.api_sections') }}";
 const studentSearchUrl = "{{ url_for('fees.search_students') }}";
+
+const stageFilter   = document.getElementById('stageFilter');
+const gradeFilter   = document.getElementById('gradeFilter');
+const sectionFilter = document.getElementById('sectionFilter');
+const sectionIdInput = document.getElementById('sectionId');
 const studentSearch = document.getElementById('studentSearch');
+const studentSearchHint = document.getElementById('studentSearchHint');
 const studentResults = document.getElementById('studentResults');
-const selectedStudent = document.getElementById('selectedStudent');
+const selectedStudentEl = document.getElementById('selectedStudent');
 let studentSearchTimer = null;
 
+// ── Cascade: load stages on page load ────────────────────────────────────────
+function loadStages() {
+  fetch(stagesUrl, { headers: { 'Accept': 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      stageFilter.innerHTML = '<option value="">— اختر المرحلة —</option>';
+      data.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.value;
+        opt.textContent = s.label;
+        stageFilter.appendChild(opt);
+      });
+    })
+    .catch(() => {});
+}
+
+function resetGrade() {
+  gradeFilter.innerHTML = '<option value="">— اختر الصف —</option>';
+  gradeFilter.disabled = true;
+  resetSection();
+}
+
+function resetSection() {
+  sectionFilter.innerHTML = '<option value="">— اختر الشعبة —</option>';
+  sectionFilter.disabled = true;
+  sectionIdInput.value = '';
+  clearStudentSelection();
+}
+
+stageFilter.addEventListener('change', function() {
+  resetGrade();
+  const stage = this.value;
+  if (!stage) return;
+  fetch(`${gradesUrl}?stage=${encodeURIComponent(stage)}`, { headers: { 'Accept': 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      gradeFilter.innerHTML = '<option value="">— اختر الصف —</option>';
+      data.forEach(g => {
+        const opt = document.createElement('option');
+        opt.value = g.id;
+        opt.textContent = g.name;
+        gradeFilter.appendChild(opt);
+      });
+      gradeFilter.disabled = data.length === 0;
+    })
+    .catch(() => {});
+});
+
+gradeFilter.addEventListener('change', function() {
+  resetSection();
+  const gradeId = this.value;
+  if (!gradeId) return;
+  fetch(`${sectionsUrl}?grade_id=${encodeURIComponent(gradeId)}`, { headers: { 'Accept': 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      sectionFilter.innerHTML = '<option value="">— اختر الشعبة —</option>';
+      data.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = s.name;
+        sectionFilter.appendChild(opt);
+      });
+      sectionFilter.disabled = data.length === 0;
+    })
+    .catch(() => {});
+});
+
+sectionFilter.addEventListener('change', function() {
+  clearStudentSelection();
+  sectionIdInput.value = this.value || '';
+});
+
+// ── Student search ────────────────────────────────────────────────────────────
 function hideStudentResults() {
   studentResults.classList.add('d-none');
   studentResults.innerHTML = '';
 }
 
+function clearStudentSelection() {
+  document.getElementById('studentId').value = '';
+  if (studentSearch) studentSearch.value = '';
+  selectedStudentEl.classList.add('d-none');
+  selectedStudentEl.innerHTML = '';
+  hideStudentResults();
+}
+
 function studentMeta(student) {
   const parts = [];
-  if (student.grade) parts.push(student.grade);
+  if (student.grade)   parts.push(student.grade);
   if (student.section) parts.push(student.section);
   if (student.student_id) parts.push(student.student_id);
   return parts.join(' - ');
@@ -249,30 +391,28 @@ function studentMeta(student) {
 function chooseStudent(student) {
   document.getElementById('studentId').value = student.id;
   studentSearch.value = student.full_name;
-  selectedStudent.classList.remove('d-none');
-  selectedStudent.innerHTML = `
+  selectedStudentEl.classList.remove('d-none');
+  selectedStudentEl.innerHTML = `
     <i class="bi bi-person-check-fill"></i>
     <span>
       ${student.full_name}
       <small>${studentMeta(student)}</small>
     </span>
-    <button type="button" id="clearStudent" class="btn btn-sm btn-outline-secondary">
-      &#1578;&#1594;&#1610;&#1610;&#1585;
-    </button>`;
+    <button type="button" id="clearStudent" class="btn btn-sm btn-outline-secondary">تغيير</button>`;
   hideStudentResults();
 }
 
 function renderStudentResults(students) {
   if (!students.length) {
-    studentResults.innerHTML = '<div class="text-muted text-center py-3">&#1604;&#1575; &#1578;&#1608;&#1580;&#1583; &#1606;&#1578;&#1575;&#1574;&#1580; &#1605;&#1591;&#1575;&#1576;&#1602;&#1577;</div>';
+    studentResults.innerHTML = '<div class="text-muted text-center py-3">لا توجد نتائج مطابقة</div>';
     studentResults.classList.remove('d-none');
     return;
   }
-  studentResults.innerHTML = students.map(student => `
-    <button type="button" class="student-result-item" data-student="${encodeURIComponent(JSON.stringify(student))}">
+  studentResults.innerHTML = students.map(s => `
+    <button type="button" class="student-result-item" data-student="${encodeURIComponent(JSON.stringify(s))}">
       <span>
-        <span class="student-result-name">${student.full_name}</span>
-        <span class="student-result-meta d-block">${studentMeta(student)}</span>
+        <span class="student-result-name">${s.full_name}</span>
+        <span class="student-result-meta d-block">${studentMeta(s)}</span>
       </span>
       <i class="bi bi-chevron-left text-muted"></i>
     </button>
@@ -283,16 +423,13 @@ function renderStudentResults(students) {
 function searchStudents() {
   const q = studentSearch.value.trim();
   document.getElementById('studentId').value = '';
-  selectedStudent.classList.add('d-none');
-  selectedStudent.innerHTML = '';
-  if (q.length < 2) {
-    hideStudentResults();
-    return;
-  }
-  fetch(`${studentSearchUrl}?q=${encodeURIComponent(q)}`, {
-    headers: { 'Accept': 'application/json' }
-  })
-    .then(response => response.ok ? response.json() : { results: [] })
+  selectedStudentEl.classList.add('d-none');
+  selectedStudentEl.innerHTML = '';
+  if (q.length < 2) { hideStudentResults(); return; }
+  const secId = sectionIdInput.value;
+  const url = `${studentSearchUrl}?q=${encodeURIComponent(q)}${secId ? '&section_id=' + encodeURIComponent(secId) : ''}`;
+  fetch(url, { headers: { 'Accept': 'application/json' } })
+    .then(r => r.ok ? r.json() : { results: [] })
     .then(data => renderStudentResults(data.results || []))
     .catch(() => renderStudentResults([]));
 }
@@ -312,13 +449,10 @@ if (studentResults) {
   });
 }
 
-if (selectedStudent) {
-  selectedStudent.addEventListener('click', event => {
+if (selectedStudentEl) {
+  selectedStudentEl.addEventListener('click', event => {
     if (!event.target.closest('#clearStudent')) return;
-    document.getElementById('studentId').value = '';
-    studentSearch.value = '';
-    selectedStudent.classList.add('d-none');
-    selectedStudent.innerHTML = '';
+    clearStudentSelection();
     studentSearch.focus();
   });
 }
@@ -337,9 +471,12 @@ if (feeForm) {
     }
   });
 }
+
+// Initialise cascade
+loadStages();
 {% endif %}
 
-// ── Iraqi Dinar amount-to-words (mirrors arabic_numbers.py:amount_to_words_iqd) ──
+// ── Iraqi Dinar amount-to-words ───────────────────────────────────────────────
 const _IQD_ONES = ['','واحد','اثنان','ثلاثة','أربعة','خمسة','ستة','سبعة','ثمانية','تسعة',
   'عشرة','أحد عشر','اثنا عشر','ثلاثة عشر','أربعة عشر','خمسة عشر',
   'ستة عشر','سبعة عشر','ثمانية عشر','تسعة عشر'];
@@ -398,16 +535,53 @@ function updateAmountInWords() {
   if (!raw) { div.classList.add('d-none'); div.textContent = ''; return; }
   const n = Math.trunc(parseFloat(raw));
   if (isNaN(n) || n < 0) { div.classList.add('d-none'); div.textContent = ''; return; }
-  const words = amountToWordsIQD(n);
-  div.textContent = 'المبلغ كتابةً: ' + words;
+  div.textContent = 'المبلغ كتابةً: ' + amountToWordsIQD(n);
   div.classList.remove('d-none');
 }
 
+// ── Discount type switching ──────────────────────────────────────────────────
+function onDiscountTypeChange() {
+  const isPct = document.getElementById('discountPct').checked;
+  const label = document.getElementById('discountValueLabel');
+  const unit  = document.getElementById('discountUnit');
+  const calcRow = document.getElementById('calcDiscountRow');
+  if (isPct) {
+    label.textContent = 'نسبة الخصم (%)';
+    unit.textContent  = '%';
+    const inp = document.getElementById('discountValue');
+    inp.step = '0.01';
+    inp.max  = '100';
+    calcRow.classList.remove('d-none');
+  } else {
+    label.textContent = 'قيمة الخصم';
+    unit.textContent  = 'د.ع';
+    const inp = document.getElementById('discountValue');
+    inp.removeAttribute('max');
+    inp.step = '0.01';
+    calcRow.classList.add('d-none');
+  }
+  calcNet();
+}
+
+// ── Net amount calculation ────────────────────────────────────────────────────
 function calcNet() {
-  const total    = parseFloat(document.getElementById('totalAmount').value) || 0;
-  const discount = parseFloat(document.getElementById('discount').value) || 0;
-  const net      = total - discount;
-  document.getElementById('netAmount').textContent = net.toLocaleString('ar-IQ') + ' د.ع';
+  const total = parseFloat(document.getElementById('totalAmount').value) || 0;
+  const val   = parseFloat(document.getElementById('discountValue').value) || 0;
+  const isPct = document.getElementById('discountPct').checked;
+
+  let discount = 0;
+  if (isPct) {
+    const pct = Math.min(100, Math.max(0, val));
+    discount = Math.round(total * pct) / 100;   // integer IQD rounding
+    document.getElementById('calcDiscountAmount').textContent =
+      discount.toLocaleString('ar-IQ') + ' د.ع';
+  } else {
+    discount = val;
+  }
+
+  const net = total - discount;
+  document.getElementById('netAmount').textContent =
+    (net >= 0 ? net : 0).toLocaleString('ar-IQ') + ' د.ع';
   updateAmountInWords();
 }
 
