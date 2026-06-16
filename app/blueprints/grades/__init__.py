@@ -1,5 +1,5 @@
 """Al-Muhandis – Grades Blueprint"""
-from flask import Blueprint, render_template, redirect, url_for, flash, request, abort
+from flask import Blueprint, render_template, redirect, url_for, flash, request, abort, jsonify
 from flask_login import login_required, current_user
 from datetime import datetime as dt
 
@@ -594,108 +594,205 @@ def report():
     school = get_current_school()
     year   = get_view_year(school.id) if school else None
 
-    stage_filter      = request.args.get('stage', '').strip()
-    grade_id          = request.args.get('grade_id', type=int)
-    section_id        = request.args.get('section_id', type=int)
-    selected_student  = request.args.get('student_id', type=int)  # 0 / absent = all
+    # student_id is the only param that drives the results table.
+    # stage / grade_id / section_id are JS-only cascade state echoed back so
+    # the dropdowns restore correctly after a page load.
+    selected_student_id = request.args.get('student_id', type=int)
 
-    # ── Base grade/section queries scoped to school + year ────────────────────
-    if school and year:
-        grades_q   = (Grade.query
-                      .filter_by(school_id=school.id, academic_year_id=year.id)
-                      .order_by(Grade.name))
-        sections_q = (Section.query
-                      .filter_by(school_id=school.id, academic_year_id=year.id)
-                      .order_by(Section.name))
-    else:
-        grades_q   = Grade.query.filter(False)
-        sections_q = Section.query.filter(False)
-
-    # ── Teacher scope: restrict to assigned sections/grades only ──────────────
-    if _is_teacher():
-        allowed_section_ids = get_teacher_section_ids(current_user)
-        if not allowed_section_ids:
-            allowed_section_ids = []
-        sections_q = sections_q.filter(Section.id.in_(allowed_section_ids))
-        teacher_grade_ids = list({
-            s.grade_id for s in sections_q.all() if s.grade_id
-        })
-        grades_q = grades_q.filter(Grade.id.in_(teacher_grade_ids))
-        # Reject any section_id the teacher is not allowed to see
-        if section_id and section_id not in allowed_section_ids:
-            section_id = None
-
-    # ── Derive distinct stages from visible grades ────────────────────────────
-    all_grades = grades_q.all()
-    stages = sorted({g.stage for g in all_grades if g.stage})
-
-    # ── Cascade: filter grades by selected stage ──────────────────────────────
-    if stage_filter:
-        grades_for_stage = [g for g in all_grades if g.stage == stage_filter]
-    else:
-        grades_for_stage = all_grades
-        grade_id    = None  # clear downstream selections when stage is blank
-        section_id  = None
-
-    # ── Cascade: filter sections by selected grade ────────────────────────────
-    grade_ids_for_stage = {g.id for g in grades_for_stage}
-    if grade_id and grade_id not in grade_ids_for_stage:
-        grade_id   = None
-        section_id = None
-
-    if grade_id:
-        sections_for_grade = sections_q.filter_by(grade_id=grade_id).all()
-    else:
-        sections_for_grade = []
-        section_id = None  # clear section when no grade is selected
-
-    # ── Validate section belongs to the selected grade ────────────────────────
-    if section_id and section_id not in {s.id for s in sections_for_grade}:
-        section_id = None
-
-    # ── Load students for the selected section (for the dropdown) ────────────
-    section_students = []
-    if section_id and school and year:
-        section_students = (Student.query
-                            .filter_by(section_id=section_id,
-                                       school_id=school.id,
-                                       academic_year_id=year.id,
-                                       status='active')
-                            .order_by(Student.full_name)
-                            .all())
-
-    # Validate selected_student belongs to this section
-    section_student_ids = {s.id for s in section_students}
-    if selected_student and selected_student not in section_student_ids:
-        selected_student = None
-
-    # ── Build results ─────────────────────────────────────────────────────────
     results = []
-    if section_id and school and year:
-        students_to_process = (
-            [s for s in section_students if s.id == selected_student]
-            if selected_student
-            else section_students
-        )
-        for s in students_to_process:
+    selected_student_obj = None
+
+    if selected_student_id and school and year:
+        student = Student.query.filter_by(
+            id=selected_student_id,
+            school_id=school.id,
+            academic_year_id=year.id,
+            status='active',
+        ).first()
+
+        if student:
+            # Teacher scope: teacher may only view students in their sections
+            if _is_teacher():
+                allowed = get_teacher_section_ids(current_user)
+                if student.section_id not in (allowed or []):
+                    student = None
+
+        if student:
+            selected_student_obj = student
             s_results = (ExamResult.query
-                         .filter_by(student_id=s.id,
+                         .filter_by(student_id=student.id,
                                     school_id=school.id,
                                     academic_year_id=year.id)
                          .all())
             if s_results:
                 avg = sum(float(r.marks) for r in s_results) / len(s_results)
-                results.append({'student': s, 'avg': round(avg, 2),
+                results.append({'student': student,
+                                'avg': round(avg, 2),
                                 'count': len(s_results)})
-        results.sort(key=lambda x: x['avg'], reverse=True)
 
     return render_template('grades/report.html',
                            results=results,
-                           stages=stages,
-                           grades=grades_for_stage,
-                           sections=sections_for_grade,
-                           section_students=section_students,
-                           stage_filter=stage_filter,
-                           grade_id=grade_id,
-                           section_id=section_id,
-                           selected_student=selected_student)
+                           selected_student_id=selected_student_id,
+                           selected_student_obj=selected_student_obj)
+
+
+# ── Grades report — cascade + student search JSON APIs ───────────────────────
+
+def _report_allowed_section_ids():
+    """Return the set of section IDs visible to the current user, or None = all."""
+    if _is_teacher():
+        return set(get_teacher_section_ids(current_user) or [])
+    return None  # non-teacher: no extra restriction
+
+
+def _report_student_payload(student):
+    section = student.section
+    grade   = section.grade if section else None
+    return {
+        'id':         student.id,
+        'student_id': student.student_id,
+        'full_name':  student.full_name,
+        'grade':      grade.name   if grade   else '',
+        'section':    section.name if section else '',
+    }
+
+
+@grades_bp.route('/report/api/stages')
+@login_required
+@permission_required('enter_grades')
+def report_api_stages():
+    school = get_current_school()
+    year   = get_view_year(school.id) if school else None
+    if not school or not year:
+        return jsonify([])
+
+    q = (db.session.query(Grade.stage)
+         .filter(Grade.school_id == school.id,
+                 Grade.academic_year_id == year.id,
+                 Grade.stage.isnot(None),
+                 Grade.stage != ''))
+
+    allowed = _report_allowed_section_ids()
+    if allowed is not None:
+        # Restrict to grades that contain at least one allowed section
+        allowed_grade_ids = (
+            db.session.query(Section.grade_id)
+            .filter(Section.id.in_(allowed))
+            .subquery()
+        )
+        q = q.filter(Grade.id.in_(allowed_grade_ids))
+
+    rows = q.distinct().order_by(Grade.stage).all()
+    return jsonify([{'value': r[0], 'label': r[0]} for r in rows])
+
+
+@grades_bp.route('/report/api/grades')
+@login_required
+@permission_required('enter_grades')
+def report_api_grades():
+    school = get_current_school()
+    year   = get_view_year(school.id) if school else None
+    stage  = request.args.get('stage', '').strip()
+    if not school or not year or not stage:
+        return jsonify([])
+
+    grades_q = (Grade.query
+                .filter_by(school_id=school.id, academic_year_id=year.id, stage=stage)
+                .order_by(Grade.name))
+
+    allowed = _report_allowed_section_ids()
+    if allowed is not None:
+        allowed_grade_ids = (
+            db.session.query(Section.grade_id)
+            .filter(Section.id.in_(allowed))
+            .subquery()
+        )
+        grades_q = grades_q.filter(Grade.id.in_(allowed_grade_ids))
+
+    return jsonify([{'id': g.id, 'name': g.name} for g in grades_q.all()])
+
+
+@grades_bp.route('/report/api/sections')
+@login_required
+@permission_required('enter_grades')
+def report_api_sections():
+    school   = get_current_school()
+    year     = get_view_year(school.id) if school else None
+    grade_id = request.args.get('grade_id', type=int)
+    if not school or not year or not grade_id:
+        return jsonify([])
+
+    grade = Grade.query.filter_by(id=grade_id, school_id=school.id,
+                                   academic_year_id=year.id).first()
+    if not grade:
+        return jsonify([])
+
+    sections_q = (Section.query
+                  .filter_by(grade_id=grade_id,
+                             school_id=school.id,
+                             academic_year_id=year.id)
+                  .order_by(Section.name))
+
+    allowed = _report_allowed_section_ids()
+    if allowed is not None:
+        sections_q = sections_q.filter(Section.id.in_(allowed))
+
+    return jsonify([{'id': s.id, 'name': s.name} for s in sections_q.all()])
+
+
+@grades_bp.route('/report/api/students')
+@login_required
+@permission_required('enter_grades')
+def report_api_students():
+    school = get_current_school()
+    year   = get_view_year(school.id) if school else None
+    if not school or not year:
+        return jsonify({'results': []})
+
+    term       = request.args.get('q', '').strip()
+    section_id = request.args.get('section_id', type=int)
+    grade_id   = request.args.get('grade_id',   type=int)
+
+    # Need at least a search term or a section to return anything
+    if not term and not section_id:
+        return jsonify({'results': []})
+
+    allowed = _report_allowed_section_ids()
+
+    q = Student.query.filter_by(status='active',
+                                 school_id=school.id,
+                                 academic_year_id=year.id)
+
+    if section_id:
+        # Verify section belongs to this school/year
+        sec = Section.query.filter_by(id=section_id,
+                                       school_id=school.id,
+                                       academic_year_id=year.id).first()
+        if not sec:
+            return jsonify({'results': []})
+        if allowed is not None and section_id not in allowed:
+            return jsonify({'results': []})
+        q = q.filter(Student.section_id == section_id)
+    elif grade_id:
+        # Scope to all sections of the grade visible to this user
+        secs_q = Section.query.filter_by(grade_id=grade_id,
+                                          school_id=school.id,
+                                          academic_year_id=year.id)
+        if allowed is not None:
+            secs_q = secs_q.filter(Section.id.in_(allowed))
+        sec_ids = [s.id for s in secs_q.all()]
+        if not sec_ids:
+            return jsonify({'results': []})
+        q = q.filter(Student.section_id.in_(sec_ids))
+    elif allowed is not None:
+        q = q.filter(Student.section_id.in_(allowed))
+
+    if term:
+        q = q.filter(
+            Student.full_name.ilike(f'%{term}%') |
+            Student.student_id.ilike(f'%{term}%')
+        )
+
+    limit = 200 if (section_id and not term) else 20
+    students = q.order_by(Student.full_name).limit(limit).all()
+    return jsonify({'results': [_report_student_payload(s) for s in students]})

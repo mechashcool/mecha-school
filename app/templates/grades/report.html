@@ -12,121 +12,104 @@
 
 <div class="card mb-4">
   <div class="card-body py-3">
-    <form method="GET" class="row g-2 align-items-end" id="reportFilterForm">
+    <div class="row g-2 align-items-end">
 
       {# ── Stage ──────────────────────────────────────────────────────────── #}
       <div class="col-md-2">
         <label class="form-label mb-1" style="font-size:12px">المرحلة</label>
-        <select name="stage" class="form-select"
-                onchange="document.getElementById('reportFilterForm').submit()">
+        <select id="stageFilter" class="form-select">
           <option value="">— كل المراحل —</option>
-          {% for s in stages %}
-          <option value="{{ s }}" {{ 'selected' if stage_filter == s }}>{{ s }}</option>
-          {% endfor %}
         </select>
       </div>
 
       {# ── Grade ──────────────────────────────────────────────────────────── #}
       <div class="col-md-2">
         <label class="form-label mb-1" style="font-size:12px">الصف</label>
-        <select name="grade_id" class="form-select"
-                {% if not stage_filter %}disabled{% endif %}
-                onchange="document.getElementById('reportFilterForm').submit()">
+        <select id="gradeFilter" class="form-select" disabled>
           <option value="">— اختر الصف —</option>
-          {% for g in grades %}
-          <option value="{{ g.id }}" {{ 'selected' if grade_id == g.id }}>{{ g.name }}</option>
-          {% endfor %}
         </select>
       </div>
 
       {# ── Section ─────────────────────────────────────────────────────────── #}
       <div class="col-md-2">
         <label class="form-label mb-1" style="font-size:12px">الشعبة</label>
-        <select name="section_id" class="form-select"
-                {% if not grade_id %}disabled{% endif %}
-                onchange="document.getElementById('reportFilterForm').submit()">
+        <select id="sectionFilter" class="form-select" disabled>
           <option value="">— اختر الشعبة —</option>
-          {% for sec in sections %}
-          <option value="{{ sec.id }}" {{ 'selected' if section_id == sec.id }}>
-            شعبة {{ sec.name }}
-          </option>
-          {% endfor %}
         </select>
       </div>
 
-      {# ── Student dropdown (populated once a section is selected) ────────── #}
-      <div class="col-md-3">
+      {# ── Student search widget ───────────────────────────────────────────── #}
+      <div class="col-md-4">
         <label class="form-label mb-1" style="font-size:12px">الطالب</label>
-        {% if section_id and section_students %}
-        <select name="student_id" class="form-select"
-                onchange="document.getElementById('reportFilterForm').submit()">
-          <option value="">— كل الطلاب —</option>
-          {% for st in section_students %}
-          <option value="{{ st.id }}"
-                  {{ 'selected' if selected_student == st.id }}>
-            {{ st.full_name }}
-            {% if st.student_id %} — {{ st.student_id }}{% endif %}
-          </option>
-          {% endfor %}
-        </select>
-        {% else %}
-        <select class="form-select" disabled>
-          <option value="">— اختر الشعبة أولاً —</option>
-        </select>
-        {% endif %}
+        <div class="student-search">
+          {# Search input (always visible) #}
+          <div id="searchMode">
+            <div class="input-group">
+              <span class="input-group-text"><i class="bi bi-search"></i></span>
+              <input type="search" id="studentSearch" class="form-control"
+                     placeholder="ابحث عن الطالب بالاسم أو الرمز..."
+                     autocomplete="off">
+            </div>
+            <div id="studentResults" class="student-results d-none"></div>
+          </div>
+          {# Dropdown (shown when a section is selected) #}
+          <div id="dropdownMode" class="d-none">
+            <select id="studentDropdown" class="form-select" disabled>
+              <option value="">— اختر الطالب —</option>
+            </select>
+          </div>
+          {# Confirmation chip for chosen student #}
+          <div id="selectedStudentCard" class="selected-student d-none"></div>
+        </div>
       </div>
 
+      {# ── Submit / clear ─────────────────────────────────────────────────── #}
       <div class="col-md-2">
-        <button class="btn btn-primary w-100" {% if not section_id %}disabled{% endif %}>
-          <i class="bi bi-search me-1"></i>عرض
-        </button>
+        <form method="GET" id="reportForm">
+          <input type="hidden" name="student_id" id="hiddenStudentId"
+                 value="{{ selected_student_id or '' }}">
+          <div class="d-flex gap-2">
+            <button type="submit" id="submitBtn" class="btn btn-primary flex-fill"
+                    {% if not selected_student_id %}disabled{% endif %}>
+              <i class="bi bi-bar-chart-fill me-1"></i>عرض
+            </button>
+            {% if selected_student_id %}
+            <a href="{{ url_for('grades.report') }}"
+               class="btn btn-outline-secondary" title="مسح">
+              <i class="bi bi-x-lg"></i>
+            </a>
+            {% endif %}
+          </div>
+        </form>
       </div>
 
-      {% if selected_student %}
-      <div class="col-md-1">
-        <a href="{{ url_for('grades.report', stage=stage_filter, grade_id=grade_id or '', section_id=section_id or '') }}"
-           class="btn btn-outline-secondary w-100" title="عرض كل الطلاب">
-          <i class="bi bi-x-lg"></i>
-        </a>
-      </div>
-      {% endif %}
-
-    </form>
+    </div>
   </div>
 </div>
 
+{# ── Results ──────────────────────────────────────────────────────────────── #}
 {% if results %}
 <div class="card">
   <div class="card-header">
     <i class="bi bi-bar-chart-fill text-accent"></i>
-    {% if selected_student %}
-      نتيجة الطالب المختار
-    {% else %}
-      نتائج الشعبة المختارة ({{ results|length }} طالب)
+    نتيجة الطالب: <strong>{{ selected_student_obj.full_name }}</strong>
+    {% if selected_student_obj.section %}
+    <span class="badge ms-2" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
+      {{ selected_student_obj.section.grade.name }} / شعبة {{ selected_student_obj.section.name }}
+    </span>
     {% endif %}
   </div>
   <div class="table-wrapper">
     <table class="table">
       <thead>
         <tr>
-          <th>الترتيب</th><th>الاسم</th><th>رقم الطالب</th>
+          <th>الاسم</th><th>رقم الطالب</th>
           <th>عدد الاختبارات</th><th>المتوسط</th><th>التقدير</th>
         </tr>
       </thead>
       <tbody>
         {% for r in results %}
         <tr>
-          <td>
-            {% if loop.index == 1 and not selected_student %}
-            <span style="font-size:18px">🥇</span>
-            {% elif loop.index == 2 and not selected_student %}
-            <span style="font-size:18px">🥈</span>
-            {% elif loop.index == 3 and not selected_student %}
-            <span style="font-size:18px">🥉</span>
-            {% else %}
-            <span class="text-muted">{{ loop.index }}</span>
-            {% endif %}
-          </td>
           <td class="fw-600">{{ r.student.full_name }}</td>
           <td><code>{{ r.student.student_id }}</code></td>
           <td>{{ r.count }}</td>
@@ -152,21 +135,287 @@
     </table>
   </div>
 </div>
-{% elif section_id %}
+{% elif selected_student_id %}
 <div class="card">
-  <div class="card-body text-center text-muted py-5">لا توجد نتائج لهذه الشعبة بعد</div>
-</div>
-{% elif grade_id %}
-<div class="card">
-  <div class="card-body text-center text-muted py-5">اختر شعبة لعرض النتائج</div>
-</div>
-{% elif stage_filter %}
-<div class="card">
-  <div class="card-body text-center text-muted py-5">اختر الصف ثم الشعبة لعرض النتائج</div>
+  <div class="card-body text-center text-muted py-5">لا توجد نتائج مسجلة لهذا الطالب بعد</div>
 </div>
 {% else %}
 <div class="card">
-  <div class="card-body text-center text-muted py-5">اختر المرحلة والصف والشعبة لعرض النتائج</div>
+  <div class="card-body text-center text-muted py-5">
+    <i class="bi bi-person-search" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+    ابحث عن طالب أو اختر المرحلة والصف والشعبة لتضييق النتائج
+  </div>
 </div>
 {% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<style>
+.student-search { position: relative; }
+.student-results {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  right: 0; left: 0;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15,37,64,.12);
+  max-height: 260px;
+  overflow-y: auto;
+}
+.student-result-item {
+  width: 100%; border: 0; background: transparent;
+  text-align: right; padding: 10px 12px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  cursor: pointer;
+}
+.student-result-item:hover, .student-result-item:focus { background: #f0f4f8; }
+.student-result-name  { font-weight: 700; color: var(--text); }
+.student-result-meta  { color: var(--text-muted); font-size: 12px; }
+.selected-student {
+  margin-top: 8px;
+  border: 1px solid #cfe8dc; background: #e8f8f0; color: #155724;
+  border-radius: 8px; padding: 8px 10px;
+  display: flex; align-items: center; gap: 8px;
+}
+.selected-student span  { flex: 1; font-weight: 700; }
+.selected-student small { display:block; color:#49725c; font-size:12px; margin-top:2px; }
+</style>
+<script>
+const stagesUrl   = "{{ url_for('grades.report_api_stages') }}";
+const gradesUrl   = "{{ url_for('grades.report_api_grades') }}";
+const sectionsUrl = "{{ url_for('grades.report_api_sections') }}";
+const studentsUrl = "{{ url_for('grades.report_api_students') }}";
+
+const stageFilter      = document.getElementById('stageFilter');
+const gradeFilter      = document.getElementById('gradeFilter');
+const sectionFilter    = document.getElementById('sectionFilter');
+const studentSearch    = document.getElementById('studentSearch');
+const studentResults   = document.getElementById('studentResults');
+const studentCard      = document.getElementById('selectedStudentCard');
+const studentDropdown  = document.getElementById('studentDropdown');
+const hiddenStudentId  = document.getElementById('hiddenStudentId');
+const submitBtn        = document.getElementById('submitBtn');
+
+let searchTimer = null;
+let currentSectionId = null;
+let currentGradeId   = null;
+
+// ── Restore selected student name on page load (if student_id in URL) ────────
+{% if selected_student_obj %}
+showStudentCard({
+  id:         {{ selected_student_obj.id }},
+  full_name:  "{{ selected_student_obj.full_name | e }}",
+  student_id: "{{ selected_student_obj.student_id or '' }}",
+  grade:      "{{ (selected_student_obj.section.grade.name if selected_student_obj.section and selected_student_obj.section.grade else '') | e }}",
+  section:    "{{ (selected_student_obj.section.name if selected_student_obj.section else '') | e }}"
+});
+{% endif %}
+
+// ── Stage cascade ─────────────────────────────────────────────────────────────
+function loadStages() {
+  fetch(stagesUrl, { headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      stageFilter.innerHTML = '<option value="">— كل المراحل —</option>';
+      data.forEach(s => {
+        const o = document.createElement('option');
+        o.value = s.value; o.textContent = s.label;
+        stageFilter.appendChild(o);
+      });
+    }).catch(() => {});
+}
+
+function resetGrade() {
+  gradeFilter.innerHTML = '<option value="">— اختر الصف —</option>';
+  gradeFilter.disabled = true;
+  currentGradeId = null;
+  resetSection();
+}
+
+function resetSection() {
+  sectionFilter.innerHTML = '<option value="">— اختر الشعبة —</option>';
+  sectionFilter.disabled = true;
+  currentSectionId = null;
+  showSearchMode();
+}
+
+stageFilter.addEventListener('change', function () {
+  resetGrade();
+  if (!this.value) return;
+  fetch(`${gradesUrl}?stage=${encodeURIComponent(this.value)}`, { headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      gradeFilter.innerHTML = '<option value="">— اختر الصف —</option>';
+      data.forEach(g => {
+        const o = document.createElement('option');
+        o.value = g.id; o.textContent = g.name;
+        gradeFilter.appendChild(o);
+      });
+      gradeFilter.disabled = data.length === 0;
+    }).catch(() => {});
+});
+
+gradeFilter.addEventListener('change', function () {
+  resetSection();
+  currentGradeId = this.value || null;
+  if (!this.value) return;
+  fetch(`${sectionsUrl}?grade_id=${encodeURIComponent(this.value)}`, { headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      sectionFilter.innerHTML = '<option value="">— اختر الشعبة —</option>';
+      data.forEach(s => {
+        const o = document.createElement('option');
+        o.value = s.id; o.textContent = s.name;
+        sectionFilter.appendChild(o);
+      });
+      sectionFilter.disabled = data.length === 0;
+    }).catch(() => {});
+});
+
+sectionFilter.addEventListener('change', function () {
+  currentSectionId = this.value || null;
+  clearStudentPick();
+  if (currentSectionId) {
+    showDropdownMode(currentSectionId);
+  } else {
+    showSearchMode();
+  }
+});
+
+// ── Student widget ────────────────────────────────────────────────────────────
+function showSearchMode() {
+  document.getElementById('searchMode').classList.remove('d-none');
+  document.getElementById('dropdownMode').classList.add('d-none');
+  studentDropdown.innerHTML = '<option value="">— اختر الطالب —</option>';
+  studentDropdown.disabled = true;
+}
+
+function showDropdownMode(secId) {
+  document.getElementById('searchMode').classList.add('d-none');
+  document.getElementById('dropdownMode').classList.remove('d-none');
+  studentDropdown.disabled = true;
+  studentDropdown.innerHTML = '<option value="">— جاري التحميل... —</option>';
+  fetch(`${studentsUrl}?section_id=${encodeURIComponent(secId)}`, { headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : { results: [] })
+    .then(data => {
+      const students = data.results || [];
+      studentDropdown.innerHTML = '<option value="">— اختر الطالب —</option>';
+      if (!students.length) {
+        studentDropdown.innerHTML = '<option value="">— لا يوجد طلاب في هذه الشعبة —</option>';
+        return;
+      }
+      students.forEach(s => {
+        const o = document.createElement('option');
+        o.value = encodeURIComponent(JSON.stringify(s));
+        o.textContent = `${s.full_name}${s.student_id ? ' — ' + s.student_id : ''}`;
+        studentDropdown.appendChild(o);
+      });
+      studentDropdown.disabled = false;
+    }).catch(() => {
+      studentDropdown.innerHTML = '<option value="">— خطأ في تحميل الطلاب —</option>';
+    });
+}
+
+studentDropdown.addEventListener('change', function () {
+  if (!this.value) { clearStudentPick(); return; }
+  chooseStudent(JSON.parse(decodeURIComponent(this.value)));
+});
+
+// ── Live search ───────────────────────────────────────────────────────────────
+function hideResults() {
+  studentResults.classList.add('d-none');
+  studentResults.innerHTML = '';
+}
+
+function clearStudentPick() {
+  hiddenStudentId.value = '';
+  submitBtn.disabled = true;
+  studentSearch.value = '';
+  if (studentDropdown) studentDropdown.value = '';
+  studentCard.classList.add('d-none');
+  studentCard.innerHTML = '';
+  hideResults();
+}
+
+function studentMeta(s) {
+  return [s.grade, s.section, s.student_id].filter(Boolean).join(' - ');
+}
+
+function showStudentCard(s) {
+  hiddenStudentId.value = s.id;
+  submitBtn.disabled = false;
+  studentCard.classList.remove('d-none');
+  studentCard.innerHTML = `
+    <i class="bi bi-person-check-fill"></i>
+    <span>${s.full_name}<small>${studentMeta(s)}</small></span>
+    <button type="button" id="clearStudentBtn" class="btn btn-sm btn-outline-secondary">تغيير</button>`;
+  hideResults();
+}
+
+function chooseStudent(s) {
+  studentSearch.value = s.full_name;
+  showStudentCard(s);
+}
+
+function renderResults(students) {
+  if (!students.length) {
+    studentResults.innerHTML = '<div class="text-muted text-center py-3" style="font-size:13px">لا توجد نتائج مطابقة</div>';
+  } else {
+    studentResults.innerHTML = students.map(s => `
+      <button type="button" class="student-result-item"
+              data-student="${encodeURIComponent(JSON.stringify(s))}">
+        <span>
+          <span class="student-result-name">${s.full_name}</span>
+          <span class="student-result-meta d-block">${studentMeta(s)}</span>
+        </span>
+        <i class="bi bi-chevron-left text-muted"></i>
+      </button>`).join('');
+  }
+  studentResults.classList.remove('d-none');
+}
+
+studentSearch.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  hiddenStudentId.value = '';
+  submitBtn.disabled = true;
+  studentCard.classList.add('d-none');
+  const q = studentSearch.value.trim();
+  if (q.length < 2) { hideResults(); return; }
+  searchTimer = setTimeout(() => {
+    let url = `${studentsUrl}?q=${encodeURIComponent(q)}`;
+    if (currentSectionId) url += `&section_id=${encodeURIComponent(currentSectionId)}`;
+    else if (currentGradeId) url += `&grade_id=${encodeURIComponent(currentGradeId)}`;
+    fetch(url, { headers: { Accept: 'application/json' } })
+      .then(r => r.ok ? r.json() : { results: [] })
+      .then(data => renderResults(data.results || []))
+      .catch(() => renderResults([]));
+  }, 250);
+});
+
+studentResults.addEventListener('click', e => {
+  const item = e.target.closest('.student-result-item');
+  if (!item) return;
+  chooseStudent(JSON.parse(decodeURIComponent(item.dataset.student)));
+});
+
+studentCard.addEventListener('click', e => {
+  if (!e.target.closest('#clearStudentBtn')) return;
+  clearStudentPick();
+  if (currentSectionId) {
+    showDropdownMode(currentSectionId);
+    studentDropdown.focus();
+  } else {
+    showSearchMode();
+    studentSearch.focus();
+  }
+});
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.student-search')) hideResults();
+});
+
+loadStages();
+</script>
 {% endblock %}
