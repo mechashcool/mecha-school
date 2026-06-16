@@ -54,12 +54,16 @@ def export_students(students) -> bytes | None:
         return None
     from openpyxl.styles import Font, PatternFill, Alignment
 
+    STUDENT_STATUS_AR = {
+        'active': 'فعال', 'inactive': 'غير فعال', 'archived': 'مؤرشف',
+    }
+
     ws = wb.active
-    ws.title = 'Students'
+    ws.title = 'الطلاب'
     ws.sheet_view.rightToLeft = True
 
-    headers = ['#', 'Student ID', 'Full Name', 'Gender', 'Date of Birth',
-               'Grade/Section', 'Guardian', 'Guardian Phone', 'Status', 'Enrolled']
+    headers = ['#', 'كود الطالب', 'الاسم الكامل', 'الجنس', 'تاريخ الميلاد',
+               'الصف / الشعبة', 'ولي الأمر', 'هاتف ولي الأمر', 'الحالة', 'تاريخ التسجيل']
     hs = _header_style()
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
@@ -76,12 +80,12 @@ def export_students(students) -> bytes | None:
             i,
             s.student_id,
             s.full_name,
-            'Male' if s.gender == 'male' else 'Female',
+            'ذكر' if s.gender == 'male' else 'أنثى',
             s.date_of_birth.strftime('%Y-%m-%d') if s.date_of_birth else '',
             section_txt,
             s.guardian_name or '',
             s.guardian_phone or '',
-            s.status.title(),
+            STUDENT_STATUS_AR.get(s.status, s.status),
             s.enrollment_date.strftime('%Y-%m-%d') if s.enrollment_date else '',
         ]
         for col, val in enumerate(row, 1):
@@ -104,11 +108,16 @@ def export_employees(employees) -> bytes | None:
         return None
     from openpyxl.styles import Font, PatternFill, Alignment
 
-    ws = wb.active
-    ws.title = 'Employees'
+    EMP_STATUS_AR = {
+        'active': 'فعال', 'inactive': 'غير فعال', 'terminated': 'منتهي',
+    }
 
-    headers = ['#', 'Employee ID', 'Full Name', 'Job Title', 'Department',
-               'Phone', 'Email', 'Base Salary (IQD)', 'Hire Date', 'Status']
+    ws = wb.active
+    ws.title = 'الموظفون'
+    ws.sheet_view.rightToLeft = True
+
+    headers = ['#', 'رقم الموظف', 'الاسم الكامل', 'المسمى الوظيفي', 'القسم',
+               'الهاتف', 'البريد الإلكتروني', 'الراتب الأساسي (د.ع)', 'تاريخ التعيين', 'الحالة']
     hs = _header_style()
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
@@ -121,7 +130,7 @@ def export_employees(employees) -> bytes | None:
             e.department or '', e.phone or '', e.email or '',
             float(e.base_salary),
             e.hire_date.strftime('%Y-%m-%d') if e.hire_date else '',
-            e.status.title(),
+            EMP_STATUS_AR.get(e.status, e.status),
         ]
         for col, val in enumerate(row, 1):
             cell = ws.cell(row=i+1, column=col, value=val)
@@ -143,23 +152,24 @@ def export_salary_month(records, month: int, year: int) -> bytes | None:
         return None
     from openpyxl.styles import Font, PatternFill, Alignment
 
-    MONTHS = ['', 'January','February','March','April','May','June',
-              'July','August','September','October','November','December']
+    AR_MONTHS = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+                 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر']
 
     ws = wb.active
-    ws.title = f'Salaries {MONTHS[month]} {year}'
+    ws.title = f'رواتب {AR_MONTHS[month]} {year}'
+    ws.sheet_view.rightToLeft = True
 
-    headers = ['#', 'Employee ID', 'Full Name', 'Job Title', 'Department',
-               'Base Salary', 'Allowances', 'Deductions', 'Net Salary',
-               'Status', 'Paid Date']
+    headers = ['#', 'رقم الموظف', 'الاسم الكامل', 'المسمى الوظيفي', 'القسم',
+               'الراتب الأساسي', 'البدلات', 'الخصومات', 'الصافي',
+               'الحالة', 'تاريخ الصرف']
     hs = _header_style()
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
         cell.font = hs['font']; cell.fill = hs['fill']; cell.alignment = hs['alignment']
     ws.row_dimensions[1].height = 22
 
-    status_en = {'draft': 'Draft', 'pending': 'Draft', 'approved': 'Approved',
-                 'paid': 'Paid', 'cancelled': 'Cancelled'}
+    status_en = {'draft': 'مسودة', 'pending': 'مسودة', 'approved': 'معتمد',
+                 'paid': 'مدفوع', 'cancelled': 'ملغي'}
 
     total_net = 0
     for i, r in enumerate(records, 1):
@@ -181,7 +191,7 @@ def export_salary_month(records, month: int, year: int) -> bytes | None:
 
     # Total row
     tr = len(records) + 2
-    ws.cell(row=tr, column=3, value='TOTAL').font = Font(bold=True)
+    ws.cell(row=tr, column=3, value='الإجمالي').font = Font(bold=True)
     total_cell = ws.cell(row=tr, column=9, value=total_net)
     total_cell.font = Font(bold=True, color='1AAB6D')
     total_cell.fill = PatternFill('solid', fgColor='E8F8F0')
@@ -202,12 +212,13 @@ def export_attendance(rows, section_name: str, start: str, end: str) -> bytes | 
 
     # ── Sheet 1: summary ──────────────────────────────────────────────────
     ws = wb.active
-    ws.title = 'Summary'
-    ws.cell(row=1, column=1, value=f'Attendance Report — {section_name} — {start} to {end}')
+    ws.title = 'ملخص'
+    ws.sheet_view.rightToLeft = True
+    ws.cell(row=1, column=1, value=f'تقرير الحضور — {section_name} — {start} إلى {end}')
     ws.cell(row=1, column=1).font = Font(bold=True, size=13)
     ws.merge_cells('A1:G1')
 
-    headers = ['#', 'Student ID', 'Full Name', 'Present', 'Absent', 'Late', 'Rate %']
+    headers = ['#', 'كود الطالب', 'الاسم الكامل', 'حاضر', 'غائب', 'متأخر', 'نسبة الحضور %']
     hs = _header_style()
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=2, column=col, value=h)
@@ -226,12 +237,13 @@ def export_attendance(rows, section_name: str, start: str, end: str) -> bytes | 
     _autowidth(ws)
 
     # ── Sheet 2: per-day detail with check_in / check_out ─────────────────
-    ws2 = wb.create_sheet(title='Details')
-    ws2.cell(row=1, column=1, value=f'Attendance Detail — {section_name} — {start} to {end}')
+    ws2 = wb.create_sheet(title='التفاصيل')
+    ws2.sheet_view.rightToLeft = True
+    ws2.cell(row=1, column=1, value=f'تفاصيل الحضور — {section_name} — {start} إلى {end}')
     ws2.cell(row=1, column=1).font = Font(bold=True, size=13)
     ws2.merge_cells('A1:I1')
 
-    detail_headers = ['#', 'Student ID', 'Full Name', 'Date', 'Check-In', 'Check-Out', 'Status', 'Source', 'Notes']
+    detail_headers = ['#', 'كود الطالب', 'الاسم الكامل', 'التاريخ', 'وقت الحضور', 'وقت الانصراف', 'الحالة', 'المصدر', 'ملاحظات']
     for col, h in enumerate(detail_headers, 1):
         cell = ws2.cell(row=2, column=col, value=h)
         cell.font = hs['font']; cell.fill = hs['fill']; cell.alignment = hs['alignment']
@@ -267,11 +279,11 @@ def export_fees(records) -> bytes | None:
     from openpyxl.styles import Font, PatternFill, Alignment
 
     ws = wb.active
-    ws.title = 'Fees'
+    ws.title = 'الرسوم'
     ws.sheet_view.rightToLeft = True
 
-    headers = ['#', 'Student ID', 'Student Name', 'Fee Type', 'Total Amount',
-               'Discount', 'Paid', 'Remaining', 'Installments', 'Academic Year']
+    headers = ['#', 'كود الطالب', 'اسم الطالب', 'نوع الرسم', 'المبلغ الإجمالي',
+               'الخصم', 'المدفوع', 'المتبقي', 'الأقساط', 'السنة الدراسية']
     hs = _header_style()
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
@@ -313,8 +325,9 @@ def export_financial(revenues, expenses, year: int) -> bytes | None:
 
     # Sheet 1: Revenues
     ws1 = wb.active
-    ws1.title = 'Revenues'
-    headers = ['Date', 'Category', 'Description', 'Amount (IQD)']
+    ws1.title = 'الإيرادات'
+    ws1.sheet_view.rightToLeft = True
+    headers = ['التاريخ', 'التصنيف', 'الوصف', 'المبلغ (د.ع)']
     hs = _header_style()
     for col, h in enumerate(headers, 1):
         cell = ws1.cell(row=1, column=col, value=h)
@@ -327,7 +340,8 @@ def export_financial(revenues, expenses, year: int) -> bytes | None:
     _autowidth(ws1)
 
     # Sheet 2: Expenses
-    ws2 = wb.create_sheet('Expenses')
+    ws2 = wb.create_sheet('المصروفات')
+    ws2.sheet_view.rightToLeft = True
     for col, h in enumerate(headers, 1):
         cell = ws2.cell(row=1, column=col, value=h)
         cell.font = hs['font']; cell.fill = PatternFill('solid', fgColor='B91C1C')
@@ -360,9 +374,10 @@ def export_exams(
     hs = _header_style()
 
     if subject_report:
-        ws.title = 'Subject Report'
-        headers = ['#', 'Student Name', 'Student ID', 'Exam Name',
-                   'Category', 'Exam Date', 'Marks', 'Max Marks', 'Grade', 'Status']
+        ws.title = 'تقرير المادة'
+        ws.sheet_view.rightToLeft = True
+        headers = ['#', 'اسم الطالب', 'كود الطالب', 'اسم الاختبار',
+                   'الفئة', 'تاريخ الاختبار', 'الدرجة', 'الدرجة القصوى', 'التقدير', 'الحالة']
         for col, h in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=h)
             cell.font = hs['font']; cell.fill = hs['fill']; cell.alignment = hs['alignment']
@@ -423,9 +438,10 @@ def export_exams(
                         cell.fill = PatternFill('solid', fgColor='F0F4F8')
                 row_num += 1
     else:
-        ws.title = 'Exams'
-        headers = ['#', 'Exam Name', 'Exam Type', 'Subject', 'Grade / Section',
-                   'Academic Year', 'Exam Date', 'Max Marks', 'Pass Marks', 'Results']
+        ws.title = 'الاختبارات'
+        ws.sheet_view.rightToLeft = True
+        headers = ['#', 'اسم الاختبار', 'نوع الاختبار', 'المادة', 'الصف / الشعبة',
+                   'السنة الدراسية', 'تاريخ الاختبار', 'الدرجة القصوى', 'درجة النجاح', 'النتائج']
         for col, h in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=h)
             cell.font = hs['font']; cell.fill = hs['fill']; cell.alignment = hs['alignment']
@@ -470,19 +486,20 @@ def export_gradebook(exams, rows) -> bytes | None:
     from openpyxl.styles import Font, PatternFill, Alignment
 
     ws = wb.active
-    ws.title = 'Gradebook'
+    ws.title = 'دفتر الدرجات'
+    ws.sheet_view.rightToLeft = True
     hs = _header_style()
 
     AVG_HEADER = PatternFill('solid', fgColor='1A5C3A')
     ALT_FILL   = PatternFill('solid', fgColor='F0F4F8')
 
     # ── header row ───────────────────────────────────────────────────────────
-    fixed_headers = ['#', 'Student Name', 'Student ID']
+    fixed_headers = ['#', 'اسم الطالب', 'كود الطالب']
     exam_headers  = [
         f"{e.display_name}\n({e.exam_date.strftime('%Y-%m-%d')})"
         for e in exams
     ]
-    all_headers = fixed_headers + exam_headers + ['Average %']
+    all_headers = fixed_headers + exam_headers + ['المعدل %']
 
     for col, h in enumerate(all_headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
@@ -763,7 +780,7 @@ def export_salary_report(records, totals, arabic_months=None,
     status_labels = status_labels or {}
 
     ws = wb.active
-    ws.title = 'Payroll Report'
+    ws.title = 'تقرير الرواتب'
     ws.sheet_view.rightToLeft = True
 
     headers = ['م', 'الموظف', 'الرقم الوظيفي', 'القسم', 'الشهر/السنة',
@@ -839,7 +856,7 @@ def export_employee_statement(employee, statement, arabic_months=None,
     from openpyxl.styles import Font, PatternFill, Alignment
 
     ws = wb.active
-    ws.title = 'Salary Statement'
+    ws.title = 'كشف الراتب'
     ws.sheet_view.rightToLeft = True
 
     # Title block
