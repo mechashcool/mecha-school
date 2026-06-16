@@ -1062,7 +1062,7 @@ def leave_requests_list():
 @login_required
 @admin_required
 def leave_records():
-    """Leave records search: find a person and view their complete leave history."""
+    """Leave records: show all leave requests newest-first, with optional filters."""
     school_id = _admin_scope_id()
 
     tab = request.args.get('tab', 'students').strip()
@@ -1072,12 +1072,10 @@ def leave_records():
     q = ''
     grade_id = None
     section_id = None
-    job_title = ''
-    department = ''
     grades = []
     sections = []
-    students = None   # None = no search yet; list = search performed
-    employees = None
+    student_leaves = []
+    employee_leaves = []
     searched = False
 
     active_year = get_active_year(school_id) if school_id else None
@@ -1103,7 +1101,6 @@ def leave_records():
             else:
                 grades = all_grades
         if grade_id and school_id and active_year:
-            # Verify grade belongs to this school/year before using it
             valid_grade = (Grade.query
                            .execution_options(include_all_years=True)
                            .filter_by(id=grade_id, school_id=school_id,
@@ -1120,23 +1117,24 @@ def leave_records():
                 grade_id = None
 
         searched = bool(q or stage or grade_id or section_id)
-        if searched and school_id:
+
+        if school_id:
             skip = False
-            student_q = (Student.query
-                         .execution_options(bypass_tenant_scope=True)
-                         .filter_by(school_id=school_id))
+            lq = (LeaveRequest.query
+                  .execution_options(include_all_years=True)
+                  .filter_by(school_id=school_id)
+                  .join(Student, LeaveRequest.student_id == Student.id))
             if q:
-                student_q = student_q.filter(or_(
+                lq = lq.filter(or_(
                     Student.full_name.ilike(f'%{q}%'),
                     Student.student_id.ilike(f'%{q}%'),
                 ))
             if section_id:
-                student_q = student_q.filter_by(section_id=section_id)
+                lq = lq.filter(Student.section_id == section_id)
             elif grade_id:
                 grade_section_ids = [s.id for s in sections]
                 if grade_section_ids:
-                    student_q = student_q.filter(
-                        Student.section_id.in_(grade_section_ids))
+                    lq = lq.filter(Student.section_id.in_(grade_section_ids))
                 else:
                     skip = True
             elif stage and active_year:
@@ -1150,39 +1148,27 @@ def leave_records():
                                                  Section.academic_year_id == active_year.id)
                                          .all()]
                     if stage_section_ids:
-                        student_q = student_q.filter(
-                            Student.section_id.in_(stage_section_ids))
+                        lq = lq.filter(Student.section_id.in_(stage_section_ids))
                     else:
                         skip = True
                 else:
                     skip = True
-            students = ([] if skip
-                        else student_q.order_by(Student.full_name).limit(200).all())
-        elif searched:
-            students = []
+            student_leaves = ([] if skip
+                              else lq.order_by(LeaveRequest.created_at.desc()).limit(300).all())
 
     else:  # employees
         q = request.args.get('q', '').strip()
-        job_title = request.args.get('job_title', '').strip()
-        department = request.args.get('department', '').strip()
+        searched = bool(q)
 
-        searched = bool(q or job_title or department)
-        if searched and school_id:
-            emp_q = (Employee.query
-                     .execution_options(bypass_tenant_scope=True)
-                     .filter_by(school_id=school_id))
+        if school_id:
+            eq = EmployeeLeaveRequest.query.filter_by(school_id=school_id)
             if q:
-                emp_q = emp_q.filter(or_(
-                    Employee.full_name.ilike(f'%{q}%'),
-                    Employee.employee_id.ilike(f'%{q}%'),
-                ))
-            if job_title:
-                emp_q = emp_q.filter(Employee.job_title.ilike(f'%{job_title}%'))
-            if department:
-                emp_q = emp_q.filter(Employee.department.ilike(f'%{department}%'))
-            employees = emp_q.order_by(Employee.full_name).limit(200).all()
-        elif searched:
-            employees = []
+                eq = (eq.join(Employee, EmployeeLeaveRequest.employee_id == Employee.id)
+                      .filter(or_(
+                          Employee.full_name.ilike(f'%{q}%'),
+                          Employee.employee_id.ilike(f'%{q}%'),
+                      )))
+            employee_leaves = eq.order_by(EmployeeLeaveRequest.created_at.desc()).limit(300).all()
 
     return render_template('admin/leave_records.html',
                            tab=tab,
@@ -1193,11 +1179,12 @@ def leave_records():
                            section_id=section_id,
                            grades=grades,
                            sections=sections,
-                           students=students,
-                           job_title=job_title,
-                           department=department,
-                           employees=employees,
-                           searched=searched)
+                           student_leaves=student_leaves,
+                           employee_leaves=employee_leaves,
+                           searched=searched,
+                           type_labels=LEAVE_TYPES,
+                           status_labels=LEAVE_STATUS,
+                           source_labels=LEAVE_SOURCE_LABELS)
 
 
 @admin_bp.route('/leave-requests/<int:request_id>', methods=['GET', 'POST'])

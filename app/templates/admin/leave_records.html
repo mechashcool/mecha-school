@@ -6,7 +6,7 @@
 <div class="page-header">
   <div>
     <h1 class="page-title">سجلات الإجازات</h1>
-    <p class="page-subtitle">ابحث عن شخص لعرض سجل إجازاته الكامل</p>
+    <p class="page-subtitle">جميع طلبات الإجازة مرتبة من الأحدث إلى الأقدم</p>
   </div>
 </div>
 
@@ -81,7 +81,7 @@
       </div>
       <div class="col-md-2 d-flex gap-2">
         <button type="submit" class="btn btn-primary flex-fill">
-          <i class="bi bi-search me-1"></i>بحث
+          <i class="bi bi-search me-1"></i>تصفية
         </button>
         <a href="{{ url_for('admin.leave_records', tab='students') }}"
            class="btn btn-outline-secondary" title="مسح">×</a>
@@ -90,61 +90,75 @@
   </div>
 </form>
 
-{# ── Student search results ── #}
-{% if searched %}
-  {% if students %}
-  <div class="card">
-    <div class="card-body py-2 px-3 border-bottom">
-      <span class="small text-muted">{{ students|length }} طالب
-        {% if students|length == 200 %} (الحد الأقصى للنتائج 200){% endif %}
-      </span>
-    </div>
-    <div class="table-wrapper">
-      <table class="table table-hover mb-0">
-        <thead>
-          <tr>
-            <th>الطالب</th>
-            <th>الكود</th>
-            <th>المرحلة / الصف / الشعبة</th>
-            <th>سجل الإجازات</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for student in students %}
-          {% set section = student.section %}
-          {% set grade   = section.grade if section else none %}
-          <tr>
-            <td class="fw-600">{{ student.full_name }}</td>
-            <td class="text-muted small">{{ student.student_id }}</td>
-            <td class="small">
-              {% if grade %}{{ grade.stage or '' }}{% endif %}
-              {% if grade and section %} / {{ grade.name }} / {{ section.name }}
-              {% elif grade %} / {{ grade.name }}
-              {% elif section %} {{ section.name }}
-              {% else %}-{% endif %}
-            </td>
-            <td>
-              <a href="{{ url_for('admin.student_leave_archive', student_id=student.id, ref='records') }}"
-                 class="btn btn-sm btn-outline-primary">
-                <i class="bi bi-archive me-1"></i>عرض السجل
-              </a>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+{# ── Student leave results ── #}
+{% if student_leaves %}
+<div class="card">
+  <div class="card-body py-2 px-3 border-bottom">
+    <span class="small text-muted">{{ student_leaves|length }} سجل إجازة
+      {% if student_leaves|length == 300 %} (الحد الأقصى للنتائج 300){% endif %}
+    </span>
   </div>
-  {% else %}
-  <div class="text-center text-muted py-5">
-    <i class="bi bi-search" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-    لا توجد نتائج مطابقة للبحث.
+  <div class="table-wrapper">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>الطالب</th>
+          <th>الكود</th>
+          <th>المرحلة / الصف / الشعبة</th>
+          <th>نوع الإجازة</th>
+          <th>من</th>
+          <th>إلى</th>
+          <th>الحالة</th>
+          <th>تاريخ الطلب</th>
+          <th>السجل الكامل</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for lr in student_leaves %}
+        {% set stu = lr.student %}
+        {% set sec = stu.section if stu else none %}
+        {% set grd = sec.grade if sec else none %}
+        <tr>
+          <td class="fw-600">{{ stu.full_name if stu else '-' }}</td>
+          <td class="text-muted small">{{ stu.student_id if stu else '-' }}</td>
+          <td class="small">
+            {% if grd %}{{ grd.stage or '' }}{% endif %}
+            {% if grd and sec %} / {{ grd.name }} / {{ sec.name }}
+            {% elif grd %} / {{ grd.name }}
+            {% elif sec %} {{ sec.name }}
+            {% else %}-{% endif %}
+          </td>
+          <td class="small">{{ type_labels.get(lr.leave_type, lr.leave_type) }}</td>
+          <td class="text-nowrap small">{{ lr.from_date.strftime('%Y-%m-%d') if lr.from_date else '-' }}</td>
+          <td class="text-nowrap small">{{ lr.to_date.strftime('%Y-%m-%d') if lr.to_date else '-' }}</td>
+          <td>
+            {% if lr.status == 'pending' %}
+              <span class="badge-status badge-pending">{{ status_labels.get(lr.status) }}</span>
+            {% elif lr.status == 'approved' %}
+              <span class="badge-status badge-active">{{ status_labels.get(lr.status) }}</span>
+            {% else %}
+              <span class="badge-status badge-inactive">{{ status_labels.get(lr.status) }}</span>
+            {% endif %}
+          </td>
+          <td class="text-nowrap small">{{ lr.created_at.strftime('%Y-%m-%d') if lr.created_at else '-' }}</td>
+          <td>
+            {% if stu %}
+            <a href="{{ url_for('admin.student_leave_archive', student_id=stu.id, ref='records') }}"
+               class="btn btn-sm btn-outline-primary">
+              <i class="bi bi-archive me-1"></i>السجل
+            </a>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
-  {% endif %}
+</div>
 {% else %}
 <div class="text-center text-muted py-5">
-  <i class="bi bi-person-lines-fill" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-  ابحث عن طالب لعرض سجل إجازاته الكامل.
+  <i class="bi bi-calendar2-check" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+  {% if searched %}لا توجد نتائج مطابقة للتصفية.{% else %}لا توجد سجلات إجازة للطلاب حتى الآن.{% endif %}
 </div>
 {% endif %}
 
@@ -205,24 +219,14 @@
   <input type="hidden" name="tab" value="employees">
   <div class="card-body">
     <div class="row g-3 align-items-end">
-      <div class="col-md-4">
+      <div class="col-md-8">
         <label class="form-label">اسم الموظف أو الكود</label>
         <input type="text" name="q" class="form-control"
                value="{{ q }}" placeholder="ابحث بالاسم أو الكود...">
       </div>
-      <div class="col-md-3">
-        <label class="form-label">المسمى الوظيفي</label>
-        <input type="text" name="job_title" class="form-control"
-               value="{{ job_title }}" placeholder="مسمى وظيفي...">
-      </div>
-      <div class="col-md-3">
-        <label class="form-label">القسم</label>
-        <input type="text" name="department" class="form-control"
-               value="{{ department }}" placeholder="القسم...">
-      </div>
-      <div class="col-md-2 d-flex gap-2">
+      <div class="col-md-4 d-flex gap-2">
         <button type="submit" class="btn btn-primary flex-fill">
-          <i class="bi bi-search me-1"></i>بحث
+          <i class="bi bi-search me-1"></i>تصفية
         </button>
         <a href="{{ url_for('admin.leave_records', tab='employees') }}"
            class="btn btn-outline-secondary" title="مسح">×</a>
@@ -231,55 +235,67 @@
   </div>
 </form>
 
-{# ── Employee search results ── #}
-{% if searched %}
-  {% if employees %}
-  <div class="card">
-    <div class="card-body py-2 px-3 border-bottom">
-      <span class="small text-muted">{{ employees|length }} موظف
-        {% if employees|length == 200 %} (الحد الأقصى للنتائج 200){% endif %}
-      </span>
-    </div>
-    <div class="table-wrapper">
-      <table class="table table-hover mb-0">
-        <thead>
-          <tr>
-            <th>الموظف</th>
-            <th>الكود</th>
-            <th>المسمى الوظيفي</th>
-            <th>القسم</th>
-            <th>سجل الإجازات</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for emp in employees %}
-          <tr>
-            <td class="fw-600">{{ emp.full_name }}</td>
-            <td class="text-muted small">{{ emp.employee_id }}</td>
-            <td class="small">{{ emp.job_title or '-' }}</td>
-            <td class="small">{{ emp.department or '-' }}</td>
-            <td>
-              <a href="{{ url_for('admin.employee_leave_archive', employee_id=emp.id, ref='records') }}"
-                 class="btn btn-sm btn-outline-primary">
-                <i class="bi bi-archive me-1"></i>عرض السجل
-              </a>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+{# ── Employee leave results ── #}
+{% if employee_leaves %}
+<div class="card">
+  <div class="card-body py-2 px-3 border-bottom">
+    <span class="small text-muted">{{ employee_leaves|length }} سجل إجازة
+      {% if employee_leaves|length == 300 %} (الحد الأقصى للنتائج 300){% endif %}
+    </span>
   </div>
-  {% else %}
-  <div class="text-center text-muted py-5">
-    <i class="bi bi-search" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-    لا توجد نتائج مطابقة للبحث.
+  <div class="table-wrapper">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>الموظف</th>
+          <th>الكود</th>
+          <th>المسمى الوظيفي</th>
+          <th>نوع الإجازة</th>
+          <th>من</th>
+          <th>إلى</th>
+          <th>الحالة</th>
+          <th>تاريخ الطلب</th>
+          <th>السجل الكامل</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for lr in employee_leaves %}
+        {% set emp = lr.employee %}
+        <tr>
+          <td class="fw-600">{{ emp.full_name if emp else '-' }}</td>
+          <td class="text-muted small">{{ emp.employee_id if emp else '-' }}</td>
+          <td class="small">{{ emp.job_title if emp and emp.job_title else '-' }}</td>
+          <td class="small">{{ type_labels.get(lr.leave_type, lr.leave_type) }}</td>
+          <td class="text-nowrap small">{{ lr.from_date.strftime('%Y-%m-%d') if lr.from_date else '-' }}</td>
+          <td class="text-nowrap small">{{ lr.to_date.strftime('%Y-%m-%d') if lr.to_date else '-' }}</td>
+          <td>
+            {% if lr.status == 'pending' %}
+              <span class="badge-status badge-pending">{{ status_labels.get(lr.status) }}</span>
+            {% elif lr.status == 'approved' %}
+              <span class="badge-status badge-active">{{ status_labels.get(lr.status) }}</span>
+            {% else %}
+              <span class="badge-status badge-inactive">{{ status_labels.get(lr.status) }}</span>
+            {% endif %}
+          </td>
+          <td class="text-nowrap small">{{ lr.created_at.strftime('%Y-%m-%d') if lr.created_at else '-' }}</td>
+          <td>
+            {% if emp %}
+            <a href="{{ url_for('admin.employee_leave_archive', employee_id=emp.id, ref='records') }}"
+               class="btn btn-sm btn-outline-primary">
+              <i class="bi bi-archive me-1"></i>السجل
+            </a>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
-  {% endif %}
+</div>
 {% else %}
 <div class="text-center text-muted py-5">
-  <i class="bi bi-briefcase" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-  ابحث عن موظف لعرض سجل إجازاته الكامل.
+  <i class="bi bi-calendar2-check" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+  {% if searched %}لا توجد نتائج مطابقة للبحث.{% else %}لا توجد سجلات إجازة للموظفين حتى الآن.{% endif %}
 </div>
 {% endif %}
 
