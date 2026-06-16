@@ -21,21 +21,57 @@
         <i class="bi bi-slash-circle text-warning me-1"></i>إضافة إيقاف جديد
       </div>
       <div class="card-body">
-        <form method="POST" action="{{ url_for('attendance.create_suspension') }}">
+        <form method="POST" action="{{ url_for('attendance.create_suspension') }}" id="suspensionForm">
           <input type="hidden" name="csrf_token"
                  value="{{ csrf_token() if csrf_token is defined else '' }}">
-          <div class="mb-3">
-            <label class="form-label">الطالب <span class="text-danger">*</span></label>
-            <select name="student_id" class="form-select" required>
-              <option value="">— اختر الطالب —</option>
-              {% for s in students %}
-              <option value="{{ s.id }}">
-                {{ s.full_name }}
-                {% if s.section %}({{ s.section.grade.name }} / {{ s.section.name }}){% endif %}
-              </option>
-              {% endfor %}
+
+          <!-- ── Stage → Grade → Section cascade ── -->
+          <div class="mb-2">
+            <label class="form-label">المرحلة</label>
+            <select id="stageFilter" class="form-select form-select-sm">
+              <option value="">— اختر المرحلة —</option>
             </select>
           </div>
+          <div class="mb-2">
+            <label class="form-label">الصف</label>
+            <select id="gradeFilter" class="form-select form-select-sm" disabled>
+              <option value="">— اختر الصف —</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">الشعبة</label>
+            <select id="sectionFilter" class="form-select form-select-sm" disabled>
+              <option value="">— اختر الشعبة —</option>
+            </select>
+          </div>
+          <input type="hidden" id="sectionId" value="">
+
+          <!-- ── Student ── -->
+          <div class="mb-3">
+            <label class="form-label">الطالب <span class="text-danger">*</span></label>
+            <input type="hidden" name="student_id" id="studentId" value="">
+            <div class="student-search">
+              <!-- Search mode: shown when no section selected -->
+              <div id="searchMode">
+                <div class="input-group">
+                  <span class="input-group-text"><i class="bi bi-search"></i></span>
+                  <input type="search" id="studentSearch" class="form-control"
+                         placeholder="ابحث عن الطالب بالاسم أو الرمز"
+                         autocomplete="off">
+                </div>
+                <div id="studentResults" class="student-results d-none"></div>
+              </div>
+              <!-- Dropdown mode: shown when a section is selected -->
+              <div id="dropdownMode" class="d-none">
+                <select id="studentDropdown" class="form-select" disabled>
+                  <option value="">— اختر الطالب —</option>
+                </select>
+              </div>
+              <!-- Selected student card -->
+              <div id="selectedStudent" class="selected-student d-none"></div>
+            </div>
+          </div>
+
           <div class="mb-3">
             <label class="form-label">من تاريخ <span class="text-danger">*</span></label>
             <input type="date" name="start_date" class="form-control" required>
@@ -128,4 +164,321 @@
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<style>
+.student-search { position: relative; }
+.student-results {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15,37,64,.12);
+  max-height: 260px;
+  overflow-y: auto;
+}
+.student-result-item {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: right;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.student-result-item:hover,
+.student-result-item:focus { background: #f0f4f8; }
+.student-result-name { font-weight: 700; color: var(--text); }
+.student-result-meta { color: var(--text-muted); font-size: 12px; }
+.selected-student {
+  margin-top: 8px;
+  border: 1px solid #cfe8dc;
+  background: #e8f8f0;
+  color: #155724;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.selected-student span { flex: 1; font-weight: 700; }
+.selected-student small {
+  display: block;
+  color: #49725c;
+  font-size: 12px;
+  margin-top: 2px;
+}
+</style>
+<script>
+const stagesUrl        = "{{ url_for('attendance.suspension_api_stages') }}";
+const gradesUrl        = "{{ url_for('attendance.suspension_api_grades') }}";
+const sectionsUrl      = "{{ url_for('attendance.suspension_api_sections') }}";
+const studentSearchUrl = "{{ url_for('attendance.suspension_search_students') }}";
+
+const stageFilter    = document.getElementById('stageFilter');
+const gradeFilter    = document.getElementById('gradeFilter');
+const sectionFilter  = document.getElementById('sectionFilter');
+const sectionIdInput = document.getElementById('sectionId');
+const studentSearch  = document.getElementById('studentSearch');
+const studentResults = document.getElementById('studentResults');
+const selectedStudentEl = document.getElementById('selectedStudent');
+let searchTimer = null;
+
+// ── Cascade: load stages on page load ────────────────────────────────────────
+function loadStages() {
+  fetch(stagesUrl, { headers: { 'Accept': 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      stageFilter.innerHTML = '<option value="">— اختر المرحلة —</option>';
+      data.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.value;
+        opt.textContent = s.label;
+        stageFilter.appendChild(opt);
+      });
+    })
+    .catch(() => {});
+}
+
+function resetGrade() {
+  gradeFilter.innerHTML = '<option value="">— اختر الصف —</option>';
+  gradeFilter.disabled = true;
+  resetSection();
+}
+
+function resetSection() {
+  sectionFilter.innerHTML = '<option value="">— اختر الشعبة —</option>';
+  sectionFilter.disabled = true;
+  sectionIdInput.value = '';
+  clearStudentSelection();
+  showSearchMode();
+}
+
+function showSearchMode() {
+  document.getElementById('searchMode').classList.remove('d-none');
+  document.getElementById('dropdownMode').classList.add('d-none');
+  const dd = document.getElementById('studentDropdown');
+  dd.innerHTML = '<option value="">— اختر الطالب —</option>';
+  dd.disabled = true;
+}
+
+function showDropdownMode(secId) {
+  document.getElementById('searchMode').classList.add('d-none');
+  const dm = document.getElementById('dropdownMode');
+  dm.classList.remove('d-none');
+  const dd = document.getElementById('studentDropdown');
+  dd.disabled = true;
+  dd.innerHTML = '<option value="">— جاري التحميل... —</option>';
+  fetch(`${studentSearchUrl}?section_id=${encodeURIComponent(secId)}`, { headers: { 'Accept': 'application/json' } })
+    .then(r => r.ok ? r.json() : { results: [] })
+    .then(data => {
+      const students = data.results || [];
+      if (!students.length) {
+        dd.innerHTML = '<option value="">— لا يوجد طلاب في هذه الشعبة —</option>';
+        return;
+      }
+      dd.innerHTML = '<option value="">— اختر الطالب —</option>';
+      students.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = encodeURIComponent(JSON.stringify(s));
+        opt.textContent = `${s.full_name} — ${s.student_id || ''}`;
+        dd.appendChild(opt);
+      });
+      dd.disabled = false;
+    })
+    .catch(() => {
+      dd.innerHTML = '<option value="">— خطأ في تحميل الطلاب —</option>';
+    });
+}
+
+stageFilter.addEventListener('change', function() {
+  resetGrade();
+  const stage = this.value;
+  if (!stage) return;
+  fetch(`${gradesUrl}?stage=${encodeURIComponent(stage)}`, { headers: { 'Accept': 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      gradeFilter.innerHTML = '<option value="">— اختر الصف —</option>';
+      data.forEach(g => {
+        const opt = document.createElement('option');
+        opt.value = g.id;
+        opt.textContent = g.name;
+        gradeFilter.appendChild(opt);
+      });
+      gradeFilter.disabled = data.length === 0;
+    })
+    .catch(() => {});
+});
+
+gradeFilter.addEventListener('change', function() {
+  resetSection();
+  const gradeId = this.value;
+  if (!gradeId) return;
+  fetch(`${sectionsUrl}?grade_id=${encodeURIComponent(gradeId)}`, { headers: { 'Accept': 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      sectionFilter.innerHTML = '<option value="">— اختر الشعبة —</option>';
+      data.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = s.name;
+        sectionFilter.appendChild(opt);
+      });
+      sectionFilter.disabled = data.length === 0;
+    })
+    .catch(() => {});
+});
+
+sectionFilter.addEventListener('change', function() {
+  clearStudentSelection();
+  const secId = this.value;
+  sectionIdInput.value = secId || '';
+  if (secId) {
+    showDropdownMode(secId);
+  } else {
+    showSearchMode();
+  }
+});
+
+// ── Student search ────────────────────────────────────────────────────────────
+function hideStudentResults() {
+  studentResults.classList.add('d-none');
+  studentResults.innerHTML = '';
+}
+
+function clearStudentSelection() {
+  document.getElementById('studentId').value = '';
+  if (studentSearch) studentSearch.value = '';
+  const dd = document.getElementById('studentDropdown');
+  if (dd) dd.value = '';
+  selectedStudentEl.classList.add('d-none');
+  selectedStudentEl.innerHTML = '';
+  hideStudentResults();
+}
+
+function studentMeta(s) {
+  const parts = [];
+  if (s.grade)      parts.push(s.grade);
+  if (s.section)    parts.push(s.section);
+  if (s.student_id) parts.push(s.student_id);
+  return parts.join(' - ');
+}
+
+function chooseStudent(student) {
+  document.getElementById('studentId').value = student.id;
+  if (studentSearch) studentSearch.value = student.full_name;
+  selectedStudentEl.classList.remove('d-none');
+  selectedStudentEl.innerHTML = `
+    <i class="bi bi-person-check-fill"></i>
+    <span>
+      ${student.full_name}
+      <small>${studentMeta(student)}</small>
+    </span>
+    <button type="button" id="clearStudent" class="btn btn-sm btn-outline-secondary">تغيير</button>`;
+  hideStudentResults();
+}
+
+function renderStudentResults(students) {
+  if (!students.length) {
+    studentResults.innerHTML = '<div class="text-muted text-center py-3">لا توجد نتائج مطابقة</div>';
+    studentResults.classList.remove('d-none');
+    return;
+  }
+  studentResults.innerHTML = students.map(s => `
+    <button type="button" class="student-result-item" data-student="${encodeURIComponent(JSON.stringify(s))}">
+      <span>
+        <span class="student-result-name">${s.full_name}</span>
+        <span class="student-result-meta d-block">${studentMeta(s)}</span>
+      </span>
+      <i class="bi bi-chevron-left text-muted"></i>
+    </button>
+  `).join('');
+  studentResults.classList.remove('d-none');
+}
+
+function searchStudents() {
+  const q = studentSearch.value.trim();
+  document.getElementById('studentId').value = '';
+  selectedStudentEl.classList.add('d-none');
+  selectedStudentEl.innerHTML = '';
+  if (q.length < 2) { hideStudentResults(); return; }
+  const secId = sectionIdInput.value;
+  const url = `${studentSearchUrl}?q=${encodeURIComponent(q)}${secId ? '&section_id=' + encodeURIComponent(secId) : ''}`;
+  fetch(url, { headers: { 'Accept': 'application/json' } })
+    .then(r => r.ok ? r.json() : { results: [] })
+    .then(data => renderStudentResults(data.results || []))
+    .catch(() => renderStudentResults([]));
+}
+
+if (studentSearch) {
+  studentSearch.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(searchStudents, 250);
+  });
+}
+
+if (studentResults) {
+  studentResults.addEventListener('click', event => {
+    const item = event.target.closest('.student-result-item');
+    if (!item) return;
+    chooseStudent(JSON.parse(decodeURIComponent(item.dataset.student)));
+  });
+}
+
+const studentDropdownEl = document.getElementById('studentDropdown');
+if (studentDropdownEl) {
+  studentDropdownEl.addEventListener('change', function() {
+    if (!this.value) { clearStudentSelection(); return; }
+    const student = JSON.parse(decodeURIComponent(this.value));
+    document.getElementById('studentId').value = student.id;
+    selectedStudentEl.classList.remove('d-none');
+    selectedStudentEl.innerHTML = `
+      <i class="bi bi-person-check-fill"></i>
+      <span>
+        ${student.full_name}
+        <small>${studentMeta(student)}</small>
+      </span>
+      <button type="button" id="clearStudent" class="btn btn-sm btn-outline-secondary">تغيير</button>`;
+  });
+}
+
+if (selectedStudentEl) {
+  selectedStudentEl.addEventListener('click', event => {
+    if (!event.target.closest('#clearStudent')) return;
+    clearStudentSelection();
+    const dropdownVisible = !document.getElementById('dropdownMode').classList.contains('d-none');
+    if (dropdownVisible) {
+      studentDropdownEl.focus();
+    } else if (studentSearch) {
+      studentSearch.focus();
+    }
+  });
+}
+
+document.addEventListener('click', event => {
+  if (!event.target.closest('.student-search')) hideStudentResults();
+});
+
+document.getElementById('suspensionForm').addEventListener('submit', event => {
+  if (!document.getElementById('studentId').value) {
+    event.preventDefault();
+    const dropdownVisible = !document.getElementById('dropdownMode').classList.contains('d-none');
+    if (dropdownVisible) {
+      studentDropdownEl.focus();
+    } else {
+      studentSearch.focus();
+      renderStudentResults([]);
+    }
+  }
+});
+
+loadStages();
+</script>
 {% endblock %}

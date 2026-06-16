@@ -1,5 +1,5 @@
 """Mecha-School – Attendance Blueprint  (Phase 6: school + year scoped)"""
-from flask import Blueprint, render_template, redirect, url_for, flash, request
+from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify
 from flask_login import login_required, current_user
 from datetime import datetime as dt, date as date_type
 from app.models import db, StudentAttendance, Student, Section, SchoolSettings, Grade, StudentSuspension, Notification, parent_students
@@ -1136,6 +1136,122 @@ def report_export_excel():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  STUDENT SUSPENSIONS — cascade filter API
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _suspension_student_payload(student):
+    section = student.section
+    grade = section.grade if section else None
+    return {
+        'id': student.id,
+        'student_id': student.student_id,
+        'full_name': student.full_name,
+        'grade': grade.name if grade else '',
+        'section': section.name if section else '',
+    }
+
+
+@attendance_bp.route('/suspensions/api/stages')
+@login_required
+@admin_required
+def suspension_api_stages():
+    school = get_current_school()
+    year = get_active_year(school.id) if school else None
+    if not school or not year:
+        return jsonify([])
+    rows = (
+        db.session.query(Grade.stage)
+        .filter(
+            Grade.school_id == school.id,
+            Grade.academic_year_id == year.id,
+            Grade.stage.isnot(None),
+            Grade.stage != '',
+        )
+        .distinct()
+        .order_by(Grade.stage)
+        .all()
+    )
+    return jsonify([{'value': r[0], 'label': r[0]} for r in rows])
+
+
+@attendance_bp.route('/suspensions/api/grades')
+@login_required
+@admin_required
+def suspension_api_grades():
+    school = get_current_school()
+    year = get_active_year(school.id) if school else None
+    stage = request.args.get('stage', '').strip()
+    if not school or not year or not stage:
+        return jsonify([])
+    grades = (
+        Grade.query
+        .filter_by(school_id=school.id, academic_year_id=year.id, stage=stage)
+        .order_by(Grade.name)
+        .all()
+    )
+    return jsonify([{'id': g.id, 'name': g.name} for g in grades])
+
+
+@attendance_bp.route('/suspensions/api/sections')
+@login_required
+@admin_required
+def suspension_api_sections():
+    school = get_current_school()
+    year = get_active_year(school.id) if school else None
+    grade_id = request.args.get('grade_id', type=int)
+    if not school or not year or not grade_id:
+        return jsonify([])
+    grade = Grade.query.filter_by(id=grade_id, school_id=school.id,
+                                  academic_year_id=year.id).first()
+    if not grade:
+        return jsonify([])
+    sections = (
+        Section.query
+        .filter_by(grade_id=grade_id, school_id=school.id, academic_year_id=year.id)
+        .order_by(Section.name)
+        .all()
+    )
+    return jsonify([{'id': s.id, 'name': s.name} for s in sections])
+
+
+@attendance_bp.route('/suspensions/students/search')
+@login_required
+@admin_required
+def suspension_search_students():
+    school = get_current_school()
+    if not school:
+        return jsonify({'results': []})
+
+    term = request.args.get('q', '').strip()
+    section_id = request.args.get('section_id', type=int)
+
+    if len(term) < 2 and not section_id:
+        return jsonify({'results': []})
+
+    query = Student.query.filter_by(status='active', school_id=school.id)
+
+    if section_id:
+        year = get_active_year(school.id)
+        valid_section = Section.query.filter_by(
+            id=section_id, school_id=school.id,
+            academic_year_id=year.id if year else None,
+        ).first()
+        if not valid_section:
+            return jsonify({'results': []})
+        query = query.filter(Student.section_id == section_id)
+
+    if term:
+        query = query.filter(
+            Student.full_name.ilike(f'%{term}%') |
+            Student.student_id.ilike(f'%{term}%')
+        )
+
+    limit = 200 if (section_id and not term) else 20
+    students = query.order_by(Student.full_name).limit(limit).all()
+    return jsonify({'results': [_suspension_student_payload(s) for s in students]})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  STUDENT SUSPENSIONS
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1152,16 +1268,8 @@ def suspensions():
                        .order_by(StudentSuspension.start_date.desc())
                        .all())
 
-    # Students available for new suspension — all active students in the school,
-    # regardless of enrollment year, since students persist across academic years.
-    students_q = Student.query.filter_by(status='active')
-    if school:
-        students_q = students_q.filter_by(school_id=school.id)
-    students = students_q.order_by(Student.full_name).all()
-
     return render_template('attendance/suspensions.html',
-                           all_suspensions=all_suspensions,
-                           students=students)
+                           all_suspensions=all_suspensions)
 
 
 @attendance_bp.route('/suspensions/create', methods=['POST'])
@@ -1195,6 +1303,15 @@ def create_suspension():
         flash('تاريخ الانتهاء يجب أن يكون بعد تاريخ البدء.', 'danger')
         return redirect(url_for('attendance.suspensions'))
 
+    # Validate the student belongs to this school before linking the suspension.
+    # student_id is client-supplied and must never be trusted as proof of ownership.
+    student = Student.query.filter_by(
+        id=student_id, school_id=school.id, status='active'
+    ).first()
+    if not student:
+        flash('الطالب المحدد غير موجود أو لا ينتمي لهذه المدرسة.', 'danger')
+        return redirect(url_for('attendance.suspensions'))
+
     susp = StudentSuspension(
         student_id       = student_id,
         school_id        = school.id,
@@ -1215,7 +1332,13 @@ def create_suspension():
 @historical_guard
 @admin_required
 def delete_suspension(susp_id):
-    susp = StudentSuspension.query.get_or_404(susp_id)
+    school = get_current_school()
+    # Scope the lookup to the current school so an admin cannot delete another
+    # school's suspension by guessing its ID.
+    susp_q = StudentSuspension.query.filter_by(id=susp_id)
+    if school:
+        susp_q = susp_q.filter_by(school_id=school.id)
+    susp = susp_q.first_or_404()
     db.session.delete(susp)
     db.session.commit()
     flash('تم إلغاء إيقاف الطالب.', 'success')
