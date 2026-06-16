@@ -410,7 +410,12 @@ def manual_students():
     else:
         att_date = local_now.date()
 
+    from datetime import time as _time
     departure_time = getattr(settings, 'att_departure_time', None)
+    # Treat midnight (00:00) as unconfigured — a zero-value from an old row
+    # or a mis-saved form would otherwise make is_departure always True.
+    if departure_time == _time(0, 0, 0):
+        departure_time = None
     now_time = local_now.time().replace(microsecond=0)
     is_departure = (
         att_date == local_now.date()
@@ -512,7 +517,10 @@ def take(section_id):
     except ValueError:
         att_date = local_now.date()
 
+    from datetime import time as _time
     departure_time = getattr(settings, 'att_departure_time', None)
+    if departure_time == _time(0, 0, 0):
+        departure_time = None
     now_time_snapshot = local_now.time().replace(microsecond=0)
     is_departure_time = (
         att_date == local_now.date()
@@ -547,6 +555,8 @@ def take(section_id):
         now_local  = get_local_now(settings)
         now_time   = now_local.time().replace(microsecond=0)
         departure  = getattr(settings, 'att_departure_time', None)
+        if departure == _time(0, 0, 0):
+            departure = None
         post_is_departure = (
             att_date == now_local.date()
             and departure is not None
