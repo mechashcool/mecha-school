@@ -325,7 +325,6 @@ def index():
         )
 
     return render_template('attendance/index.html',
-                           sections=filtered_sections,
                            all_sections=sections_qs,
                            all_grades=all_grades,
                            today=today, settings=settings,
