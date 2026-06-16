@@ -50,6 +50,92 @@ def _student_payload(student):
     }
 
 
+class FeeValidationError(ValueError):
+    """Raised when fee form data fails validation.
+
+    Carries a user-safe Arabic message suitable for flashing back to the form.
+    """
+
+
+def compute_fee_amounts(form):
+    """Validate and compute (total_amount, discount, net_amount) from form data.
+
+    Single source of truth for the fee discount rules, shared by the standalone
+    `fees.create` route and the student-registration wizard so the calculation
+    is never duplicated. Performs no database access and creates no records.
+    Raises :class:`FeeValidationError` with an Arabic message on invalid input.
+    """
+    try:
+        total_amount = Decimal(form.get('total_amount', '0') or '0')
+    except InvalidOperation:
+        raise FeeValidationError('المبلغ الإجمالي غير صالح.')
+
+    discount_type = form.get('discount_type', 'fixed')
+    try:
+        discount_value = Decimal(form.get('discount_value', '0') or '0')
+    except InvalidOperation:
+        raise FeeValidationError('قيمة الخصم غير صالحة.')
+
+    if discount_type == 'percentage':
+        if discount_value < 0 or discount_value > 100:
+            raise FeeValidationError('نسبة الخصم يجب أن تكون بين 0 و100.')
+        discount = (total_amount * discount_value / Decimal('100')).quantize(Decimal('0.01'))
+    else:
+        discount = discount_value
+        if discount < 0:
+            raise FeeValidationError('الخصم لا يمكن أن يكون سالباً.')
+        if discount > total_amount:
+            raise FeeValidationError('الخصم لا يمكن أن يتجاوز المبلغ الإجمالي.')
+
+    net_amount = total_amount - discount
+    if net_amount < 0:
+        raise FeeValidationError('الصافي لا يمكن أن يكون سالباً.')
+
+    return total_amount, discount, net_amount
+
+
+def persist_fee_record(form, *, school, student_id, fee_type_id, academic_year_id,
+                       total_amount, discount, notes=None):
+    """Create a FeeRecord and its FeeInstallments from already-computed amounts.
+
+    Shared by `fees.create` and the student-registration wizard. Adds objects to
+    the current ``db.session`` and flushes; the CALLER is responsible for the
+    final commit and for all authorization (``manage_fees``) and ownership /
+    duplicate checks. Installment splitting matches the standalone fee route
+    exactly. ``notes`` lets a caller (the wizard) supply a non-colliding field
+    name; when ``None`` the standard ``notes`` form field is used.
+    """
+    record = FeeRecord(
+        student_id       = student_id,
+        fee_type_id      = fee_type_id,
+        academic_year_id = academic_year_id,
+        school_id        = school.id if school else None,
+        total_amount     = float(total_amount),
+        discount         = float(discount),   # always stored as final monetary amount
+        notes            = (notes if notes is not None else form.get('notes', '')).strip(),
+    )
+    db.session.add(record)
+    db.session.flush()
+
+    # Build installments from the server-computed net amount.
+    num_inst = max(1, min(12, int(form.get('num_installments', 1) or 1)))
+    net      = record.net_amount          # uses model property: total_amount - discount
+    each     = round(net / num_inst, 2)
+    for i in range(1, num_inst + 1):
+        due_str = form.get(f'due_date_{i}')
+        due     = dt.strptime(due_str, '%Y-%m-%d').date() if due_str else date.today()
+        inst = FeeInstallment(
+            fee_record_id    = record.id,
+            school_id        = record.school_id,
+            academic_year_id = record.academic_year_id,
+            installment_no   = i,
+            amount           = each,
+            due_date         = due,
+        )
+        db.session.add(inst)
+    return record
+
+
 @fees_bp.route('/')
 @login_required
 @permission_required('manage_fees')
@@ -188,79 +274,23 @@ def create():
                                    fee_types=fee_types, years=years,
                                    selected_student=selected_student)
 
-        # ── Discount calculation (server-side, safe Decimal arithmetic) ──────
+        # ── Discount + record + installments (shared with the student wizard) ─
         try:
-            total_amount = Decimal(request.form.get('total_amount', '0') or '0')
-        except InvalidOperation:
-            flash('المبلغ الإجمالي غير صالح.', 'danger')
-            return render_template('fees/form.html',
-                                   fee_types=fee_types, years=years,
-                                   selected_student=selected_student), 400
-
-        discount_type = request.form.get('discount_type', 'fixed')
-        try:
-            discount_value = Decimal(request.form.get('discount_value', '0') or '0')
-        except InvalidOperation:
-            flash('قيمة الخصم غير صالحة.', 'danger')
-            return render_template('fees/form.html',
-                                   fee_types=fee_types, years=years,
-                                   selected_student=selected_student), 400
-
-        if discount_type == 'percentage':
-            if discount_value < 0 or discount_value > 100:
-                flash('نسبة الخصم يجب أن تكون بين 0 و100.', 'danger')
-                return render_template('fees/form.html',
-                                       fee_types=fee_types, years=years,
-                                       selected_student=selected_student), 400
-            discount = (total_amount * discount_value / Decimal('100')).quantize(Decimal('0.01'))
-        else:
-            discount = discount_value
-            if discount < 0:
-                flash('الخصم لا يمكن أن يكون سالباً.', 'danger')
-                return render_template('fees/form.html',
-                                       fee_types=fee_types, years=years,
-                                       selected_student=selected_student), 400
-            if discount > total_amount:
-                flash('الخصم لا يمكن أن يتجاوز المبلغ الإجمالي.', 'danger')
-                return render_template('fees/form.html',
-                                       fee_types=fee_types, years=years,
-                                       selected_student=selected_student), 400
-
-        net_amount = total_amount - discount
-        if net_amount < 0:
-            flash('الصافي لا يمكن أن يكون سالباً.', 'danger')
-            return render_template('fees/form.html',
-                                   fee_types=fee_types, years=years,
-                                   selected_student=selected_student), 400
-
-        record = FeeRecord(
-            student_id       = selected_student_id,
-            fee_type_id      = selected_fee_type_id,
-            academic_year_id = selected_year_id,
-            school_id        = school.id if school else None,
-            total_amount     = float(total_amount),
-            discount         = float(discount),   # always stored as final monetary amount
-            notes            = request.form.get('notes', '').strip(),
-        )
-        db.session.add(record)
-        db.session.flush()
-
-        # Build installments from the server-computed net amount.
-        num_inst = max(1, min(12, int(request.form.get('num_installments', 1) or 1)))
-        net      = record.net_amount          # uses model property: total_amount - discount
-        each     = round(net / num_inst, 2)
-        for i in range(1, num_inst + 1):
-            due_str = request.form.get(f'due_date_{i}')
-            due     = dt.strptime(due_str, '%Y-%m-%d').date() if due_str else date.today()
-            inst = FeeInstallment(
-                fee_record_id    = record.id,
-                school_id        = record.school_id,
-                academic_year_id = record.academic_year_id,
-                installment_no   = i,
-                amount           = each,
-                due_date         = due,
+            total_amount, discount, _net = compute_fee_amounts(request.form)
+            persist_fee_record(
+                request.form,
+                school=school,
+                student_id=selected_student_id,
+                fee_type_id=selected_fee_type_id,
+                academic_year_id=selected_year_id,
+                total_amount=total_amount,
+                discount=discount,
             )
-            db.session.add(inst)
+        except FeeValidationError as exc:
+            flash(str(exc), 'danger')
+            return render_template('fees/form.html',
+                                   fee_types=fee_types, years=years,
+                                   selected_student=selected_student), 400
 
         db.session.commit()
         flash('تم إنشاء سجل الرسوم بنجاح.', 'success')

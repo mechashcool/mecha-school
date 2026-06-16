@@ -1,0 +1,1029 @@
+{% extends "shared/base.html" %}
+{% block title %}إضافة طالب{% endblock %}
+{% block page_title %}طالب جديد{% endblock %}
+
+{# Create-only multi-step wizard. The single existing form, field names, and the
+   one final POST to students.create are preserved exactly — steps only hide/show
+   sections of the same form. The edit flow keeps using students/form.html. #}
+{% set sf = request.form %}
+
+{% block extra_css %}
+<style>
+  .wiz-progress {
+    display: flex; align-items: flex-start; gap: 0;
+    overflow-x: auto; padding: 4px 2px 10px; margin-bottom: 22px;
+    scrollbar-width: thin;
+  }
+  .wiz-step-ind {
+    display: flex; flex-direction: column; align-items: center;
+    flex: 1 1 0; min-width: 78px; position: relative;
+    cursor: default; text-align: center;
+  }
+  .wiz-step-ind.clickable { cursor: pointer; }
+  .wiz-step-ind .dot {
+    width: 36px; height: 36px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 14px;
+    background: var(--card-bg); color: var(--text-muted);
+    border: 2px solid var(--border);
+    transition: all .2s var(--ease); z-index: 2;
+  }
+  .wiz-step-ind .lbl {
+    margin-top: 7px; font-size: 11.5px; font-weight: 600;
+    color: var(--text-muted); line-height: 1.3;
+  }
+  /* connector line between dots */
+  .wiz-step-ind::before {
+    content: ''; position: absolute; top: 17px; height: 2px;
+    background: var(--border); z-index: 1;
+    right: 50%; left: -50%;
+  }
+  .wiz-step-ind:first-child::before { display: none; }
+  .wiz-step-ind.active .dot {
+    background: var(--primary); color: #fff; border-color: var(--primary);
+    box-shadow: 0 0 0 4px rgba(26,58,92,.12);
+  }
+  .wiz-step-ind.active .lbl { color: var(--primary); }
+  .wiz-step-ind.done .dot {
+    background: var(--success); color: #fff; border-color: var(--success);
+  }
+  .wiz-step-ind.done .lbl { color: var(--success); }
+  .wiz-step-ind.done::before,
+  .wiz-step-ind.active::before { background: var(--success); }
+
+  .wizard-step { display: none; animation: pageFade .25s var(--ease); }
+  .wizard-step.current { display: block; }
+
+  .wiz-nav {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; margin-top: 24px;
+  }
+  .wiz-nav .spacer { flex: 1; }
+
+  .fee-mode-toggle { display: flex; gap: 12px; flex-wrap: wrap; }
+  .fee-mode-toggle .form-check {
+    flex: 1 1 200px; border: 1.5px solid var(--border);
+    border-radius: 12px; padding: 12px 14px; margin: 0;
+    transition: border-color .18s var(--ease), background .18s var(--ease);
+  }
+  .fee-mode-toggle .form-check:hover { border-color: #cdd6e3; }
+  .fee-mode-toggle .form-check-input:checked ~ .form-check-label { color: var(--primary); }
+  .fee-mode-toggle .form-check:has(.form-check-input:checked) {
+    border-color: var(--primary); background: rgba(26,58,92,.04);
+  }
+  .amount-in-words-preview {
+    margin-top: 6px; font-size: 12.5px; color: var(--text-muted);
+    padding: 6px 10px; border-radius: 6px;
+    background: var(--bg); border: 1px solid var(--border);
+    direction: rtl; text-align: right; word-break: break-word; line-height: 1.6;
+  }
+  .review-group { margin-bottom: 18px; }
+  .review-group h6 {
+    font-size: 12.5px; font-weight: 800; color: var(--primary);
+    text-transform: none; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .review-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 6px 18px;
+  }
+  .review-item { font-size: 13px; padding: 5px 0; border-bottom: 1px dashed var(--border); }
+  .review-item .k { color: var(--text-muted); font-weight: 600; }
+  .review-item .v { color: var(--text); font-weight: 700; }
+  .review-empty { color: var(--text-muted); font-size: 12.5px; font-style: italic; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">إضافة طالب جديد</h1>
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="{{ url_for('admin.dashboard') }}">الرئيسية</a></li>
+        <li class="breadcrumb-item"><a href="{{ url_for('students.index') }}">الطلاب</a></li>
+        <li class="breadcrumb-item active">إضافة</li>
+      </ol>
+    </nav>
+  </div>
+  <a href="{{ url_for('students.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+{# Progress indicator — built by JS from the steps actually present #}
+<div class="wiz-progress" id="wizardProgress"
+     data-error-step="{{ {1:'student', 4:'account', 5:'fees'}.get(error_step, 'student') }}"></div>
+
+<form method="POST" action="{{ url_for('students.create') }}"
+      enctype="multipart/form-data" id="studentWizardForm" novalidate>
+
+  <!-- ════════════ STEP 1 — Student Information ════════════ -->
+  <section class="wizard-step" data-step-key="student" data-step-title="معلومات الطالب">
+    <div class="card mb-4">
+      <div class="card-header"><i class="bi bi-person-fill text-accent"></i>البيانات الشخصية</div>
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">الاسم الكامل <span class="text-danger">*</span></label>
+            <input type="text" name="full_name" class="form-control" required
+                   value="{{ sf.get('full_name', '') }}">
+          </div>
+
+          {% if form_cfg.field_visible('date_of_birth') %}
+          <div class="col-md-6">
+            <label class="form-label">تاريخ الميلاد
+              {% if form_cfg.field_required('date_of_birth') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <input type="date" name="date_of_birth" class="form-control"
+                   {% if form_cfg.field_required('date_of_birth') %}required{% endif %}
+                   value="{{ sf.get('date_of_birth', '') }}">
+          </div>
+          {% endif %}
+
+          {% if form_cfg.field_visible('gender') %}
+          <div class="col-md-6">
+            <label class="form-label">الجنس
+              {% if form_cfg.field_required('gender') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <select name="gender" class="form-select"
+                    {% if form_cfg.field_required('gender') %}required{% endif %}>
+              <option value="">— اختر —</option>
+              <option value="male"   {{ 'selected' if sf.get('gender') == 'male' }}>ذكر</option>
+              <option value="female" {{ 'selected' if sf.get('gender') == 'female' }}>أنثى</option>
+            </select>
+          </div>
+          {% endif %}
+
+          {% if form_cfg.field_visible('nationality') %}
+          <div class="col-md-6">
+            <label class="form-label">الجنسية
+              {% if form_cfg.field_required('nationality') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <input type="text" name="nationality" class="form-control"
+                   {% if form_cfg.field_required('nationality') %}required{% endif %}
+                   value="{{ sf.get('nationality', '') }}">
+          </div>
+          {% endif %}
+
+          {% if form_cfg.field_visible('phone') %}
+          <div class="col-md-6">
+            <label class="form-label">رقم الهاتف
+              {% if form_cfg.field_required('phone') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <input type="tel" name="phone" class="form-control"
+                   {% if form_cfg.field_required('phone') %}required{% endif %}
+                   value="{{ sf.get('phone', '') }}">
+          </div>
+          {% endif %}
+
+          {% if form_cfg.section_visible('class_section') %}
+          <div class="col-md-4">
+            <label class="form-label">المرحلة الدراسية</label>
+            <select id="fStage" class="form-select">
+              <option value="">— كل المراحل —</option>
+              {% for st in stages %}
+              <option value="{{ st }}">
+                {% if st == 'ابتدائية' %}المرحلة الابتدائية
+                {% elif st == 'متوسطة' %}المرحلة المتوسطة
+                {% else %}المرحلة الإعدادية{% endif %}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">الصف</label>
+            <select id="fGrade" class="form-select">
+              <option value="">— اختر الصف —</option>
+              {% for g in grades %}
+              <option value="{{ g.id }}" data-stage="{{ g.stage or '' }}">{{ g.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">الشعبة</label>
+            <select name="section_id" id="fSection" class="form-select">
+              <option value="">— بدون تعيين —</option>
+              {% for sec in sections %}
+              <option value="{{ sec.id }}" data-grade-id="{{ sec.grade_id }}"
+                      {{ 'selected' if sf.get('section_id') == sec.id|string }}>
+                شعبة {{ sec.name }}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          {% endif %}
+
+          {% if buildings_enabled %}
+          <div class="col-md-4">
+            <label class="form-label"><i class="bi bi-building me-1"></i>البناية</label>
+            <select name="building_id" id="wizBuilding" class="form-select">
+              <option value="">— بدون بناية —</option>
+              {% for b in buildings_list %}
+              <option value="{{ b.id }}" {{ 'selected' if sf.get('building_id') == b.id|string }}>
+                {{ b.name }}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          {% endif %}
+
+          {% if form_cfg.field_visible('address') %}
+          <div class="col-12">
+            <label class="form-label">العنوان
+              {% if form_cfg.field_required('address') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <textarea name="address" class="form-control" rows="2"
+                      {% if form_cfg.field_required('address') %}required{% endif %}>{{ sf.get('address', '') }}</textarea>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    {% if form_cfg.section_visible('notes') %}
+    <div class="card mb-4">
+      <div class="card-header"><i class="bi bi-sticky-fill text-accent"></i>ملاحظات</div>
+      <div class="card-body">
+        <textarea name="notes" class="form-control" rows="3"
+                  placeholder="أي ملاحظات إضافية...">{{ sf.get('notes', '') }}</textarea>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if form_cfg.section_visible('attendance_device') and 'attendance_devices.mappings' in enabled_features and active_devices %}
+    <div class="card">
+      <div class="card-header"><i class="bi bi-hdd-network-fill text-accent"></i>بيانات جهاز الحضور</div>
+      <div class="card-body">
+        <p class="text-muted small mb-3">
+          <i class="bi bi-info-circle me-1"></i>اكتب نفس الرقم الموجود داخل جهاز الحضور لهذا الطالب.
+        </p>
+        <div class="row g-3 align-items-end">
+          <div class="col-md-4">
+            <label class="form-label">رقم الطالب في الجهاز</label>
+            <input type="text" name="employee_no_string" class="form-control"
+                   placeholder="مثال: 1 أو 25 أو 630" pattern="[0-9]*" inputmode="numeric"
+                   value="{{ sf.get('employee_no_string', '') }}">
+          </div>
+          <div class="col-md-{{ '8' if active_devices|length == 1 else '5' }}">
+            <label class="form-label">اختيار الجهاز</label>
+            <select name="device_id" class="form-select" id="deviceSelect">
+              <option value="">— اختر الجهاز —</option>
+              {% for dev in active_devices %}
+              <option value="{{ dev.id }}" {{ 'selected' if sf.get('device_id') == dev.id|string }}>{{ dev.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          {% if active_devices|length > 1 %}
+          <div class="col-md-3 d-flex align-items-end pb-1">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="all_devices" value="1"
+                     id="allDevicesCb" {{ 'checked' if sf.get('all_devices') == '1' }}
+                     onchange="document.getElementById('deviceSelect').disabled = this.checked">
+              <label class="form-check-label small" for="allDevicesCb">ربط بكل الأجهزة</label>
+            </div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </section>
+
+  <!-- ════════════ STEP 2 — Student Documents ════════════ -->
+  {% if (form_cfg.section_visible('student_photo') and 'students.photo_upload' in enabled_features)
+        or (form_cfg.section_visible('student_documents') and 'students.documents_upload' in enabled_features) %}
+  <section class="wizard-step" data-step-key="documents" data-step-title="المستندات">
+    <div class="row g-4">
+      {% if form_cfg.section_visible('student_photo') and 'students.photo_upload' in enabled_features %}
+      <div class="col-lg-5">
+        <div class="card mb-4">
+          <div class="card-header"><i class="bi bi-camera-fill text-accent"></i>صورة الطالب</div>
+          <div class="card-body text-center">
+            <div class="mb-3" style="width:120px;height:120px;border-radius:12px;
+                  background:var(--bg);display:flex;align-items:center;justify-content:center;
+                  margin:0 auto;font-size:40px;color:var(--text-muted)" id="photoPreviewWrap">
+              <i class="bi bi-person-fill" id="photoPreviewIcon"></i>
+              <img id="photoPreviewImg" class="rounded-12 d-none"
+                   style="width:120px;height:120px;object-fit:cover" alt="">
+            </div>
+            <input type="file" name="photo" id="photoInput"
+                   class="form-control form-control-sm" accept="image/*">
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      {% if form_cfg.section_visible('student_documents') and 'students.documents_upload' in enabled_features %}
+      <div class="col-lg-7">
+        <div class="card mb-4">
+          <div class="card-header"><i class="bi bi-folder-fill text-accent"></i>مستندات الطالب</div>
+          <div class="card-body">
+            <div id="document-rows">
+              <div class="row g-3 align-items-end mb-3 document-row">
+                <div class="col-6">
+                  <label class="form-label">نوع المستند</label>
+                  <select name="document_type[]" class="form-select">
+                    <option value="">— اختر النوع —</option>
+                    <option value="الهوية الوطنية">الهوية الوطنية</option>
+                    <option value="بطاقة السكن">بطاقة السكن</option>
+                    <option value="الوثيقة الدراسية">الوثيقة الدراسية</option>
+                    <option value="التقرير الطبي">التقرير الطبي</option>
+                  </select>
+                </div>
+                <div class="col-6">
+                  <label class="form-label">اختر الملف</label>
+                  <input type="file" name="document_file[]" class="form-control"
+                         accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+                </div>
+              </div>
+            </div>
+            <button type="button" id="add-document-row" class="btn btn-sm btn-outline-primary">
+              <i class="bi bi-plus-lg"></i> إضافة مستند آخر
+            </button>
+            <div class="text-muted mt-2" style="font-size:12px">يمكنك رفع أكثر من مستند في نفس الوقت.</div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- ════════════ STEP 3 — Guardian Information ════════════ -->
+  {% if form_cfg.section_visible('guardian_info') %}
+  <section class="wizard-step" data-step-key="guardian" data-step-title="ولي الأمر">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-people-fill text-accent"></i>بيانات ولي الأمر</div>
+      <div class="card-body">
+        <div class="row g-3">
+          {% if form_cfg.field_visible('guardian_name') %}
+          <div class="col-md-6">
+            <label class="form-label">اسم ولي الأمر
+              {% if form_cfg.field_required('guardian_name') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <input type="text" name="guardian_name" class="form-control"
+                   {% if form_cfg.field_required('guardian_name') %}required{% endif %}
+                   value="{{ sf.get('guardian_name', '') }}">
+          </div>
+          {% endif %}
+          {% if form_cfg.field_visible('guardian_relation') %}
+          <div class="col-md-6">
+            <label class="form-label">صلة القرابة
+              {% if form_cfg.field_required('guardian_relation') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <select name="guardian_relation" class="form-select"
+                    {% if form_cfg.field_required('guardian_relation') %}required{% endif %}>
+              <option value="">— اختر —</option>
+              {% for rel in ['أب','أم','أخ','أخت','جد','جدة','عم','عمة','خال','خالة','آخر'] %}
+              <option value="{{ rel }}" {{ 'selected' if sf.get('guardian_relation') == rel }}>{{ rel }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          {% endif %}
+          {% if form_cfg.field_visible('guardian_phone') %}
+          <div class="col-md-6">
+            <label class="form-label">هاتف ولي الأمر
+              {% if form_cfg.field_required('guardian_phone') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <input type="tel" name="guardian_phone" class="form-control"
+                   {% if form_cfg.field_required('guardian_phone') %}required{% endif %}
+                   value="{{ sf.get('guardian_phone', '') }}">
+          </div>
+          {% endif %}
+          {% if form_cfg.field_visible('guardian_email') %}
+          <div class="col-md-6">
+            <label class="form-label">بريد ولي الأمر
+              {% if form_cfg.field_required('guardian_email') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <input type="email" name="guardian_email" class="form-control"
+                   {% if form_cfg.field_required('guardian_email') %}required{% endif %}
+                   value="{{ sf.get('guardian_email', '') }}">
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- ════════════ STEP 4 — Parent Account ════════════ -->
+  {% if form_cfg.section_visible('link_existing_parent') or form_cfg.section_visible('create_parent_account') %}
+  <section class="wizard-step" data-step-key="account" data-step-title="حساب ولي الأمر">
+    {% if form_cfg.section_visible('link_existing_parent') and available_parents %}
+    <div class="card mb-4">
+      <div class="card-header"><i class="bi bi-person-check-fill text-accent"></i>ربط بولي أمر موجود</div>
+      <div class="card-body">
+        <p class="text-muted small mb-3">
+          <i class="bi bi-info-circle me-1"></i>
+          اختر حساب ولي الأمر الموجود لربطه بهذا الطالب مباشرةً.
+          إذا اخترت من هنا <strong>لن يُنشأ حساب جديد</strong>.
+        </p>
+        <input type="text" id="parentSearchAdd" class="form-control mb-2" placeholder="بحث عن ولي الأمر…">
+        <select name="link_existing_parent_id" id="parentSelectAdd" class="form-select">
+          <option value="">— اختر ولي الأمر (اختياري) —</option>
+          {% for p in available_parents %}
+          <option value="{{ p.id }}" {{ 'selected' if sf.get('link_existing_parent_id') == p.id|string }}>
+            {{ p.full_name }} (@{{ p.username }}){% if p.phone %} — {{ p.phone }}{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if form_cfg.section_visible('create_parent_account') %}
+    <div class="card">
+      <div class="card-header"><i class="bi bi-person-badge-fill text-accent"></i>إنشاء حساب ولي أمر جديد</div>
+      <div class="card-body">
+        <p class="text-muted small mb-3">
+          <i class="bi bi-info-circle me-1"></i>
+          أدخل كلمة المرور فقط وسيتم توليد اسم المستخدم تلقائياً بصيغة <code>XXX-PAR-000001</code>.
+          يمكنك أيضاً كتابة اسم مستخدم مخصص. إذا تركت كلمة المرور فارغة، لن يُنشأ الحساب.
+        </p>
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label class="form-label">اسم المستخدم <span class="text-muted fw-400">(اختياري — يُولَّد تلقائياً)</span></label>
+            <input type="text" name="parent_username" class="form-control"
+                   placeholder="اتركه فارغاً للتوليد التلقائي" autocomplete="off"
+                   value="{{ sf.get('parent_username', '') }}">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">كلمة المرور</label>
+            <input type="password" name="parent_password" class="form-control" autocomplete="new-password">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">تأكيد كلمة المرور</label>
+            <input type="password" name="parent_password_confirm" class="form-control" autocomplete="new-password">
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <!-- ════════════ STEP 5 — Fees & Installments ════════════ -->
+  {% if can_manage_fees %}
+  <section class="wizard-step" data-step-key="fees" data-step-title="الرسوم">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-cash-coin text-accent"></i>رسوم الطالب (اختياري)</div>
+      <div class="card-body">
+        <input type="hidden" name="create_fee" id="createFeeFlag"
+               value="{{ '1' if sf.get('create_fee') == '1' else '0' }}">
+
+        <div class="fee-mode-toggle mb-4">
+          <div class="form-check">
+            <input class="form-check-input" type="radio" name="fee_mode" id="feeModeSkip"
+                   value="skip" {{ 'checked' if sf.get('create_fee') != '1' }}>
+            <label class="form-check-label fw-600" for="feeModeSkip">
+              <i class="bi bi-skip-forward me-1"></i>تخطّي الرسوم الآن
+              <div class="text-muted small fw-400 mt-1">يمكن إضافة الرسوم لاحقاً من صفحة الرسوم.</div>
+            </label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="radio" name="fee_mode" id="feeModeAdd"
+                   value="add" {{ 'checked' if sf.get('create_fee') == '1' }}>
+            <label class="form-check-label fw-600" for="feeModeAdd">
+              <i class="bi bi-plus-circle me-1"></i>إضافة سجل رسوم للطالب
+              <div class="text-muted small fw-400 mt-1">يُنشأ السجل مع الطالب عند التأكيد النهائي.</div>
+            </label>
+          </div>
+        </div>
+
+        <div id="feeFields" class="row g-3 {{ '' if sf.get('create_fee') == '1' else 'd-none' }}">
+          <div class="col-md-6">
+            <label class="form-label">العام الدراسي</label>
+            <input type="text" class="form-control" value="{{ active_year.name if active_year else '' }}" disabled>
+            <div class="form-text">تُسجَّل الرسوم على العام الدراسي النشط للطالب.</div>
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">نوع الرسم <span class="text-danger">*</span></label>
+            <select name="fee_type_id" id="wizFeeType" class="form-select">
+              <option value="">— اختر النوع —</option>
+              {% for ft in fee_types %}
+              <option value="{{ ft.id }}" {{ 'selected' if sf.get('fee_type_id') == ft.id|string }}>{{ ft.name }}</option>
+              {% endfor %}
+            </select>
+            {% if not fee_types %}
+            <div class="form-text text-danger">لا توجد أنواع رسوم معرّفة لهذه المدرسة بعد.</div>
+            {% endif %}
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">المبلغ الإجمالي <span class="text-danger">*</span></label>
+            <input type="number" name="total_amount" id="totalAmount" class="form-control"
+                   min="0" step="0.01" oninput="calcNet()" value="{{ sf.get('total_amount', '') }}">
+            <div id="amountInWords" class="amount-in-words-preview d-none" dir="rtl"></div>
+          </div>
+
+          <div class="col-12">
+            <label class="form-label">نوع الخصم</label>
+            <div class="d-flex gap-4 mt-1">
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="discount_type" id="discountFixed"
+                       value="fixed" {{ 'checked' if sf.get('discount_type') != 'percentage' }}
+                       onchange="onDiscountTypeChange()">
+                <label class="form-check-label" for="discountFixed">مبلغ ثابت</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="discount_type" id="discountPct"
+                       value="percentage" {{ 'checked' if sf.get('discount_type') == 'percentage' }}
+                       onchange="onDiscountTypeChange()">
+                <label class="form-check-label" for="discountPct">نسبة مئوية</label>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label" id="discountValueLabel">قيمة الخصم</label>
+            <div class="input-group">
+              <input type="number" name="discount_value" id="discountValue" class="form-control"
+                     min="0" step="0.01" value="{{ sf.get('discount_value', '0') }}" oninput="calcNet()">
+              <span class="input-group-text" id="discountUnit">د.ع</span>
+            </div>
+          </div>
+
+          <div class="col-md-4 d-none" id="calcDiscountRow">
+            <label class="form-label">قيمة الخصم المحسوبة</label>
+            <div class="form-control bg-light text-danger fw-700" id="calcDiscountAmount">—</div>
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">الصافي بعد الخصم</label>
+            <div class="form-control bg-light fw-700 text-primary-custom" id="netAmount">—</div>
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">عدد الأقساط <span class="text-danger">*</span></label>
+            <select name="num_installments" id="numInst" class="form-select" onchange="renderInstDates()">
+              {% for n in range(1, 13) %}
+              <option value="{{ n }}" {{ 'selected' if sf.get('num_installments', '1') == n|string }}>
+                {% if n == 1 %}قسط واحد{% elif n == 2 %}قسطان{% elif n <= 10 %}{{ n }} أقساط{% else %}{{ n }} قسطاً{% endif %}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="col-12">
+            <label class="form-label">ملاحظات الرسوم</label>
+            <textarea name="fee_notes" class="form-control" rows="2">{{ sf.get('fee_notes', '') }}</textarea>
+          </div>
+
+          <div class="col-12" id="instDatesSection">
+            <div class="mb-2 fw-700" style="font-size:13px;color:var(--primary)">
+              <i class="bi bi-calendar3 me-1"></i>تواريخ استحقاق الأقساط
+            </div>
+            <div id="instDates" class="row g-2"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- ════════════ STEP 6 — Review ════════════ -->
+  <section class="wizard-step" data-step-key="review" data-step-title="المراجعة">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-clipboard-check-fill text-accent"></i>مراجعة البيانات قبل الحفظ</div>
+      <div class="card-body" id="reviewContent">
+        <!-- filled by JS on entering this step -->
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ Navigation ════════════ -->
+  <div class="wiz-nav">
+    <button type="button" class="btn btn-outline-secondary px-4" id="wizPrev" style="display:none">
+      <i class="bi bi-arrow-right me-1"></i>السابق
+    </button>
+    <div class="spacer"></div>
+    <a href="{{ url_for('students.index') }}" class="btn btn-link text-muted">إلغاء</a>
+    <button type="button" class="btn btn-primary px-4" id="wizNext">
+      التالي<i class="bi bi-arrow-left ms-1"></i>
+    </button>
+    <button type="submit" class="btn btn-success px-4" id="wizSubmit" style="display:none">
+      <i class="bi bi-check-circle-fill me-2"></i>تأكيد وإضافة الطالب
+    </button>
+  </div>
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+/* ════════════ Stage → Grade → Section cascade (reused from form.html) ════════════ */
+(function () {
+  const stageEl = document.getElementById('fStage');
+  const gradeEl = document.getElementById('fGrade');
+  const sectionEl = document.getElementById('fSection');
+  if (!stageEl || !gradeEl || !sectionEl) return;
+
+  const gradeOpts = Array.from(gradeEl.options).slice(1);
+  const sectionOpts = Array.from(sectionEl.options).slice(1);
+
+  function filterSections() {
+    const gradeId = gradeEl.value;
+    for (const opt of sectionOpts) opt.hidden = gradeId ? opt.dataset.gradeId !== gradeId : false;
+    const sel = sectionEl.selectedOptions[0];
+    if (sel && sel.hidden) sectionEl.value = '';
+  }
+  function filterGrades() {
+    const stage = stageEl.value.trim();
+    for (const opt of gradeOpts) opt.hidden = stage ? opt.dataset.stage.trim() !== stage : false;
+    const sel = gradeEl.selectedOptions[0];
+    if (sel && sel.hidden) gradeEl.value = '';
+    filterSections();
+  }
+  stageEl.addEventListener('change', filterGrades);
+  gradeEl.addEventListener('change', filterSections);
+
+  // Restore grade/stage from a preserved section selection (after a server error).
+  const selSection = sectionEl.selectedOptions[0];
+  if (selSection && selSection.value) {
+    const gid = selSection.dataset.gradeId;
+    const gOpt = gradeOpts.find(o => o.value === gid);
+    if (gOpt) {
+      gradeEl.value = gid;
+      if (gOpt.dataset.stage) stageEl.value = gOpt.dataset.stage.trim();
+    }
+  }
+  filterGrades();
+  // Re-apply the preserved section after filtering (filterGrades may have cleared it).
+  if (selSection && selSection.value) sectionEl.value = selSection.value;
+})();
+
+/* ════════════ Document rows (reused from form.html) ════════════ */
+(function () {
+  const addBtn = document.getElementById('add-document-row');
+  const rows = document.getElementById('document-rows');
+  addBtn?.addEventListener('click', () => {
+    const row = document.createElement('div');
+    row.className = 'row g-3 align-items-end mb-3 document-row';
+    row.innerHTML = `
+      <div class="col-6">
+        <label class="form-label">نوع المستند</label>
+        <select name="document_type[]" class="form-select">
+          <option value="">— اختر النوع —</option>
+          <option value="الهوية الوطنية">الهوية الوطنية</option>
+          <option value="بطاقة السكن">بطاقة السكن</option>
+          <option value="الوثيقة الدراسية">الوثيقة الدراسية</option>
+          <option value="التقرير الطبي">التقرير الطبي</option>
+        </select>
+      </div>
+      <div class="col-5">
+        <label class="form-label">اختر الملف</label>
+        <input type="file" name="document_file[]" class="form-control" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+      </div>
+      <div class="col-1">
+        <button type="button" class="btn btn-danger btn-sm w-100 remove-document-row" title="إزالة">
+          <i class="bi bi-trash"></i>
+        </button>
+      </div>`;
+    rows.appendChild(row);
+  });
+  rows?.addEventListener('click', e => {
+    if (e.target.closest('.remove-document-row')) e.target.closest('.document-row')?.remove();
+  });
+})();
+
+/* ════════════ Photo preview ════════════ */
+(function () {
+  const input = document.getElementById('photoInput');
+  if (!input) return;
+  input.addEventListener('change', () => {
+    const file = input.files && input.files[0];
+    const img = document.getElementById('photoPreviewImg');
+    const icon = document.getElementById('photoPreviewIcon');
+    if (file && file.type.startsWith('image/')) {
+      img.src = URL.createObjectURL(file);
+      img.classList.remove('d-none');
+      icon.classList.add('d-none');
+    } else {
+      img.classList.add('d-none');
+      icon.classList.remove('d-none');
+    }
+  });
+})();
+
+/* ════════════ Existing-parent live search (reused from form.html) ════════════ */
+(function () {
+  const search = document.getElementById('parentSearchAdd');
+  const sel = document.getElementById('parentSelectAdd');
+  if (!search || !sel) return;
+  const opts = Array.from(sel.options);
+  search.addEventListener('input', function () {
+    const q = this.value.toLowerCase();
+    const keep = sel.value;
+    sel.innerHTML = '';
+    opts.forEach(o => { if (!q || o.text.toLowerCase().includes(q)) sel.appendChild(o.cloneNode(true)); });
+    sel.value = keep;
+  });
+})();
+
+/* ════════════ Fee calculations (reused from fees/form.html) ════════════ */
+const _IQD_ONES = ['','واحد','اثنان','ثلاثة','أربعة','خمسة','ستة','سبعة','ثمانية','تسعة',
+  'عشرة','أحد عشر','اثنا عشر','ثلاثة عشر','أربعة عشر','خمسة عشر','ستة عشر','سبعة عشر','ثمانية عشر','تسعة عشر'];
+const _IQD_TENS = ['','','عشرون','ثلاثون','أربعون','خمسون','ستون','سبعون','ثمانون','تسعون'];
+const _IQD_HUNDREDS = ['','مائة','مائتان','ثلاثمائة','أربعمائة','خمسمائة','ستمائة','سبعمائة','ثمانمائة','تسعمائة'];
+function _iqdBelow1000(n) {
+  if (n === 0) return '';
+  if (n < 20) return _IQD_ONES[n];
+  if (n < 100) { const t = Math.floor(n/10), o = n%10; return o===0 ? _IQD_TENS[t] : _IQD_ONES[o]+' و'+_IQD_TENS[t]; }
+  const h = Math.floor(n/100), r = n%100;
+  return r===0 ? _IQD_HUNDREDS[h] : _IQD_HUNDREDS[h]+' و'+_iqdBelow1000(r);
+}
+function _iqdGroup(c, hasLower, sing, dualAcc, dualNom, p310, p11) {
+  if (c===1) return sing; if (c===2) return hasLower ? dualNom : dualAcc;
+  if (c<=10) return _IQD_ONES[c]+' '+p310; return _iqdBelow1000(c)+' '+p11;
+}
+function _iqdIntToWords(n) {
+  const parts = [];
+  const b = Math.floor(n/1e9); n%=1e9;
+  const m = Math.floor(n/1e6); n%=1e6;
+  const t = Math.floor(n/1e3); n%=1e3;
+  const r = n;
+  if (b) parts.push(_iqdGroup(b, m>0||t>0||r>0, 'مليار','مليارا','ملياران','مليارات','مليار'));
+  if (m) parts.push(_iqdGroup(m, t>0||r>0, 'مليون','مليونا','مليونان','ملايين','مليون'));
+  if (t) parts.push(_iqdGroup(t, r>0, 'ألف','ألفا','ألفان','آلاف','ألف'));
+  if (r) parts.push(_iqdBelow1000(r));
+  return parts.join(' و');
+}
+function amountToWordsIQD(value) {
+  if (value === '' || value == null) return '';
+  const n = Math.trunc(Number(value));
+  if (isNaN(n) || n < 0) return '';
+  if (n === 0) return 'صفر دينار عراقي';
+  if (n === 1) return 'دينار عراقي واحد';
+  if (n === 2) return 'ديناران عراقيان';
+  const w = _iqdIntToWords(n);
+  return (n >= 3 && n <= 10) ? w+' دنانير عراقية' : w+' دينار عراقي';
+}
+function updateAmountInWords() {
+  const raw = document.getElementById('totalAmount')?.value;
+  const div = document.getElementById('amountInWords');
+  if (!div) return;
+  if (!raw) { div.classList.add('d-none'); div.textContent=''; return; }
+  const n = Math.trunc(parseFloat(raw));
+  if (isNaN(n) || n < 0) { div.classList.add('d-none'); div.textContent=''; return; }
+  div.textContent = 'المبلغ كتابةً: ' + amountToWordsIQD(n);
+  div.classList.remove('d-none');
+}
+function onDiscountTypeChange() {
+  const pct = document.getElementById('discountPct');
+  if (!pct) return;
+  const isPct = pct.checked;
+  const label = document.getElementById('discountValueLabel');
+  const unit = document.getElementById('discountUnit');
+  const calcRow = document.getElementById('calcDiscountRow');
+  const inp = document.getElementById('discountValue');
+  if (isPct) {
+    label.textContent = 'نسبة الخصم (%)'; unit.textContent = '%';
+    inp.step = '0.01'; inp.max = '100'; calcRow.classList.remove('d-none');
+  } else {
+    label.textContent = 'قيمة الخصم'; unit.textContent = 'د.ع';
+    inp.removeAttribute('max'); inp.step = '0.01'; calcRow.classList.add('d-none');
+  }
+  calcNet();
+}
+function calcNet() {
+  const totalEl = document.getElementById('totalAmount');
+  if (!totalEl) return;
+  const total = parseFloat(totalEl.value) || 0;
+  const val = parseFloat(document.getElementById('discountValue').value) || 0;
+  const isPct = document.getElementById('discountPct').checked;
+  let discount = 0;
+  if (isPct) {
+    const p = Math.min(100, Math.max(0, val));
+    discount = Math.round(total * p) / 100;
+    document.getElementById('calcDiscountAmount').textContent = discount.toLocaleString('ar-IQ') + ' د.ع';
+  } else { discount = val; }
+  const net = total - discount;
+  document.getElementById('netAmount').textContent = (net >= 0 ? net : 0).toLocaleString('ar-IQ') + ' د.ع';
+  updateAmountInWords();
+}
+function renderInstDates() {
+  const numEl = document.getElementById('numInst');
+  const div = document.getElementById('instDates');
+  if (!numEl || !div) return;
+  const n = parseInt(numEl.value);
+  div.innerHTML = '';
+  const today = new Date();
+  for (let i = 1; i <= n; i++) {
+    const d = new Date(today); d.setMonth(d.getMonth() + (i - 1));
+    const iso = d.toISOString().split('T')[0];
+    div.innerHTML += `
+      <div class="col-md-4">
+        <label class="form-label" style="font-size:12.5px">استحقاق القسط ${i}</label>
+        <input type="date" name="due_date_${i}" class="form-control form-control-sm" value="${iso}">
+      </div>`;
+  }
+}
+
+/* ════════════ Fee mode (skip / add) ════════════ */
+(function () {
+  const skip = document.getElementById('feeModeSkip');
+  const add = document.getElementById('feeModeAdd');
+  const fields = document.getElementById('feeFields');
+  const flag = document.getElementById('createFeeFlag');
+  const feeType = document.getElementById('wizFeeType');
+  const total = document.getElementById('totalAmount');
+  if (!skip || !add) return;
+
+  function apply() {
+    const on = add.checked;
+    flag.value = on ? '1' : '0';
+    fields.classList.toggle('d-none', !on);
+    // Required only while the admin is actually adding a fee, so skipping never blocks submit.
+    if (feeType) feeType.required = on;
+    if (total) total.required = on;
+    if (on) { onDiscountTypeChange(); calcNet(); }
+  }
+  skip.addEventListener('change', apply);
+  add.addEventListener('change', apply);
+  apply();
+})();
+
+/* initialise fee widgets (safe no-ops when the fee step is absent) */
+renderInstDates();
+calcNet();
+
+/* ════════════ Wizard engine ════════════ */
+(function () {
+  const form = document.getElementById('studentWizardForm');
+  const steps = Array.from(document.querySelectorAll('.wizard-step'));
+  const progress = document.getElementById('wizardProgress');
+  const btnPrev = document.getElementById('wizPrev');
+  const btnNext = document.getElementById('wizNext');
+  const btnSubmit = document.getElementById('wizSubmit');
+  if (!steps.length) return;
+
+  let current = 0;
+  let maxReached = 0;
+
+  // Build the step indicator from the steps actually rendered.
+  steps.forEach((s, i) => {
+    const ind = document.createElement('div');
+    ind.className = 'wiz-step-ind';
+    ind.dataset.idx = i;
+    ind.innerHTML = `<div class="dot">${i + 1}</div><div class="lbl">${s.dataset.stepTitle || ''}</div>`;
+    ind.addEventListener('click', () => { if (i <= maxReached) goTo(i); });
+    progress.appendChild(ind);
+  });
+  const indicators = Array.from(progress.children);
+
+  function firstInvalidControl(step) {
+    const controls = step.querySelectorAll('input, select, textarea');
+    for (const c of controls) {
+      if (c.disabled) continue;
+      if (!c.checkValidity()) return c;
+    }
+    return null;
+  }
+  function validateStep(i) {
+    const bad = firstInvalidControl(steps[i]);
+    if (bad) { bad.reportValidity(); return false; }
+    return true;
+  }
+
+  function buildReview() {
+    const box = document.getElementById('reviewContent');
+    if (!box) return;
+    const txt = name => {
+      const el = form.querySelector(`[name="${name}"]`);
+      return el ? (el.value || '').trim() : '';
+    };
+    const selText = id => {
+      const el = document.getElementById(id);
+      if (!el || el.selectedIndex < 0) return '';
+      const o = el.selectedOptions[0];
+      return (!o || !o.value) ? '' : o.textContent.trim();
+    };
+    const genderMap = { male: 'ذكر', female: 'أنثى' };
+    const row = (k, v) => v ? `<div class="review-item d-flex justify-content-between gap-3"><span class="k">${k}</span><span class="v">${v}</span></div>` : '';
+
+    // Documents summary
+    let docs = [];
+    form.querySelectorAll('.document-row').forEach(r => {
+      const t = r.querySelector('[name="document_type[]"]');
+      const f = r.querySelector('[name="document_file[]"]');
+      if (f && f.files && f.files.length) docs.push((t && t.value ? t.value : 'وثيقة') + ' — ' + f.files[0].name);
+    });
+    const photoEl = document.getElementById('photoInput');
+    const hasPhoto = photoEl && photoEl.files && photoEl.files.length;
+
+    // Account summary
+    const linkSel = document.getElementById('parentSelectAdd');
+    const linkName = (linkSel && linkSel.value) ? linkSel.selectedOptions[0].textContent.trim() : '';
+    const newUser = txt('parent_username');
+    const newPass = txt('parent_password');
+    let accountLine = 'لا يوجد';
+    if (linkName) accountLine = 'ربط بحساب: ' + linkName;
+    else if (newPass) accountLine = 'حساب جديد' + (newUser ? ' (' + newUser + ')' : ' (اسم مستخدم تلقائي)');
+
+    let html = '';
+
+    // Student
+    html += '<div class="review-group"><h6><i class="bi bi-person-fill text-accent"></i>بيانات الطالب</h6><div class="review-grid">';
+    html += row('الاسم الكامل', txt('full_name'));
+    html += row('تاريخ الميلاد', txt('date_of_birth'));
+    html += row('الجنس', genderMap[txt('gender')] || '');
+    html += row('الجنسية', txt('nationality'));
+    html += row('الهاتف', txt('phone'));
+    html += row('الصف', selText('fGrade'));
+    html += row('الشعبة', selText('fSection'));
+    html += row('البناية', selText('wizBuilding'));
+    html += row('العنوان', txt('address'));
+    html += row('ملاحظات', txt('notes'));
+    html += row('رقم جهاز الحضور', txt('employee_no_string'));
+    html += '</div></div>';
+
+    // Documents
+    html += '<div class="review-group"><h6><i class="bi bi-folder-fill text-accent"></i>المستندات</h6>';
+    if (hasPhoto || docs.length) {
+      html += '<div class="review-grid">';
+      if (hasPhoto) html += row('صورة الطالب', 'تم اختيار صورة');
+      docs.forEach((d, i) => html += row('مستند ' + (i + 1), d));
+      html += '</div>';
+    } else { html += '<div class="review-empty">لم يتم اختيار مستندات.</div>'; }
+    html += '</div>';
+
+    // Guardian
+    const gName = txt('guardian_name'), gRel = txt('guardian_relation'), gPhone = txt('guardian_phone'), gEmail = txt('guardian_email');
+    html += '<div class="review-group"><h6><i class="bi bi-people-fill text-accent"></i>ولي الأمر</h6>';
+    if (gName || gRel || gPhone || gEmail) {
+      html += '<div class="review-grid">';
+      html += row('الاسم', gName); html += row('صلة القرابة', gRel);
+      html += row('الهاتف', gPhone); html += row('البريد', gEmail);
+      html += '</div>';
+    } else { html += '<div class="review-empty">لم تُدخل بيانات ولي أمر.</div>'; }
+    html += '</div>';
+
+    // Account
+    html += '<div class="review-group"><h6><i class="bi bi-person-badge-fill text-accent"></i>حساب ولي الأمر</h6>';
+    html += '<div class="review-grid">' + row('الحساب', accountLine) + '</div></div>';
+
+    // Fees
+    const feeFlag = document.getElementById('createFeeFlag');
+    if (feeFlag && feeFlag.value === '1') {
+      html += '<div class="review-group"><h6><i class="bi bi-cash-coin text-accent"></i>الرسوم</h6><div class="review-grid">';
+      html += row('نوع الرسم', selText('wizFeeType'));
+      html += row('المبلغ الإجمالي', txt('total_amount'));
+      const net = document.getElementById('netAmount');
+      html += row('الصافي بعد الخصم', net ? net.textContent : '');
+      html += row('عدد الأقساط', selText('numInst'));
+      html += row('ملاحظات الرسوم', txt('fee_notes'));
+      html += '</div></div>';
+    } else if (feeFlag) {
+      html += '<div class="review-group"><h6><i class="bi bi-cash-coin text-accent"></i>الرسوم</h6><div class="review-empty">تم تخطّي الرسوم.</div></div>';
+    }
+
+    box.innerHTML = html;
+  }
+
+  function goTo(i) {
+    current = i;
+    if (i > maxReached) maxReached = i;
+    steps.forEach((s, idx) => s.classList.toggle('current', idx === i));
+    indicators.forEach((ind, idx) => {
+      ind.classList.toggle('active', idx === i);
+      ind.classList.toggle('done', idx < i);
+      ind.classList.toggle('clickable', idx <= maxReached);
+    });
+    btnPrev.style.display = i === 0 ? 'none' : '';
+    const last = i === steps.length - 1;
+    btnNext.style.display = last ? 'none' : '';
+    btnSubmit.style.display = last ? '' : 'none';
+    if (steps[i].dataset.stepKey === 'review') buildReview();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  btnNext.addEventListener('click', () => {
+    if (!validateStep(current)) return;
+    if (current < steps.length - 1) goTo(current + 1);
+  });
+  btnPrev.addEventListener('click', () => { if (current > 0) goTo(current - 1); });
+
+  // Final submit: validate every step, jump to the first invalid one, then submit once.
+  let submitting = false;
+  form.addEventListener('submit', e => {
+    if (submitting) { e.preventDefault(); return; }
+    for (let i = 0; i < steps.length; i++) {
+      const bad = firstInvalidControl(steps[i]);
+      if (bad) { e.preventDefault(); goTo(i); bad.reportValidity(); return; }
+    }
+    submitting = true;
+    btnSubmit.disabled = true;
+    btnSubmit.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>جارٍ الحفظ...';
+  });
+
+  // Land on the step that the server flagged as invalid (or the first step).
+  const errKey = progress.dataset.errorStep || 'student';
+  let startIdx = steps.findIndex(s => s.dataset.stepKey === errKey);
+  if (startIdx < 0) startIdx = 0;
+  // Allow navigation back to any earlier step after a server error.
+  maxReached = startIdx;
+  goTo(startIdx);
+})();
+</script>
+{% endblock %}

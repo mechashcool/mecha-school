@@ -5,7 +5,7 @@ from flask_login import login_required, current_user
 from sqlalchemy.orm import joinedload
 from app.models import (db, Student, Section, Grade, AcademicYear, StudentDocument,
                         parent_students, User, Role, AttendanceDevice, DeviceStudentMapping,
-                        FeeRecord, FeeInstallment)
+                        FeeRecord, FeeInstallment, FeeType)
 from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    get_current_school, get_active_year, get_view_year,
                                    historical_guard)
@@ -221,6 +221,14 @@ def create():
             buildings_for_form = [b for b in buildings_for_form
                                   if b.id in allowed_building_ids]
 
+    # ── Optional in-wizard fee step ──────────────────────────────────────────
+    # The fee step is only available to users who may manage fees; this keeps
+    # the manage_fees authorization boundary intact even though fee creation now
+    # happens inside the add_student flow. fee_types is auto-scoped to the
+    # current school + active year by the tenant ORM filter.
+    can_manage_fees = current_user.has_permission('manage_fees')
+    fee_types = FeeType.query.all() if can_manage_fees else []
+
     if request.method == 'POST':
         # ── Pre-validate parent account and device mapping fields ────────────
         parent_username         = request.form.get('parent_username', '').strip()
@@ -231,9 +239,10 @@ def create():
         device_id               = int(_dev_id_raw) if _dev_id_raw.isdigit() else None
         all_devices_flag        = request.form.get('all_devices') == '1'
 
-        def _re_render(msg):
-            flash(msg, 'danger')
-            return render_template('students/form.html', student=None, sections=sections,
+        def _re_render(msg, error_step=1):
+            if msg:
+                flash(msg, 'danger')
+            return render_template('students/create_wizard.html', student=None, sections=sections,
                                    grades=grades, stages=['ابتدائية', 'متوسطة', 'إعدادية'],
                                    selected_grade_id=None, selected_stage=None,
                                    active_devices=active_devices,
@@ -242,7 +251,11 @@ def create():
                                    form_cfg=form_cfg,
                                    buildings_enabled=buildings_on,
                                    buildings_list=buildings_for_form,
-                                   selected_building_id=request.form.get('building_id', type=int))
+                                   selected_building_id=request.form.get('building_id', type=int),
+                                   active_year=year,
+                                   can_manage_fees=can_manage_fees,
+                                   fee_types=fee_types,
+                                   error_step=error_step)
 
         # ── Backend enforcement of required fields per school config ─────────
         _cfg_errors = form_cfg.validate(request.form)
@@ -257,11 +270,11 @@ def create():
 
         if parent_username:
             if not parent_password:
-                return _re_render('يجب إدخال كلمة المرور لإنشاء حساب ولي الأمر')
+                return _re_render('يجب إدخال كلمة المرور لإنشاء حساب ولي الأمر', error_step=4)
             if parent_password != parent_password_confirm:
-                return _re_render('كلمة المرور غير متطابقة')
+                return _re_render('كلمة المرور غير متطابقة', error_step=4)
             if User.query.filter_by(username=parent_username).first():
-                return _re_render('اسم المستخدم مستخدم مسبقاً، يرجى اختيار اسم مستخدم آخر')
+                return _re_render('اسم المستخدم مستخدم مسبقاً، يرجى اختيار اسم مستخدم آخر', error_step=4)
 
         if employee_no_string:
             if not employee_no_string.isdigit():
@@ -274,6 +287,28 @@ def create():
                              .first())
                 if _conflict:
                     return _re_render(f'الرقم {employee_no_string} مستخدم مسبقاً في جهاز "{_dev.name}"')
+
+        # ── Pre-validate optional fee BEFORE creating the student / uploads ───
+        # Validating here (no DB writes yet) keeps registration atomic and avoids
+        # orphaned uploads if the fee data is invalid. Fee creation is gated by
+        # manage_fees and only runs when the admin explicitly opted in.
+        create_fee        = (can_manage_fees and request.form.get('create_fee') == '1')
+        _fee_total        = None
+        _fee_discount     = None
+        _fee_type_id_val  = None
+        if create_fee:
+            from app.blueprints.fees import FeeValidationError, compute_fee_amounts
+            _fee_type_id_val = request.form.get('fee_type_id', type=int)
+            # FeeType.query is auto-scoped to this school + active year by the
+            # tenant ORM filter, so a fee type from another school/year is None.
+            _fee_type = (FeeType.query.filter_by(id=_fee_type_id_val).first()
+                         if _fee_type_id_val else None)
+            if not _fee_type:
+                return _re_render('يرجى اختيار نوع رسم صالح لهذه المدرسة.', error_step=5)
+            try:
+                _fee_total, _fee_discount, _ = compute_fee_amounts(request.form)
+            except FeeValidationError as _fexc:
+                return _re_render(str(_fexc), error_step=5)
 
         from datetime import datetime as dt
         student_id = code_generator.generate_student_id(school.id)
@@ -427,15 +462,41 @@ def create():
                 )
                 _linked_parent_name = _ep.full_name
 
+        # ── Create optional fee record (shared fee logic, manage_fees gated) ──
+        _fee_created = False
+        if create_fee:
+            from app.blueprints.fees import persist_fee_record, FeeValidationError
+            try:
+                persist_fee_record(
+                    request.form,
+                    school=school,
+                    student_id=student.id,
+                    fee_type_id=_fee_type_id_val,
+                    academic_year_id=year.id,   # fee shares the student's active year
+                    total_amount=_fee_total,
+                    discount=_fee_discount,
+                    notes=request.form.get('fee_notes', ''),
+                )
+                _fee_created = True
+            except (FeeValidationError, ValueError):
+                # Keep registration atomic: discard the student and everything
+                # staged in this transaction, return to the fee step.
+                db.session.rollback()
+                return _re_render(
+                    'تعذر حفظ بيانات الرسوم. يرجى مراجعة المبالغ وعدد الأقساط وتواريخ الاستحقاق.',
+                    error_step=5)
+
         db.session.commit()
         flash(f'تم إضافة الطالب {student.full_name} برقم {student.student_id}.', 'success')
         if parent_created:
             flash(f'تم إنشاء حساب ولي الأمر بنجاح. اسم المستخدم: {parent_username}', 'success')
         if _linked_parent_name:
             flash(f'تم ربط الطالب بولي الأمر {_linked_parent_name} بنجاح.', 'success')
+        if _fee_created:
+            flash('تم إنشاء سجل الرسوم للطالب بنجاح.', 'success')
         return redirect(url_for('students.create_success', student_id=student.id))
 
-    return render_template('students/form.html', student=None, sections=sections,
+    return render_template('students/create_wizard.html', student=None, sections=sections,
                            grades=grades, stages=['ابتدائية', 'متوسطة', 'إعدادية'],
                            selected_grade_id=None, selected_stage=None,
                            active_devices=active_devices,
@@ -444,7 +505,11 @@ def create():
                            form_cfg=form_cfg,
                            buildings_enabled=buildings_on,
                            buildings_list=buildings_for_form,
-                           selected_building_id=None)
+                           selected_building_id=None,
+                           active_year=year,
+                           can_manage_fees=can_manage_fees,
+                           fee_types=fee_types,
+                           error_step=1)
 
 
 @students_bp.route('/<int:student_id>/create-success')
