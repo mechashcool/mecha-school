@@ -10,7 +10,7 @@
   </a>
 </div>
 
-<div class="card mb-4">
+<div class="card filters-card mb-4">
   <div class="card-body py-3">
     <div class="row g-2 align-items-end">
 
@@ -151,6 +151,12 @@
 
 {% block extra_js %}
 <style>
+/* The base .card rule sets overflow:hidden which clips the absolutely-positioned
+   search results dropdown. Override it only on this page's filters card. */
+.filters-card { overflow: visible; }
+/* card-body also inherits the clip context; make it transparent too */
+.filters-card .card-body { overflow: visible; }
+
 .student-search { position: relative; }
 .student-results {
   position: absolute;
