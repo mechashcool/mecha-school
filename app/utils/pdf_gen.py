@@ -1232,9 +1232,9 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
     gen_reg  = ef.get('general_registry', '')
 
     title_row = [[
-        Paragraph(ar(f'رقم الصحيفة  :  {rec_num}  ............'),
+        Paragraph(ar(f'رقم الصحيفة  :  {rec_num}'),
                   ps('TL', fn, 10, 0, BLACK)),
-        Paragraph(ar(f'سجل القيد العام  :  {gen_reg}  ............'),
+        Paragraph(ar(f'سجل القيد العام  :  {gen_reg}'),
                   ps('TR', fn_b, 13, 2, NAVY)),
     ]]
     title_tbl = Table(title_row, colWidths=[AW * 0.40, AW * 0.60])
@@ -1426,7 +1426,7 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
         nc   = ync(yi)
         tc   = ytc(yi)
         GHR0[nc] = ph_(clas or YEAR_LABELS[yi])
-        GHR1[nc] = ph_(f'السنة\n{year}' if year else 'السنة\n........')
+        GHR1[nc] = ph_(f'السنة\n{year}' if year else 'السنة')
         GHR2[nc] = ph_('الدرجة')
         GHR3[tc] = ph_('رقماً', shdr_s)   # tc = higher index = more right = read first in Arabic
         GHR3[nc] = ph_('كتابة', shdr_s)   # nc = lower index = more left
