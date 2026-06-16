@@ -2900,3 +2900,46 @@ class StudentRegistrationRecord(db.Model):
 
     def __repr__(self):
         return f'<StudentRegistrationRecord {self.id} student={self.student_id}>'
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  MOBILE BADGE SYSTEM  — per-user module last-viewed timestamps
+# ═════════════════════════════════════════════════════════════════════════════
+
+class MobileModuleView(db.Model):
+    """
+    Tracks when a mobile user last opened each badge-tracked module.
+
+    One row per (user_id, module).  The badge-count endpoint counts records
+    created or meaningfully updated AFTER last_viewed_at.  When no row exists
+    for a module, the badge count for that module is 0 (new users are not
+    flooded with historical data on first login).
+
+    Module names correspond 1-to-1 with the badge keys returned by
+    GET /api/mobile/v1/me/badge-counts:
+        grades, homework, exams, attendance, fees, leave_requests, complaints
+    """
+    __tablename__ = 'mobile_module_views'
+
+    id             = db.Column(db.Integer, primary_key=True)
+    user_id        = db.Column(db.Integer,
+                               db.ForeignKey('users.id', ondelete='CASCADE'),
+                               nullable=False, index=True)
+    school_id      = db.Column(db.Integer,
+                               db.ForeignKey('schools.id', ondelete='CASCADE'),
+                               nullable=False, index=True)
+    module         = db.Column(db.String(50), nullable=False)
+    last_viewed_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    user   = db.relationship('User', foreign_keys=[user_id],
+                             backref=db.backref('module_views',
+                                                cascade='all, delete-orphan',
+                                                lazy='dynamic'))
+    school = db.relationship('School', foreign_keys=[school_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'module', name='uq_mobile_module_view'),
+    )
+
+    def __repr__(self):
+        return f'<MobileModuleView user={self.user_id} module={self.module}>'
