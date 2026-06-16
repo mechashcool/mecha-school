@@ -29,7 +29,7 @@
         {% if filter_stages %}
         <div class="col-auto">
           <label class="form-label small mb-1 text-muted">المرحلة</label>
-          <select id="f_stage" name="f_stage" class="form-select form-select-sm">
+          <select id="f_stage" name="f_stage" class="form-select form-select-sm" style="min-width:110px">
             <option value="">كل المراحل</option>
             {% for st in filter_stages %}
             <option value="{{ st }}" {% if f_stage == st %}selected{% endif %}>{{ st }}</option>
@@ -68,14 +68,17 @@
         </div>
         {% endif %}
 
-        {# Group 2: Subject (independent) #}
+        {# Group 2: Subject — JS filters this by selected Stage/Grade #}
         {% if filter_subjects %}
         <div class="col-auto">
           <label class="form-label small mb-1 text-muted">المادة</label>
           <select id="f_subject_id" name="f_subject_id" class="form-select form-select-sm" style="min-width:150px">
             <option value="">كل المواد</option>
             {% for subj in filter_subjects %}
-            <option value="{{ subj.id }}" {% if f_subject_id == subj.id %}selected{% endif %}>{{ subj.name }}</option>
+            <option value="{{ subj.id }}"
+              data-grade="{{ subj.grade_id or '' }}"
+              data-stage="{{ subj.stage or '' }}"
+              {% if f_subject_id == subj.id %}selected{% endif %}>{{ subj.name }}</option>
             {% endfor %}
           </select>
         </div>
@@ -246,15 +249,17 @@
 {% endif %}
 
 {# ── Cascade JS for filter dropdowns ─────────────────────────────────── #}
-{% if filter_grades %}
+{% if filter_grades or filter_subjects %}
 <script>
 (function () {
   var stageEl   = document.getElementById('f_stage');
   var gradeEl   = document.getElementById('f_grade_id');
   var sectionEl = document.getElementById('f_section_id');
-  if (!gradeEl) return;
+  var subjectEl = document.getElementById('f_subject_id');
+  if (!gradeEl && !subjectEl) return;
 
   function filterGrades() {
+    if (!gradeEl) { filterSubjects(); return; }
     var stage = stageEl ? stageEl.value : '';
     Array.from(gradeEl.options).forEach(function (opt) {
       if (!opt.value) return;
@@ -263,10 +268,11 @@
     var sel = gradeEl.options[gradeEl.selectedIndex];
     if (sel && sel.hidden) gradeEl.value = '';
     filterSections();
+    filterSubjects();
   }
 
   function filterSections() {
-    if (!sectionEl) return;
+    if (!sectionEl || !gradeEl) return;
     var gradeId = gradeEl.value;
     Array.from(sectionEl.options).forEach(function (opt) {
       if (!opt.value) return;
@@ -276,10 +282,77 @@
     if (sel && sel.hidden) sectionEl.value = '';
   }
 
-  if (stageEl) stageEl.addEventListener('change', filterGrades);
-  gradeEl.addEventListener('change', filterSections);
+  function filterSubjects() {
+    if (!subjectEl) return;
+    var gradeId = gradeEl ? gradeEl.value : '';
+    var stage   = stageEl ? stageEl.value : '';
+    var seenNames = {};
 
-  /* Restore cascade state on page load (when returning with active filters) */
+    /* When a grade is selected, prefer grade-specific subjects over cross-grade
+       subjects that share the same name. Build a set of names already claimed
+       by a grade-specific match so the cross-grade duplicate can be suppressed. */
+    var gradeSpecificNames = {};
+    if (gradeId) {
+      Array.from(subjectEl.options).forEach(function (opt) {
+        if (opt.value && (opt.dataset.grade || '') === gradeId) {
+          gradeSpecificNames[opt.textContent.trim()] = true;
+        }
+      });
+    }
+
+    Array.from(subjectEl.options).forEach(function (opt) {
+      if (!opt.value) return;
+      var name      = opt.textContent.trim();
+      var optGrade  = opt.dataset.grade || '';
+      var optStage  = opt.dataset.stage || '';
+
+      /* Grade match: option must belong to selected grade OR be cross-grade */
+      var gMatch = !gradeId || optGrade === gradeId || optGrade === '';
+      /* Stage match: option must belong to selected stage OR be cross-stage */
+      var sMatch = !stage   || optStage === stage   || optStage === '';
+      var visible = gMatch && sMatch;
+
+      /* When a grade is selected and a grade-specific subject exists for this
+         name, hide the cross-grade version to prevent the duplicate. */
+      if (visible && gradeId && optGrade === '' && gradeSpecificNames[name]) {
+        visible = false;
+      }
+
+      /* Final deduplication: among remaining visible options, keep only the
+         first occurrence of each display name. */
+      if (visible) {
+        if (seenNames[name]) {
+          visible = false;
+        } else {
+          seenNames[name] = true;
+        }
+      }
+
+      opt.hidden = !visible;
+    });
+
+    /* If the currently selected subject became hidden, reset to "all" */
+    var sel = subjectEl.options[subjectEl.selectedIndex];
+    if (sel && sel.value && sel.hidden) subjectEl.value = '';
+  }
+
+  /* Stage change → reset grade, then re-cascade everything */
+  if (stageEl) {
+    stageEl.addEventListener('change', function () {
+      if (gradeEl) gradeEl.value = '';
+      filterGrades();
+    });
+  }
+
+  /* Grade change → re-cascade sections and subjects */
+  if (gradeEl) {
+    gradeEl.addEventListener('change', function () {
+      filterSections();
+      filterSubjects();
+    });
+  }
+
+  /* Restore full cascade state on page load (pre-selected filter values) */
   filterGrades();
 })();
 </script>
