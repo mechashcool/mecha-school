@@ -153,8 +153,8 @@
   </div>
 
   {# Departure mode notice #}
-  <div id="departureNotice" style="display:none"
-       class="alert alert-warning d-flex align-items-center gap-2 mb-3">
+  <div id="departureNotice"
+       class="alert alert-warning d-flex d-none align-items-center gap-2 mb-3">
     <i class="bi bi-door-closed-fill" style="font-size:20px;flex-shrink:0"></i>
     <div>
       <strong>وضع الانصراف:</strong>
@@ -313,9 +313,9 @@ function renderWorkspace(data, sid, date) {
     // Departure notice
     const depNotice = document.getElementById('departureNotice');
     if (data.is_departure) {
-        depNotice.style.display = '';
+        depNotice.classList.remove('d-none');
     } else {
-        depNotice.style.display = 'none';
+        depNotice.classList.add('d-none');
     }
 
     // Set form action
