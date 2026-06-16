@@ -591,34 +591,100 @@ def gradebook_export():
 @login_required
 @permission_required('enter_grades')
 def report():
-    section_id    = request.args.get('section_id', type=int)
+    school = get_current_school()
+    year   = get_view_year(school.id) if school else None
+
+    stage_filter   = request.args.get('stage', '').strip()
+    grade_id       = request.args.get('grade_id', type=int)
+    section_id     = request.args.get('section_id', type=int)
     student_search = request.args.get('student_q', '').strip()
 
-    if _is_teacher():
-        section_ids = get_teacher_section_ids(current_user)
-        sections = Section.query.filter(Section.id.in_(section_ids)).all() if section_ids else []
-        if section_id and section_id not in section_ids:
-            section_id = None
+    # ── Base grade/section queries scoped to school + year ────────────────────
+    if school and year:
+        grades_q   = (Grade.query
+                      .filter_by(school_id=school.id, academic_year_id=year.id)
+                      .order_by(Grade.name))
+        sections_q = (Section.query
+                      .filter_by(school_id=school.id, academic_year_id=year.id)
+                      .order_by(Section.name))
     else:
-        sections = Section.query.all()
+        grades_q   = Grade.query.filter(False)
+        sections_q = Section.query.filter(False)
 
+    # ── Teacher scope: restrict to assigned sections/grades only ──────────────
+    if _is_teacher():
+        allowed_section_ids = get_teacher_section_ids(current_user)
+        if not allowed_section_ids:
+            allowed_section_ids = []
+        sections_q = sections_q.filter(Section.id.in_(allowed_section_ids))
+        teacher_grade_ids = list({
+            s.grade_id for s in sections_q.all() if s.grade_id
+        })
+        grades_q = grades_q.filter(Grade.id.in_(teacher_grade_ids))
+        # Reject any section_id the teacher is not allowed to see
+        if section_id and section_id not in allowed_section_ids:
+            section_id = None
+
+    # ── Derive distinct stages from visible grades ────────────────────────────
+    all_grades = grades_q.all()
+    stages = sorted({g.stage for g in all_grades if g.stage})
+
+    # ── Cascade: filter grades by selected stage ──────────────────────────────
+    if stage_filter:
+        grades_for_stage = [g for g in all_grades if g.stage == stage_filter]
+    else:
+        grades_for_stage = all_grades
+        grade_id    = None  # clear downstream selections when stage is blank
+        section_id  = None
+
+    # ── Cascade: filter sections by selected grade ────────────────────────────
+    grade_ids_for_stage = {g.id for g in grades_for_stage}
+    if grade_id and grade_id not in grade_ids_for_stage:
+        grade_id   = None
+        section_id = None
+
+    if grade_id:
+        sections_for_grade = sections_q.filter_by(grade_id=grade_id).all()
+    else:
+        sections_for_grade = []
+        section_id = None  # clear section when no grade is selected
+
+    # ── Validate section belongs to the selected grade ────────────────────────
+    if section_id and section_id not in {s.id for s in sections_for_grade}:
+        section_id = None
+
+    # ── Build results when a section is chosen ────────────────────────────────
     results = []
-    if section_id:
-        students_q = Student.query.filter_by(section_id=section_id, status='active')
+    if section_id and school and year:
+        students_q = Student.query.filter_by(
+            section_id=section_id,
+            school_id=school.id,
+            academic_year_id=year.id,
+            status='active',
+        )
         if student_search:
             students_q = students_q.filter(
                 Student.full_name.ilike(f'%{student_search}%') |
                 Student.student_id.ilike(f'%{student_search}%')
             )
-        students = students_q.all()
-        for s in students:
-            s_results = ExamResult.query.filter_by(student_id=s.id).all()
+        for s in students_q.all():
+            s_results = (ExamResult.query
+                         .filter_by(student_id=s.id,
+                                    school_id=school.id,
+                                    academic_year_id=year.id)
+                         .all())
             if s_results:
                 avg = sum(float(r.marks) for r in s_results) / len(s_results)
                 results.append({'student': s, 'avg': round(avg, 2),
                                 'count': len(s_results)})
         results.sort(key=lambda x: x['avg'], reverse=True)
+
     return render_template('grades/report.html',
-                           results=results, sections=sections,
+                           results=results,
+                           stages=stages,
+                           grades=grades_for_stage,
+                           sections=sections_for_grade,
+                           stage_filter=stage_filter,
+                           grade_id=grade_id,
                            section_id=section_id,
                            student_search=student_search)

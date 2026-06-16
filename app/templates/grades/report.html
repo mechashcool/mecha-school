@@ -12,33 +12,70 @@
 
 <div class="card mb-4">
   <div class="card-body py-3">
-    <form method="GET" class="row g-2 align-items-end">
-      <div class="col-md-4">
+    <form method="GET" class="row g-2 align-items-end" id="reportFilterForm">
+
+      {# ── Stage filter ───────────────────────────────────────────────────── #}
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12px">المرحلة</label>
+        <select name="stage" class="form-select"
+                onchange="document.getElementById('reportFilterForm').submit()">
+          <option value="">— كل المراحل —</option>
+          {% for s in stages %}
+          <option value="{{ s }}" {{ 'selected' if stage_filter == s }}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      {# ── Grade filter (visible only when a stage is selected) ───────────── #}
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12px">الصف</label>
+        <select name="grade_id" class="form-select"
+                {% if not stage_filter %}disabled{% endif %}
+                onchange="document.getElementById('reportFilterForm').submit()">
+          <option value="">— اختر الصف —</option>
+          {% for g in grades %}
+          <option value="{{ g.id }}" {{ 'selected' if grade_id == g.id }}>{{ g.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      {# ── Section filter (visible only when a grade is selected) ─────────── #}
+      <div class="col-md-2">
         <label class="form-label mb-1" style="font-size:12px">الشعبة</label>
-        <select name="section_id" class="form-select">
+        <select name="section_id" class="form-select"
+                {% if not grade_id %}disabled{% endif %}>
           <option value="">— اختر الشعبة —</option>
           {% for sec in sections %}
           <option value="{{ sec.id }}" {{ 'selected' if section_id == sec.id }}>
-            {{ sec.grade.name }} — شعبة {{ sec.name }}
+            شعبة {{ sec.name }}
           </option>
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-4">
+
+      {# ── Student search ─────────────────────────────────────────────────── #}
+      <div class="col-md-3">
         <label class="form-label mb-1" style="font-size:12px">اسم الطالب أو رقمه</label>
         <input type="text" name="student_q" class="form-control"
                placeholder="بحث باسم الطالب..."
-               value="{{ student_search }}">
+               value="{{ student_search }}"
+               {% if not section_id %}disabled{% endif %}>
       </div>
+
       <div class="col-md-2">
-        <button class="btn btn-primary w-100"><i class="bi bi-search me-1"></i>عرض</button>
+        <button class="btn btn-primary w-100"
+                {% if not section_id %}disabled{% endif %}>
+          <i class="bi bi-search me-1"></i>عرض
+        </button>
       </div>
+
       {% if student_search %}
-      <div class="col-md-2">
-        <a href="{{ url_for('grades.report', section_id=section_id or '') }}"
+      <div class="col-md-1">
+        <a href="{{ url_for('grades.report', stage=stage_filter, grade_id=grade_id or '', section_id=section_id or '') }}"
            class="btn btn-outline-secondary w-100">مسح</a>
       </div>
       {% endif %}
+
     </form>
   </div>
 </div>
@@ -99,6 +136,18 @@
 {% elif section_id %}
 <div class="card">
   <div class="card-body text-center text-muted py-5">لا توجد نتائج لهذه الشعبة بعد</div>
+</div>
+{% elif grade_id %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">اختر شعبة لعرض النتائج</div>
+</div>
+{% elif stage_filter %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">اختر الصف ثم الشعبة لعرض النتائج</div>
+</div>
+{% else %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">اختر المرحلة والصف والشعبة لعرض النتائج</div>
 </div>
 {% endif %}
 {% endblock %}
