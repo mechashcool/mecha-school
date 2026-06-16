@@ -3,6 +3,20 @@
 {% block page_title %}كشف الدرجات الشامل{% endblock %}
 
 {% block content %}
+{# ── Print-only header (hidden on screen) ── #}
+<div class="print-header" style="display:none">
+  <div class="print-school-name">{{ school.school_name_ar or school.school_name if school else '' }}</div>
+  <div class="print-report-title">كشف الدرجات الشامل</div>
+  <div class="print-meta">
+    {% if active_year %}<span>العام الدراسي: {{ active_year.name }}</span>{% endif %}
+    <span>تاريخ الطباعة: <span class="js-print-date"></span></span>
+  </div>
+</div>
+<script>
+document.querySelectorAll('.js-print-date').forEach(function(el){
+  el.textContent = new Date().toLocaleDateString('ar-SA', {year:'numeric',month:'long',day:'numeric'});
+});
+</script>
 <style>
   .gradebook-wrap { overflow-x: auto; }
   .gradebook-table { border-collapse: separate; border-spacing: 0; min-width: 100%; }
@@ -44,8 +58,101 @@
   .exam-col-header { text-align:center; min-width:100px; }
   .exam-col-header small { display:block; font-weight:400; opacity:.8; font-size:11px; margin-top:2px; }
   @media print {
-    .page-header .d-flex, .card.mb-4 { display:none !important; }
-    .gradebook-table thead th, .gradebook-table tbody td.col-fixed { position: static; }
+    /* ── Hide all chrome ── */
+    #sidebar, #sidebar-overlay, #topbar,
+    .page-header .d-flex,
+    .card.mb-4,
+    .row.g-3.mb-4,
+    .btn, a.btn,
+    #flash-container { display: none !important; }
+
+    /* ── Reset page shell ── */
+    body { background: #fff !important; font-family: 'Cairo', 'Tajawal', sans-serif !important; color: #000 !important; }
+    #main-content { margin: 0 !important; padding: 0 !important; }
+    * { box-shadow: none !important; }
+
+    /* ── Print header ── */
+    .print-header {
+      display: block !important;
+      text-align: center;
+      border-bottom: 3px double #1a3a5c;
+      padding-bottom: 12pt;
+      margin-bottom: 16pt;
+    }
+    .print-header .print-school-name { font-size: 18pt; font-weight: 900; color: #1a3a5c; margin: 0 0 4pt; }
+    .print-header .print-report-title { font-size: 14pt; font-weight: 700; color: #333; margin: 0 0 4pt; }
+    .print-header .print-meta { font-size: 9pt; color: #555; display: flex; justify-content: center; gap: 24pt; flex-wrap: wrap; }
+
+    /* ── Page layout ── */
+    @page { size: A4 landscape; margin: 12mm 10mm; }
+    .page-header { margin-bottom: 8pt !important; }
+    .page-title { font-size: 13pt !important; font-weight: 800 !important; }
+
+    /* ── Card ── */
+    .card { border: none !important; border-radius: 0 !important; background: #fff !important; }
+
+    /* ── Gradebook table: un-stick everything ── */
+    .gradebook-wrap { overflow: visible !important; }
+    .gradebook-table { min-width: unset !important; width: 100% !important; border-collapse: collapse !important; font-size: 8pt !important; }
+
+    .gradebook-table thead th,
+    .gradebook-table thead th.col-fixed,
+    .gradebook-table tbody td.col-fixed {
+      position: static !important;
+    }
+
+    .gradebook-table thead th {
+      background: #1a3a5c !important;
+      color: #fff !important;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+      border: 1px solid #0f2440 !important;
+      padding: 5pt 6pt !important;
+      font-size: 8pt !important;
+      font-weight: 700 !important;
+      white-space: normal !important;
+    }
+    .gradebook-table thead th.col-avg { background: #1a5c3a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+    .gradebook-table tbody td {
+      border: 1px solid #bbb !important;
+      padding: 4pt 5pt !important;
+      font-size: 8pt !important;
+      vertical-align: middle !important;
+      background: #fff !important;
+    }
+    .gradebook-table tbody tr:nth-child(even) td {
+      background: #f5f7fa !important;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .gradebook-table tbody tr:hover td { background: inherit !important; }
+
+    /* Pass/fail cell colouring preserved */
+    .mark-pass {
+      background: #e0f5ea !important;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+      color: #0a6640 !important;
+    }
+    .mark-fail {
+      background: #fde8e8 !important;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+      color: #8b1a1a !important;
+    }
+    .avg-pass { background: #e0f5ea !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; color: #0a6640 !important; }
+    .avg-fail { background: #fde8e8 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; color: #8b1a1a !important; }
+    .mark-empty { color: #888 !important; }
+
+    /* Inline badge in mark cells */
+    .badge { font-size: 7pt !important; border: 1px solid currentColor !important; background: transparent !important; padding: 0 3pt !important; }
+
+    /* Student ID codes */
+    code { font-size: 7.5pt !important; background: transparent !important; border: none !important; }
+
+    /* Exam column header sub-text */
+    .exam-col-header small { font-size: 7pt !important; opacity: 1 !important; }
   }
 </style>
 

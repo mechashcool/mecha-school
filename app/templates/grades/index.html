@@ -2,7 +2,154 @@
 {% block title %}الدرجات والاختبارات{% endblock %}
 {% block page_title %}الدرجات والاختبارات{% endblock %}
 
+{% block extra_css %}
+<style>
+@media print {
+  /* ── Hide all chrome ── */
+  #sidebar, #sidebar-overlay, #topbar,
+  .page-header .d-flex,
+  .card.mb-4,
+  .btn, a.btn,
+  .breadcrumb,
+  #flash-container { display: none !important; }
+
+  /* ── Reset page shell ── */
+  body { background: #fff !important; font-family: 'Cairo', 'Tajawal', sans-serif !important; color: #000 !important; }
+  #main-content { margin: 0 !important; padding: 0 !important; }
+  * { box-shadow: none !important; }
+
+  /* ── Print header ── */
+  .print-header {
+    display: block !important;
+    text-align: center;
+    border-bottom: 3px double #1a3a5c;
+    padding-bottom: 12pt;
+    margin-bottom: 16pt;
+  }
+  .print-header .print-school-name {
+    font-size: 18pt; font-weight: 900; color: #1a3a5c;
+    margin: 0 0 4pt;
+  }
+  .print-header .print-report-title {
+    font-size: 14pt; font-weight: 700; color: #333;
+    margin: 0 0 4pt;
+  }
+  .print-header .print-meta {
+    font-size: 9pt; color: #555;
+    display: flex; justify-content: center; gap: 24pt;
+  }
+
+  /* ── Page layout ── */
+  @page { size: A4 landscape; margin: 15mm 12mm; }
+  .page-header { margin-bottom: 10pt !important; }
+  .page-title { font-size: 14pt !important; font-weight: 800 !important; }
+
+  /* ── Cards ── */
+  .card {
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: #fff !important;
+    break-inside: auto;
+  }
+  .card-header {
+    background: #1a3a5c !important;
+    color: #fff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    border-radius: 0 !important;
+    padding: 8pt 10pt !important;
+    font-size: 11pt !important;
+  }
+  .card-header .badge { background: rgba(255,255,255,.2) !important; color: #fff !important; }
+
+  /* ── Tables ── */
+  .table-wrapper { border: none !important; overflow: visible !important; }
+  .table { font-size: 9pt !important; width: 100% !important; border-collapse: collapse !important; }
+  .table thead th {
+    background: #1a3a5c !important;
+    color: #fff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    border: 1px solid #0f2440 !important;
+    padding: 6pt 8pt !important;
+    font-size: 9pt !important;
+    font-weight: 700 !important;
+  }
+  .table tbody td {
+    border: 1px solid #bbb !important;
+    padding: 5pt 7pt !important;
+    vertical-align: middle !important;
+  }
+  .table tbody tr:nth-child(even) td {
+    background: #f5f7fa !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .table tbody tr:hover td { background: inherit !important; }
+
+  /* ── Badges & status ── */
+  .badge {
+    border: 1px solid #999 !important;
+    background: transparent !important;
+    color: #000 !important;
+    font-size: 8pt !important;
+    padding: 1pt 4pt !important;
+  }
+  .badge-status {
+    border: 1px solid currentColor !important;
+    background: transparent !important;
+    font-size: 8pt !important;
+    padding: 1pt 5pt !important;
+  }
+  /* Keep pass/fail colours meaningful on print */
+  .badge-active { color: #0a6640 !important; border-color: #0a6640 !important; }
+  .badge-inactive { color: #8b1a1a !important; border-color: #8b1a1a !important; }
+
+  /* Marks: keep semantic colour */
+  span[style*="#1aab6d"] { color: #0a6640 !important; }
+  span[style*="#e03e3e"] { color: #8b1a1a !important; }
+
+  /* ── Inline code (student IDs) ── */
+  code { font-size: 8pt !important; background: transparent !important; border: none !important; }
+
+  /* ── Empty state icons ── */
+  .bi { font-size: inherit !important; }
+  td .bi[style*="font-size:36px"] { display: none !important; }
+
+  /* ── Print footer via CSS counter ── */
+  @page {
+    @bottom-center {
+      content: "صفحة " counter(page) " من " counter(pages);
+      font-size: 8pt; color: #666;
+      font-family: 'Cairo', sans-serif;
+    }
+    @bottom-right {
+      content: "{{ school.school_name if school else '' }}";
+      font-size: 8pt; color: #666;
+    }
+  }
+}
+</style>
+{% endblock %}
+
 {% block content %}
+{# ── Print-only header (hidden on screen) ── #}
+<div class="print-header" style="display:none">
+  <div class="print-school-name">{{ school.school_name_ar or school.school_name if school else '' }}</div>
+  <div class="print-report-title">
+    {% if results_view is not none %}تقرير نتائج الطلاب{% else %}قائمة الاختبارات{% endif %}
+  </div>
+  <div class="print-meta">
+    {% if active_year %}<span>العام الدراسي: {{ active_year.name }}</span>{% endif %}
+    <span>تاريخ الطباعة: <span class="js-print-date"></span></span>
+  </div>
+</div>
+<script>
+document.querySelectorAll('.js-print-date').forEach(function(el){
+  el.textContent = new Date().toLocaleDateString('ar-SA', {year:'numeric',month:'long',day:'numeric'});
+});
+</script>
 <div class="page-header">
   <div><h1 class="page-title">الاختبارات والدرجات</h1></div>
   <div class="d-flex gap-2">

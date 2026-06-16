@@ -2,12 +2,127 @@
 {% block title %}تقرير الدرجات{% endblock %}
 {% block page_title %}تقرير الدرجات{% endblock %}
 
+{% block extra_css %}
+<style>
+@media print {
+  /* ── Hide all chrome ── */
+  #sidebar, #sidebar-overlay, #topbar,
+  .page-header .d-flex,
+  .card.filters-card,
+  .btn, a.btn,
+  #flash-container { display: none !important; }
+
+  /* ── Reset page shell ── */
+  body { background: #fff !important; font-family: 'Cairo', 'Tajawal', sans-serif !important; color: #000 !important; }
+  #main-content { margin: 0 !important; padding: 0 !important; }
+  * { box-shadow: none !important; }
+
+  /* ── Print header ── */
+  .print-header {
+    display: block !important;
+    text-align: center;
+    border-bottom: 3px double #1a3a5c;
+    padding-bottom: 12pt;
+    margin-bottom: 16pt;
+  }
+  .print-header .print-school-name { font-size: 18pt; font-weight: 900; color: #1a3a5c; margin: 0 0 4pt; }
+  .print-header .print-report-title { font-size: 14pt; font-weight: 700; color: #333; margin: 0 0 4pt; }
+  .print-header .print-meta { font-size: 9pt; color: #555; display: flex; justify-content: center; gap: 24pt; flex-wrap: wrap; }
+
+  /* ── Page layout ── */
+  @page { size: A4 portrait; margin: 18mm 15mm; }
+  .page-header { margin-bottom: 10pt !important; }
+  .page-title { font-size: 13pt !important; font-weight: 800 !important; }
+
+  /* ── Cards ── */
+  .card { border: none !important; border-radius: 0 !important; background: #fff !important; }
+  .card-header {
+    background: #1a3a5c !important;
+    color: #fff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    border-radius: 0 !important;
+    padding: 8pt 10pt !important;
+    font-size: 11pt !important;
+  }
+  .card-header .badge { background: rgba(255,255,255,.2) !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  /* ── Tables ── */
+  .table-wrapper { border: none !important; overflow: visible !important; }
+  .table { font-size: 10pt !important; width: 100% !important; border-collapse: collapse !important; }
+  .table thead th {
+    background: #1a3a5c !important;
+    color: #fff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    border: 1px solid #0f2440 !important;
+    padding: 6pt 8pt !important;
+    font-size: 10pt !important;
+    font-weight: 700 !important;
+  }
+  .table tbody td {
+    border: 1px solid #bbb !important;
+    padding: 6pt 8pt !important;
+    vertical-align: middle !important;
+  }
+  .table tbody tr:nth-child(even) td {
+    background: #f5f7fa !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Grade letter badges */
+  .badge {
+    border: 1px solid currentColor !important;
+    background: transparent !important;
+    font-size: 9pt !important;
+    padding: 1pt 5pt !important;
+    font-weight: 700 !important;
+  }
+
+  /* Average colour preserved */
+  span[style*="#1aab6d"] { color: #0a6640 !important; }
+  span[style*="#e8a020"] { color: #7a4a00 !important; }
+  span[style*="#e03e3e"] { color: #8b1a1a !important; }
+
+  code { font-size: 9pt !important; background: transparent !important; border: none !important; }
+}
+</style>
+{% endblock %}
+
 {% block content %}
+{# ── Print-only header (hidden on screen) ── #}
+<div class="print-header" style="display:none">
+  <div class="print-school-name">{{ school.school_name_ar or school.school_name if school else '' }}</div>
+  <div class="print-report-title">
+    تقرير الدرجات
+    {% if selected_student_obj %} — {{ selected_student_obj.full_name }}{% endif %}
+  </div>
+  <div class="print-meta">
+    {% if selected_student_obj and selected_student_obj.section %}
+    <span>الصف: {{ selected_student_obj.section.grade.name }} / شعبة {{ selected_student_obj.section.name }}</span>
+    {% endif %}
+    {% if active_year %}<span>العام الدراسي: {{ active_year.name }}</span>{% endif %}
+    <span>تاريخ الطباعة: <span class="js-print-date"></span></span>
+  </div>
+</div>
+<script>
+document.querySelectorAll('.js-print-date').forEach(function(el){
+  el.textContent = new Date().toLocaleDateString('ar-SA', {year:'numeric',month:'long',day:'numeric'});
+});
+</script>
 <div class="page-header">
   <div><h1 class="page-title">تقرير الدرجات</h1></div>
-  <a href="{{ url_for('grades.index') }}" class="btn btn-outline-secondary">
-    <i class="bi bi-arrow-right me-1"></i>رجوع
-  </a>
+  <div class="d-flex gap-2">
+    {% if selected_student_id %}
+    <button type="button" class="btn btn-outline-secondary" onclick="window.print()">
+      <i class="bi bi-printer-fill me-1"></i>طباعة
+    </button>
+    {% endif %}
+    <a href="{{ url_for('grades.index') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>رجوع
+    </a>
+  </div>
 </div>
 
 <div class="card filters-card mb-4">
