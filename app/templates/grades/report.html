@@ -14,7 +14,7 @@
   <div class="card-body py-3">
     <form method="GET" class="row g-2 align-items-end" id="reportFilterForm">
 
-      {# ── Stage filter ───────────────────────────────────────────────────── #}
+      {# ── Stage ──────────────────────────────────────────────────────────── #}
       <div class="col-md-2">
         <label class="form-label mb-1" style="font-size:12px">المرحلة</label>
         <select name="stage" class="form-select"
@@ -26,7 +26,7 @@
         </select>
       </div>
 
-      {# ── Grade filter (visible only when a stage is selected) ───────────── #}
+      {# ── Grade ──────────────────────────────────────────────────────────── #}
       <div class="col-md-2">
         <label class="form-label mb-1" style="font-size:12px">الصف</label>
         <select name="grade_id" class="form-select"
@@ -39,11 +39,12 @@
         </select>
       </div>
 
-      {# ── Section filter (visible only when a grade is selected) ─────────── #}
+      {# ── Section ─────────────────────────────────────────────────────────── #}
       <div class="col-md-2">
         <label class="form-label mb-1" style="font-size:12px">الشعبة</label>
         <select name="section_id" class="form-select"
-                {% if not grade_id %}disabled{% endif %}>
+                {% if not grade_id %}disabled{% endif %}
+                onchange="document.getElementById('reportFilterForm').submit()">
           <option value="">— اختر الشعبة —</option>
           {% for sec in sections %}
           <option value="{{ sec.id }}" {{ 'selected' if section_id == sec.id }}>
@@ -53,26 +54,40 @@
         </select>
       </div>
 
-      {# ── Student search ─────────────────────────────────────────────────── #}
+      {# ── Student dropdown (populated once a section is selected) ────────── #}
       <div class="col-md-3">
-        <label class="form-label mb-1" style="font-size:12px">اسم الطالب أو رقمه</label>
-        <input type="text" name="student_q" class="form-control"
-               placeholder="بحث باسم الطالب..."
-               value="{{ student_search }}"
-               {% if not section_id %}disabled{% endif %}>
+        <label class="form-label mb-1" style="font-size:12px">الطالب</label>
+        {% if section_id and section_students %}
+        <select name="student_id" class="form-select"
+                onchange="document.getElementById('reportFilterForm').submit()">
+          <option value="">— كل الطلاب —</option>
+          {% for st in section_students %}
+          <option value="{{ st.id }}"
+                  {{ 'selected' if selected_student == st.id }}>
+            {{ st.full_name }}
+            {% if st.student_id %} — {{ st.student_id }}{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+        {% else %}
+        <select class="form-select" disabled>
+          <option value="">— اختر الشعبة أولاً —</option>
+        </select>
+        {% endif %}
       </div>
 
       <div class="col-md-2">
-        <button class="btn btn-primary w-100"
-                {% if not section_id %}disabled{% endif %}>
+        <button class="btn btn-primary w-100" {% if not section_id %}disabled{% endif %}>
           <i class="bi bi-search me-1"></i>عرض
         </button>
       </div>
 
-      {% if student_search %}
+      {% if selected_student %}
       <div class="col-md-1">
         <a href="{{ url_for('grades.report', stage=stage_filter, grade_id=grade_id or '', section_id=section_id or '') }}"
-           class="btn btn-outline-secondary w-100">مسح</a>
+           class="btn btn-outline-secondary w-100" title="عرض كل الطلاب">
+          <i class="bi bi-x-lg"></i>
+        </a>
       </div>
       {% endif %}
 
@@ -84,7 +99,11 @@
 <div class="card">
   <div class="card-header">
     <i class="bi bi-bar-chart-fill text-accent"></i>
-    نتائج الشعبة المختارة ({{ results|length }} طالب)
+    {% if selected_student %}
+      نتيجة الطالب المختار
+    {% else %}
+      نتائج الشعبة المختارة ({{ results|length }} طالب)
+    {% endif %}
   </div>
   <div class="table-wrapper">
     <table class="table">
@@ -98,11 +117,11 @@
         {% for r in results %}
         <tr>
           <td>
-            {% if loop.index == 1 %}
+            {% if loop.index == 1 and not selected_student %}
             <span style="font-size:18px">🥇</span>
-            {% elif loop.index == 2 %}
+            {% elif loop.index == 2 and not selected_student %}
             <span style="font-size:18px">🥈</span>
-            {% elif loop.index == 3 %}
+            {% elif loop.index == 3 and not selected_student %}
             <span style="font-size:18px">🥉</span>
             {% else %}
             <span class="text-muted">{{ loop.index }}</span>

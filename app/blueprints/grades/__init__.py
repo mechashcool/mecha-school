@@ -594,10 +594,10 @@ def report():
     school = get_current_school()
     year   = get_view_year(school.id) if school else None
 
-    stage_filter   = request.args.get('stage', '').strip()
-    grade_id       = request.args.get('grade_id', type=int)
-    section_id     = request.args.get('section_id', type=int)
-    student_search = request.args.get('student_q', '').strip()
+    stage_filter      = request.args.get('stage', '').strip()
+    grade_id          = request.args.get('grade_id', type=int)
+    section_id        = request.args.get('section_id', type=int)
+    selected_student  = request.args.get('student_id', type=int)  # 0 / absent = all
 
     # ── Base grade/section queries scoped to school + year ────────────────────
     if school and year:
@@ -653,21 +653,31 @@ def report():
     if section_id and section_id not in {s.id for s in sections_for_grade}:
         section_id = None
 
-    # ── Build results when a section is chosen ────────────────────────────────
+    # ── Load students for the selected section (for the dropdown) ────────────
+    section_students = []
+    if section_id and school and year:
+        section_students = (Student.query
+                            .filter_by(section_id=section_id,
+                                       school_id=school.id,
+                                       academic_year_id=year.id,
+                                       status='active')
+                            .order_by(Student.full_name)
+                            .all())
+
+    # Validate selected_student belongs to this section
+    section_student_ids = {s.id for s in section_students}
+    if selected_student and selected_student not in section_student_ids:
+        selected_student = None
+
+    # ── Build results ─────────────────────────────────────────────────────────
     results = []
     if section_id and school and year:
-        students_q = Student.query.filter_by(
-            section_id=section_id,
-            school_id=school.id,
-            academic_year_id=year.id,
-            status='active',
+        students_to_process = (
+            [s for s in section_students if s.id == selected_student]
+            if selected_student
+            else section_students
         )
-        if student_search:
-            students_q = students_q.filter(
-                Student.full_name.ilike(f'%{student_search}%') |
-                Student.student_id.ilike(f'%{student_search}%')
-            )
-        for s in students_q.all():
+        for s in students_to_process:
             s_results = (ExamResult.query
                          .filter_by(student_id=s.id,
                                     school_id=school.id,
@@ -684,7 +694,8 @@ def report():
                            stages=stages,
                            grades=grades_for_stage,
                            sections=sections_for_grade,
+                           section_students=section_students,
                            stage_filter=stage_filter,
                            grade_id=grade_id,
                            section_id=section_id,
-                           student_search=student_search)
+                           selected_student=selected_student)
