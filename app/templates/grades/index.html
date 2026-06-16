@@ -4,6 +4,7 @@
 
 {% block extra_css %}
 <style>
+.print-only { display: none; }
 @media print {
   /* ── Hide all chrome ── */
   #sidebar, #sidebar-overlay, #topbar,
@@ -112,6 +113,10 @@
 
   /* ── Inline code (student IDs) ── */
   code { font-size: 8pt !important; background: transparent !important; border: none !important; }
+
+  /* ── Show/hide per-context spans within shared cells ── */
+  .no-print { display: none !important; }
+  .print-only { display: inline !important; }
 
   /* ── Empty state icons ── */
   .bi { font-size: inherit !important; }
@@ -311,7 +316,7 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
       <thead>
         <tr>
           <th>اسم الاختبار</th><th>الفئة</th><th>المادة</th><th>الصف / الشعبة</th>
-          <th>التاريخ</th><th>الدرجة العظمى</th><th>درجة النجاح</th><th>عدد النتائج</th><th>الإجراءات</th>
+          <th>التاريخ</th><th>الدرجة العظمى</th><th>درجة النجاح</th><th>عدد النتائج</th><th><span class="no-print">الإجراءات</span><span class="print-only">نسبة النجاح</span></th>
         </tr>
       </thead>
       <tbody>
@@ -336,14 +341,28 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
             <span class="badge-status badge-active">{{ exam.results.count() }}</span>
           </td>
           <td>
-            {% if not is_historical_year %}
-            <a href="{{ url_for('grades.enter_results', exam_id=exam.id) }}"
-               class="btn btn-sm btn-outline-primary">
-              <i class="bi bi-pencil-square me-1"></i>إدخال الدرجات
-            </a>
-            {% else %}
-            <span class="text-muted" style="font-size:12px">للعرض فقط</span>
-            {% endif %}
+            {# Screen: action button; Print: pass rate percentage #}
+            <span class="no-print">
+              {% if not is_historical_year %}
+              <a href="{{ url_for('grades.enter_results', exam_id=exam.id) }}"
+                 class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-pencil-square me-1"></i>إدخال الدرجات
+              </a>
+              {% else %}
+              <span class="text-muted" style="font-size:12px">للعرض فقط</span>
+              {% endif %}
+            </span>
+            <span class="print-only">
+              {% set total = exam.results.count() %}
+              {% if total > 0 %}
+                {% set passed = exam.results.filter_by(is_pass=True).count() %}
+                {% set pct = (passed / total * 100) | round(1) %}
+                <span style="font-weight:700;color:{% if pct >= 50 %}#0a6640{% else %}#8b1a1a{% endif %}">{{ pct }}%</span>
+                <span style="font-size:8pt;color:#555">({{ passed }}/{{ total }})</span>
+              {% else %}
+                <span style="color:#888">—</span>
+              {% endif %}
+            </span>
           </td>
         </tr>
         {% else %}
