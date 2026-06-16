@@ -2161,9 +2161,18 @@ def attendance_settings():
             if not s or not s.strip():
                 return None
             try:
-                h, m = map(int, s.strip().split(':')[:2])
+                upper = s.strip().upper()
+                is_pm = 'PM' in upper
+                is_am = 'AM' in upper
+                cleaned = upper.replace('AM', '').replace('PM', '').strip()
+                parts = cleaned.split(':')[:2]
+                h, m = int(parts[0]), int(parts[1])
+                if is_pm and h != 12:
+                    h += 12
+                elif is_am and h == 12:
+                    h = 0
                 return _time(h, m)
-            except (ValueError, AttributeError):
+            except (ValueError, AttributeError, IndexError):
                 return None
 
         settings_row.att_start_time        = _parse_time(request.form.get('att_start_time', ''))
