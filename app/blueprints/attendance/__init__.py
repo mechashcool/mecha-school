@@ -337,6 +337,145 @@ def index():
                            auto_absent_count_sel=auto_absent_count_sel)
 
 
+@attendance_bp.route('/manual')
+@login_required
+@permission_required('take_attendance')
+def manual():
+    """New cascading attendance workspace: Stage → Grade → Section → students."""
+    school   = get_current_school()
+    settings = _get_settings()
+    today    = get_local_date(settings)
+
+    if _is_teacher():
+        section_ids = get_teacher_section_ids(current_user)
+        sections_qs = (Section.query
+                       .filter(Section.id.in_(section_ids)).all()
+                       if section_ids else [])
+        teacher_grade_ids = list({s.grade_id for s in sections_qs if s.grade_id})
+        all_grades = (Grade.query
+                      .filter(Grade.id.in_(teacher_grade_ids))
+                      .order_by(Grade.name).all()
+                      if teacher_grade_ids else [])
+    else:
+        year = get_view_year(school.id) if school else None
+        if school and year:
+            all_grades  = Grade.query.filter_by(academic_year_id=year.id).order_by(Grade.name).all()
+            grade_ids   = [g.id for g in all_grades]
+            sections_qs = (Section.query
+                           .filter(Section.grade_id.in_(grade_ids)).all()
+                           if grade_ids else [])
+        else:
+            all_grades  = Grade.query.order_by(Grade.name).all()
+            sections_qs = Section.query.all()
+
+    grade_data   = [{'id': g.id, 'name': g.name, 'stage': g.stage or ''} for g in all_grades]
+    section_data = [{'id': s.id, 'name': s.name, 'grade_id': s.grade_id} for s in sections_qs]
+
+    return render_template('attendance/manual.html',
+                           all_grades=all_grades,
+                           all_sections=sections_qs,
+                           grade_data=grade_data,
+                           section_data=section_data,
+                           today=today,
+                           settings=settings)
+
+
+@attendance_bp.route('/manual/students')
+@login_required
+@permission_required('take_attendance')
+def manual_students():
+    """AJAX: return student list with existing attendance for a section/date."""
+    from flask import jsonify
+    from app.utils.helpers import resolve_photo_url
+
+    school     = get_current_school()
+    settings   = _get_settings()
+    section_id = request.args.get('section_id', type=int)
+    date_str   = request.args.get('date', '')
+
+    if not section_id:
+        return jsonify({'error': 'section_id required'}), 400
+
+    # ORM tenant scope ensures this section belongs to the current school.
+    section = Section.query.get_or_404(section_id)
+
+    if _is_teacher() and section_id not in get_teacher_section_ids(current_user):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    local_now = get_local_now(settings)
+    if date_str:
+        try:
+            att_date = dt.strptime(date_str, '%Y-%m-%d').date()
+        except ValueError:
+            att_date = local_now.date()
+    else:
+        att_date = local_now.date()
+
+    departure_time = getattr(settings, 'att_departure_time', None)
+    now_time = local_now.time().replace(microsecond=0)
+    is_departure = (
+        att_date == local_now.date()
+        and departure_time is not None
+        and now_time >= departure_time
+    )
+
+    students = (Student.query
+                .execution_options(include_all_years=True)
+                .filter_by(section_id=section_id, status='active')
+                .order_by(Student.full_name)
+                .all())
+
+    s_ids = [s.id for s in students]
+
+    existing = {}
+    if s_ids:
+        for a in (StudentAttendance.query
+                  .filter_by(date=att_date)
+                  .filter(StudentAttendance.student_id.in_(s_ids))
+                  .all()):
+            existing[a.student_id] = a
+
+    suspended_ids = set()
+    if s_ids:
+        suspended_ids = {
+            row.student_id for row in
+            StudentSuspension.query
+                .filter(StudentSuspension.student_id.in_(s_ids),
+                        StudentSuspension.start_date <= att_date,
+                        StudentSuspension.end_date   >= att_date)
+                .with_entities(StudentSuspension.student_id)
+                .all()
+        }
+
+    result = []
+    for s in students:
+        rec    = existing.get(s.id)
+        locked = rec is not None and rec.check_in is not None
+        photo  = resolve_photo_url(getattr(s, 'photo', None))
+        result.append({
+            'id':           s.id,
+            'full_name':    s.full_name,
+            'student_id':   s.student_id,
+            'photo_url':    photo,
+            'is_suspended': s.id in suspended_ids,
+            'locked':       locked,
+            'existing': {
+                'status':    rec.status,
+                'check_in':  rec.check_in.strftime('%H:%M')  if rec.check_in  else None,
+                'check_out': rec.check_out.strftime('%H:%M') if rec.check_out else None,
+                'source':    rec.source,
+            } if rec else None,
+        })
+
+    return jsonify({
+        'students':     result,
+        'is_departure': is_departure,
+        'section_name': section.name,
+        'grade_name':   section.grade.name if section.grade else '',
+        'total':        len(result),
+    })
+
+
 @attendance_bp.route('/take/<int:section_id>', methods=['GET', 'POST'])
 @login_required
 @historical_guard
@@ -518,6 +657,11 @@ def take(section_id):
             flash(f'تم تسجيل انصراف {len(newly_checked_out)} طالب الساعة {departure_str}.', 'success')
         else:
             flash(f'تم حفظ الحضور ليوم {att_date.strftime("%Y-%m-%d")}.', 'success')
+
+        if request.form.get('_from') == 'manual':
+            return redirect(url_for('attendance.manual',
+                                    section_id=section_id,
+                                    date=att_date.isoformat()))
         return redirect(url_for('attendance.index'))
 
     return render_template('attendance/take.html',

@@ -1,0 +1,502 @@
+{% extends "shared/base.html" %}
+{% block title %}تسجيل الحضور يدوياً{% endblock %}
+{% block page_title %}تسجيل الحضور يدوياً{% endblock %}
+
+{% block extra_css %}
+<style>
+/* ── Attendance status buttons ─────────────────────────────────────── */
+.att-card { border-radius: 12px; transition: box-shadow .15s; }
+.att-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.1); }
+.att-card.is-locked  { opacity: .55; }
+.att-card.is-suspended { border-right: 4px solid #e8a020; }
+
+.att-avatar {
+  width: 44px; height: 44px; border-radius: 10px;
+  object-fit: cover; flex-shrink: 0;
+  background: #1a3a5c;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; color: #fff;
+  overflow: hidden;
+}
+.att-avatar img { width: 100%; height: 100%; object-fit: cover; }
+
+.att-status-btn {
+  flex: 1; font-size: 12px; font-weight: 700;
+  padding: 5px 4px; border-radius: 6px !important;
+  transition: all .15s;
+}
+.att-status-btn.active-present { background: #1aab6d !important; color: #fff !important; border-color: #1aab6d !important; }
+.att-status-btn.active-absent  { background: #e03e3e !important; color: #fff !important; border-color: #e03e3e !important; }
+.att-status-btn.active-late    { background: #e8a020 !important; color: #fff !important; border-color: #e8a020 !important; }
+
+.save-bar {
+  position: sticky; bottom: 0; z-index: 90;
+  background: rgba(255,255,255,.97);
+  border-top: 2px solid #e8edf2;
+  padding: 10px 16px;
+  backdrop-filter: blur(8px);
+  border-radius: 0 0 12px 12px;
+  margin-top: 16px;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">تسجيل الحضور يدوياً</h1>
+    <p class="page-subtitle">اختر الشعبة ثم سجّل الحضور</p>
+  </div>
+  <a href="{{ url_for('attendance.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>الحضور والغياب
+  </a>
+</div>
+
+{% if is_historical_year %}
+<div class="alert alert-warning d-flex align-items-center gap-2 mb-4">
+  <i class="bi bi-lock-fill" style="font-size:20px;flex-shrink:0"></i>
+  <div>
+    <strong>وضع العرض فقط</strong> — أنت تشاهد سنة دراسية مؤرشفة. لا يمكن تسجيل الحضور.
+  </div>
+</div>
+{% endif %}
+
+{# ── Selection card ───────────────────────────────────────────────── #}
+<div class="card mb-4">
+  <div class="card-header">
+    <i class="bi bi-filter-square-fill text-accent me-1"></i>
+    اختيار الشعبة
+  </div>
+  <div class="card-body">
+    <div class="row g-3 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label fw-600">المرحلة الدراسية</label>
+        <select id="stageSelect" class="form-select">
+          <option value="">كل المراحل</option>
+          {%- set seen = [] -%}
+          {% for g in all_grades %}{% if g.stage and g.stage not in seen %}{% if seen.append(g.stage) %}{% endif %}
+          <option value="{{ g.stage }}">{{ g.stage }}</option>
+          {% endif %}{% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label fw-600">الصف <span class="text-danger">*</span></label>
+        <select id="gradeSelect" class="form-select">
+          <option value="">— اختر الصف —</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label fw-600">الشعبة <span class="text-danger">*</span></label>
+        <select id="sectionSelect" class="form-select">
+          <option value="">— اختر الشعبة —</option>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label fw-600">التاريخ</label>
+        <input type="date" id="dateInput" class="form-control"
+               value="{{ today.isoformat() }}"
+               max="{{ today.isoformat() }}">
+      </div>
+      <div class="col-md-1">
+        <button type="button" id="loadBtn" class="btn btn-primary w-100" disabled>
+          <i class="bi bi-arrow-down-circle-fill me-1"></i>تحميل
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Loading indicator ────────────────────────────────────────────── #}
+<div id="loadingArea" style="display:none;text-align:center;padding:48px">
+  <div class="spinner-border text-primary" role="status"></div>
+  <p class="text-muted mt-3">جاري تحميل بيانات الطلاب…</p>
+</div>
+
+{# ── Error area ───────────────────────────────────────────────────── #}
+<div id="errorArea" style="display:none"></div>
+
+{# ── Workspace (filled by JS) ─────────────────────────────────────── #}
+<div id="workspace" style="display:none">
+
+  {# Info bar #}
+  <div class="card mb-3">
+    <div class="card-body py-2 d-flex align-items-center justify-content-between flex-wrap gap-2">
+      <div>
+        <strong id="wsTitle" style="font-size:16px"></strong>
+        <span class="text-muted ms-2" style="font-size:13px" id="wsDate"></span>
+      </div>
+      <div class="d-flex gap-3 align-items-center flex-wrap">
+        <span class="fw-600" style="font-size:13px;color:#1aab6d">
+          <i class="bi bi-check-circle-fill me-1"></i>حاضر: <b id="cntP">0</b>
+        </span>
+        <span class="fw-600" style="font-size:13px;color:#e03e3e">
+          <i class="bi bi-x-circle-fill me-1"></i>غائب: <b id="cntA">0</b>
+        </span>
+        <span class="fw-600" style="font-size:13px;color:#e8a020">
+          <i class="bi bi-clock-fill me-1"></i>متأخر: <b id="cntL">0</b>
+        </span>
+        <span class="text-muted" style="font-size:12px">
+          الإجمالي: <b id="cntTot">0</b>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  {# Toolbar #}
+  <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+    <button type="button" id="markAllPresent" class="btn btn-outline-success btn-sm">
+      <i class="bi bi-check-all me-1"></i>تحديد الجميع حاضر
+    </button>
+    <button type="button" id="markAllAbsent" class="btn btn-outline-danger btn-sm">
+      <i class="bi bi-x-circle me-1"></i>تحديد الجميع غائب
+    </button>
+  </div>
+
+  {# Departure mode notice #}
+  <div id="departureNotice" style="display:none"
+       class="alert alert-warning d-flex align-items-center gap-2 mb-3">
+    <i class="bi bi-door-closed-fill" style="font-size:20px;flex-shrink:0"></i>
+    <div>
+      <strong>وضع الانصراف:</strong>
+      وقت الانصراف المحدد قد حان. لتسجيل الانصراف استخدم
+      <a id="departureLink" href="#" class="fw-700">صفحة تسجيل انصراف الشعبة</a>.
+    </div>
+  </div>
+
+  {# Attendance form – action set dynamically by JS #}
+  <form id="attForm" method="POST" action="">
+    <input type="hidden" name="_from" value="manual">
+
+    <div id="studentGrid" class="row g-3 mb-2"></div>
+
+    {# Sticky save bar #}
+    <div class="save-bar">
+      <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div class="d-flex gap-3 align-items-center">
+          <span class="fw-600" style="font-size:13px;color:#1aab6d">
+            <i class="bi bi-check-circle-fill me-1"></i>حاضر: <b id="cntP2">0</b>
+          </span>
+          <span class="fw-600" style="font-size:13px;color:#e03e3e">
+            <i class="bi bi-x-circle-fill me-1"></i>غائب: <b id="cntA2">0</b>
+          </span>
+          <span class="fw-600" style="font-size:13px;color:#e8a020">
+            <i class="bi bi-clock-fill me-1"></i>متأخر: <b id="cntL2">0</b>
+          </span>
+        </div>
+        {% if not is_historical_year %}
+        <button type="submit" class="btn btn-primary px-5" id="saveBtn">
+          <i class="bi bi-save-fill me-2"></i>حفظ الحضور
+        </button>
+        {% endif %}
+      </div>
+    </div>
+  </form>
+</div>
+
+{# ── Embedded JSON data for cascade ──────────────────────────────── #}
+<script>
+const GRADE_DATA    = {{ grade_data   | tojson | safe }};
+const SECTION_DATA  = {{ section_data | tojson | safe }};
+const STUDENTS_URL  = "{{ url_for('attendance.manual_students') }}";
+const TAKE_URL_BASE = "{{ url_for('attendance.take', section_id=0) }}";
+const IS_HIST       = {{ 'true' if is_historical_year else 'false' }};
+</script>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+/* ── Cascade helpers ────────────────────────────────────────────────── */
+const stageEl   = document.getElementById('stageSelect');
+const gradeEl   = document.getElementById('gradeSelect');
+const sectionEl = document.getElementById('sectionSelect');
+const dateEl    = document.getElementById('dateInput');
+const loadBtn   = document.getElementById('loadBtn');
+
+// Build lookup maps
+const gradeMap   = {};  // id → {name, stage}
+const sectionMap = {};  // id → {name, grade_id}
+GRADE_DATA.forEach(g => { gradeMap[g.id]   = g; });
+SECTION_DATA.forEach(s => { sectionMap[s.id] = s; });
+
+function filterGrades() {
+    const stage = stageEl.value;
+    const prev  = gradeEl.value;
+    gradeEl.innerHTML = '<option value="">— اختر الصف —</option>';
+    GRADE_DATA.forEach(g => {
+        if (!stage || g.stage === stage) {
+            const opt = document.createElement('option');
+            opt.value = g.id; opt.textContent = g.name;
+            gradeEl.appendChild(opt);
+        }
+    });
+    gradeEl.value = prev && gradeMap[prev] && (!stage || gradeMap[prev].stage === stage)
+                    ? prev : '';
+    filterSections();
+}
+
+function filterSections() {
+    const gid  = parseInt(gradeEl.value) || 0;
+    const prev = sectionEl.value;
+    sectionEl.innerHTML = '<option value="">— اختر الشعبة —</option>';
+    SECTION_DATA.forEach(s => {
+        if (!gid || s.grade_id === gid) {
+            const opt = document.createElement('option');
+            opt.value = s.id; opt.textContent = s.name;
+            sectionEl.appendChild(opt);
+        }
+    });
+    sectionEl.value = prev && sectionMap[prev] && (!gid || sectionMap[prev].grade_id === gid)
+                      ? prev : '';
+    onSectionChange();
+}
+
+function onSectionChange() {
+    loadBtn.disabled = !sectionEl.value;
+}
+
+stageEl.addEventListener('change', () => { gradeEl.value = ''; filterGrades(); });
+gradeEl.addEventListener('change', () => { sectionEl.value = ''; filterSections(); });
+sectionEl.addEventListener('change', onSectionChange);
+loadBtn.addEventListener('click', loadStudents);
+
+// Initialise dropdowns
+filterGrades();
+
+/* ── State ─────────────────────────────────────────────────────────── */
+let dirty = false;
+let currentStudentIds = [];  // ids of active (unlocked) students
+
+function setDirty(val) {
+    dirty = val;
+}
+
+window.addEventListener('beforeunload', e => {
+    if (dirty) {
+        e.preventDefault();
+        e.returnValue = 'هناك تغييرات لم تُحفظ. هل تريد المغادرة؟';
+    }
+});
+
+/* ── Student loading ────────────────────────────────────────────────── */
+function loadStudents() {
+    const sid  = sectionEl.value;
+    const date = dateEl.value;
+    if (!sid) return;
+
+    document.getElementById('workspace').style.display     = 'none';
+    document.getElementById('errorArea').style.display     = 'none';
+    document.getElementById('loadingArea').style.display   = 'block';
+
+    fetch(`${STUDENTS_URL}?section_id=${sid}&date=${date}`)
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('loadingArea').style.display = 'none';
+            if (data.error) throw new Error(data.error);
+            renderWorkspace(data, sid, date);
+        })
+        .catch(err => {
+            document.getElementById('loadingArea').style.display = 'none';
+            document.getElementById('errorArea').style.display   = 'block';
+            document.getElementById('errorArea').innerHTML =
+                `<div class="alert alert-danger"><i class="bi bi-exclamation-triangle-fill me-2"></i>
+                 تعذّر تحميل بيانات الطلاب: ${err.message || 'خطأ غير معروف'}</div>`;
+        });
+}
+
+/* ── Render workspace ───────────────────────────────────────────────── */
+function renderWorkspace(data, sid, date) {
+    // Update info bar
+    document.getElementById('wsTitle').textContent =
+        `${data.grade_name} — شعبة ${data.section_name}`;
+    document.getElementById('wsDate').textContent  = date;
+    document.getElementById('cntTot').textContent  = data.total;
+
+    // Departure notice
+    const depNotice = document.getElementById('departureNotice');
+    const depLink   = document.getElementById('departureLink');
+    if (data.is_departure) {
+        depNotice.style.display = '';
+        depLink.href = TAKE_URL_BASE.replace('/0', `/${sid}`) + `?date=${date}`;
+    } else {
+        depNotice.style.display = 'none';
+    }
+
+    // Set form action
+    const form = document.getElementById('attForm');
+    form.action = TAKE_URL_BASE.replace('/0', `/${sid}`) + `?date=${date}`;
+
+    // Render student cards
+    const grid = document.getElementById('studentGrid');
+    grid.innerHTML = '';
+    currentStudentIds = [];
+
+    data.students.forEach(s => {
+        grid.insertAdjacentHTML('beforeend', buildCard(s));
+        if (!s.locked && !s.is_suspended) {
+            currentStudentIds.push(s.id);
+        }
+    });
+
+    updateCounts();
+    setDirty(false);
+    document.getElementById('workspace').style.display = '';
+}
+
+function buildCard(s) {
+    const locked    = s.locked;
+    const suspended = s.is_suspended;
+
+    // Photo or placeholder
+    let avatarHtml;
+    if (s.photo_url) {
+        avatarHtml = `<div class="att-avatar"><img src="${escHtml(s.photo_url)}" alt=""></div>`;
+    } else {
+        avatarHtml = `<div class="att-avatar"><i class="bi bi-person-fill"></i></div>`;
+    }
+
+    // Determine initial status
+    const initStatus = s.existing ? s.existing.status : 'present';
+
+    // Card badge / locked info
+    let extraBadge = '';
+    if (suspended) {
+        extraBadge = `<span class="badge ms-1" style="background:#fff3cd;color:#856404;font-size:10px">
+                        <i class="bi bi-slash-circle me-1"></i>موقوف</span>`;
+    }
+
+    let bottomHtml;
+    if (suspended) {
+        bottomHtml = `<div class="text-muted text-center py-1" style="font-size:11px">
+                        <i class="bi bi-slash-circle me-1 text-warning"></i>الطالب موقوف — لا يُسجَّل حضوره
+                      </div>`;
+    } else if (locked) {
+        const rec  = s.existing;
+        const src  = rec && rec.source === 'rfid'
+                     ? '<i class="bi bi-credit-card-2-back text-accent ms-1" title="RFID"></i>'
+                     : (rec && rec.source === 'automatic'
+                        ? '<i class="bi bi-clock-history text-warning ms-1" title="تلقائي"></i>'
+                        : '');
+        const cin  = rec && rec.check_in  ? `<b style="color:#1aab6d">${rec.check_in}</b>` : '';
+        const cout = rec && rec.check_out ? ` · خروج <b style="color:#e03e3e">${rec.check_out}</b>` : '';
+        bottomHtml = `<div class="text-muted text-center py-1" style="font-size:11px">
+                        <i class="bi bi-lock-fill me-1"></i>سُجِّل ${cin}${cout} ${src}
+                      </div>`;
+    } else {
+        bottomHtml = `
+          <div class="d-flex gap-1 mt-2">
+            <button type="button" class="att-status-btn btn btn-sm ${initStatus==='present'?'active-present':'btn-outline-secondary'}"
+                    data-sid="${s.id}" data-status="present" onclick="setStatus(${s.id},'present')">
+              <i class="bi bi-check-circle-fill me-1"></i>حاضر
+            </button>
+            <button type="button" class="att-status-btn btn btn-sm ${initStatus==='absent'?'active-absent':'btn-outline-secondary'}"
+                    data-sid="${s.id}" data-status="absent" onclick="setStatus(${s.id},'absent')">
+              <i class="bi bi-x-circle-fill me-1"></i>غائب
+            </button>
+            <button type="button" class="att-status-btn btn btn-sm ${initStatus==='late'?'active-late':'btn-outline-secondary'}"
+                    data-sid="${s.id}" data-status="late" onclick="setStatus(${s.id},'late')">
+              <i class="bi bi-clock-fill me-1"></i>متأخر
+            </button>
+          </div>
+          <input type="hidden" name="status_${s.id}" id="sv_${s.id}" value="${initStatus}">`;
+    }
+
+    const cardClass = locked ? 'is-locked' : (suspended ? 'is-suspended' : '');
+
+    return `
+      <div class="col-md-4 col-lg-3 col-6">
+        <div class="card att-card ${cardClass}" style="min-height:0">
+          <div class="card-body py-2 px-3">
+            <div class="d-flex align-items-center gap-2 mb-1">
+              ${avatarHtml}
+              <div class="flex-grow-1" style="min-width:0">
+                <div class="fw-700 text-truncate" style="font-size:13px">${escHtml(s.full_name)}</div>
+                <div class="text-muted" style="font-size:11px">#${escHtml(s.student_id)}</div>
+              </div>
+              ${extraBadge}
+            </div>
+            ${bottomHtml}
+          </div>
+        </div>
+      </div>`;
+}
+
+/* ── Status toggle ──────────────────────────────────────────────────── */
+function setStatus(sid, status) {
+    document.getElementById('sv_' + sid).value = status;
+
+    document.querySelectorAll(`.att-status-btn[data-sid="${sid}"]`).forEach(btn => {
+        const bStatus = btn.dataset.status;
+        btn.className = btn.className
+            .replace(/\bactive-(present|absent|late)\b/g, '')
+            .replace(/\bbtn-outline-secondary\b/g, '')
+            .trim();
+        if (bStatus === status) {
+            btn.classList.add(`active-${status}`);
+        } else {
+            btn.classList.add('btn-outline-secondary');
+        }
+    });
+
+    setDirty(true);
+    updateCounts();
+}
+
+/* ── Bulk actions ───────────────────────────────────────────────────── */
+document.getElementById('markAllPresent').addEventListener('click', () => {
+    currentStudentIds.forEach(id => setStatus(id, 'present'));
+    setDirty(true);
+});
+document.getElementById('markAllAbsent').addEventListener('click', () => {
+    currentStudentIds.forEach(id => setStatus(id, 'absent'));
+    setDirty(true);
+});
+
+/* ── Live count update ──────────────────────────────────────────────── */
+function updateCounts() {
+    let p = 0, a = 0, l = 0;
+    currentStudentIds.forEach(id => {
+        const val = document.getElementById('sv_' + id);
+        if (!val) return;
+        if      (val.value === 'present') p++;
+        else if (val.value === 'absent')  a++;
+        else if (val.value === 'late')    l++;
+    });
+    ['cntP','cntP2'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = p; });
+    ['cntA','cntA2'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = a; });
+    ['cntL','cntL2'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = l; });
+}
+
+/* ── Form submit — clear dirty flag ────────────────────────────────── */
+document.getElementById('attForm').addEventListener('submit', () => setDirty(false));
+
+/* ── HTML escape helper ─────────────────────────────────────────────── */
+function escHtml(str) {
+    return String(str)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ── Auto-load from URL params (post-save return) ──────────────────── */
+(function () {
+    const params      = new URLSearchParams(window.location.search);
+    const autoSection = params.get('section_id');
+    const autoDate    = params.get('date');
+    if (!autoSection) return;
+
+    const sec = sectionMap[parseInt(autoSection)];
+    if (!sec) return;
+
+    const grade = gradeMap[sec.grade_id];
+    if (grade && grade.stage) {
+        stageEl.value = grade.stage;
+    }
+    filterGrades();
+    gradeEl.value = sec.grade_id;
+    filterSections();
+    sectionEl.value = autoSection;
+    if (autoDate) dateEl.value = autoDate;
+    onSectionChange();
+    if (!IS_HIST) loadStudents();
+})();
+</script>
+{% endblock %}

@@ -314,8 +314,14 @@
         {% if 'attendance' in enabled_modules and current_user.has_permission('take_attendance') %}
         <li class="nav-item">
           <a href="{{ url_for('attendance.index') }}"
-             class="{{ 'active' if request.blueprint == 'attendance' and request.endpoint != 'admin.attendance_settings' and request.endpoint != 'attendance.suspensions' and request.endpoint != 'attendance.create_suspension' and request.endpoint != 'attendance.delete_suspension' }}">
+             class="{{ 'active' if request.endpoint in ['attendance.index'] }}">
             <i class="bi bi-calendar-check"></i> الحضور والغياب
+          </a>
+        </li>
+        <li class="nav-item">
+          <a href="{{ url_for('attendance.manual') }}"
+             class="{{ 'active' if request.endpoint in ['attendance.manual', 'attendance.take'] }}">
+            <i class="bi bi-pencil-square"></i> تسجيل الحضور يدوياً
           </a>
         </li>
         {% if current_user.is_admin_user %}
