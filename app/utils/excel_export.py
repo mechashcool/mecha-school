@@ -441,7 +441,7 @@ def export_exams(
         ws.title = 'الاختبارات'
         ws.sheet_view.rightToLeft = True
         headers = ['#', 'اسم الاختبار', 'نوع الاختبار', 'المادة', 'الصف / الشعبة',
-                   'السنة الدراسية', 'تاريخ الاختبار', 'الدرجة القصوى', 'درجة النجاح', 'النتائج']
+                   'السنة الدراسية', 'تاريخ الاختبار', 'الدرجة القصوى', 'درجة النجاح', 'النتائج', 'نسبة النجاح']
         for col, h in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=h)
             cell.font = hs['font']; cell.fill = hs['fill']; cell.alignment = hs['alignment']
@@ -452,6 +452,12 @@ def export_exams(
             if exam.section:
                 grade_name = exam.section.grade.name if exam.section.grade else ''
                 section_txt = f"{grade_name} / {exam.section.name}" if grade_name else exam.section.name
+            total_results = exam.results.count()
+            if total_results:
+                pass_count = exam.results.filter_by(is_pass=True).count()
+                pass_pct = f'{round(pass_count / total_results * 100)}%'
+            else:
+                pass_pct = '0%'
             row = [
                 i,
                 exam.display_name,
@@ -462,7 +468,8 @@ def export_exams(
                 exam.exam_date.strftime('%Y-%m-%d') if exam.exam_date else '',
                 float(exam.max_marks),
                 float(exam.pass_marks),
-                exam.results.count(),
+                total_results,
+                pass_pct,
             ]
             for col, val in enumerate(row, 1):
                 cell = ws.cell(row=i + 1, column=col, value=val)
