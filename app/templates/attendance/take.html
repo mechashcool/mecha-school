@@ -184,7 +184,7 @@
         <tbody>
           {% for student in students %}
           {% set current = existing.get(student.id) %}
-          {% set locked = current and current.check_in is not none %}
+          {% set locked = current is not none %}
           {% set is_suspended = student.id in suspended_ids %}
           <tr {% if locked or is_suspended %}style="opacity:.55;background:#f8f9fa"{% endif %}>
             <td class="text-muted">{{ loop.index }}</td>
@@ -206,10 +206,14 @@
             {% elif locked %}
             <td colspan="3" class="text-center text-muted" style="font-size:12px">
               <i class="bi bi-lock-fill me-1"></i>
+              {% if current.check_in %}
               سُجِّل الدخول الساعة
               <b style="color:#1aab6d">{{ current.check_in.strftime('%H:%M') }}</b>
               {% if current.check_out %}
               · خروج <b style="color:#e03e3e">{{ current.check_out.strftime('%H:%M') }}</b>
+              {% endif %}
+              {% else %}
+              <span class="badge-status badge-inactive">غائب</span>
               {% endif %}
             </td>
             {% else %}

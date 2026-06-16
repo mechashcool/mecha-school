@@ -158,8 +158,7 @@
     <i class="bi bi-door-closed-fill" style="font-size:20px;flex-shrink:0"></i>
     <div>
       <strong>وضع الانصراف:</strong>
-      وقت الانصراف المحدد قد حان. لتسجيل الانصراف استخدم
-      <a id="departureLink" href="#" class="fw-700">صفحة تسجيل انصراف الشعبة</a>.
+      وقت الانصراف قد حان. سيتم تسجيل انصراف جميع الطلاب الحاضرين عند الحفظ.
     </div>
   </div>
 
@@ -313,10 +312,8 @@ function renderWorkspace(data, sid, date) {
 
     // Departure notice
     const depNotice = document.getElementById('departureNotice');
-    const depLink   = document.getElementById('departureLink');
     if (data.is_departure) {
         depNotice.style.display = '';
-        depLink.href = TAKE_URL_BASE.replace('/0', `/${sid}`) + `?date=${date}`;
     } else {
         depNotice.style.display = 'none';
     }
@@ -324,6 +321,19 @@ function renderWorkspace(data, sid, date) {
     // Set form action
     const form = document.getElementById('attForm');
     form.action = TAKE_URL_BASE.replace('/0', `/${sid}`) + `?date=${date}`;
+
+    // Remove checkout fields injected by a previous load
+    form.querySelectorAll('.departure-checkout-field').forEach(el => el.remove());
+
+    // Update save button label for departure mode
+    const saveBtn = document.getElementById('saveBtn');
+    if (saveBtn) {
+        if (data.is_departure) {
+            saveBtn.innerHTML = '<i class="bi bi-door-closed-fill me-2"></i>تسجيل الانصراف';
+        } else {
+            saveBtn.innerHTML = '<i class="bi bi-save-fill me-2"></i>حفظ الحضور';
+        }
+    }
 
     // Render student cards
     const grid = document.getElementById('studentGrid');
@@ -334,6 +344,17 @@ function renderWorkspace(data, sid, date) {
         grid.insertAdjacentHTML('beforeend', buildCard(s));
         if (!s.locked && !s.is_suspended) {
             currentStudentIds.push(s.id);
+        }
+        // In departure mode, inject a hidden checkout field for each student
+        // who has checked in but not yet checked out — mirrors the device
+        // behaviour where any punch during the departure window triggers checkout.
+        if (s.needs_checkout) {
+            const inp = document.createElement('input');
+            inp.type      = 'hidden';
+            inp.name      = `checkout_${s.id}`;
+            inp.value     = '1';
+            inp.className = 'departure-checkout-field';
+            form.appendChild(inp);
         }
     });
 
@@ -370,17 +391,32 @@ function buildCard(s) {
                         <i class="bi bi-slash-circle me-1 text-warning"></i>الطالب موقوف — لا يُسجَّل حضوره
                       </div>`;
     } else if (locked) {
-        const rec  = s.existing;
-        const src  = rec && rec.source === 'rfid'
-                     ? '<i class="bi bi-credit-card-2-back text-accent ms-1" title="RFID"></i>'
-                     : (rec && rec.source === 'automatic'
-                        ? '<i class="bi bi-clock-history text-warning ms-1" title="تلقائي"></i>'
-                        : '');
-        const cin  = rec && rec.check_in  ? `<b style="color:#1aab6d">${rec.check_in}</b>` : '';
-        const cout = rec && rec.check_out ? ` · خروج <b style="color:#e03e3e">${rec.check_out}</b>` : '';
-        bottomHtml = `<div class="text-muted text-center py-1" style="font-size:11px">
-                        <i class="bi bi-lock-fill me-1"></i>سُجِّل ${cin}${cout} ${src}
-                      </div>`;
+        const rec = s.existing;
+        const src = rec && rec.source === 'rfid'
+                    ? '<i class="bi bi-credit-card-2-back text-accent ms-1" title="RFID"></i>'
+                    : (rec && rec.source === 'automatic'
+                       ? '<i class="bi bi-clock-history text-warning ms-1" title="تلقائي"></i>'
+                       : '');
+        if (rec && rec.status === 'absent') {
+            // Absent record — locked to prevent re-registration (matches device behaviour)
+            bottomHtml = `<div class="text-muted text-center py-1" style="font-size:11px">
+                            <i class="bi bi-lock-fill me-1"></i>
+                            <span style="color:#e03e3e">غائب</span> ${src}
+                          </div>`;
+        } else if (s.needs_checkout) {
+            // Departure mode: checked in, awaiting checkout — will be checked out on submit
+            const cin = rec && rec.check_in ? `<b style="color:#1aab6d">${rec.check_in}</b>` : '';
+            bottomHtml = `<div class="text-center py-1" style="font-size:11px;color:#856404">
+                            <i class="bi bi-door-open-fill me-1"></i>
+                            دخل ${cin} — سيُسجَّل الانصراف ${src}
+                          </div>`;
+        } else {
+            const cin  = rec && rec.check_in  ? `<b style="color:#1aab6d">${rec.check_in}</b>` : '';
+            const cout = rec && rec.check_out ? ` · خروج <b style="color:#e03e3e">${rec.check_out}</b>` : '';
+            bottomHtml = `<div class="text-muted text-center py-1" style="font-size:11px">
+                            <i class="bi bi-lock-fill me-1"></i>سُجِّل ${cin}${cout} ${src}
+                          </div>`;
+        }
     } else {
         bottomHtml = `
           <div class="d-flex gap-1 mt-2">

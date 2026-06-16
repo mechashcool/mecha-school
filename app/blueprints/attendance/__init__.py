@@ -449,15 +449,27 @@ def manual_students():
     result = []
     for s in students:
         rec    = existing.get(s.id)
-        locked = rec is not None and rec.check_in is not None
+        # Any existing record (present, late, or absent) is locked — matches
+        # device behaviour where a second punch on an existing record is either
+        # a checkout (departure window) or silently ignored.
+        locked = rec is not None
+        # Eligible for automatic checkout: existing check-in, no check-out yet,
+        # and we are currently inside the departure window.
+        needs_checkout = (
+            is_departure
+            and rec is not None
+            and rec.check_in is not None
+            and rec.check_out is None
+        )
         photo  = resolve_photo_url(getattr(s, 'photo', None))
         result.append({
-            'id':           s.id,
-            'full_name':    s.full_name,
-            'student_id':   s.student_id,
-            'photo_url':    photo,
-            'is_suspended': s.id in suspended_ids,
-            'locked':       locked,
+            'id':             s.id,
+            'full_name':      s.full_name,
+            'student_id':     s.student_id,
+            'photo_url':      photo,
+            'is_suspended':   s.id in suspended_ids,
+            'locked':         locked,
+            'needs_checkout': needs_checkout,
             'existing': {
                 'status':    rec.status,
                 'check_in':  rec.check_in.strftime('%H:%M')  if rec.check_in  else None,
@@ -566,20 +578,11 @@ def take(section_id):
                     else:
                         already_marked_count += 1
                     continue
-                # Record exists but no check_in yet — allow update
-                if status_choice == 'present':
-                    _shift = get_student_shift(student, school)
-                    actual_status = determine_check_in_status(now_time, settings, shift=_shift)
-                    rec.check_in  = now_time
-                elif status_choice == 'late':
-                    actual_status = 'late'
-                    rec.check_in  = now_time
-                else:
-                    actual_status = 'absent'
-                prev       = rec.status
-                rec.status = actual_status
-                if actual_status in ('present', 'late') and prev not in ('present', 'late'):
-                    newly_checked_in.append((student, actual_status))
+                # Absent record (check_in is None) — already finalized.
+                # Block re-registration to match device behaviour: any existing
+                # record (regardless of status) is treated as already processed.
+                already_marked_count += 1
+                continue
             else:
                 _shift = get_student_shift(student, school)
                 if status_choice == 'present':
