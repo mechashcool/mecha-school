@@ -62,6 +62,72 @@ def _apply_teacher_scope(query):
     return query
 
 
+def _notify_grade_results(exam, students):
+    """FCM push to the linked parents of each graded student (post-commit).
+
+    The notification body never contains the marks — only that a grade was
+    recorded — so no sensitive academic data leaves the API. Parents are
+    resolved server-side via the student→parent link; school isolation is
+    inherited from that relationship. Never raises.
+    """
+    if not students:
+        return
+    try:
+        from app.services.notifications import NotificationService
+        for student in students:
+            NotificationService.send_to_parents_of_student(
+                student.id,
+                'درجة جديدة',
+                f'تم رصد درجة جديدة في {exam.exam_name}.',
+                ntype='grade',
+                data={
+                    'type':       'grade',
+                    'screen':     'grades',
+                    'route':      '/parent/grades',
+                    'exam_id':    str(exam.id),
+                    'subject_id': str(exam.subject_id),
+                    'student_id': str(student.id),
+                },
+            )
+    except Exception:
+        # Push is best-effort; a delivery failure must not fail the grade save.
+        import logging
+        logging.getLogger('mecha.grades').exception(
+            '[grades] FCM push failed for exam_id=%s', getattr(exam, 'id', None))
+
+
+def _notify_new_exam(exam):
+    """FCM push announcing a newly scheduled exam to the section's parents.
+
+    The exam is section-scoped, so recipients are the linked parents of the
+    active students in that section, resolved server-side. Never raises.
+    """
+    try:
+        from app.services.notifications import NotificationService
+        section_students = (Student.query
+                            .filter_by(section_id=exam.section_id, status='active')
+                            .all())
+        for student in section_students:
+            NotificationService.send_to_parents_of_student(
+                student.id,
+                'اختبار جديد',
+                f'تم جدولة اختبار جديد: {exam.exam_name}.',
+                ntype='exam',
+                data={
+                    'type':       'exam',
+                    'screen':     'exams',
+                    'route':      '/parent/exams',
+                    'exam_id':    str(exam.id),
+                    'subject_id': str(exam.subject_id),
+                    'student_id': str(student.id),
+                },
+            )
+    except Exception:
+        import logging
+        logging.getLogger('mecha.grades').exception(
+            '[grades] FCM push failed for new exam_id=%s', getattr(exam, 'id', None))
+
+
 @grades_bp.route('/')
 @login_required
 @permission_required('enter_grades')
@@ -283,6 +349,11 @@ def create_exam():
             created.append(exam)
         db.session.commit()
 
+        # Push only after the exam rows are committed. Each exam is section-scoped,
+        # so parents are resolved per section, server-side.
+        for exam in created:
+            _notify_new_exam(exam)
+
         if section_id:
             flash('تم إنشاء الاختبار بنجاح.', 'success')
             return redirect(url_for('grades.enter_results', exam_id=created[0].id))
@@ -313,6 +384,7 @@ def enter_results(exam_id):
     existing = {r.student_id: r for r in ExamResult.query.filter_by(exam_id=exam_id).all()}
 
     if request.method == 'POST':
+        graded_students = []
         for student in students:
             marks_str = request.form.get(f'marks_{student.id}', '')
             if marks_str == '':
@@ -338,6 +410,7 @@ def enter_results(exam_id):
                     entered_by  = current_user.id,
                 )
                 db.session.add(res)
+            graded_students.append(student)
 
         db.session.commit()
 
@@ -346,6 +419,11 @@ def enter_results(exam_id):
         for rank, res in enumerate(results, 1):
             res.rank = rank
         db.session.commit()
+
+        # Push only after the grades are committed. Recipients (the linked
+        # parents) are resolved server-side per student; the body never
+        # contains the actual marks — Flutter fetches the grade via the API.
+        _notify_grade_results(exam, graded_students)
 
         flash('تم حفظ الدرجات وحساب الترتيب.', 'success')
         return redirect(url_for('grades.index'))

@@ -2286,6 +2286,55 @@ VIDEO_MEDIA_TYPES = {
 }
 
 
+def _push_school_board(school_id, audience, *, content_type, content_id,
+                       title, body, publish_at=None, is_active=True):
+    """
+    FCM push for a newly published school-board item (video / announcement).
+
+    Recipients are resolved strictly server-side: active parent/teacher users in
+    THIS school whose role matches the item's `audience`. No client-supplied
+    school_id / user_id / role is ever trusted. The push is skipped for inactive
+    or future-scheduled items so a notification is only sent when the item is
+    actually visible in the app (mirrors the school-board visibility filter).
+    Never raises — push failure must not break content creation.
+    """
+    if not school_id or not is_active:
+        return
+    if publish_at is not None and publish_at > datetime.utcnow():
+        return  # scheduled for the future — not visible yet, don't notify
+    if audience == 'parents':
+        roles = ('parent',)
+    elif audience == 'teachers':
+        roles = ('teacher',)
+    else:  # 'all'
+        roles = ('parent', 'teacher')
+
+    data = {
+        'type':         'school_board',
+        'screen':       'school_board',
+        'route':        '/school-board',
+        'content_type': content_type,        # 'video' | 'announcement'
+        'content_id':   str(content_id),
+        'ntype':        'school_board',
+    }
+    try:
+        from app.services.fcm_service import is_enabled, send_push_to_user
+        if not is_enabled():
+            return
+        recipients = (
+            User.query.execution_options(bypass_tenant_scope=True)
+            .join(Role, User.role_id == Role.id)
+            .filter(User.school_id == school_id,
+                    User.is_active.is_(True),
+                    Role.name.in_(roles))
+            .all()
+        )
+        for u in recipients:
+            send_push_to_user(u.id, title, body, data)
+    except Exception:
+        _sb_log.exception('[school-board] FCM push failed school_id=%s', school_id)
+
+
 def _parse_dt(value):
     """Parse a datetime-local form field; return datetime or None."""
     if not value:
@@ -2453,14 +2502,15 @@ def school_board_video_create():
                                    media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
 
         try:
-            db.session.add(SchoolVideo(
+            new_video = SchoolVideo(
                 school_id=school_id, title=title, description=description,
                 media_type=media_type, video_url=final_url,
                 thumbnail_url=thumbnail_url,
                 audience=audience, is_featured=is_featured, is_active=is_active,
                 publish_at=publish_at, expires_at=expires_at,
                 created_by=current_user.id,
-            ))
+            )
+            db.session.add(new_video)
             db.session.commit()
         except Exception as exc:
             _sb_log.error('school_board_video_create commit failed: %s', exc, exc_info=True)
@@ -2469,6 +2519,14 @@ def school_board_video_create():
             return render_template('admin/school_board_video_form.html',
                                    video=None, audience_labels=BOARD_AUDIENCES,
                                    media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
+        # Push only after the DB transaction has committed successfully.
+        _push_school_board(
+            school_id, audience,
+            content_type='video', content_id=new_video.id,
+            title='فيديو جديد على لوحة المدرسة',
+            body=title,
+            publish_at=publish_at, is_active=is_active,
+        )
         flash('تمت الإضافة بنجاح.', 'success')
         return redirect(url_for('admin.school_board_videos'))
 
@@ -2706,13 +2764,14 @@ def school_board_announcement_create():
                                    media_types=MEDIA_TYPES, form_data=request.form)
 
         try:
-            db.session.add(SchoolAnnouncement(
+            new_ann = SchoolAnnouncement(
                 school_id=school_id, title=title, body=body,
                 media_url=media_url, media_type=media_type, thumbnail_url=thumbnail_url,
                 audience=audience, is_featured=is_featured, is_active=is_active,
                 publish_at=publish_at, expires_at=expires_at,
                 created_by=current_user.id,
-            ))
+            )
+            db.session.add(new_ann)
             db.session.commit()
         except Exception as exc:
             _sb_log.error('school_board_announcement_create commit failed: %s', exc, exc_info=True)
@@ -2721,6 +2780,15 @@ def school_board_announcement_create():
             return render_template('admin/school_board_announcement_form.html',
                                    announcement=None, audience_labels=BOARD_AUDIENCES,
                                    media_types=MEDIA_TYPES, form_data=request.form)
+        # Push only after the DB transaction has committed successfully.
+        # The notification body carries the title only (no sensitive content).
+        _push_school_board(
+            school_id, audience,
+            content_type='announcement', content_id=new_ann.id,
+            title='إعلان جديد على لوحة المدرسة',
+            body=title,
+            publish_at=publish_at, is_active=is_active,
+        )
         flash('تم إنشاء الإعلان بنجاح.', 'success')
         return redirect(url_for('admin.school_board_announcements'))
 

@@ -23,6 +23,35 @@ fees_bp = Blueprint('fees', __name__, template_folder='../../templates/fees')
 _log = logging.getLogger('mecha.fees')
 
 
+def _notify_fee_parents(student_id, title, body, screen, *, fee_record_id=None,
+                        installment_id=None):
+    """FCM push to a student's linked parents after a fee/payment change.
+
+    Called only after the DB transaction has committed. Parents are resolved
+    server-side from the student→parent link (school isolation inherited); no
+    client-supplied identifier is trusted. The body carries no amounts beyond
+    what the caller passes. Never raises — push must not fail a payment.
+    """
+    if not student_id:
+        return
+    data = {
+        'type':   'fee',
+        'screen': screen,            # 'fees'
+        'route':  '/parent/fees',
+        'student_id': str(student_id),
+    }
+    if fee_record_id is not None:
+        data['fee_record_id'] = str(fee_record_id)
+    if installment_id is not None:
+        data['installment_id'] = str(installment_id)
+    try:
+        from app.services.notifications import NotificationService
+        NotificationService.send_to_parents_of_student(
+            student_id, title, body, ntype='fee', data=data)
+    except Exception:
+        _log.exception('[fees] FCM push failed for student_id=%s', student_id)
+
+
 def _active_fee_student_query(school, year):
     query = (
         Student.query
@@ -293,6 +322,13 @@ def create():
                                    selected_student=selected_student), 400
 
         db.session.commit()
+        # Push after the fee record + installments are committed.
+        _notify_fee_parents(
+            selected_student.id,
+            'سجل رسوم جديد',
+            f'تم إضافة سجل رسوم جديد للطالب {selected_student.full_name}.',
+            screen='fees',
+        )
         flash('تم إنشاء سجل الرسوم بنجاح.', 'success')
         return redirect(url_for('fees.index'))
 
@@ -543,6 +579,20 @@ def pay_installment(inst_id):
         status_label = {'paid': 'مكتمل', 'partial': 'دفعة جزئية',
                         'pending': 'قيد الانتظار', 'overdue': 'متأخر'}.get(inst.status, '')
         receipt = inst.receipt_no or '—'
+
+        # Push after the payment is committed. Resolve the student from the
+        # already-loaded fee_record relationship (server-side, school-scoped).
+        _paid_student = inst.fee_record.student if inst.fee_record else None
+        if _paid_student is not None:
+            _notify_fee_parents(
+                _paid_student.id,
+                'تم تسجيل دفعة',
+                f'تم تسجيل دفعة بقيمة {received} لقسط الرسوم رقم {inst.installment_no} '
+                f'({status_label}).',
+                screen='fees',
+                fee_record_id=inst.fee_record_id,
+                installment_id=inst.id,
+            )
 
         # Return JSON with success status and receipt URL
         receipt_url = url_for('fees.generate_receipt', inst_id=inst.id) if inst.receipt_no else None

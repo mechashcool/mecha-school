@@ -64,12 +64,26 @@ def _init_firebase() -> None:
             cred   = credentials.Certificate(sa_dict)
             source = 'FIREBASE_SERVICE_ACCOUNT_JSON (env string)'
         else:
-            if not os.path.isfile(file_path):
-                log.error('[FCM] GOOGLE_APPLICATION_CREDENTIALS is set to %r '
-                          'but file does not exist — push notifications disabled.', file_path)
-                return
-            cred   = credentials.Certificate(file_path)
-            source = f'GOOGLE_APPLICATION_CREDENTIALS ({file_path})'
+            resolved_path = file_path
+            if not os.path.isfile(resolved_path):
+                # A relative path (e.g. "firebase-key.json") only resolves when the
+                # process CWD is the project root — which is NOT guaranteed under
+                # gunicorn/Render. Fall back to resolving it against the project
+                # root (three levels up from app/services/fcm_service.py) so the
+                # credential is found regardless of the current working directory.
+                project_root = os.path.dirname(os.path.dirname(os.path.dirname(
+                    os.path.abspath(__file__))))
+                candidate = os.path.join(project_root, file_path)
+                if os.path.isfile(candidate):
+                    resolved_path = candidate
+                else:
+                    log.error('[FCM] GOOGLE_APPLICATION_CREDENTIALS is set to %r '
+                              'but the file was not found (cwd=%r, project_root=%r) '
+                              '— push notifications disabled.',
+                              file_path, os.getcwd(), project_root)
+                    return
+            cred   = credentials.Certificate(resolved_path)
+            source = f'GOOGLE_APPLICATION_CREDENTIALS ({resolved_path})'
 
         firebase_admin.initialize_app(cred)
         _messaging   = fb_messaging
