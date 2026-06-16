@@ -345,7 +345,9 @@ def dashboard():
     att_q_base = StudentAttendance.query.filter_by(date=today)
     if school_id:
         att_q_base = att_q_base.filter_by(school_id=school_id)
-    stats['present_today'] = att_q_base.filter_by(status='present').count()
+    stats['present_today'] = att_q_base.filter(
+        StudentAttendance.status.in_(['present', 'late'])
+    ).count()
     stats['absent_today']  = att_q_base.filter_by(status='absent').count()
 
     # Revenue vs Expense this month — school-scoped
