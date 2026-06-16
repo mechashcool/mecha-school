@@ -250,11 +250,55 @@ def index():
     if not school or not year:
         flash('لا يوجد عام دراسي نشط.', 'warning')
         return render_template('homework/index.html', homework_list=[], emp=None,
-                               is_admin=_is_admin())
+                               is_admin=_is_admin(),
+                               filter_grades=[], filter_sections=[], filter_subjects=[],
+                               filter_stages=[],
+                               f_grade_id=None, f_section_id=None,
+                               f_subject_id=None, f_stage='')
 
     emp = _get_employee()
     is_admin = _is_admin()
 
+    # ── Build filter dropdown data (same scope as teacher/admin access) ───
+    if is_admin:
+        filter_sections = Section.query.filter_by(
+            school_id=school.id, academic_year_id=year.id).order_by(Section.name).all()
+        filter_subjects = Subject.query.filter_by(
+            school_id=school.id, academic_year_id=year.id).order_by(Subject.name).all()
+        filter_grades = Grade.query.filter_by(
+            school_id=school.id, academic_year_id=year.id).order_by(Grade.name).all()
+    elif emp:
+        sec_ids  = _teacher_section_ids(emp)
+        subj_ids = _teacher_subject_ids(emp)
+        filter_sections = (Section.query.filter(Section.id.in_(sec_ids))
+                           .order_by(Section.name).all() if sec_ids else [])
+        filter_subjects = (Subject.query.filter(Subject.id.in_(subj_ids))
+                           .order_by(Subject.name).all() if subj_ids else [])
+        filter_grades = _teacher_grades(filter_sections)
+    else:
+        filter_sections, filter_subjects, filter_grades = [], [], []
+
+    filter_stages = sorted({g.stage for g in filter_grades if g.stage})
+
+    # ── Parse filter params ───────────────────────────────────────────────
+    f_stage      = request.args.get('f_stage', '').strip()
+    f_grade_id   = request.args.get('f_grade_id', type=int)
+    f_section_id = request.args.get('f_section_id', type=int)
+    f_subject_id = request.args.get('f_subject_id', type=int)
+
+    # Validate that filter values actually belong to this school/year
+    # (prevents cross-school probing via URL params)
+    if f_section_id and not Section.query.filter_by(
+            id=f_section_id, school_id=school.id, academic_year_id=year.id).first():
+        f_section_id = None
+    if f_grade_id and not Grade.query.filter_by(
+            id=f_grade_id, school_id=school.id, academic_year_id=year.id).first():
+        f_grade_id = None
+    if f_subject_id and not Subject.query.filter_by(
+            id=f_subject_id, school_id=school.id, academic_year_id=year.id).first():
+        f_subject_id = None
+
+    # ── Base query ────────────────────────────────────────────────────────
     q = (Homework.query
          .filter_by(school_id=school.id, academic_year_id=year.id, is_active=True)
          .order_by(Homework.publish_date.desc(), Homework.id.desc()))
@@ -265,12 +309,33 @@ def index():
     elif not is_admin and not emp:
         q = q.filter(False)  # no employee record → nothing visible
 
+    # ── Apply location filters (section takes precedence over grade) ──────
+    if f_section_id:
+        q = q.filter(Homework.section_id == f_section_id)
+    elif f_grade_id:
+        grade_sec_ids = [s.id for s in Section.query.filter_by(
+            grade_id=f_grade_id, school_id=school.id, academic_year_id=year.id).all()]
+        q = (q.filter(Homework.section_id.in_(grade_sec_ids))
+             if grade_sec_ids else q.filter(False))
+
+    # ── Apply subject filter (independent of location filter) ─────────────
+    if f_subject_id:
+        q = q.filter(Homework.subject_id == f_subject_id)
+
     homework_list = q.all()
     return render_template('homework/index.html',
                            homework_list=homework_list,
                            emp=emp,
                            is_admin=is_admin,
-                           resolve_photo_url=resolve_photo_url)
+                           resolve_photo_url=resolve_photo_url,
+                           filter_grades=filter_grades,
+                           filter_sections=filter_sections,
+                           filter_subjects=filter_subjects,
+                           filter_stages=filter_stages,
+                           f_grade_id=f_grade_id,
+                           f_section_id=f_section_id,
+                           f_subject_id=f_subject_id,
+                           f_stage=f_stage)
 
 
 @homework_bp.route('/create', methods=['GET', 'POST'])

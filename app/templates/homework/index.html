@@ -17,6 +17,101 @@
   {% endif %}
 </div>
 
+{# ── Filter Panel ──────────────────────────────────────────────────────── #}
+{% if filter_grades or filter_subjects %}
+<div class="card mb-3">
+  <div class="card-body py-2 px-3">
+    <form method="GET" action="{{ url_for('homework.index') }}" id="hw-filter-form">
+      <div class="row g-2 align-items-end flex-wrap">
+
+        {# Group 1: Stage / Grade / Section #}
+        {% if filter_grades %}
+        {% if filter_stages %}
+        <div class="col-auto">
+          <label class="form-label small mb-1 text-muted">المرحلة</label>
+          <select id="f_stage" name="f_stage" class="form-select form-select-sm">
+            <option value="">كل المراحل</option>
+            {% for st in filter_stages %}
+            <option value="{{ st }}" {% if f_stage == st %}selected{% endif %}>{{ st }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
+        <div class="col-auto">
+          <label class="form-label small mb-1 text-muted">الصف</label>
+          <select id="f_grade_id" name="f_grade_id" class="form-select form-select-sm" style="min-width:120px">
+            <option value="">كل الصفوف</option>
+            {% for g in filter_grades %}
+            <option value="{{ g.id }}" data-stage="{{ g.stage or '' }}"
+              {% if f_grade_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% if filter_sections %}
+        <div class="col-auto">
+          <label class="form-label small mb-1 text-muted">الشعبة</label>
+          <select id="f_section_id" name="f_section_id" class="form-select form-select-sm" style="min-width:110px">
+            <option value="">كل الشعب</option>
+            {% for s in filter_sections %}
+            <option value="{{ s.id }}" data-grade="{{ s.grade_id or '' }}"
+              {% if f_section_id == s.id %}selected{% endif %}>{{ s.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
+        {% endif %}
+
+        {# Separator between the two independent filters #}
+        {% if filter_grades and filter_subjects %}
+        <div class="col-auto d-flex align-items-end" style="padding-bottom:6px">
+          <span class="text-muted small">أو</span>
+        </div>
+        {% endif %}
+
+        {# Group 2: Subject (independent) #}
+        {% if filter_subjects %}
+        <div class="col-auto">
+          <label class="form-label small mb-1 text-muted">المادة</label>
+          <select id="f_subject_id" name="f_subject_id" class="form-select form-select-sm" style="min-width:150px">
+            <option value="">كل المواد</option>
+            {% for subj in filter_subjects %}
+            <option value="{{ subj.id }}" {% if f_subject_id == subj.id %}selected{% endif %}>{{ subj.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
+
+        {# Action buttons #}
+        <div class="col-auto d-flex gap-1 align-items-end">
+          <button type="submit" class="btn btn-primary btn-sm">
+            <i class="bi bi-funnel-fill me-1"></i>تصفية
+          </button>
+          {% if f_grade_id or f_section_id or f_subject_id %}
+          <a href="{{ url_for('homework.index') }}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-x-lg me-1"></i>إلغاء التصفية
+          </a>
+          {% endif %}
+        </div>
+
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+{# ── Active filter summary ─────────────────────────────────────────────── #}
+{% if f_grade_id or f_section_id or f_subject_id %}
+<p class="text-muted small mb-2">
+  <i class="bi bi-funnel me-1"></i>
+  يُعرض
+  {% if f_section_id %}شعبة محددة{% elif f_grade_id %}صف محدد{% endif %}
+  {% if (f_section_id or f_grade_id) and f_subject_id %} · {% endif %}
+  {% if f_subject_id %}مادة محددة{% endif %}
+  &mdash;
+  <a href="{{ url_for('homework.index') }}" class="text-decoration-none">عرض الكل</a>
+</p>
+{% endif %}
+
 {% if homework_list %}
 <div class="row g-3">
   {% for hw in homework_list %}
@@ -125,6 +220,17 @@
   {% endfor %}
 </div>
 
+{% elif f_grade_id or f_section_id or f_subject_id %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">
+    <i class="bi bi-funnel" style="font-size:3rem;opacity:.3;display:block;margin-bottom:12px"></i>
+    <p class="mb-0">لا توجد واجبات تطابق الفلتر المحدد.</p>
+    <a href="{{ url_for('homework.index') }}" class="btn btn-outline-secondary mt-3">
+      <i class="bi bi-x-lg me-1"></i>إلغاء التصفية
+    </a>
+  </div>
+</div>
+
 {% else %}
 <div class="card">
   <div class="card-body text-center text-muted py-5">
@@ -137,5 +243,45 @@
     {% endif %}
   </div>
 </div>
+{% endif %}
+
+{# ── Cascade JS for filter dropdowns ─────────────────────────────────── #}
+{% if filter_grades %}
+<script>
+(function () {
+  var stageEl   = document.getElementById('f_stage');
+  var gradeEl   = document.getElementById('f_grade_id');
+  var sectionEl = document.getElementById('f_section_id');
+  if (!gradeEl) return;
+
+  function filterGrades() {
+    var stage = stageEl ? stageEl.value : '';
+    Array.from(gradeEl.options).forEach(function (opt) {
+      if (!opt.value) return;
+      opt.hidden = !!(stage && opt.dataset.stage !== stage);
+    });
+    var sel = gradeEl.options[gradeEl.selectedIndex];
+    if (sel && sel.hidden) gradeEl.value = '';
+    filterSections();
+  }
+
+  function filterSections() {
+    if (!sectionEl) return;
+    var gradeId = gradeEl.value;
+    Array.from(sectionEl.options).forEach(function (opt) {
+      if (!opt.value) return;
+      opt.hidden = !!(gradeId && opt.dataset.grade !== gradeId);
+    });
+    var sel = sectionEl.options[sectionEl.selectedIndex];
+    if (sel && sel.hidden) sectionEl.value = '';
+  }
+
+  if (stageEl) stageEl.addEventListener('change', filterGrades);
+  gradeEl.addEventListener('change', filterSections);
+
+  /* Restore cascade state on page load (when returning with active filters) */
+  filterGrades();
+})();
+</script>
 {% endif %}
 {% endblock %}
