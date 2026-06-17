@@ -2,7 +2,7 @@
 import logging
 from decimal import Decimal, InvalidOperation
 
-from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify, session as flask_session
+from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify, session as flask_session, abort
 from flask_login import login_required, current_user
 from datetime import date, datetime as dt
 from sqlalchemy import func
@@ -731,6 +731,194 @@ def fee_types():
         return redirect(url_for('fees.fee_types'))
     types = FeeType.query.all()
     return render_template('fees/fee_types.html', types=types)
+
+
+@fees_bp.route('/print')
+@login_required
+@permission_required('manage_fees')
+def print_list():
+    """Print view of current fee records — same filters as index, no pagination."""
+    search             = request.args.get('q', '')
+    fee_type_filter    = request.args.get('fee_type', 'all')
+    payment_status     = request.args.get('payment_status', 'all')
+    installment_filter = request.args.get('installment', 'all')
+
+    total_paid_sub = db.session.query(
+        FeeInstallment.fee_record_id,
+        func.sum(FeeInstallment.received_amount).label('total_paid')
+    ).group_by(FeeInstallment.fee_record_id).subquery()
+
+    school = get_current_school()
+    year   = get_view_year(school.id) if school else None
+
+    query = (
+        FeeRecord.query
+        .join(Student)
+        .outerjoin(total_paid_sub, FeeRecord.id == total_paid_sub.c.fee_record_id)
+    )
+
+    if school:
+        query = query.filter(FeeRecord.school_id == school.id)
+
+    query = apply_building_scope_to_fees(query, current_user, school)
+
+    if search:
+        query = query.filter(
+            Student.full_name.ilike(f'%{search}%') |
+            Student.student_id.ilike(f'%{search}%')
+        )
+
+    if fee_type_filter != 'all':
+        query = query.filter(FeeRecord.fee_type_id == int(fee_type_filter))
+
+    if installment_filter != 'all':
+        query = query.join(FeeInstallment).filter(
+            FeeInstallment.installment_no == int(installment_filter))
+
+    net_amount_expr = FeeRecord.total_amount - func.coalesce(FeeRecord.discount, 0)
+    remaining_expr  = net_amount_expr - func.coalesce(total_paid_sub.c.total_paid, 0)
+
+    if payment_status == 'paid':
+        query = query.filter(remaining_expr <= 0)
+    elif payment_status == 'unpaid':
+        query = query.filter(remaining_expr > 0)
+
+    records = query.order_by(FeeRecord.created_at.desc()).all()
+
+    _inst_map = {}
+    if records:
+        _ids = [r.id for r in records]
+        _insts = (
+            FeeInstallment.query
+            .filter(FeeInstallment.fee_record_id.in_(_ids))
+            .order_by(FeeInstallment.installment_no)
+            .all()
+        )
+        for _i in _insts:
+            _inst_map.setdefault(_i.fee_record_id, []).append(_i)
+
+    fee_entries = [(r, _inst_map.get(r.id, [])) for r in records]
+
+    grand_total = sum(float(r.total_amount) for r in records)
+    grand_disc  = sum(float(r.discount or 0) for r in records)
+    grand_paid  = sum(
+        sum(float(i.received_amount or 0) for i in _inst_map.get(r.id, []))
+        for r in records
+    )
+    grand_rem   = grand_total - grand_disc - grand_paid
+
+    fee_types     = FeeType.query.all()
+    fee_type_name = next(
+        (ft.name for ft in fee_types if str(ft.id) == fee_type_filter), None)
+
+    logo_url = None
+    if school and getattr(school, 'logo_path', None):
+        from app.utils.helpers import resolve_photo_url
+        logo_url = resolve_photo_url(school.logo_path)
+
+    return render_template(
+        'fees/print_list.html',
+        fee_entries=fee_entries,
+        school=school,
+        year=year,
+        search=search,
+        fee_type_filter=fee_type_filter,
+        fee_type_name=fee_type_name,
+        payment_status=payment_status,
+        installment_filter=installment_filter,
+        grand_total=grand_total,
+        grand_disc=grand_disc,
+        grand_paid=grand_paid,
+        grand_rem=grand_rem,
+        print_date=date.today(),
+        logo_url=logo_url,
+    )
+
+
+@fees_bp.route('/student/<int:student_id>/statement')
+@login_required
+@permission_required('manage_fees')
+def student_statement(student_id):
+    """Complete financial statement for a student — all fee types, all academic years."""
+    school = get_current_school()
+
+    student = (
+        Student.query
+        .execution_options(include_all_years=True)
+        .options(
+            joinedload(Student.section).joinedload(Section.grade)
+        )
+        .filter(Student.id == student_id)
+        .first_or_404()
+    )
+
+    # School isolation: student must belong to the authenticated user's school.
+    if school and student.school_id and student.school_id != school.id:
+        abort(403)
+
+    # Building scope: restricted users cannot view students outside their buildings.
+    if not user_can_access_student(current_user, school, student):
+        abort(403)
+
+    # Load all fee records across all academic years, scoped to school.
+    fee_records = (
+        FeeRecord.query
+        .execution_options(include_all_years=True)
+        .filter_by(student_id=student.id, school_id=student.school_id)
+        .options(
+            joinedload(FeeRecord.fee_type),
+            joinedload(FeeRecord.academic_year),
+        )
+        .order_by(FeeRecord.academic_year_id.asc(), FeeRecord.created_at.asc())
+        .all()
+    )
+
+    fee_entries = []
+    if fee_records:
+        _ids = [r.id for r in fee_records]
+        _insts = (
+            FeeInstallment.query
+            .execution_options(include_all_years=True)
+            .filter(
+                FeeInstallment.fee_record_id.in_(_ids),
+                FeeInstallment.school_id == student.school_id,
+            )
+            .options(joinedload(FeeInstallment.collector))
+            .order_by(FeeInstallment.fee_record_id, FeeInstallment.installment_no)
+            .all()
+        )
+        _inst_map = {}
+        for _i in _insts:
+            _inst_map.setdefault(_i.fee_record_id, []).append(_i)
+        fee_entries = [(r, _inst_map.get(r.id, [])) for r in fee_records]
+
+    grand_total = sum(float(r.total_amount) for r, _ in fee_entries)
+    grand_disc  = sum(float(r.discount or 0) for r, _ in fee_entries)
+    grand_net   = grand_total - grand_disc
+    grand_paid  = sum(
+        sum(float(i.received_amount or 0) for i in insts)
+        for _, insts in fee_entries
+    )
+    grand_rem   = grand_net - grand_paid
+
+    logo_url = None
+    if school and getattr(school, 'logo_path', None):
+        from app.utils.helpers import resolve_photo_url
+        logo_url = resolve_photo_url(school.logo_path)
+
+    return render_template(
+        'fees/student_statement.html',
+        student=student,
+        school=school,
+        fee_entries=fee_entries,
+        grand_total=grand_total,
+        grand_disc=grand_disc,
+        grand_net=grand_net,
+        grand_paid=grand_paid,
+        grand_rem=grand_rem,
+        print_date=date.today(),
+        logo_url=logo_url,
+    )
 
 
 @fees_bp.route('/reminder-settings', methods=['POST'])

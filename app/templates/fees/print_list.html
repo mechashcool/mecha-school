@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>كشف الرسوم الدراسية{% if school %} — {{ school.school_name_ar or school.school_name }}{% endif %}</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Cairo', 'Tajawal', sans-serif;
+  background: #f0f4f8;
+  color: #16243a;
+  padding: 20px;
+  direction: rtl;
+}
+
+/* ── Screen controls (hidden on print) ── */
+.screen-controls {
+  text-align: center;
+  padding: 14px;
+  background: #e8edf5;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+.btn-print, .btn-close-win {
+  border: none;
+  padding: 9px 26px;
+  border-radius: 8px;
+  font-family: 'Cairo', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  margin: 0 5px;
+}
+.btn-print     { background: #1a3a5c; color: #fff; }
+.btn-close-win { background: #6b7a8d; color: #fff; }
+.btn-print:hover     { background: #0f2540; }
+.btn-close-win:hover { background: #56636f; }
+
+/* ── Document wrapper ── */
+.print-wrapper {
+  max-width: 980px;
+  margin: 0 auto;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0,0,0,.12);
+  overflow: hidden;
+}
+
+/* ── Header ── */
+.doc-header {
+  background: linear-gradient(135deg, #0f2540 0%, #1a3a5c 100%);
+  color: #fff;
+  padding: 22px 36px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+.doc-header-logo {
+  width: 60px;
+  height: 60px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: rgba(255,255,255,.15);
+  padding: 4px;
+  flex-shrink: 0;
+}
+.doc-header-info { flex: 1; }
+.school-name   { font-size: 19px; font-weight: 900; line-height: 1.2; }
+.report-title  { font-size: 14px; font-weight: 700; color: rgba(255,255,255,.82); margin-top: 4px; }
+.report-sub    { font-size: 11px; color: rgba(255,255,255,.56); margin-top: 3px; }
+.doc-header-date {
+  text-align: left;
+  font-size: 11.5px;
+  color: rgba(255,255,255,.65);
+  white-space: nowrap;
+  margin-right: auto;
+}
+.doc-header-date strong { display: block; font-size: 15px; color: #fff; margin-top: 2px; font-weight: 800; }
+
+/* ── Filters bar ── */
+.filter-bar {
+  background: #f8fbff;
+  border-bottom: 1px solid #dde8f4;
+  padding: 9px 36px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  font-size: 12.5px;
+  color: #64748b;
+}
+.filter-bar .chip {
+  background: #e9eff8;
+  border-radius: 12px;
+  padding: 3px 10px;
+  font-size: 12px;
+}
+.filter-bar .chip b { color: #1a3a5c; }
+
+/* ── Table ── */
+.doc-body { padding: 22px 36px 28px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th {
+  background: #1a3a5c;
+  color: #fff;
+  padding: 10px 11px;
+  font-weight: 700;
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+thead th:first-child { border-radius: 0 4px 0 0; text-align: center; }
+thead th:last-child  { border-radius: 4px 0 0 0; }
+tbody td {
+  padding: 9px 11px;
+  border-bottom: 1px solid #edf1f7;
+  vertical-align: middle;
+  font-size: 12.5px;
+}
+tbody tr:nth-child(even) td { background: #f5f8fd; }
+tbody tr:hover td { background: #eef4ff; }
+.td-idx      { text-align: center; color: #b0bec5; font-size: 11.5px; width: 36px; }
+.td-student  { }
+.student-name { font-weight: 700; font-size: 13px; }
+.student-code { font-size: 11px; color: #9aabb8; margin-top: 1px; }
+.td-amount   { font-weight: 700; }
+.td-disc     { color: #e8a020; }
+.td-net      { font-weight: 700; }
+.td-paid     { color: #1aab6d; font-weight: 700; }
+.td-year     { font-size: 11.5px; color: #9aabb8; white-space: nowrap; }
+.badge-settled { background: #e8f8f0; color: #1aab6d; padding: 2px 8px; border-radius: 10px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+.badge-due     { background: #fef0f0; color: #e03e3e; padding: 2px 8px; border-radius: 10px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+.empty-row td  { text-align: center; padding: 40px; color: #b0bec5; font-size: 14px; }
+
+/* ── Totals row ── */
+.totals-row td {
+  background: #0f2540 !important;
+  color: #fff !important;
+  font-weight: 800 !important;
+  font-size: 13px;
+  padding: 11px 11px;
+  border: none;
+}
+.totals-row .lbl { color: rgba(255,255,255,.75); font-weight: 600; }
+
+/* ── Footer ── */
+.doc-footer {
+  border-top: 1px solid #e0e8f0;
+  padding: 11px 36px;
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: #b0bec5;
+}
+
+/* ── Print styles ── */
+@media print {
+  body { background: #fff !important; padding: 0; }
+  .screen-controls { display: none !important; }
+  .print-wrapper { box-shadow: none; border-radius: 0; max-width: 100%; }
+
+  .doc-header      { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  thead th         { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .totals-row td   { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  tbody tr:nth-child(even) td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .badge-settled, .badge-due  { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  @page { size: A4 portrait; margin: 10mm 8mm; }
+  table { page-break-inside: auto; }
+  tr    { page-break-inside: avoid; }
+  .doc-footer { position: fixed; bottom: 0; left: 0; right: 0; }
+}
+</style>
+</head>
+<body>
+
+<div class="screen-controls">
+  <button class="btn-print"     onclick="window.print()"><i>🖨</i> طباعة</button>
+  <button class="btn-close-win" onclick="window.close()">✕ إغلاق</button>
+</div>
+
+<div class="print-wrapper">
+
+  <!-- Header -->
+  <div class="doc-header">
+    {% if logo_url %}
+    <img src="{{ logo_url }}" class="doc-header-logo" alt="شعار المدرسة">
+    {% endif %}
+    <div class="doc-header-info">
+      <div class="school-name">{{ (school.school_name_ar or school.school_name) if school else 'المدرسة' }}</div>
+      <div class="report-title">كشف الرسوم الدراسية</div>
+      {% if year %}
+      <div class="report-sub">العام الدراسي: {{ year.name }}</div>
+      {% endif %}
+    </div>
+    <div class="doc-header-date">
+      تاريخ الطباعة
+      <strong>{{ print_date.strftime('%Y-%m-%d') }}</strong>
+    </div>
+  </div>
+
+  <!-- Active filters -->
+  <div class="filter-bar">
+    <span>عدد السجلات: <b>{{ fee_entries | length }}</b></span>
+    {% if fee_type_name %}
+    <span class="chip">نوع الرسم: <b>{{ fee_type_name }}</b></span>
+    {% endif %}
+    {% if payment_status == 'paid' %}
+    <span class="chip">الحالة: <b>مدفوع</b></span>
+    {% elif payment_status == 'unpaid' %}
+    <span class="chip">الحالة: <b>غير مدفوع</b></span>
+    {% endif %}
+    {% if installment_filter != 'all' %}
+    <span class="chip">رقم القسط: <b>{{ installment_filter }}</b></span>
+    {% endif %}
+    {% if search %}
+    <span class="chip">بحث: <b>{{ search }}</b></span>
+    {% endif %}
+  </div>
+
+  <!-- Table -->
+  <div class="doc-body">
+    <table>
+      <thead>
+        <tr>
+          <th class="td-idx">#</th>
+          <th>الطالب</th>
+          <th>نوع الرسم</th>
+          <th>الإجمالي</th>
+          <th>الخصم</th>
+          <th>الصافي</th>
+          <th>المدفوع</th>
+          <th>المتبقي</th>
+          <th>السنة الدراسية</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rec, insts in fee_entries %}
+        {% set paid_ns = namespace(v=0) %}
+        {% for i in insts %}{% set paid_ns.v = paid_ns.v + (i.received_amount | float) %}{% endfor %}
+        {% set net = (rec.total_amount | float) - (rec.discount | float if rec.discount else 0) %}
+        {% set rem = net - paid_ns.v %}
+        <tr>
+          <td class="td-idx">{{ loop.index }}</td>
+          <td class="td-student">
+            <div class="student-name">{{ rec.student.full_name }}</div>
+            <div class="student-code">{{ rec.student.student_id }}</div>
+          </td>
+          <td>{{ rec.fee_type.name }}</td>
+          <td class="td-amount">{{ '{:,.0f}'.format(rec.total_amount) }}</td>
+          <td class="td-disc">
+            {% if rec.discount and rec.discount > 0 %}{{ '{:,.0f}'.format(rec.discount) }}{% else %}—{% endif %}
+          </td>
+          <td class="td-net">{{ '{:,.0f}'.format(net) }}</td>
+          <td class="td-paid">{{ '{:,.0f}'.format(paid_ns.v) }}</td>
+          <td>
+            {% if rem <= 0 %}
+            <span class="badge-settled">مسدّد</span>
+            {% else %}
+            <span class="badge-due">{{ '{:,.0f}'.format(rem) }}</span>
+            {% endif %}
+          </td>
+          <td class="td-year">{{ rec.academic_year.name if rec.academic_year else '—' }}</td>
+        </tr>
+        {% else %}
+        <tr class="empty-row">
+          <td colspan="9">لا توجد سجلات رسوم مطابقة للفلاتر المحددة</td>
+        </tr>
+        {% endfor %}
+
+        {% if fee_entries %}
+        <tr class="totals-row">
+          <td colspan="3" class="lbl" style="text-align:center">الإجمالي الكلي</td>
+          <td>{{ '{:,.0f}'.format(grand_total) }}</td>
+          <td>{{ '{:,.0f}'.format(grand_disc) }}</td>
+          <td>{{ '{:,.0f}'.format(grand_total - grand_disc) }}</td>
+          <td>{{ '{:,.0f}'.format(grand_paid) }}</td>
+          <td colspan="2">
+            {% if grand_rem <= 0 %}مسدّد بالكامل{% else %}{{ '{:,.0f}'.format(grand_rem) }}{% endif %}
+          </td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Footer -->
+  <div class="doc-footer">
+    <span>{{ (school.school_name_ar or school.school_name) if school else '' }}</span>
+    <span>نظام ميكا سكول</span>
+    <span>{{ print_date.strftime('%Y-%m-%d') }}</span>
+  </div>
+
+</div><!-- /.print-wrapper -->
+
+<script>
+(function () {
+  // Auto-print when opened as a popup from the fees index page.
+  if (window.opener) {
+    window.onload = function () {
+      setTimeout(function () { window.print(); }, 350);
+    };
+  }
+})();
+</script>
+</body>
+</html>

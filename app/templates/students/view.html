@@ -189,12 +189,21 @@
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-cash-stack text-accent me-2"></i>سجل الرسوم والأقساط</span>
-        {% if student.status == 'active' and not is_historical_year %}
-        <a href="{{ url_for('fees.create', student_id=student.id) }}"
-           class="btn btn-sm btn-primary">
-          <i class="bi bi-plus-circle me-1"></i>إضافة رسم لهذا الطالب
-        </a>
-        {% endif %}
+        <div class="d-flex gap-2">
+          {% if fee_records_with_inst %}
+          <a href="{{ url_for('fees.student_statement', student_id=student.id) }}"
+             class="btn btn-sm btn-outline-secondary"
+             onclick="return openStatementWindow(this)">
+            <i class="bi bi-file-earmark-text-fill me-1"></i>كشف مالي للطباعة
+          </a>
+          {% endif %}
+          {% if student.status == 'active' and not is_historical_year %}
+          <a href="{{ url_for('fees.create', student_id=student.id) }}"
+             class="btn btn-sm btn-primary">
+            <i class="bi bi-plus-circle me-1"></i>إضافة رسم لهذا الطالب
+          </a>
+          {% endif %}
+        </div>
       </div>
       {{ fees_table_body(fee_records_with_inst, show_student_col=False) }}
     </div>
@@ -247,6 +256,12 @@ function confirmArchive(form, name) {
     ? `أرشفة الطالب "${name}"؟ ستختفي من القوائم النشطة لكن بياناته ستبقى محفوظة.`
     : 'إعادة تفعيل هذا الطالب؟';
   if (confirm(msg)) form.submit();
+}
+
+function openStatementWindow(el) {
+  window.open(el.href, 'student_statement_window',
+    'width=900,height=720,scrollbars=yes,resizable=yes');
+  return false;
 }
 </script>
 {% endblock %}

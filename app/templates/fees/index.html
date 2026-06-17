@@ -13,6 +13,11 @@
     <a href="{{ url_for('fees.fee_types') }}" class="btn btn-outline-secondary">
       <i class="bi bi-tags-fill me-1"></i>أنواع الرسوم
     </a>
+    <a href="{{ url_for('fees.print_list', **request.args.to_dict()) }}"
+       class="btn btn-outline-secondary"
+       onclick="return openFeePrintWindow(this)">
+      <i class="bi bi-printer-fill me-1"></i>طباعة
+    </a>
     <a href="{{ url_for('fees.export_excel', **request.args.to_dict()) }}" class="btn btn-outline-success">
       <i class="bi bi-file-earmark-excel-fill me-1"></i>تصدير Excel
     </a>
@@ -187,6 +192,13 @@
 
 {% block extra_js %}
 <script>
+// ── Open fees print list in a popup window ────────────────────────────────────
+function openFeePrintWindow(el) {
+  window.open(el.href, 'fee_print_window',
+    'width=1040,height=720,scrollbars=yes,resizable=yes');
+  return false;
+}
+
 // ── Auto-expand reminder card on save success ─────────────────────────────────
 (function () {
   var flashEls = document.querySelectorAll('.alert');
