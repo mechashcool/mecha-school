@@ -7,6 +7,146 @@
   <span class="badge-status {{ cls.get(st,'badge-pending') }}">{{ status_labels.get(st, st) }}</span>
 {% endmacro %}
 
+{% block extra_css %}
+<style>
+/* ── Payroll print styles ─────────────────────────────────────────────── */
+#payroll-print-section { display: none; }
+
+@media print {
+  @page { size: A4 landscape; margin: 14mm 12mm; }
+
+  body * { visibility: hidden; }
+  #payroll-print-section,
+  #payroll-print-section * { visibility: visible; }
+
+  #payroll-print-section {
+    display: block !important;
+    position: fixed;
+    inset: 0;
+    direction: rtl;
+    font-family: 'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif;
+    font-size: 11pt;
+    color: #1e2b3a;
+    background: #fff;
+  }
+
+  .pr-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    border-bottom: 3px solid #1a3a5c;
+    padding-bottom: 8px;
+    margin-bottom: 10px;
+  }
+  .pr-school-name {
+    font-size: 17pt;
+    font-weight: 900;
+    color: #0f2540;
+  }
+  .pr-school-sub {
+    font-size: 9pt;
+    color: #6b7a8d;
+    margin-top: 2px;
+  }
+  .pr-report-title {
+    text-align: left;
+  }
+  .pr-report-title h2 {
+    font-size: 14pt;
+    font-weight: 700;
+    color: #1a3a5c;
+    margin: 0;
+  }
+  .pr-report-title p {
+    font-size: 9.5pt;
+    color: #6b7a8d;
+    margin: 2px 0 0;
+  }
+
+  .pr-filters {
+    background: #f0f4f8;
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-size: 9pt;
+    color: #4a5568;
+    margin-bottom: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .pr-filters span { font-weight: 700; color: #1a3a5c; }
+
+  .pr-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10pt;
+  }
+  .pr-table thead tr {
+    background: #1a3a5c;
+    color: #fff;
+  }
+  .pr-table thead th {
+    padding: 7px 8px;
+    text-align: right;
+    font-weight: 700;
+    font-size: 9.5pt;
+    border: 1px solid #22508a;
+    white-space: nowrap;
+  }
+  .pr-table tbody tr:nth-child(even) { background: #f8fbff; }
+  .pr-table tbody tr:hover { background: #eef3fa; }
+  .pr-table tbody td {
+    padding: 6px 8px;
+    border: 1px solid #dde3ec;
+    vertical-align: middle;
+  }
+  .pr-table tfoot tr {
+    background: #0f2540;
+    color: #fff;
+    font-weight: 700;
+  }
+  .pr-table tfoot td {
+    padding: 8px 8px;
+    border: 1px solid #22508a;
+    font-size: 10.5pt;
+  }
+
+  .pr-num  { text-align: left; font-variant-numeric: tabular-nums; }
+  .pr-allow  { color: #1aab6d; font-weight: 700; }
+  .pr-deduct { color: #c0392b; font-weight: 700; }
+  .pr-net    { font-weight: 900; font-size: 11pt; }
+
+  .pr-status-draft     { color: #92400e; font-size: 8.5pt; font-weight: 700; }
+  .pr-status-approved  { color: #1d4ed8; font-size: 8.5pt; font-weight: 700; }
+  .pr-status-paid      { color: #166534; font-size: 8.5pt; font-weight: 700; }
+  .pr-status-cancelled { color: #7f1d1d; font-size: 8.5pt; font-weight: 700; text-decoration: line-through; }
+
+  .pr-summary {
+    margin-top: 10px;
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    border-top: 2px solid #dde3ec;
+    padding-top: 8px;
+    font-size: 9.5pt;
+  }
+  .pr-summary-item { text-align: center; }
+  .pr-summary-item .val { font-size: 12pt; font-weight: 900; color: #1a3a5c; display: block; }
+  .pr-summary-item .lbl { font-size: 8.5pt; color: #6b7a8d; }
+
+  .pr-footer {
+    margin-top: 12px;
+    border-top: 1px solid #dde3ec;
+    padding-top: 6px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 8pt;
+    color: #9aabb8;
+  }
+}
+</style>
+{% endblock extra_css %}
+
 {% block content %}
 <div class="page-header">
   <div>
@@ -14,6 +154,9 @@
     <p class="page-subtitle">{{ arabic_months[month] }} {{ year }}</p>
   </div>
   <div class="d-flex gap-2">
+    <button onclick="window.print()" class="btn btn-outline-secondary">
+      <i class="bi bi-printer-fill me-1"></i>طباعة
+    </button>
     <a href="{{ url_for('salaries.export_excel', month=month, year=year) }}"
        class="btn btn-outline-success">
       <i class="bi bi-file-earmark-excel-fill me-1"></i>Excel
@@ -205,4 +348,143 @@
   </div>
 </div>
 {% endif %}
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     PRINT-ONLY SECTION — hidden in normal view, rendered by @media print
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<div id="payroll-print-section" aria-hidden="true">
+
+  <!-- Header -->
+  <div class="pr-header">
+    <div>
+      <div class="pr-school-name">{{ current_school.name if current_school else 'المدرسة' }}</div>
+      <div class="pr-school-sub">نظام ميكا لإدارة المدارس</div>
+    </div>
+    <div class="pr-report-title">
+      <h2>مسير الرواتب الشهري</h2>
+      <p>{{ arabic_months[month] }} {{ year }}</p>
+    </div>
+  </div>
+
+  <!-- Active filters summary -->
+  <div class="pr-filters">
+    <div>الفترة: <span>{{ arabic_months[month] }} {{ year }}</span></div>
+    {% if dept_filter %}<div>القسم: <span>{{ dept_filter }}</span></div>{% endif %}
+    {% if status_filter %}<div>الحالة: <span>{{ status_labels.get(status_filter, status_filter) }}</span></div>{% endif %}
+    <div>عدد السجلات: <span>{{ records|length }}</span></div>
+    <div>تاريخ الطباعة: <span id="pr-print-date"></span></div>
+  </div>
+
+  <!-- Main table -->
+  <table class="pr-table">
+    <thead>
+      <tr>
+        <th style="width:32px">#</th>
+        <th>اسم الموظف</th>
+        <th>المسمى الوظيفي</th>
+        <th>القسم</th>
+        <th class="pr-num">الأساسي (د.ع)</th>
+        <th class="pr-num">البدلات (د.ع)</th>
+        <th class="pr-num">الخصومات (د.ع)</th>
+        <th class="pr-num">الصافي (د.ع)</th>
+        <th>الحالة</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for rec in records %}
+      <tr>
+        <td style="text-align:center;color:#9aabb8;font-size:9pt">{{ loop.index }}</td>
+        <td style="font-weight:700">{{ rec.employee_name }}</td>
+        <td style="font-size:9.5pt;color:#4a5568">{{ rec.job_title or '—' }}</td>
+        <td style="font-size:9.5pt;color:#4a5568">{{ rec.department or '—' }}</td>
+        <td class="pr-num">{{ '{:,.0f}'.format(rec.base_salary) }}</td>
+        <td class="pr-num pr-allow">{% if rec.allowances and rec.allowances > 0 %}{{ '{:,.0f}'.format(rec.allowances) }}{% else %}—{% endif %}</td>
+        <td class="pr-num pr-deduct">{% if rec.deductions and rec.deductions > 0 %}{{ '{:,.0f}'.format(rec.deductions) }}{% else %}—{% endif %}</td>
+        <td class="pr-num pr-net">{{ '{:,.0f}'.format(rec.net_salary) }}</td>
+        <td>
+          {% if rec.status == 'paid' %}
+            <span class="pr-status-paid">مدفوع{% if rec.paid_date %} ({{ rec.paid_date.strftime('%Y-%m-%d') }}){% endif %}</span>
+          {% elif rec.status == 'approved' %}
+            <span class="pr-status-approved">معتمد</span>
+          {% elif rec.status == 'cancelled' %}
+            <span class="pr-status-cancelled">ملغي</span>
+          {% else %}
+            <span class="pr-status-draft">مسودة</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="9" style="text-align:center;color:#9aabb8;padding:20px">
+          لا توجد سجلات لهذا الشهر
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    {% if records %}
+    <tfoot>
+      <tr>
+        <td colspan="4" style="text-align:right">الإجمالي ({{ records|length }} موظف)</td>
+        <td class="pr-num">{{ '{:,.0f}'.format(records | sum(attribute='base_salary') | float) }}</td>
+        <td class="pr-num">{{ '{:,.0f}'.format(total_allow) }}</td>
+        <td class="pr-num">{{ '{:,.0f}'.format(total_deduct) }}</td>
+        <td class="pr-num" style="font-size:12pt">{{ '{:,.0f}'.format(total_net) }}</td>
+        <td></td>
+      </tr>
+    </tfoot>
+    {% endif %}
+  </table>
+
+  <!-- Summary cards -->
+  {% if records %}
+  <div class="pr-summary">
+    <div class="pr-summary-item">
+      <span class="val">{{ records|length }}</span>
+      <span class="lbl">إجمالي السجلات</span>
+    </div>
+    <div class="pr-summary-item">
+      <span class="val">{{ '{:,.0f}'.format(total_net) }}</span>
+      <span class="lbl">إجمالي الصافي (د.ع)</span>
+    </div>
+    <div class="pr-summary-item">
+      <span class="val" style="color:#1aab6d">{{ '{:,.0f}'.format(total_paid) }}</span>
+      <span class="lbl">مدفوع (د.ع)</span>
+    </div>
+    <div class="pr-summary-item">
+      <span class="val" style="color:#c0392b">{{ '{:,.0f}'.format(total_deduct) }}</span>
+      <span class="lbl">إجمالي الخصومات (د.ع)</span>
+    </div>
+    <div class="pr-summary-item">
+      <span class="val" style="color:#1aab6d">{{ '{:,.0f}'.format(total_allow) }}</span>
+      <span class="lbl">إجمالي البدلات (د.ع)</span>
+    </div>
+    <div class="pr-summary-item">
+      <span class="val">{{ approved_count }}</span>
+      <span class="lbl">معتمد (لم يُصرف)</span>
+    </div>
+    <div class="pr-summary-item">
+      <span class="val">{{ draft_count }}</span>
+      <span class="lbl">مسودة</span>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Footer -->
+  <div class="pr-footer">
+    <div>{{ current_school.name if current_school else '' }} &mdash; نظام ميكا</div>
+    <div>تمت الطباعة بواسطة: {{ current_user.full_name if current_user.is_authenticated else '' }}</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var el = document.getElementById('pr-print-date');
+  if (el) {
+    var d = new Date();
+    var months = ['يناير','فبراير','مارس','أبريل','مايو','يونيو',
+                  'يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+    el.textContent = d.getDate() + ' ' + months[d.getMonth()] + ' ' + d.getFullYear();
+  }
+})();
+</script>
 {% endblock %}
