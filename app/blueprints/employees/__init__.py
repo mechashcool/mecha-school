@@ -131,6 +131,8 @@ def _handle_employee_post(employee):
     school    = get_current_school()
     is_create = employee is None
     emp_cfg   = get_school_config(school.id if school else None)
+    # Create uses the multi-step wizard; edit keeps the single form.
+    _tmpl = 'employees/create_wizard.html' if is_create else 'employees/form.html'
 
     full_name = request.form.get('full_name', '').strip()
     email     = request.form.get('email', '').strip() or None
@@ -143,11 +145,11 @@ def _handle_employee_post(employee):
 
     if not full_name:
         flash('يرجى ملء حقل الاسم الكامل.', 'danger')
-        return render_template('employees/form.html', **_form_context(employee))
+        return render_template(_tmpl, error_step='basic', **_form_context(employee))
 
     if emp_cfg.field_visible('employees', 'job_title') and emp_cfg.field_required('employees', 'job_title') and not job_title:
         flash('المسمى الوظيفي مطلوب.', 'danger')
-        return render_template('employees/form.html', **_form_context(employee))
+        return render_template(_tmpl, error_step='basic', **_form_context(employee))
 
     if email:
         q = Employee.query.filter_by(email=email)
@@ -155,7 +157,7 @@ def _handle_employee_post(employee):
             q = q.filter(Employee.id != employee.id)
         if q.first():
             flash('عذراً، هذا البريد الإلكتروني مسجل مسبقاً.', 'danger')
-            return render_template('employees/form.html', **_form_context(employee))
+            return render_template(_tmpl, error_step='basic', **_form_context(employee))
 
     hire_date = None
     hire_str  = request.form.get('hire_date', '').strip()
@@ -164,7 +166,7 @@ def _handle_employee_post(employee):
             hire_date = dt.strptime(hire_str, '%Y-%m-%d').date()
         except ValueError:
             flash('صيغة تاريخ التعيين غير صحيحة.', 'danger')
-            return render_template('employees/form.html', **_form_context(employee))
+            return render_template(_tmpl, error_step='basic', **_form_context(employee))
 
     dob = None
     dob_str = request.form.get('date_of_birth', '').strip()
@@ -227,7 +229,7 @@ def _handle_employee_post(employee):
             )
             if _is_emp_id_conflict:
                 flash('رقم الموظف مستخدم مسبقاً، يرجى المحاولة مرة أخرى', 'danger')
-                return render_template('employees/form.html', **_form_context(None))
+                return render_template(_tmpl, error_step='basic', **_form_context(None))
             raise
     else:
         employee.full_name     = full_name
@@ -376,7 +378,7 @@ def index():
 def create():
     if request.method == 'POST':
         return _handle_employee_post(None)
-    return render_template('employees/form.html', **_form_context())
+    return render_template('employees/create_wizard.html', **_form_context())
 
 
 @employees_bp.route('/<int:emp_id>')

@@ -1,0 +1,808 @@
+{% extends "shared/base.html" %}
+{% block title %}إضافة موظف{% endblock %}
+{% block page_title %}موظف جديد{% endblock %}
+
+{# Create-only multi-step wizard. Field names, POST action, and save logic are unchanged.
+   The edit flow continues to use employees/form.html. #}
+{% set sf = request.form %}
+
+{% block extra_css %}
+<style>
+  .wiz-progress {
+    display: flex; align-items: flex-start; gap: 0;
+    overflow-x: auto; padding: 4px 2px 10px; margin-bottom: 22px;
+    scrollbar-width: thin;
+  }
+  .wiz-step-ind {
+    display: flex; flex-direction: column; align-items: center;
+    flex: 1 1 0; min-width: 78px; position: relative;
+    cursor: default; text-align: center;
+  }
+  .wiz-step-ind.clickable { cursor: pointer; }
+  .wiz-step-ind .dot {
+    width: 36px; height: 36px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 14px;
+    background: var(--card-bg); color: var(--text-muted);
+    border: 2px solid var(--border);
+    transition: all .2s var(--ease); z-index: 2;
+  }
+  .wiz-step-ind .lbl {
+    margin-top: 7px; font-size: 11.5px; font-weight: 600;
+    color: var(--text-muted); line-height: 1.3;
+  }
+  .wiz-step-ind::before {
+    content: ''; position: absolute; top: 17px; height: 2px;
+    background: var(--border); z-index: 1;
+    right: 50%; left: -50%;
+  }
+  .wiz-step-ind:first-child::before { display: none; }
+  .wiz-step-ind.active .dot {
+    background: var(--primary); color: #fff; border-color: var(--primary);
+    box-shadow: 0 0 0 4px rgba(26,58,92,.12);
+  }
+  .wiz-step-ind.active .lbl { color: var(--primary); }
+  .wiz-step-ind.done .dot {
+    background: var(--success); color: #fff; border-color: var(--success);
+  }
+  .wiz-step-ind.done .lbl { color: var(--success); }
+  .wiz-step-ind.done::before,
+  .wiz-step-ind.active::before { background: var(--success); }
+
+  .wizard-step { display: none; animation: pageFade .25s var(--ease); }
+  .wizard-step.current { display: block; }
+
+  .wiz-nav {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; margin-top: 24px;
+  }
+  .wiz-nav .spacer { flex: 1; }
+
+  .review-group { margin-bottom: 18px; }
+  .review-group h6 {
+    font-size: 12.5px; font-weight: 800; color: var(--primary);
+    text-transform: none; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .review-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 6px 18px;
+  }
+  .review-item { font-size: 13px; padding: 5px 0; border-bottom: 1px dashed var(--border); }
+  .review-item .k { color: var(--text-muted); font-weight: 600; }
+  .review-item .v { color: var(--text); font-weight: 700; }
+  .review-empty { color: var(--text-muted); font-size: 12.5px; font-style: italic; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">إضافة موظف جديد</h1>
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="{{ url_for('admin.dashboard') }}">الرئيسية</a></li>
+        <li class="breadcrumb-item"><a href="{{ url_for('employees.index') }}">الموظفون</a></li>
+        <li class="breadcrumb-item active">إضافة</li>
+      </ol>
+    </nav>
+  </div>
+  <a href="{{ url_for('employees.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+{# Progress indicator — built by JS from the steps actually present in the DOM #}
+<div class="wiz-progress" id="wizardProgress"
+     data-error-step="{{ error_step or 'basic' }}"></div>
+
+<form method="POST" action="{{ url_for('employees.create') }}"
+      enctype="multipart/form-data" id="employeeWizardForm" novalidate>
+
+  <!-- ════════════ STEP 1 — Basic Info ════════════ -->
+  <section class="wizard-step" data-step-key="basic" data-step-title="البيانات الأساسية">
+    <div class="card mb-4">
+      <div class="card-header"><i class="bi bi-person-badge-fill text-accent"></i>البيانات الشخصية والوظيفية</div>
+      <div class="card-body">
+        <div class="row g-3">
+
+          <div class="col-md-6">
+            <label class="form-label">الاسم الكامل <span class="text-danger">*</span></label>
+            <input type="text" name="full_name" class="form-control" required
+                   value="{{ sf.get('full_name', '') }}">
+          </div>
+
+          {% if school_cfg.field_visible('employees', 'job_title') %}
+          <div class="col-md-6">
+            <label class="form-label">المسمى الوظيفي{% if school_cfg.field_required('employees', 'job_title') %} <span class="text-danger">*</span>{% endif %}</label>
+            <input type="text" name="job_title" class="form-control"
+                   {{ 'required' if school_cfg.field_required('employees', 'job_title') }}
+                   value="{{ sf.get('job_title', '') }}">
+          </div>
+          {% endif %}
+
+          {% if school_cfg.field_visible('employees', 'department') %}
+          <div class="col-md-6">
+            <label class="form-label">القسم</label>
+            <input type="text" name="department" class="form-control"
+                   value="{{ sf.get('department', '') }}"
+                   placeholder="مثال: التدريس، المالية، الإدارة...">
+          </div>
+          {% endif %}
+
+          {% if school_cfg.field_visible('employees', 'gender') %}
+          <div class="col-md-6">
+            <label class="form-label">الجنس</label>
+            <select name="gender" class="form-select">
+              <option value="">— اختر —</option>
+              <option value="male"   {{ 'selected' if sf.get('gender') == 'male' }}>ذكر</option>
+              <option value="female" {{ 'selected' if sf.get('gender') == 'female' }}>أنثى</option>
+            </select>
+          </div>
+          {% endif %}
+
+          {% if school_cfg.field_visible('employees', 'phone') %}
+          <div class="col-md-6">
+            <label class="form-label">رقم الهاتف{% if school_cfg.field_required('employees', 'phone') %} <span class="text-danger">*</span>{% endif %}</label>
+            <input type="tel" name="phone" class="form-control"
+                   {{ 'required' if school_cfg.field_required('employees', 'phone') }}
+                   value="{{ sf.get('phone', '') }}">
+          </div>
+          {% endif %}
+
+          {% if school_cfg.field_visible('employees', 'email') %}
+          <div class="col-md-6">
+            <label class="form-label">البريد الإلكتروني</label>
+            <input type="email" name="email" class="form-control"
+                   value="{{ sf.get('email', '') }}">
+          </div>
+          {% endif %}
+
+          {% if school_cfg.field_visible('employees', 'nationality') %}
+          <div class="col-md-6">
+            <label class="form-label">الجنسية</label>
+            <input type="text" name="nationality" class="form-control"
+                   value="{{ sf.get('nationality', '') }}">
+          </div>
+          {% endif %}
+
+          {% if school_cfg.field_visible('employees', 'date_of_birth') %}
+          <div class="col-md-6">
+            <label class="form-label">تاريخ الميلاد</label>
+            <input type="date" name="date_of_birth" class="form-control"
+                   value="{{ sf.get('date_of_birth', '') }}">
+          </div>
+          {% endif %}
+
+          {% if school_cfg.field_visible('employees', 'contract_type') %}
+          <div class="col-md-6">
+            <label class="form-label">نوع العقد</label>
+            <select name="contract_type" class="form-select">
+              <option value="">— اختر —</option>
+              <option value="full-time"  {{ 'selected' if sf.get('contract_type') == 'full-time' }}>دوام كامل</option>
+              <option value="part-time"  {{ 'selected' if sf.get('contract_type') == 'part-time' }}>دوام جزئي</option>
+              <option value="contract"   {{ 'selected' if sf.get('contract_type') == 'contract' }}>عقد</option>
+            </select>
+          </div>
+          {% endif %}
+
+          {% if school_cfg.field_visible('employees', 'hire_date') %}
+          <div class="col-md-6">
+            <label class="form-label">تاريخ التعيين</label>
+            <input type="date" name="hire_date" class="form-control"
+                   value="{{ sf.get('hire_date', '') }}">
+          </div>
+          {% endif %}
+
+          {% if school_cfg.field_visible('employees', 'address') %}
+          <div class="col-12">
+            <label class="form-label">العنوان</label>
+            <textarea name="address" class="form-control" rows="2">{{ sf.get('address', '') }}</textarea>
+          </div>
+          {% endif %}
+
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ STEP 2 — Payroll ════════════ -->
+  {% if school_cfg.field_visible('employees', 'base_salary') %}
+  <section class="wizard-step" data-step-key="payroll" data-step-title="بيانات الراتب">
+    <div class="card mb-4">
+      <div class="card-header"><i class="bi bi-cash-stack text-accent"></i>بيانات الراتب</div>
+      <div class="card-body">
+        <div class="row g-3">
+
+          <div class="col-md-6">
+            <label class="form-label">الراتب الأساسي (د.ع) <span class="text-danger">*</span></label>
+            <input type="number" name="base_salary" class="form-control" min="0" step="1000" required
+                   value="{{ sf.get('base_salary', '') }}">
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">نوع الراتب</label>
+            <select name="salary_type" class="form-select">
+              <option value="monthly"     {{ 'selected' if sf.get('salary_type', 'monthly') in ('', 'monthly') }}>شهري</option>
+              <option value="daily"       {{ 'selected' if sf.get('salary_type') == 'daily' }}>يومي</option>
+              <option value="per_session" {{ 'selected' if sf.get('salary_type') == 'per_session' }}>بالحصة / المحاضرة</option>
+            </select>
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">حالة الراتب</label>
+            <select name="payroll_status" class="form-select">
+              <option value="active"    {{ 'selected' if sf.get('payroll_status', 'active') in ('', 'active') }}>فعّال</option>
+              <option value="suspended" {{ 'selected' if sf.get('payroll_status') == 'suspended' }}>موقوف</option>
+              <option value="resigned"  {{ 'selected' if sf.get('payroll_status') == 'resigned' }}>مستقيل</option>
+              <option value="inactive"  {{ 'selected' if sf.get('payroll_status') == 'inactive' }}>غير فعّال</option>
+            </select>
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">طريقة الدفع</label>
+            <select name="pay_method" class="form-select">
+              <option value="">— اختر —</option>
+              <option value="cash"   {{ 'selected' if sf.get('pay_method') == 'cash' }}>نقدي</option>
+              <option value="bank"   {{ 'selected' if sf.get('pay_method') == 'bank' }}>حوالة بنكية</option>
+              <option value="wallet" {{ 'selected' if sf.get('pay_method') == 'wallet' }}>محفظة إلكترونية</option>
+            </select>
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">رقم الحساب / المحفظة</label>
+            <input type="text" name="bank_account" class="form-control"
+                   value="{{ sf.get('bank_account', '') }}">
+          </div>
+
+          <div class="col-md-6">
+            <label class="form-label">تاريخ بدء الراتب</label>
+            <input type="date" name="salary_start_date" class="form-control"
+                   value="{{ sf.get('salary_start_date', '') }}">
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- ════════════ STEP 3 — Photo & Notes ════════════ -->
+  <section class="wizard-step" data-step-key="media"
+           data-step-title="{{ 'الصورة والملاحظات' if school_cfg.section_visible('employees', 'photo') else 'ملاحظات' }}">
+    <div class="row g-4">
+
+      {% if school_cfg.section_visible('employees', 'photo') %}
+      <div class="col-lg-5">
+        <div class="card mb-4">
+          <div class="card-header"><i class="bi bi-camera-fill text-accent"></i>صورة الموظف</div>
+          <div class="card-body text-center">
+            <div class="mb-3" style="width:120px;height:120px;border-radius:12px;
+                  background:var(--bg);display:flex;align-items:center;justify-content:center;
+                  margin:0 auto;font-size:40px;color:var(--text-muted)" id="photoPreviewWrap">
+              <i class="bi bi-person-fill" id="photoPreviewIcon"></i>
+              <img id="photoPreviewImg" class="rounded-12 d-none"
+                   style="width:120px;height:120px;object-fit:cover" alt="">
+            </div>
+            <input type="file" name="photo" id="photoInput"
+                   class="form-control form-control-sm" accept="image/*">
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="col-lg-{{ '7' if school_cfg.section_visible('employees', 'photo') else '12' }}">
+        <div class="card mb-4">
+          <div class="card-header"><i class="bi bi-sticky-fill text-accent"></i>ملاحظات</div>
+          <div class="card-body">
+            <textarea name="notes" class="form-control" rows="6"
+                      placeholder="أي ملاحظات إضافية...">{{ sf.get('notes', '') }}</textarea>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ════════════ STEP 4 — System Account ════════════ -->
+  {% if school_cfg.section_visible('employees', 'system_account') %}
+  <section class="wizard-step" data-step-key="account" data-step-title="حساب النظام">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-person-lock text-accent"></i>حساب النظام</div>
+      <div class="card-body">
+
+        <div class="form-check mb-3">
+          <input class="form-check-input" type="checkbox" name="create_account"
+                 id="chkCreateAccount" value="1"
+                 {{ 'checked' if sf.get('create_account') == '1' }}
+                 onchange="document.getElementById('accountFields').classList.toggle('d-none',!this.checked)">
+          <label class="form-check-label fw-semibold" for="chkCreateAccount">
+            إنشاء حساب دخول للموظف
+          </label>
+        </div>
+
+        <div id="accountFields" class="{{ '' if sf.get('create_account') == '1' else 'd-none' }}">
+          <p class="text-muted small mb-3">
+            <i class="bi bi-info-circle me-1"></i>
+            أدخل كلمة المرور فقط وسيتم توليد اسم المستخدم تلقائياً بصيغة <code>XXX-EMP-000001</code>.
+            يمكنك أيضاً كتابة اسم مستخدم مخصص. إذا تركت كلمة المرور فارغة، لن يُنشأ الحساب.
+          </p>
+          <div class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label">اسم المستخدم <span class="text-muted fw-400">(اختياري — يُولَّد تلقائياً)</span></label>
+              <input type="text" name="username" class="form-control"
+                     autocomplete="off" placeholder="اتركه فارغاً للتوليد التلقائي"
+                     value="{{ sf.get('username', '') }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">كلمة المرور</label>
+              <input type="password" name="user_password" class="form-control" autocomplete="new-password">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">الدور الوظيفي <span class="text-danger">*</span></label>
+              <select name="role_id" class="form-select">
+                <option value="">— اختر —</option>
+                {% for role in roles %}
+                <option value="{{ role.id }}" {{ 'selected' if sf.get('role_id') == role.id|string }}>{{ role.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-6 d-flex align-items-end">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="user_is_active"
+                       id="chkUserActive" value="1" checked>
+                <label class="form-check-label" for="chkUserActive">الحساب فعّال</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- ════════════ STEP 5 — Teacher Assignments ════════════ -->
+  {% if school_cfg.section_visible('employees', 'teacher_assignment') %}
+  <section class="wizard-step" data-step-key="teacher" data-step-title="إعدادات التدريسي">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-journal-bookmark-fill text-accent"></i>إعدادات التدريسي</div>
+      <div class="card-body">
+        <input type="hidden" name="save_teacher_section" value="1">
+
+        {% if sections or subjects %}
+
+        {# Stage / Grade filter row #}
+        <div class="row g-3 mb-3 align-items-end">
+          <div class="col-md-5" id="taStageCol">
+            <label class="form-label fw-semibold small text-muted">المرحلة الدراسية</label>
+            <select id="taStageFilter" class="form-select">
+              <option value="">— اختر المرحلة —</option>
+            </select>
+          </div>
+          <div class="col-md-5">
+            <label class="form-label fw-semibold small text-muted">الصف الدراسي</label>
+            <select id="taGradeFilter" class="form-select" disabled>
+              <option value="">— اختر الصف —</option>
+            </select>
+          </div>
+        </div>
+
+        <p id="taSelectHint" class="text-muted small mb-3">
+          <i class="bi bi-arrow-up-circle me-1"></i>
+          اختر المرحلة والصف لعرض الشعب والمواد الخاصة بهذا الصف.
+        </p>
+
+        {# Homeroom sections — one panel per grade #}
+        <div id="taHomeroomWrap" style="display:none">
+          <h6 class="fw-semibold mb-2">الصفوف الرئيسية (مشرف الصف)</h6>
+          {% for grade in grades %}
+          {% set gs = sections | selectattr('grade_id', 'equalto', grade.id) | list %}
+          {% if gs %}
+          <div class="ta-grade-homeroom" data-gid="{{ grade.id }}" style="display:none">
+            <div class="d-flex flex-wrap gap-2 mb-3">
+              {% for sec in gs %}
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="checkbox"
+                       name="homeroom_section_ids" value="{{ sec.id }}"
+                       id="hr_sec_{{ sec.id }}">
+                <label class="form-check-label" for="hr_sec_{{ sec.id }}">{{ sec.name }}</label>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+          {% endfor %}
+        </div>
+
+        {# Teaching sections — one panel per grade #}
+        <div id="taSectionsWrap" style="display:none">
+          <h6 class="fw-semibold mb-2">الشعب التي يُدرّسها</h6>
+          {% for grade in grades %}
+          {% set gs = sections | selectattr('grade_id', 'equalto', grade.id) | list %}
+          {% if gs %}
+          <div class="ta-grade-sections" data-gid="{{ grade.id }}" style="display:none">
+            <div class="d-flex flex-wrap gap-2 mb-3">
+              {% for sec in gs %}
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="checkbox"
+                       name="teaching_section_ids" value="{{ sec.id }}"
+                       id="ts_sec_{{ sec.id }}">
+                <label class="form-check-label" for="ts_sec_{{ sec.id }}">{{ sec.name }}</label>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+          {% endfor %}
+        </div>
+
+        {# Subjects — one panel per grade #}
+        {% if subjects %}
+        <div id="taSubjectsWrap" style="display:none">
+          <h6 class="fw-semibold mb-2">المواد الدراسية</h6>
+          {% for grade in grades %}
+          {% set gsubjs = subjects | selectattr('grade_id', 'equalto', grade.id) | list %}
+          {% if gsubjs %}
+          <div class="ta-grade-subjects" data-gid="{{ grade.id }}" style="display:none">
+            <div class="d-flex flex-wrap gap-2 mb-2">
+              {% for subj in gsubjs %}
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="checkbox"
+                       name="subject_ids" value="{{ subj.id }}"
+                       id="subj_{{ subj.id }}">
+                <label class="form-check-label" for="subj_{{ subj.id }}">{{ subj.name }}</label>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+          {% endfor %}
+          {# Subjects with no grade_id — shown whenever any grade is selected #}
+          {% set ung = subjects | selectattr('grade_id', 'none') | list %}
+          {% if ung %}
+          <div class="ta-ungrouped-subjects" style="display:none">
+            <div class="d-flex flex-wrap gap-2 mb-2">
+              {% for subj in ung %}
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="checkbox"
+                       name="subject_ids" value="{{ subj.id }}"
+                       id="subj_ung_{{ subj.id }}">
+                <label class="form-check-label" for="subj_ung_{{ subj.id }}">{{ subj.name }}</label>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {% else %}
+        <p class="text-muted mb-0">
+          <i class="bi bi-info-circle me-1"></i>
+          لا توجد شعب أو مواد محددة للعام الدراسي الحالي.
+        </p>
+        {% endif %}
+
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- ════════════ STEP 6 — Review ════════════ -->
+  <section class="wizard-step" data-step-key="review" data-step-title="المراجعة">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-clipboard-check-fill text-accent"></i>مراجعة البيانات قبل الحفظ</div>
+      <div class="card-body" id="reviewContent">
+        <!-- filled by JS when this step is entered -->
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ Navigation ════════════ -->
+  <div class="wiz-nav">
+    <button type="button" class="btn btn-outline-secondary px-4" id="wizPrev" style="display:none">
+      <i class="bi bi-arrow-right me-1"></i>السابق
+    </button>
+    <div class="spacer"></div>
+    <a href="{{ url_for('employees.index') }}" class="btn btn-link text-muted">إلغاء</a>
+    <button type="button" class="btn btn-primary px-4" id="wizNext">
+      التالي<i class="bi bi-arrow-left ms-1"></i>
+    </button>
+    <button type="submit" class="btn btn-success px-4" id="wizSubmit" style="display:none">
+      <i class="bi bi-check-circle-fill me-2"></i>تأكيد وإضافة الموظف
+    </button>
+  </div>
+
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+/* ════════════ Photo preview ════════════ */
+(function () {
+  const input = document.getElementById('photoInput');
+  if (!input) return;
+  input.addEventListener('change', () => {
+    const file = input.files && input.files[0];
+    const img  = document.getElementById('photoPreviewImg');
+    const icon = document.getElementById('photoPreviewIcon');
+    if (file && file.type.startsWith('image/')) {
+      img.src = URL.createObjectURL(file);
+      img.classList.remove('d-none');
+      icon.classList.add('d-none');
+    } else {
+      img.classList.add('d-none');
+      icon.classList.remove('d-none');
+    }
+  });
+})();
+
+/* ════════════ Teacher assignment: stage → grade → content filter ════════════ */
+(function () {
+  var grades = [
+    {% for g in grades %}{"id":{{ g.id }},"name":{{ g.name|tojson }},"stage":{{ (g.stage or "")|tojson }}},{% endfor %}
+  ];
+
+  var stageSel = document.getElementById('taStageFilter');
+  var gradeSel = document.getElementById('taGradeFilter');
+  var stageCol = document.getElementById('taStageCol');
+  var hint     = document.getElementById('taSelectHint');
+  var hrWrap   = document.getElementById('taHomeroomWrap');
+  var secWrap  = document.getElementById('taSectionsWrap');
+  var subjWrap = document.getElementById('taSubjectsWrap');
+
+  if (!stageSel) return;
+
+  var stages = [], seen = {};
+  grades.forEach(function(g) {
+    var s = g.stage || '';
+    if (!seen[s]) { seen[s] = true; stages.push(s); }
+  });
+
+  var multiStage = stages.length > 1 || (stages.length === 1 && stages[0] !== '');
+
+  if (multiStage) {
+    stages.forEach(function(s) {
+      var o = document.createElement('option');
+      o.value = s; o.textContent = s || 'بدون مرحلة';
+      stageSel.appendChild(o);
+    });
+  } else {
+    if (stageCol) stageCol.style.display = 'none';
+    grades.forEach(function(g) {
+      var o = document.createElement('option');
+      o.value = g.id; o.textContent = g.name;
+      gradeSel.appendChild(o);
+    });
+    gradeSel.disabled = false;
+  }
+
+  function refreshGrades() {
+    gradeSel.innerHTML = '<option value="">— اختر الصف —</option>';
+    gradeSel.disabled = true;
+    var sv = stageSel.value;
+    if (!sv) { refreshContent(null); return; }
+    grades.filter(function(g) { return (g.stage || '') === sv; })
+      .forEach(function(g) {
+        var o = document.createElement('option');
+        o.value = g.id; o.textContent = g.name;
+        gradeSel.appendChild(o);
+      });
+    gradeSel.disabled = false;
+    refreshContent(null);
+  }
+
+  function refreshContent(gradeId) {
+    var show = gradeId !== null && gradeId !== '';
+    [hrWrap, secWrap, subjWrap].forEach(function(w) { if (w) w.style.display = show ? '' : 'none'; });
+    if (hint) hint.style.display = show ? 'none' : '';
+    ['ta-grade-homeroom', 'ta-grade-sections', 'ta-grade-subjects'].forEach(function(cls) {
+      document.querySelectorAll('.' + cls).forEach(function(el) {
+        el.style.display = (String(el.dataset.gid) === String(gradeId)) ? '' : 'none';
+      });
+    });
+    document.querySelectorAll('.ta-ungrouped-subjects').forEach(function(el) {
+      el.style.display = show ? '' : 'none';
+    });
+  }
+
+  if (multiStage) {
+    stageSel.addEventListener('change', function() { refreshGrades(); });
+  }
+  gradeSel.addEventListener('change', function() { refreshContent(gradeSel.value || null); });
+
+  refreshContent(null);
+})();
+
+/* ════════════ Wizard engine ════════════ */
+(function () {
+  const form     = document.getElementById('employeeWizardForm');
+  const steps    = Array.from(document.querySelectorAll('.wizard-step'));
+  const progress = document.getElementById('wizardProgress');
+  const btnPrev  = document.getElementById('wizPrev');
+  const btnNext  = document.getElementById('wizNext');
+  const btnSubmit = document.getElementById('wizSubmit');
+  if (!steps.length) return;
+
+  let current    = 0;
+  let maxReached = 0;
+
+  // Build step indicator from steps actually rendered in the DOM.
+  steps.forEach((s, i) => {
+    const ind = document.createElement('div');
+    ind.className = 'wiz-step-ind';
+    ind.dataset.idx = i;
+    ind.innerHTML = `<div class="dot">${i + 1}</div><div class="lbl">${s.dataset.stepTitle || ''}</div>`;
+    ind.addEventListener('click', () => { if (i <= maxReached) goTo(i); });
+    progress.appendChild(ind);
+  });
+  const indicators = Array.from(progress.children);
+
+  function firstInvalidControl(step) {
+    for (const c of step.querySelectorAll('input, select, textarea')) {
+      if (c.disabled) continue;
+      if (!c.checkValidity()) return c;
+    }
+    return null;
+  }
+  function validateStep(i) {
+    const bad = firstInvalidControl(steps[i]);
+    if (bad) { bad.reportValidity(); return false; }
+    return true;
+  }
+
+  function buildReview() {
+    const box = document.getElementById('reviewContent');
+    if (!box) return;
+
+    const txt = name => {
+      const el = form.querySelector(`[name="${name}"]`);
+      return el ? (el.value || '').trim() : '';
+    };
+    const selTextByName = name => {
+      const el = form.querySelector(`select[name="${name}"]`);
+      if (!el) return '';
+      const o = el.selectedOptions[0];
+      return (o && o.value) ? o.textContent.trim() : '';
+    };
+
+    const genderMap    = { male: 'ذكر', female: 'أنثى' };
+    const contractMap  = { 'full-time': 'دوام كامل', 'part-time': 'دوام جزئي', 'contract': 'عقد' };
+    const salTypeMap   = { 'monthly': 'شهري', 'daily': 'يومي', 'per_session': 'بالحصة / المحاضرة' };
+    const payMethMap   = { 'cash': 'نقدي', 'bank': 'حوالة بنكية', 'wallet': 'محفظة إلكترونية' };
+
+    const row = (k, v) => v
+      ? `<div class="review-item d-flex justify-content-between gap-3"><span class="k">${k}</span><span class="v">${v}</span></div>`
+      : '';
+
+    let html = '';
+
+    // Basic Info
+    html += '<div class="review-group"><h6><i class="bi bi-person-badge-fill text-accent"></i>البيانات الأساسية</h6><div class="review-grid">';
+    html += row('الاسم الكامل',    txt('full_name'));
+    html += row('المسمى الوظيفي', txt('job_title'));
+    html += row('القسم',          txt('department'));
+    html += row('الجنس',          genderMap[txt('gender')] || '');
+    html += row('رقم الهاتف',     txt('phone'));
+    html += row('البريد الإلكتروني', txt('email'));
+    html += row('الجنسية',        txt('nationality'));
+    html += row('تاريخ الميلاد',  txt('date_of_birth'));
+    html += row('نوع العقد',      contractMap[txt('contract_type')] || txt('contract_type'));
+    html += row('تاريخ التعيين',  txt('hire_date'));
+    html += row('العنوان',        txt('address'));
+    html += '</div></div>';
+
+    // Payroll
+    const baseSal = txt('base_salary');
+    const payrollStep = document.querySelector('[data-step-key="payroll"]');
+    if (payrollStep) {
+      html += '<div class="review-group"><h6><i class="bi bi-cash-stack text-accent"></i>بيانات الراتب</h6>';
+      if (baseSal) {
+        html += '<div class="review-grid">';
+        html += row('الراتب الأساسي',   Number(baseSal).toLocaleString('ar-IQ') + ' د.ع');
+        html += row('نوع الراتب',       salTypeMap[txt('salary_type')] || '');
+        html += row('حالة الراتب',      selTextByName('payroll_status'));
+        html += row('طريقة الدفع',      payMethMap[txt('pay_method')] || '');
+        html += row('رقم الحساب',       txt('bank_account'));
+        html += row('تاريخ بدء الراتب', txt('salary_start_date'));
+        html += '</div>';
+      } else {
+        html += '<div class="review-empty">لم يُدخل راتب.</div>';
+      }
+      html += '</div>';
+    }
+
+    // Photo & Notes
+    const photoEl  = document.getElementById('photoInput');
+    const hasPhoto = photoEl && photoEl.files && photoEl.files.length;
+    html += '<div class="review-group"><h6><i class="bi bi-camera-fill text-accent"></i>الصورة والملاحظات</h6><div class="review-grid">';
+    if (hasPhoto) html += row('صورة الموظف', 'تم اختيار صورة');
+    html += row('ملاحظات', txt('notes'));
+    html += '</div></div>';
+
+    // System Account
+    const accountStep = document.querySelector('[data-step-key="account"]');
+    if (accountStep) {
+      const createAcct = form.querySelector('[name="create_account"]');
+      html += '<div class="review-group"><h6><i class="bi bi-person-lock text-accent"></i>حساب النظام</h6>';
+      if (createAcct && createAcct.checked) {
+        html += '<div class="review-grid">';
+        const uname = txt('username');
+        html += row('اسم المستخدم', uname || '(يُولَّد تلقائياً)');
+        html += row('الدور الوظيفي', selTextByName('role_id'));
+        html += '</div>';
+      } else {
+        html += '<div class="review-empty">لن يُنشأ حساب دخول.</div>';
+      }
+      html += '</div>';
+    }
+
+    // Teacher Assignments
+    const teacherStep = document.querySelector('[data-step-key="teacher"]');
+    if (teacherStep) {
+      const labelOf = cb => cb.closest('.form-check')?.querySelector('label')?.textContent?.trim() || cb.value;
+      const hrChecked   = Array.from(form.querySelectorAll('[name="homeroom_section_ids"]:checked')).map(labelOf);
+      const tsChecked   = Array.from(form.querySelectorAll('[name="teaching_section_ids"]:checked')).map(labelOf);
+      const subjChecked = Array.from(form.querySelectorAll('[name="subject_ids"]:checked')).map(labelOf);
+      html += '<div class="review-group"><h6><i class="bi bi-journal-bookmark-fill text-accent"></i>إعدادات التدريسي</h6>';
+      if (hrChecked.length || tsChecked.length || subjChecked.length) {
+        html += '<div class="review-grid">';
+        if (hrChecked.length)   html += row('صفوف رئيسية', hrChecked.join('، '));
+        if (tsChecked.length)   html += row('شعب التدريس', tsChecked.join('، '));
+        if (subjChecked.length) html += row('المواد',       subjChecked.join('، '));
+        html += '</div>';
+      } else {
+        html += '<div class="review-empty">لم تُحدد تكليفات تدريسية.</div>';
+      }
+      html += '</div>';
+    }
+
+    box.innerHTML = html;
+  }
+
+  function goTo(i) {
+    current = i;
+    if (i > maxReached) maxReached = i;
+    steps.forEach((s, idx) => s.classList.toggle('current', idx === i));
+    indicators.forEach((ind, idx) => {
+      ind.classList.toggle('active',    idx === i);
+      ind.classList.toggle('done',      idx < i);
+      ind.classList.toggle('clickable', idx <= maxReached);
+    });
+    btnPrev.style.display  = i === 0 ? 'none' : '';
+    const last = i === steps.length - 1;
+    btnNext.style.display   = last ? 'none' : '';
+    btnSubmit.style.display = last ? '' : 'none';
+    if (steps[i].dataset.stepKey === 'review') buildReview();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  btnNext.addEventListener('click', () => {
+    if (!validateStep(current)) return;
+    if (current < steps.length - 1) goTo(current + 1);
+  });
+  btnPrev.addEventListener('click', () => { if (current > 0) goTo(current - 1); });
+
+  // Final submit: validate every step, jump to first invalid one.
+  let submitting = false;
+  form.addEventListener('submit', e => {
+    if (submitting) { e.preventDefault(); return; }
+    for (let i = 0; i < steps.length; i++) {
+      const bad = firstInvalidControl(steps[i]);
+      if (bad) { e.preventDefault(); goTo(i); bad.reportValidity(); return; }
+    }
+    submitting = true;
+    btnSubmit.disabled = true;
+    btnSubmit.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>جارٍ الحفظ...';
+  });
+
+  // Land on the step the server flagged as invalid (or step 1).
+  const errKey  = progress.dataset.errorStep || 'basic';
+  let startIdx  = steps.findIndex(s => s.dataset.stepKey === errKey);
+  if (startIdx < 0) startIdx = 0;
+  maxReached = startIdx;
+  goTo(startIdx);
+})();
+</script>
+{% endblock %}
