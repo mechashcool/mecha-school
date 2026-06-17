@@ -261,6 +261,40 @@ def _handle_employee_post(employee):
     flash_msgs = [('success',
                    f'تم {"إضافة" if is_create else "تحديث"} بيانات الموظف {employee.full_name}.')]
 
+    # ── Wizard documents (create only) ───────────────────────────────────────
+    if is_create:
+        from app.models import EmployeeDocument
+        _ALLOWED_DOC_EXTS = {'pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'}
+        doc_titles = request.form.getlist('doc_title[]')
+        doc_types  = request.form.getlist('doc_type[]')
+        doc_files  = request.files.getlist('doc_file[]')
+        doc_saved  = 0
+        for i in range(len(doc_titles)):
+            title    = doc_titles[i].strip() if i < len(doc_titles) else ''
+            doc_type = doc_types[i].strip()  if i < len(doc_types)  else ''
+            f        = doc_files[i]          if i < len(doc_files)  else None
+            if not title or not f or not f.filename:
+                continue
+            file_path = save_uploaded_file(
+                f, 'employee_docs',
+                allowed_exts=_ALLOWED_DOC_EXTS,
+            )
+            if not file_path:
+                flash_msgs.append(('warning',
+                    f'تعذّر رفع المستند "{title}" — تأكد من أن صيغة الملف مقبولة.'))
+                continue
+            db.session.add(EmployeeDocument(
+                employee_id=employee.id,
+                school_id=school.id if school else None,
+                title=title,
+                file_path=file_path,
+                doc_type=doc_type or None,
+            ))
+            doc_saved += 1
+        if doc_saved:
+            db.session.commit()
+            flash_msgs.append(('success', f'تم رفع {doc_saved} مستند(ات) بنجاح.'))
+
     # ── User account ──────────────────────────────────────────────────────────
     create_account = request.form.get('create_account')
     reset_password = request.form.get('reset_password')
@@ -438,7 +472,10 @@ def documents(emp_id):
         doc_type  = request.form.get('doc_type', '').strip()
         file_path = None
         if 'file' in request.files and request.files['file'].filename:
-            file_path = save_uploaded_file(request.files['file'], 'employee_docs')
+            file_path = save_uploaded_file(
+                request.files['file'], 'employee_docs',
+                allowed_exts={'pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'},
+            )
         if title and file_path:
             doc = EmployeeDocument(
                 employee_id=emp_id, title=title,

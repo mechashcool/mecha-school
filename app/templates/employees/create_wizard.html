@@ -304,7 +304,49 @@
     </div>
   </section>
 
-  <!-- ════════════ STEP 4 — System Account ════════════ -->
+  <!-- ════════════ STEP 4 — Documents ════════════ -->
+  <section class="wizard-step" data-step-key="documents" data-step-title="المستندات">
+    <div class="card mb-4">
+      <div class="card-header"><i class="bi bi-folder-fill text-accent"></i>مستندات الموظف</div>
+      <div class="card-body">
+        <p class="text-muted small mb-3">
+          <i class="bi bi-info-circle me-1"></i>
+          يمكنك رفع مستندات الموظف الآن أو تركها فارغة وإضافتها لاحقاً من صفحة المستندات.
+          الصيغ المقبولة: PDF, JPG, PNG, DOC, DOCX.
+        </p>
+        <div id="empDocRows">
+          <div class="row g-3 align-items-end mb-3 emp-doc-row">
+            <div class="col-md-4">
+              <label class="form-label">العنوان</label>
+              <input type="text" name="doc_title[]" class="form-control"
+                     placeholder="مثال: شهادة التخرج، بطاقة الهوية...">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">النوع</label>
+              <select name="doc_type[]" class="form-select">
+                <option value="">— اختر النوع —</option>
+                <option value="هوية">هوية وطنية</option>
+                <option value="شهادة">شهادة دراسية</option>
+                <option value="عقد">عقد عمل</option>
+                <option value="شهادة خبرة">شهادة خبرة</option>
+                <option value="أخرى">أخرى</option>
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">الملف</label>
+              <input type="file" name="doc_file[]" class="form-control"
+                     accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+            </div>
+          </div>
+        </div>
+        <button type="button" id="addEmpDocRow" class="btn btn-sm btn-outline-primary">
+          <i class="bi bi-plus-lg"></i> إضافة مستند آخر
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ STEP 5 — System Account ════════════ -->
   {% if school_cfg.section_visible('employees', 'system_account') %}
   <section class="wizard-step" data-step-key="account" data-step-title="حساب النظام">
     <div class="card">
@@ -538,6 +580,51 @@
   });
 })();
 
+/* ════════════ Employee document rows ════════════ */
+(function () {
+  const addBtn = document.getElementById('addEmpDocRow');
+  const rows   = document.getElementById('empDocRows');
+  const OPTS   = `<option value="">— اختر النوع —</option>
+    <option value="هوية">هوية وطنية</option>
+    <option value="شهادة">شهادة دراسية</option>
+    <option value="عقد">عقد عمل</option>
+    <option value="شهادة خبرة">شهادة خبرة</option>
+    <option value="أخرى">أخرى</option>`;
+
+  if (!addBtn || !rows) return;
+
+  addBtn.addEventListener('click', () => {
+    const row = document.createElement('div');
+    row.className = 'row g-3 align-items-end mb-3 emp-doc-row';
+    row.innerHTML = `
+      <div class="col-md-4">
+        <label class="form-label">العنوان</label>
+        <input type="text" name="doc_title[]" class="form-control"
+               placeholder="مثال: شهادة التخرج، بطاقة الهوية...">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">النوع</label>
+        <select name="doc_type[]" class="form-select">${OPTS}</select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">الملف</label>
+        <input type="file" name="doc_file[]" class="form-control"
+               accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+      </div>
+      <div class="col-md-1 d-flex align-items-end pb-1">
+        <button type="button" class="btn btn-danger btn-sm w-100 remove-emp-doc-row" title="إزالة">
+          <i class="bi bi-trash"></i>
+        </button>
+      </div>`;
+    rows.appendChild(row);
+  });
+
+  rows.addEventListener('click', e => {
+    if (e.target.closest('.remove-emp-doc-row'))
+      e.target.closest('.emp-doc-row')?.remove();
+  });
+})();
+
 /* ════════════ Teacher assignment: stage → grade → content filter ════════════ */
 (function () {
   var grades = [
@@ -720,6 +807,28 @@
     if (hasPhoto) html += row('صورة الموظف', 'تم اختيار صورة');
     html += row('ملاحظات', txt('notes'));
     html += '</div></div>';
+
+    // Documents
+    const docStep = document.querySelector('[data-step-key="documents"]');
+    if (docStep) {
+      const docItems = [];
+      docStep.querySelectorAll('.emp-doc-row').forEach(r => {
+        const title = (r.querySelector('[name="doc_title[]"]')?.value || '').trim();
+        const type  = (r.querySelector('[name="doc_type[]"]')?.value  || '').trim();
+        const fi    = r.querySelector('[name="doc_file[]"]');
+        const fname = (fi && fi.files && fi.files.length) ? fi.files[0].name : '';
+        if (title || fname) docItems.push((type ? type + ' — ' : '') + (title || fname));
+      });
+      html += '<div class="review-group"><h6><i class="bi bi-folder-fill text-accent"></i>المستندات</h6>';
+      if (docItems.length) {
+        html += '<div class="review-grid">';
+        docItems.forEach((d, i) => html += row(`مستند ${i + 1}`, d));
+        html += '</div>';
+      } else {
+        html += '<div class="review-empty">لم تُضَف مستندات.</div>';
+      }
+      html += '</div>';
+    }
 
     // System Account
     const accountStep = document.querySelector('[data-step-key="account"]');
