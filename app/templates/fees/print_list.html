@@ -185,21 +185,41 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
   display: inline-block;
 }
 
-/* ── Totals row (screen) ── */
-.totals-row td {
-  background: #0f2540 !important;
-  color: #fff !important;
-  font-weight: 800 !important;
+/* ── Grand totals summary card ── */
+.grand-totals { border-top: 2px solid #1a3a5c; overflow: hidden; }
+.gt-header {
+  background: #1a3a5c;
+  color: #fff;
+  padding: 11px 20px;
   font-size: 13px;
-  padding: 10px 12px;
-  border: 1px solid #08192e !important;
-  white-space: nowrap;
+  font-weight: 800;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
 }
-.totals-row .lbl { color: rgba(255,255,255,.70); font-weight: 600; text-align: center; }
-
-/* ── Standalone totals block (shown once after the table) ── */
-.totals-block { margin-top: 0; }
-.totals-block table.fee-tbl { border-top: none; }
+.gt-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  background: #fff;
+  border-bottom: 1px solid #dde8f4;
+}
+.gt-cell {
+  padding: 18px 20px;
+  border-left: 1px solid #dde8f4;
+  text-align: center;
+}
+.gt-cell:last-child { border-left: none; }
+.gt-cell label {
+  font-size: 10.5px;
+  color: #9aabb8;
+  font-weight: 700;
+  display: block;
+  margin-bottom: 6px;
+}
+.gt-cell .val  { font-size: 19px; font-weight: 900; color: #1e2b3a; }
+.gt-cell .val.v-disc { color: #c17b00; }
+.gt-cell .val.v-paid { color: #1aab6d; }
+.gt-cell .val.v-rem  { color: #c0392b; }
+.gt-cell .val.v-ok   { color: #1aab6d; }
 
 /* ── Empty ── */
 .empty-row td { text-align: center; padding: 40px; color: #b0bec5; }
@@ -351,23 +371,23 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
     border-radius: 3pt !important;
   }
 
-  /* Totals block — shown once, at the very end */
-  .totals-block {
+  /* Grand totals card — appears once at the very end */
+  .grand-totals {
     page-break-inside: avoid;
-    margin-top: 0;
-  }
-  .totals-block table.fee-tbl {
     border-top: 2pt solid #0f2540 !important;
+    overflow: visible !important;
   }
-  .totals-row td {
-    background: #0f2540 !important;
-    color: #fff !important;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-    border: 1pt solid #08192e !important;
-    padding: 5pt 6pt !important;
+  .gt-header {
+    padding: 5pt 10pt !important;
     font-size: 8.5pt !important;
   }
+  .gt-grid { border-bottom: 1pt solid #ccd4e0 !important; }
+  .gt-cell {
+    padding: 8pt 10pt !important;
+    border-left: 1pt solid #ccd4e0 !important;
+  }
+  .gt-cell label { font-size: 7pt !important; margin-bottom: 3pt !important; }
+  .gt-cell .val  { font-size: 10.5pt !important; }
 
   /* Cell sizing hints for landscape A4 (usable width ~257mm at 8pt) */
   .col-idx   { width: 20pt; }
@@ -531,31 +551,29 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
   </div>
 
   {% if fee_entries %}
-  <!-- Totals block — outside the data table so it appears only once on the final page -->
-  <div class="totals-block">
-    <table class="fee-tbl">
-      <colgroup>
-        <col class="col-idx">
-        <col class="col-name">
-        <col class="col-type">
-        <col class="col-total">
-        <col class="col-disc">
-        <col class="col-net">
-        <col class="col-paid">
-        <col class="col-rem">
-        <col class="col-year">
-      </colgroup>
-      <tbody>
-        <tr class="totals-row">
-          <td colspan="3" class="lbl">الإجمالي الكلي — {{ fee_entries | length }} سجل</td>
-          <td class="td-amount">{{ '{:,.0f}'.format(grand_total) }}</td>
-          <td class="td-disc">{{ '{:,.0f}'.format(grand_disc) if grand_disc > 0 else '—' }}</td>
-          <td class="td-net">{{ '{:,.0f}'.format(grand_total - grand_disc) }}</td>
-          <td class="td-paid">{{ '{:,.0f}'.format(grand_paid) }}</td>
-          <td colspan="2">{{ 'مسدّد بالكامل' if grand_rem <= 0 else '{:,.0f}'.format(grand_rem) }}</td>
-        </tr>
-      </tbody>
-    </table>
+  <!-- Grand totals summary card — appears once at the very end of the report -->
+  <div class="grand-totals">
+    <div class="gt-header">الملخص المالي الكلي — {{ fee_entries | length }} سجل</div>
+    <div class="gt-grid">
+      <div class="gt-cell">
+        <label>إجمالي الرسوم</label>
+        <div class="val">{{ '{:,.0f}'.format(grand_total) }}</div>
+      </div>
+      <div class="gt-cell">
+        <label>إجمالي الخصومات</label>
+        <div class="val v-disc">{{ '{:,.0f}'.format(grand_disc) if grand_disc > 0 else '—' }}</div>
+      </div>
+      <div class="gt-cell">
+        <label>إجمالي المدفوع</label>
+        <div class="val v-paid">{{ '{:,.0f}'.format(grand_paid) }}</div>
+      </div>
+      <div class="gt-cell">
+        <label>الرصيد المتبقي</label>
+        <div class="val {{ 'v-ok' if grand_rem <= 0 else 'v-rem' }}">
+          {% if grand_rem <= 0 %}مسدّد بالكامل{% else %}{{ '{:,.0f}'.format(grand_rem) }}{% endif %}
+        </div>
+      </div>
+    </div>
   </div>
   {% endif %}
 
