@@ -6,132 +6,184 @@
 <title>كشف الرسوم الدراسية{% if school %} — {{ school.school_name_ar or school.school_name }}{% endif %}</title>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
 <style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
+/* ═══════════════════════════════════════════════════════
+   BASE
+═══════════════════════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body {
   font-family: 'Cairo', 'Tajawal', sans-serif;
   background: #f0f4f8;
   color: #16243a;
-  padding: 20px;
   direction: rtl;
+  padding: 16px;
 }
 
-/* ── Screen controls (hidden on print) ── */
-.screen-controls {
-  text-align: center;
-  padding: 14px;
-  background: #e8edf5;
+/* ═══════════════════════════════════════════════════════
+   SCREEN CONTROLS  (hidden on print)
+═══════════════════════════════════════════════════════ */
+.screen-bar {
+  max-width: 1100px;
+  margin: 0 auto 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #fff;
+  border: 1px solid #dde8f4;
   border-radius: 8px;
-  margin-bottom: 16px;
+  padding: 10px 16px;
 }
-.btn-print, .btn-close-win {
-  border: none;
-  padding: 9px 26px;
-  border-radius: 8px;
-  font-family: 'Cairo', sans-serif;
+.screen-bar .bar-title {
+  flex: 1;
   font-size: 14px;
   font-weight: 700;
-  cursor: pointer;
-  margin: 0 5px;
+  color: #1a3a5c;
 }
-.btn-print     { background: #1a3a5c; color: #fff; }
-.btn-close-win { background: #6b7a8d; color: #fff; }
-.btn-print:hover     { background: #0f2540; }
-.btn-close-win:hover { background: #56636f; }
+.screen-bar .bar-meta {
+  font-size: 12px;
+  color: #9aabb8;
+}
+.btn-screen {
+  border: none;
+  padding: 7px 20px;
+  border-radius: 7px;
+  font-family: 'Cairo', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn-print { background: #1a3a5c; color: #fff; }
+.btn-print:hover { background: #0f2540; }
+.btn-close { background: #e8edf5; color: #64748b; }
+.btn-close:hover { background: #d0d8e8; }
 
-/* ── Document wrapper ── */
-.print-wrapper {
-  max-width: 980px;
+/* ═══════════════════════════════════════════════════════
+   PRINT HEADER  (hidden on screen, shown on print)
+═══════════════════════════════════════════════════════ */
+.print-header { display: none; }
+
+/* ═══════════════════════════════════════════════════════
+   PRINT FOOTER  (hidden on screen, fixed on print pages)
+═══════════════════════════════════════════════════════ */
+.print-footer { display: none; }
+
+/* ═══════════════════════════════════════════════════════
+   SCREEN TABLE WRAPPER
+═══════════════════════════════════════════════════════ */
+.screen-card {
+  max-width: 1100px;
   margin: 0 auto;
   background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 4px 24px rgba(0,0,0,.12);
+  border-radius: 10px;
+  box-shadow: 0 2px 16px rgba(0,0,0,.10);
   overflow: hidden;
 }
 
-/* ── Header ── */
-.doc-header {
+/* ── Screen card header ── */
+.screen-card-header {
   background: linear-gradient(135deg, #0f2540 0%, #1a3a5c 100%);
   color: #fff;
-  padding: 22px 36px;
+  padding: 18px 28px;
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 14px;
 }
-.doc-header-logo {
-  width: 60px;
-  height: 60px;
+.sch-logo {
+  width: 52px; height: 52px;
   object-fit: contain;
-  border-radius: 8px;
+  border-radius: 6px;
   background: rgba(255,255,255,.15);
-  padding: 4px;
+  padding: 3px;
   flex-shrink: 0;
 }
-.doc-header-info { flex: 1; }
-.school-name   { font-size: 19px; font-weight: 900; line-height: 1.2; }
-.report-title  { font-size: 14px; font-weight: 700; color: rgba(255,255,255,.82); margin-top: 4px; }
-.report-sub    { font-size: 11px; color: rgba(255,255,255,.56); margin-top: 3px; }
-.doc-header-date {
-  text-align: left;
-  font-size: 11.5px;
-  color: rgba(255,255,255,.65);
-  white-space: nowrap;
+.sch-name  { font-size: 17px; font-weight: 900; line-height: 1.2; }
+.sch-title { font-size: 13px; font-weight: 700; color: rgba(255,255,255,.80); margin-top: 3px; }
+.sch-sub   { font-size: 11px; color: rgba(255,255,255,.55); margin-top: 2px; }
+.sch-date  {
   margin-right: auto;
+  text-align: left;
+  font-size: 11px;
+  color: rgba(255,255,255,.60);
+  white-space: nowrap;
 }
-.doc-header-date strong { display: block; font-size: 15px; color: #fff; margin-top: 2px; font-weight: 800; }
+.sch-date strong { display: block; font-size: 14px; color: #fff; font-weight: 800; margin-top: 2px; }
 
-/* ── Filters bar ── */
-.filter-bar {
-  background: #f8fbff;
+/* ── Filters strip ── */
+.filter-strip {
+  background: #f5f8fd;
   border-bottom: 1px solid #dde8f4;
-  padding: 9px 36px;
+  padding: 8px 28px;
   display: flex;
   flex-wrap: wrap;
-  gap: 20px;
-  font-size: 12.5px;
+  gap: 14px;
+  font-size: 12px;
   color: #64748b;
 }
-.filter-bar .chip {
-  background: #e9eff8;
-  border-radius: 12px;
-  padding: 3px 10px;
-  font-size: 12px;
+.filter-strip .chip {
+  background: #e4ecf8;
+  border-radius: 10px;
+  padding: 2px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #1a3a5c;
 }
-.filter-bar .chip b { color: #1a3a5c; }
 
-/* ── Table ── */
-.doc-body { padding: 22px 36px 28px; }
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-thead th {
+/* ═══════════════════════════════════════════════════════
+   FEE TABLE  (shared screen + print styles)
+═══════════════════════════════════════════════════════ */
+.fee-tbl-wrap { overflow-x: auto; }
+
+table.fee-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+table.fee-tbl thead th {
   background: #1a3a5c;
   color: #fff;
-  padding: 10px 11px;
+  padding: 10px 12px;
   font-weight: 700;
-  font-size: 12px;
+  font-size: 12.5px;
   text-align: right;
   white-space: nowrap;
+  border: 1px solid #0f2440;
 }
-thead th:first-child { border-radius: 0 4px 0 0; text-align: center; }
-thead th:last-child  { border-radius: 4px 0 0 0; }
-tbody td {
-  padding: 9px 11px;
+table.fee-tbl thead th.th-center { text-align: center; }
+table.fee-tbl thead th.th-num    { text-align: center; width: 36px; }
+
+table.fee-tbl tbody td {
+  padding: 9px 12px;
   border-bottom: 1px solid #edf1f7;
+  border-right: 1px solid #edf1f7;
   vertical-align: middle;
-  font-size: 12.5px;
+  font-size: 13px;
 }
-tbody tr:nth-child(even) td { background: #f5f8fd; }
-tbody tr:hover td { background: #eef4ff; }
-.td-idx      { text-align: center; color: #b0bec5; font-size: 11.5px; width: 36px; }
-.td-student  { }
-.student-name { font-weight: 700; font-size: 13px; }
-.student-code { font-size: 11px; color: #9aabb8; margin-top: 1px; }
-.td-amount   { font-weight: 700; }
-.td-disc     { color: #e8a020; }
-.td-net      { font-weight: 700; }
-.td-paid     { color: #1aab6d; font-weight: 700; }
-.td-year     { font-size: 11.5px; color: #9aabb8; white-space: nowrap; }
-.badge-settled { background: #e8f8f0; color: #1aab6d; padding: 2px 8px; border-radius: 10px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
-.badge-due     { background: #fef0f0; color: #e03e3e; padding: 2px 8px; border-radius: 10px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
-.empty-row td  { text-align: center; padding: 40px; color: #b0bec5; font-size: 14px; }
+table.fee-tbl tbody tr:nth-child(even) td { background: #f5f8fd; }
+table.fee-tbl tbody tr:hover td { background: #eef4ff; }
+
+/* Cell type helpers */
+.td-idx     { text-align: center; color: #b0bec5; font-size: 11.5px; width: 36px; }
+.td-name    { font-weight: 700; font-size: 13px; }
+.td-code    { font-size: 11px; color: #9aabb8; margin-top: 1px; }
+.td-amount  { text-align: left; font-weight: 700; white-space: nowrap; }
+.td-disc    { text-align: left; color: #c17b00; white-space: nowrap; }
+.td-net     { text-align: left; font-weight: 700; white-space: nowrap; }
+.td-paid    { text-align: left; color: #1aab6d; font-weight: 700; white-space: nowrap; }
+.td-year    { font-size: 11.5px; color: #9aabb8; white-space: nowrap; text-align: center; }
+.td-dash    { color: #c8d3e0; text-align: center; }
+
+.badge-settled {
+  background: #e8f8f0; color: #1aab6d;
+  padding: 2px 8px; border-radius: 10px;
+  font-size: 11.5px; font-weight: 700; white-space: nowrap;
+  display: inline-block;
+}
+.badge-due {
+  background: #fef0f0; color: #c0392b;
+  padding: 2px 8px; border-radius: 10px;
+  font-size: 11.5px; font-weight: 700; white-space: nowrap;
+  display: inline-block;
+}
 
 /* ── Totals row ── */
 .totals-row td {
@@ -139,100 +191,295 @@ tbody tr:hover td { background: #eef4ff; }
   color: #fff !important;
   font-weight: 800 !important;
   font-size: 13px;
-  padding: 11px 11px;
-  border: none;
+  padding: 10px 12px;
+  border: 1px solid #08192e !important;
+  white-space: nowrap;
 }
-.totals-row .lbl { color: rgba(255,255,255,.75); font-weight: 600; }
+.totals-row .lbl { color: rgba(255,255,255,.70); font-weight: 600; text-align: center; }
 
-/* ── Footer ── */
-.doc-footer {
-  border-top: 1px solid #e0e8f0;
-  padding: 11px 36px;
-  display: flex;
-  justify-content: space-between;
-  font-size: 11.5px;
-  color: #b0bec5;
-}
+/* ── Empty ── */
+.empty-row td { text-align: center; padding: 40px; color: #b0bec5; }
 
-/* ── Print styles ── */
+/* ═══════════════════════════════════════════════════════
+   PRINT STYLES
+═══════════════════════════════════════════════════════ */
 @media print {
-  body { background: #fff !important; padding: 0; }
-  .screen-controls { display: none !important; }
-  .print-wrapper { box-shadow: none; border-radius: 0; max-width: 100%; }
+  /* ── Page setup ── */
+  @page {
+    size: A4 landscape;
+    margin: 12mm 10mm 16mm;
+  }
 
-  .doc-header      { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  thead th         { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .totals-row td   { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  tbody tr:nth-child(even) td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .badge-settled, .badge-due  { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  /* ── Reset body & chrome ── */
+  body {
+    background: #fff !important;
+    padding: 0 !important;
+    font-family: 'Cairo', 'Tajawal', sans-serif !important;
+    color: #000 !important;
+  }
+  * { box-shadow: none !important; }
 
-  @page { size: A4 portrait; margin: 10mm 8mm; }
-  table { page-break-inside: auto; }
-  tr    { page-break-inside: avoid; }
-  .doc-footer { position: fixed; bottom: 0; left: 0; right: 0; }
+  /* ── Hide screen-only elements ── */
+  .screen-bar          { display: none !important; }
+  .screen-card-header  { display: none !important; }
+  .filter-strip        { display: none !important; }
+
+  /* ── Remove screen card chrome ── */
+  .screen-card {
+    max-width: 100% !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+  .fee-tbl-wrap { overflow: visible !important; }
+
+  /* ── Show print header ── */
+  .print-header {
+    display: block !important;
+    text-align: center;
+    border-bottom: 3px double #1a3a5c;
+    padding-bottom: 10pt;
+    margin-bottom: 14pt;
+  }
+  .print-header .ph-logo {
+    width: 56pt;
+    height: 56pt;
+    object-fit: contain;
+    display: block;
+    margin: 0 auto 6pt;
+  }
+  .print-header .ph-school {
+    font-size: 18pt;
+    font-weight: 900;
+    color: #1a3a5c;
+    margin: 0 0 3pt;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .print-header .ph-title {
+    font-size: 13pt;
+    font-weight: 700;
+    color: #333;
+    margin: 0 0 6pt;
+  }
+  .print-header .ph-meta {
+    font-size: 9pt;
+    color: #555;
+    display: flex;
+    justify-content: center;
+    gap: 20pt;
+    flex-wrap: wrap;
+  }
+  .print-header .ph-meta span { white-space: nowrap; }
+
+  /* ── Show print footer (fixed = repeats on every page) ── */
+  .print-footer {
+    display: flex !important;
+    justify-content: space-between;
+    align-items: center;
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    border-top: 1pt solid #ccd4e0;
+    padding: 3pt 10mm 2pt;
+    font-size: 8pt;
+    color: #777;
+    background: #fff;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* ── Table: compact print styles ── */
+  table.fee-tbl {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: 8pt !important;
+    table-layout: fixed !important;
+  }
+
+  /* Repeat header on every page */
+  table.fee-tbl thead { display: table-header-group; }
+  table.fee-tbl tfoot { display: table-footer-group; }
+
+  table.fee-tbl thead th {
+    background: #1a3a5c !important;
+    color: #fff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    border: 1pt solid #0f2440 !important;
+    padding: 5pt 6pt !important;
+    font-size: 8pt !important;
+    font-weight: 700 !important;
+    white-space: normal !important;
+  }
+
+  table.fee-tbl tbody td {
+    border: 1pt solid #ccd4e0 !important;
+    padding: 4pt 5pt !important;
+    font-size: 8pt !important;
+    vertical-align: middle !important;
+    background: #fff !important;
+  }
+
+  table.fee-tbl tbody tr:nth-child(even) td {
+    background: #f5f7fa !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Prevent a row from splitting across a page break */
+  table.fee-tbl tbody tr { page-break-inside: avoid; }
+  table.fee-tbl tbody tr:hover td { background: inherit !important; }
+
+  /* Preserve badge colours */
+  .badge-settled {
+    background: #e0f5ea !important; color: #0a6640 !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    border: 1pt solid #0a6640 !important;
+    font-size: 7pt !important; padding: 1pt 4pt !important;
+    border-radius: 3pt !important;
+  }
+  .badge-due {
+    background: #fde8e8 !important; color: #8b1a1a !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    border: 1pt solid #8b1a1a !important;
+    font-size: 7pt !important; padding: 1pt 4pt !important;
+    border-radius: 3pt !important;
+  }
+
+  /* Totals row */
+  .totals-row td {
+    background: #0f2540 !important;
+    color: #fff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    border: 1pt solid #08192e !important;
+    padding: 5pt 6pt !important;
+    font-size: 8.5pt !important;
+  }
+
+  /* Cell sizing hints for landscape A4 (usable width ~257mm at 8pt) */
+  .col-idx   { width: 20pt; }
+  .col-name  { width: auto; }          /* takes remaining space */
+  .col-type  { width: 80pt; }
+  .col-total { width: 52pt; }
+  .col-disc  { width: 44pt; }
+  .col-net   { width: 52pt; }
+  .col-paid  { width: 52pt; }
+  .col-rem   { width: 60pt; }
+  .col-year  { width: 52pt; }
+
+  /* Typography adjustments */
+  .td-idx  { font-size: 7.5pt !important; }
+  .td-name { font-size: 8pt !important; font-weight: 700 !important; }
+  .td-code { font-size: 7pt !important; color: #666 !important; }
+  .td-year { font-size: 7.5pt !important; }
+  .td-amount, .td-disc, .td-net, .td-paid { font-size: 8pt !important; }
 }
 </style>
 </head>
 <body>
 
-<div class="screen-controls">
-  <button class="btn-print"     onclick="window.print()"><i>🖨</i> طباعة</button>
-  <button class="btn-close-win" onclick="window.close()">✕ إغلاق</button>
+<!-- ═══════════════════════════════════════════════════
+     PRINT HEADER  (hidden on screen, visible in print)
+═══════════════════════════════════════════════════════ -->
+<div class="print-header">
+  {% if logo_url %}
+  <img src="{{ logo_url }}" class="ph-logo" alt="">
+  {% endif %}
+  <div class="ph-school">{{ (school.school_name_ar or school.school_name) if school else 'المدرسة' }}</div>
+  <div class="ph-title">كشف الرسوم الدراسية</div>
+  <div class="ph-meta">
+    {% if year %}<span>العام الدراسي: {{ year.name }}</span>{% endif %}
+    {% if fee_type_name %}<span>نوع الرسم: {{ fee_type_name }}</span>{% endif %}
+    {% if payment_status == 'paid' %}<span>الحالة: مدفوع</span>
+    {% elif payment_status == 'unpaid' %}<span>الحالة: غير مدفوع</span>{% endif %}
+    {% if installment_filter != 'all' %}<span>القسط: {{ installment_filter }}</span>{% endif %}
+    {% if search %}<span>بحث: {{ search }}</span>{% endif %}
+    <span>عدد السجلات: {{ fee_entries | length }}</span>
+    <span>تاريخ الطباعة: <span class="js-print-date"></span></span>
+  </div>
 </div>
 
-<div class="print-wrapper">
+<!-- ═══════════════════════════════════════════════════
+     PRINT FOOTER  (hidden on screen, fixed per-page)
+═══════════════════════════════════════════════════════ -->
+<div class="print-footer">
+  <span>{{ (school.school_name_ar or school.school_name) if school else '' }}</span>
+  <span>نظام ميكا سكول — كشف الرسوم الدراسية</span>
+  <span class="js-print-date-footer"></span>
+</div>
 
-  <!-- Header -->
-  <div class="doc-header">
+<!-- ═══════════════════════════════════════════════════
+     SCREEN BAR
+═══════════════════════════════════════════════════════ -->
+<div class="screen-bar">
+  <span class="bar-title">
+    {% if logo_url %}<img src="{{ logo_url }}" style="height:24px;border-radius:3px;vertical-align:middle;margin-left:6px" alt="">{% endif %}
+    كشف الرسوم الدراسية
+    {% if year %} — {{ year.name }}{% endif %}
+  </span>
+  <span class="bar-meta">{{ fee_entries | length }} سجل</span>
+  <button class="btn-screen btn-print" onclick="window.print()">🖨 طباعة</button>
+  <button class="btn-screen btn-close" onclick="window.close()">✕ إغلاق</button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     SCREEN CARD  (wraps header + filter strip + table)
+═══════════════════════════════════════════════════════ -->
+<div class="screen-card">
+
+  <!-- Screen card header (hidden in print) -->
+  <div class="screen-card-header">
     {% if logo_url %}
-    <img src="{{ logo_url }}" class="doc-header-logo" alt="شعار المدرسة">
+    <img src="{{ logo_url }}" class="sch-logo" alt="">
     {% endif %}
-    <div class="doc-header-info">
-      <div class="school-name">{{ (school.school_name_ar or school.school_name) if school else 'المدرسة' }}</div>
-      <div class="report-title">كشف الرسوم الدراسية</div>
-      {% if year %}
-      <div class="report-sub">العام الدراسي: {{ year.name }}</div>
-      {% endif %}
+    <div style="flex:1">
+      <div class="sch-name">{{ (school.school_name_ar or school.school_name) if school else 'المدرسة' }}</div>
+      <div class="sch-title">كشف الرسوم الدراسية</div>
+      {% if year %}<div class="sch-sub">العام الدراسي: {{ year.name }}</div>{% endif %}
     </div>
-    <div class="doc-header-date">
+    <div class="sch-date">
       تاريخ الطباعة
       <strong>{{ print_date.strftime('%Y-%m-%d') }}</strong>
     </div>
   </div>
 
-  <!-- Active filters -->
-  <div class="filter-bar">
-    <span>عدد السجلات: <b>{{ fee_entries | length }}</b></span>
-    {% if fee_type_name %}
-    <span class="chip">نوع الرسم: <b>{{ fee_type_name }}</b></span>
-    {% endif %}
-    {% if payment_status == 'paid' %}
-    <span class="chip">الحالة: <b>مدفوع</b></span>
-    {% elif payment_status == 'unpaid' %}
-    <span class="chip">الحالة: <b>غير مدفوع</b></span>
-    {% endif %}
-    {% if installment_filter != 'all' %}
-    <span class="chip">رقم القسط: <b>{{ installment_filter }}</b></span>
-    {% endif %}
-    {% if search %}
-    <span class="chip">بحث: <b>{{ search }}</b></span>
-    {% endif %}
+  <!-- Filter strip (hidden in print — shown in print header instead) -->
+  <div class="filter-strip">
+    <span>السجلات: <strong>{{ fee_entries | length }}</strong></span>
+    {% if fee_type_name %}<span class="chip">نوع الرسم: {{ fee_type_name }}</span>{% endif %}
+    {% if payment_status == 'paid'   %}<span class="chip">الحالة: مدفوع</span>
+    {% elif payment_status == 'unpaid' %}<span class="chip">الحالة: غير مدفوع</span>{% endif %}
+    {% if installment_filter != 'all' %}<span class="chip">القسط رقم: {{ installment_filter }}</span>{% endif %}
+    {% if search %}<span class="chip">بحث: {{ search }}</span>{% endif %}
   </div>
 
   <!-- Table -->
-  <div class="doc-body">
-    <table>
+  <div class="fee-tbl-wrap">
+    <table class="fee-tbl">
+      <colgroup>
+        <col class="col-idx">
+        <col class="col-name">
+        <col class="col-type">
+        <col class="col-total">
+        <col class="col-disc">
+        <col class="col-net">
+        <col class="col-paid">
+        <col class="col-rem">
+        <col class="col-year">
+      </colgroup>
       <thead>
         <tr>
-          <th class="td-idx">#</th>
-          <th>الطالب</th>
-          <th>نوع الرسم</th>
-          <th>الإجمالي</th>
-          <th>الخصم</th>
-          <th>الصافي</th>
-          <th>المدفوع</th>
-          <th>المتبقي</th>
-          <th>السنة الدراسية</th>
+          <th class="th-num col-idx">#</th>
+          <th class="col-name">الطالب</th>
+          <th class="col-type">نوع الرسم</th>
+          <th class="col-total td-amount">الإجمالي</th>
+          <th class="col-disc  td-disc">الخصم</th>
+          <th class="col-net   td-net">الصافي</th>
+          <th class="col-paid  td-paid">المدفوع</th>
+          <th class="col-rem">المتبقي</th>
+          <th class="col-year th-center">السنة الدراسية</th>
         </tr>
       </thead>
       <tbody>
@@ -243,14 +490,14 @@ tbody tr:hover td { background: #eef4ff; }
         {% set rem = net - paid_ns.v %}
         <tr>
           <td class="td-idx">{{ loop.index }}</td>
-          <td class="td-student">
-            <div class="student-name">{{ rec.student.full_name }}</div>
-            <div class="student-code">{{ rec.student.student_id }}</div>
+          <td>
+            <div class="td-name">{{ rec.student.full_name }}</div>
+            <div class="td-code">{{ rec.student.student_id }}</div>
           </td>
           <td>{{ rec.fee_type.name }}</td>
           <td class="td-amount">{{ '{:,.0f}'.format(rec.total_amount) }}</td>
           <td class="td-disc">
-            {% if rec.discount and rec.discount > 0 %}{{ '{:,.0f}'.format(rec.discount) }}{% else %}—{% endif %}
+            {% if rec.discount and rec.discount > 0 %}{{ '{:,.0f}'.format(rec.discount) }}{% else %}<span class="td-dash">—</span>{% endif %}
           </td>
           <td class="td-net">{{ '{:,.0f}'.format(net) }}</td>
           <td class="td-paid">{{ '{:,.0f}'.format(paid_ns.v) }}</td>
@@ -268,41 +515,40 @@ tbody tr:hover td { background: #eef4ff; }
           <td colspan="9">لا توجد سجلات رسوم مطابقة للفلاتر المحددة</td>
         </tr>
         {% endfor %}
-
-        {% if fee_entries %}
-        <tr class="totals-row">
-          <td colspan="3" class="lbl" style="text-align:center">الإجمالي الكلي</td>
-          <td>{{ '{:,.0f}'.format(grand_total) }}</td>
-          <td>{{ '{:,.0f}'.format(grand_disc) }}</td>
-          <td>{{ '{:,.0f}'.format(grand_total - grand_disc) }}</td>
-          <td>{{ '{:,.0f}'.format(grand_paid) }}</td>
-          <td colspan="2">
-            {% if grand_rem <= 0 %}مسدّد بالكامل{% else %}{{ '{:,.0f}'.format(grand_rem) }}{% endif %}
-          </td>
-        </tr>
-        {% endif %}
       </tbody>
+      {% if fee_entries %}
+      <tfoot>
+        <tr class="totals-row">
+          <td colspan="3" class="lbl">الإجمالي الكلي — {{ fee_entries | length }} سجل</td>
+          <td class="td-amount">{{ '{:,.0f}'.format(grand_total) }}</td>
+          <td class="td-disc">{{ '{:,.0f}'.format(grand_disc) if grand_disc > 0 else '—' }}</td>
+          <td class="td-net">{{ '{:,.0f}'.format(grand_total - grand_disc) }}</td>
+          <td class="td-paid">{{ '{:,.0f}'.format(grand_paid) }}</td>
+          <td colspan="2">{{ 'مسدّد بالكامل' if grand_rem <= 0 else '{:,.0f}'.format(grand_rem) }}</td>
+        </tr>
+      </tfoot>
+      {% endif %}
     </table>
   </div>
 
-  <!-- Footer -->
-  <div class="doc-footer">
-    <span>{{ (school.school_name_ar or school.school_name) if school else '' }}</span>
-    <span>نظام ميكا سكول</span>
-    <span>{{ print_date.strftime('%Y-%m-%d') }}</span>
-  </div>
-
-</div><!-- /.print-wrapper -->
+</div><!-- /.screen-card -->
 
 <script>
+// Fill print date in both print header and footer.
 (function () {
-  // Auto-print when opened as a popup from the fees index page.
-  if (window.opener) {
-    window.onload = function () {
-      setTimeout(function () { window.print(); }, 350);
-    };
-  }
+  var d = new Date().toLocaleDateString('ar-SA', {
+    year: 'numeric', month: 'long', day: 'numeric'
+  });
+  document.querySelectorAll('.js-print-date, .js-print-date-footer')
+    .forEach(function (el) { el.textContent = d; });
 })();
+
+// Auto-print when this window was opened as a popup.
+if (window.opener) {
+  window.onload = function () {
+    setTimeout(function () { window.print(); }, 350);
+  };
+}
 </script>
 </body>
 </html>
