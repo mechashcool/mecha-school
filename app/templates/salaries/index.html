@@ -15,9 +15,17 @@
 @media print {
   @page { size: A4 landscape; margin: 14mm 12mm; }
 
-  body * { visibility: hidden; }
-  #payroll-print-section,
-  #payroll-print-section * { visibility: visible; }
+  /* Hide layout chrome */
+  nav#sidebar,
+  div#sidebar-overlay,
+  header#topbar,
+  div#flash-container { display: none !important; }
+
+  /* Strip main-content margins so no blank space precedes the report */
+  main#main-content { margin: 0 !important; padding: 0 !important; }
+
+  /* Hide every sibling of the print section inside main */
+  main#main-content > *:not(#payroll-print-section) { display: none !important; }
 
   #payroll-print-section {
     display: block !important;
