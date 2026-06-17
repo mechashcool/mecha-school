@@ -193,15 +193,10 @@
     <div class="row g-3 align-items-end">
       <div class="col-md-8">
         <label class="form-label">اختر الطالب</label>
-        <div class="position-relative">
-          <input type="text" id="stmtStudentSearch" class="form-control"
-                 placeholder="ابحث باسم الطالب أو رقمه..."
-                 autocomplete="off">
-          <input type="hidden" id="stmtStudentId">
-          <div id="stmtStudentDropdown"
-               class="position-absolute w-100 bg-white border rounded shadow-sm"
-               style="top:100%;z-index:1050;max-height:220px;overflow-y:auto;display:none"></div>
-        </div>
+        <input type="text" id="stmtStudentSearch" class="form-control"
+               placeholder="ابحث باسم الطالب أو رقمه..."
+               autocomplete="off">
+        <input type="hidden" id="stmtStudentId">
         <div id="stmtSelectedInfo" class="mt-2" style="display:none;font-size:13px;color:#1aab6d;font-weight:600"></div>
       </div>
       <div class="col-md-4 d-grid">
@@ -229,15 +224,47 @@
 (function () {
   var searchInput  = document.getElementById('stmtStudentSearch');
   var hiddenId     = document.getElementById('stmtStudentId');
-  var dropdown     = document.getElementById('stmtStudentDropdown');
   var openBtn      = document.getElementById('stmtOpenBtn');
   var selectedInfo = document.getElementById('stmtSelectedInfo');
 
   if (!searchInput) return;
 
-  var searchUrl  = '{{ url_for("fees.search_students") }}';
-  var stmtBase   = '{{ url_for("fees.student_statement", student_id=0) }}'.replace('/0/', '/');
+  var searchUrl = '{{ url_for("fees.search_students") }}';
+  var stmtTpl = '{{ url_for("fees.student_statement", student_id=0) }}';
   var timer;
+
+  // Dropdown is appended to <body> to escape any ancestor overflow clipping.
+  var dropdown = document.createElement('div');
+  dropdown.id = 'stmtStudentDropdown';
+  dropdown.style.cssText = [
+    'position:fixed',
+    'background:#fff',
+    'border:1px solid #dde8f4',
+    'border-radius:8px',
+    'box-shadow:0 4px 20px rgba(0,0,0,.12)',
+    'max-height:240px',
+    'overflow-y:auto',
+    'z-index:9999',
+    'display:none',
+    'font-family:inherit',
+    'direction:rtl'
+  ].join(';');
+  document.body.appendChild(dropdown);
+
+  function positionDropdown() {
+    var rect = searchInput.getBoundingClientRect();
+    dropdown.style.top   = (rect.bottom + window.scrollY) + 'px';
+    dropdown.style.left  = rect.left + 'px';
+    dropdown.style.width = rect.width + 'px';
+  }
+
+  function hideDropdown() { dropdown.style.display = 'none'; }
+  function showDropdown() {
+    if (dropdown.children.length) {
+      positionDropdown();
+      dropdown.style.display = 'block';
+    }
+  }
 
   function clearSelection() {
     hiddenId.value = '';
@@ -250,37 +277,43 @@
 
   function selectStudent(id, name, studentCode, grade, section) {
     hiddenId.value = id;
-    openBtn.href = stmtBase + id + '/statement';
+    openBtn.href = stmtTpl.replace('/0/', '/' + id + '/');
     openBtn.classList.remove('disabled');
     openBtn.style.pointerEvents = '';
-    var sectionStr = (grade || section) ? ' — ' + [grade, section ? 'شعبة ' + section : ''].filter(Boolean).join(' / ') : '';
-    selectedInfo.textContent = 'تم اختيار: ' + name + ' (' + studentCode + ')' + sectionStr;
+    var loc = (grade || section)
+      ? ' — ' + [grade, section ? 'شعبة ' + section : ''].filter(Boolean).join(' / ')
+      : '';
+    selectedInfo.textContent = 'تم اختيار: ' + name + ' (' + studentCode + ')' + loc;
     selectedInfo.style.display = 'block';
-    dropdown.style.display = 'none';
+    hideDropdown();
     searchInput.value = name + ' — ' + studentCode;
   }
 
   function renderDropdown(results) {
     dropdown.innerHTML = '';
     if (!results.length) {
-      dropdown.innerHTML = '<div style="padding:10px 14px;color:#9aabb8;font-size:13px">لا توجد نتائج</div>';
-      dropdown.style.display = 'block';
-      return;
-    }
-    results.forEach(function (s) {
-      var item = document.createElement('div');
-      item.style.cssText = 'padding:9px 14px;cursor:pointer;font-size:13px;border-bottom:1px solid #f0f4f8';
-      item.innerHTML = '<strong>' + s.full_name + '</strong>'
-        + '<span style="color:#9aabb8;margin-right:8px;font-size:12px">' + s.student_id + '</span>'
-        + (s.grade ? '<span style="color:#64748b;font-size:12px"> — ' + s.grade + (s.section ? ' / شعبة ' + s.section : '') + '</span>' : '');
-      item.addEventListener('mousedown', function (e) {
-        e.preventDefault();
-        selectStudent(s.id, s.full_name, s.student_id, s.grade, s.section);
+      var empty = document.createElement('div');
+      empty.style.cssText = 'padding:10px 14px;color:#9aabb8;font-size:13px';
+      empty.textContent = 'لا توجد نتائج';
+      dropdown.appendChild(empty);
+    } else {
+      results.forEach(function (s) {
+        var item = document.createElement('div');
+        item.style.cssText = 'padding:9px 14px;cursor:pointer;font-size:13px;border-bottom:1px solid #f0f4f8';
+        item.innerHTML = '<strong>' + s.full_name + '</strong>'
+          + '<span style="color:#9aabb8;margin-right:8px;font-size:12px">' + s.student_id + '</span>'
+          + (s.grade ? '<span style="color:#64748b;font-size:12px"> — ' + s.grade
+              + (s.section ? ' / شعبة ' + s.section : '') + '</span>' : '');
+        item.addEventListener('mousedown', function (e) {
+          e.preventDefault();
+          selectStudent(s.id, s.full_name, s.student_id, s.grade, s.section);
+        });
+        item.addEventListener('mouseover', function () { this.style.background = '#f0f6ff'; });
+        item.addEventListener('mouseout',  function () { this.style.background = ''; });
+        dropdown.appendChild(item);
       });
-      item.addEventListener('mouseover', function () { this.style.background = '#f0f6ff'; });
-      item.addEventListener('mouseout',  function () { this.style.background = ''; });
-      dropdown.appendChild(item);
-    });
+    }
+    positionDropdown();
     dropdown.style.display = 'block';
   }
 
@@ -288,21 +321,21 @@
     var q = this.value.trim();
     clearSelection();
     clearTimeout(timer);
-    if (q.length < 2) { dropdown.style.display = 'none'; return; }
+    if (q.length < 2) { hideDropdown(); return; }
     timer = setTimeout(function () {
       fetch(searchUrl + '?q=' + encodeURIComponent(q))
         .then(function (r) { return r.json(); })
         .then(function (data) { renderDropdown(data.results || []); })
-        .catch(function () { dropdown.style.display = 'none'; });
+        .catch(function () { hideDropdown(); });
     }, 250);
   });
 
-  searchInput.addEventListener('blur', function () {
-    setTimeout(function () { dropdown.style.display = 'none'; }, 200);
-  });
-  searchInput.addEventListener('focus', function () {
-    if (dropdown.children.length > 0) dropdown.style.display = 'block';
-  });
+  searchInput.addEventListener('blur',  function () { setTimeout(hideDropdown, 200); });
+  searchInput.addEventListener('focus', showDropdown);
+
+  // Reposition on scroll or resize so the dropdown tracks the input.
+  window.addEventListener('scroll', function () { if (dropdown.style.display !== 'none') positionDropdown(); }, true);
+  window.addEventListener('resize', function () { if (dropdown.style.display !== 'none') positionDropdown(); });
 })();
 
 // ── Auto-expand reminder card on save success ─────────────────────────────────
