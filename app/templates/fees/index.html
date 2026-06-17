@@ -185,24 +185,70 @@
 
 <!-- ── Student Financial Statement Selector ──────────────────────────── -->
 {% if current_user.has_permission('manage_fees') %}
-<div class="card mb-4">
-  <div class="card-header">
-    <i class="bi bi-file-earmark-text-fill text-accent me-2"></i>كشف مالي شامل لطالب
+<div class="card mb-4" id="stmtCard">
+  <div class="card-header d-flex align-items-center gap-2">
+    <i class="bi bi-file-earmark-text-fill text-accent"></i>
+    <span>كشف مالي شامل لطالب</span>
+    <span class="text-muted" style="font-size:12px;font-weight:400;margin-right:4px">— اختر طالباً لعرض وطباعة كشفه المالي الكامل عبر جميع السنوات الدراسية</span>
   </div>
-  <div class="card-body py-3">
-    <div class="row g-3 align-items-end">
-      <div class="col-md-8">
-        <label class="form-label">اختر الطالب</label>
-        <input type="text" id="stmtStudentSearch" class="form-control"
-               placeholder="ابحث باسم الطالب أو رقمه..."
-               autocomplete="off">
+
+  <!-- Search state -->
+  <div class="card-body" id="stmtSearchState">
+    <div class="row g-3 align-items-center">
+      <div class="col-12 col-md-8 col-lg-7">
+        <label class="form-label fw-semibold" for="stmtStudentSearch">ابحث عن طالب</label>
+        <div style="position:relative">
+          <span style="position:absolute;top:50%;right:12px;transform:translateY(-50%);color:#9aabb8;pointer-events:none;line-height:1">
+            <i class="bi bi-search" style="font-size:15px"></i>
+          </span>
+          <input type="text" id="stmtStudentSearch" class="form-control"
+                 style="padding-right:38px"
+                 placeholder="اكتب اسم الطالب أو رقمه (حرفان على الأقل)..."
+                 autocomplete="off" spellcheck="false">
+          <span id="stmtSpinner" style="position:absolute;top:50%;left:12px;transform:translateY(-50%);display:none">
+            <span class="spinner-border spinner-border-sm text-secondary" role="status"></span>
+          </span>
+        </div>
         <input type="hidden" id="stmtStudentId">
-        <div id="stmtSelectedInfo" class="mt-2" style="display:none;font-size:13px;color:#1aab6d;font-weight:600"></div>
+        <div style="font-size:12px;color:#9aabb8;margin-top:6px">
+          <i class="bi bi-info-circle me-1"></i>تظهر نتائج الطلاب النشطين في السنة الدراسية الحالية فقط
+        </div>
       </div>
-      <div class="col-md-4 d-grid">
-        <a id="stmtOpenBtn" href="#" target="_blank"
-           class="btn btn-outline-primary disabled"
-           style="pointer-events:none">
+      <div class="col-12 col-md-4 col-lg-5 d-flex align-items-end">
+        <div style="font-size:13px;color:#b0bec5;padding-bottom:2px">
+          <i class="bi bi-arrow-right me-1"></i>اختر طالباً من نتائج البحث لتفعيل الكشف
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Selected state (hidden until a student is chosen) -->
+  <div class="card-body" id="stmtSelectedState" style="display:none">
+    <div class="d-flex align-items-center gap-3 flex-wrap">
+      <!-- Avatar -->
+      <div id="stmtAvatar"
+           style="width:52px;height:52px;border-radius:50%;background:#1a3a5c;
+                  display:flex;align-items:center;justify-content:center;
+                  font-size:20px;color:#fff;font-weight:900;flex-shrink:0;
+                  border:3px solid #e8a020"></div>
+      <!-- Student info -->
+      <div style="flex:1;min-width:0">
+        <div id="stmtStudentName" style="font-size:17px;font-weight:800;color:#1e2b3a;line-height:1.2"></div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:5px">
+          <span id="stmtStudentCode"
+                style="font-size:12px;color:#fff;background:#1a3a5c;
+                       padding:2px 10px;border-radius:10px;font-weight:600"></span>
+          <span id="stmtStudentGrade"
+                style="font-size:12px;color:#1a3a5c;background:#e4ecf8;
+                       padding:2px 10px;border-radius:10px;font-weight:600"></span>
+        </div>
+      </div>
+      <!-- Actions -->
+      <div class="d-flex gap-2 flex-shrink-0">
+        <button type="button" id="stmtClearBtn" class="btn btn-outline-secondary btn-sm">
+          <i class="bi bi-x-circle me-1"></i>تغيير الطالب
+        </button>
+        <a id="stmtOpenBtn" href="#" target="_blank" class="btn btn-primary">
           <i class="bi bi-printer-fill me-1"></i>طباعة الكشف المالي
         </a>
       </div>
@@ -222,120 +268,182 @@
 <script>
 // ── Student financial statement selector ─────────────────────────────────────
 (function () {
-  var searchInput  = document.getElementById('stmtStudentSearch');
-  var hiddenId     = document.getElementById('stmtStudentId');
-  var openBtn      = document.getElementById('stmtOpenBtn');
-  var selectedInfo = document.getElementById('stmtSelectedInfo');
-
+  var searchInput   = document.getElementById('stmtStudentSearch');
   if (!searchInput) return;
 
+  var hiddenId      = document.getElementById('stmtStudentId');
+  var openBtn       = document.getElementById('stmtOpenBtn');
+  var clearBtn      = document.getElementById('stmtClearBtn');
+  var searchState   = document.getElementById('stmtSearchState');
+  var selectedState = document.getElementById('stmtSelectedState');
+  var avatar        = document.getElementById('stmtAvatar');
+  var nameEl        = document.getElementById('stmtStudentName');
+  var codeEl        = document.getElementById('stmtStudentCode');
+  var gradeEl       = document.getElementById('stmtStudentGrade');
+  var spinner       = document.getElementById('stmtSpinner');
+
   var searchUrl = '{{ url_for("fees.search_students") }}';
-  var stmtTpl = '{{ url_for("fees.student_statement", student_id=0) }}';
+  var stmtTpl   = '{{ url_for("fees.student_statement", student_id=0) }}';
   var timer;
 
-  // Dropdown is appended to <body> to escape any ancestor overflow clipping.
-  var dropdown = document.createElement('div');
-  dropdown.id = 'stmtStudentDropdown';
-  dropdown.style.cssText = [
+  // ── Dropdown — appended to <body> so no ancestor clips it ──────────────
+  var dd = document.createElement('div');
+  dd.style.cssText = [
     'position:fixed',
     'background:#fff',
     'border:1px solid #dde8f4',
-    'border-radius:8px',
-    'box-shadow:0 4px 20px rgba(0,0,0,.12)',
-    'max-height:240px',
+    'border-radius:10px',
+    'box-shadow:0 8px 32px rgba(26,58,92,.14),0 2px 8px rgba(0,0,0,.08)',
+    'max-height:300px',
     'overflow-y:auto',
     'z-index:9999',
     'display:none',
     'font-family:inherit',
-    'direction:rtl'
+    'direction:rtl',
+    'min-width:260px'
   ].join(';');
-  document.body.appendChild(dropdown);
+  document.body.appendChild(dd);
 
-  function positionDropdown() {
-    var rect = searchInput.getBoundingClientRect();
-    dropdown.style.top   = (rect.bottom + window.scrollY) + 'px';
-    dropdown.style.left  = rect.left + 'px';
-    dropdown.style.width = rect.width + 'px';
+  function positionDd() {
+    var r = searchInput.getBoundingClientRect();
+    // position:fixed — coordinates are viewport-relative, no scrollY offset needed.
+    dd.style.top   = r.bottom + 4 + 'px';
+    dd.style.left  = r.left   + 'px';
+    dd.style.width = r.width  + 'px';
   }
 
-  function hideDropdown() { dropdown.style.display = 'none'; }
-  function showDropdown() {
-    if (dropdown.children.length) {
-      positionDropdown();
-      dropdown.style.display = 'block';
-    }
+  function hideDd() { dd.style.display = 'none'; }
+  function showDd() { if (dd.children.length) { positionDd(); dd.style.display = 'block'; } }
+
+  // ── State switching ─────────────────────────────────────────────────────
+  function showSearchState() {
+    selectedState.style.display = 'none';
+    searchState.style.display   = 'block';
+    searchInput.value = '';
+    hiddenId.value    = '';
+    dd.innerHTML      = '';
+    hideDd();
+    setTimeout(function () { searchInput.focus(); }, 50);
   }
 
-  function clearSelection() {
-    hiddenId.value = '';
-    openBtn.classList.add('disabled');
-    openBtn.style.pointerEvents = 'none';
-    openBtn.href = '#';
-    selectedInfo.style.display = 'none';
-    selectedInfo.textContent = '';
+  function showSelectedState(id, name, code, grade, section) {
+    hiddenId.value  = id;
+    openBtn.href    = stmtTpl.replace('/0/', '/' + id + '/');
+
+    // Avatar: first letter of name
+    avatar.textContent = name.charAt(0) || '؟';
+
+    nameEl.textContent  = name;
+    codeEl.textContent  = code;
+
+    var loc = [grade, section ? 'شعبة ' + section : ''].filter(Boolean).join(' / ');
+    gradeEl.textContent  = loc || '—';
+    gradeEl.style.display = loc ? '' : 'none';
+
+    searchState.style.display   = 'none';
+    selectedState.style.display = 'block';
+    hideDd();
   }
 
-  function selectStudent(id, name, studentCode, grade, section) {
-    hiddenId.value = id;
-    openBtn.href = stmtTpl.replace('/0/', '/' + id + '/');
-    openBtn.classList.remove('disabled');
-    openBtn.style.pointerEvents = '';
-    var loc = (grade || section)
-      ? ' — ' + [grade, section ? 'شعبة ' + section : ''].filter(Boolean).join(' / ')
-      : '';
-    selectedInfo.textContent = 'تم اختيار: ' + name + ' (' + studentCode + ')' + loc;
-    selectedInfo.style.display = 'block';
-    hideDropdown();
-    searchInput.value = name + ' — ' + studentCode;
-  }
+  // ── Dropdown rendering ──────────────────────────────────────────────────
+  function renderDd(results) {
+    dd.innerHTML = '';
 
-  function renderDropdown(results) {
-    dropdown.innerHTML = '';
     if (!results.length) {
       var empty = document.createElement('div');
-      empty.style.cssText = 'padding:10px 14px;color:#9aabb8;font-size:13px';
-      empty.textContent = 'لا توجد نتائج';
-      dropdown.appendChild(empty);
-    } else {
-      results.forEach(function (s) {
-        var item = document.createElement('div');
-        item.style.cssText = 'padding:9px 14px;cursor:pointer;font-size:13px;border-bottom:1px solid #f0f4f8';
-        item.innerHTML = '<strong>' + s.full_name + '</strong>'
-          + '<span style="color:#9aabb8;margin-right:8px;font-size:12px">' + s.student_id + '</span>'
-          + (s.grade ? '<span style="color:#64748b;font-size:12px"> — ' + s.grade
-              + (s.section ? ' / شعبة ' + s.section : '') + '</span>' : '');
-        item.addEventListener('mousedown', function (e) {
-          e.preventDefault();
-          selectStudent(s.id, s.full_name, s.student_id, s.grade, s.section);
-        });
-        item.addEventListener('mouseover', function () { this.style.background = '#f0f6ff'; });
-        item.addEventListener('mouseout',  function () { this.style.background = ''; });
-        dropdown.appendChild(item);
-      });
+      empty.style.cssText = 'padding:14px 16px;color:#9aabb8;font-size:13px;text-align:center';
+      empty.textContent = 'لا توجد نتائج مطابقة';
+      dd.appendChild(empty);
+      positionDd();
+      dd.style.display = 'block';
+      return;
     }
-    positionDropdown();
-    dropdown.style.display = 'block';
+
+    // Header count
+    var hdr = document.createElement('div');
+    hdr.style.cssText = 'padding:7px 14px 5px;font-size:11px;color:#9aabb8;border-bottom:1px solid #f0f4f8;font-weight:600';
+    hdr.textContent = results.length + ' نتيجة';
+    dd.appendChild(hdr);
+
+    results.forEach(function (s) {
+      var row = document.createElement('div');
+      row.style.cssText = [
+        'display:flex',
+        'align-items:center',
+        'gap:10px',
+        'padding:9px 14px',
+        'cursor:pointer',
+        'border-bottom:1px solid #f5f8fd',
+        'transition:background .12s'
+      ].join(';');
+
+      // Mini-avatar
+      var av = document.createElement('div');
+      av.style.cssText = [
+        'width:34px','height:34px','border-radius:50%',
+        'background:#e4ecf8','color:#1a3a5c',
+        'display:flex','align-items:center','justify-content:center',
+        'font-size:14px','font-weight:800','flex-shrink:0'
+      ].join(';');
+      av.textContent = s.full_name.charAt(0) || '؟';
+
+      // Text block
+      var txt = document.createElement('div');
+      txt.style.cssText = 'flex:1;min-width:0;overflow:hidden';
+
+      var nameSpan = document.createElement('div');
+      nameSpan.style.cssText = 'font-weight:700;font-size:13px;color:#1e2b3a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+      nameSpan.textContent = s.full_name;
+
+      var metaSpan = document.createElement('div');
+      metaSpan.style.cssText = 'font-size:11px;color:#9aabb8;margin-top:2px';
+      var parts = [s.student_id];
+      if (s.grade)   parts.push(s.grade);
+      if (s.section) parts.push('شعبة ' + s.section);
+      metaSpan.textContent = parts.join(' · ');
+
+      txt.appendChild(nameSpan);
+      txt.appendChild(metaSpan);
+      row.appendChild(av);
+      row.appendChild(txt);
+
+      row.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        showSelectedState(s.id, s.full_name, s.student_id, s.grade, s.section);
+      });
+      row.addEventListener('mouseover', function () { this.style.background = '#f0f6ff'; });
+      row.addEventListener('mouseout',  function () { this.style.background = ''; });
+
+      dd.appendChild(row);
+    });
+
+    positionDd();
+    dd.style.display = 'block';
   }
 
+  // ── Search input events ─────────────────────────────────────────────────
   searchInput.addEventListener('input', function () {
     var q = this.value.trim();
-    clearSelection();
     clearTimeout(timer);
-    if (q.length < 2) { hideDropdown(); return; }
+    if (q.length < 2) { hideDd(); spinner.style.display = 'none'; return; }
+    spinner.style.display = 'inline-block';
     timer = setTimeout(function () {
       fetch(searchUrl + '?q=' + encodeURIComponent(q))
         .then(function (r) { return r.json(); })
-        .then(function (data) { renderDropdown(data.results || []); })
-        .catch(function () { hideDropdown(); });
+        .then(function (data) { spinner.style.display = 'none'; renderDd(data.results || []); })
+        .catch(function () { spinner.style.display = 'none'; hideDd(); });
     }, 250);
   });
 
-  searchInput.addEventListener('blur',  function () { setTimeout(hideDropdown, 200); });
-  searchInput.addEventListener('focus', showDropdown);
+  searchInput.addEventListener('blur',  function () { setTimeout(hideDd, 180); });
+  searchInput.addEventListener('focus', showDd);
 
-  // Reposition on scroll or resize so the dropdown tracks the input.
-  window.addEventListener('scroll', function () { if (dropdown.style.display !== 'none') positionDropdown(); }, true);
-  window.addEventListener('resize', function () { if (dropdown.style.display !== 'none') positionDropdown(); });
+  // Clear / change button
+  if (clearBtn) clearBtn.addEventListener('click', showSearchState);
+
+  // Reposition on scroll/resize (fixed coords change when page scrolls).
+  window.addEventListener('scroll', function () { if (dd.style.display !== 'none') positionDd(); }, true);
+  window.addEventListener('resize', function () { if (dd.style.display !== 'none') positionDd(); });
 })();
 
 // ── Auto-expand reminder card on save success ─────────────────────────────────
