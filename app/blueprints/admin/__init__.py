@@ -350,12 +350,14 @@ def dashboard():
     ).count()
     stats['absent_today']  = att_q_base.filter_by(status='absent').count()
 
-    # Revenue vs Expense this month — school-scoped
+    # Revenue vs Expense this month — school-scoped, across all academic years
     first_of_month = today.replace(day=1)
-    rev_q = db.session.query(func.sum(Revenue.amount))\
-        .filter(Revenue.date >= first_of_month)
-    exp_q = db.session.query(func.sum(Expense.amount))\
-        .filter(Expense.date >= first_of_month)
+    rev_q = (db.session.query(func.sum(Revenue.amount))
+             .execution_options(include_all_years=True)
+             .filter(Revenue.date >= first_of_month))
+    exp_q = (db.session.query(func.sum(Expense.amount))
+             .execution_options(include_all_years=True)
+             .filter(Expense.date >= first_of_month))
     if school_id:
         rev_q = rev_q.filter(Revenue.school_id == school_id)
         exp_q = exp_q.filter(Expense.school_id == school_id)

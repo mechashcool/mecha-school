@@ -13,6 +13,7 @@ from app.models import (db, Revenue, RevenueCategory,
                          Expense, ExpenseCategory, AcademicYear)
 from app.utils.decorators import (permission_required, any_permission_required,
                                   get_current_school, get_active_year, historical_guard)
+from app.utils.scoping import is_historical_view
 from app.utils.helpers import save_uploaded_file
 from app.utils.audit import log_action
 
@@ -85,15 +86,17 @@ def index():
     school = get_current_school()
     sid    = school.id if school else None
 
-    rev_q = db.session.query(
+    rev_q = (db.session.query(
         func.coalesce(func.sum(Revenue.amount), 0).label('total')
-    ).filter(extract('year', Revenue.date) == year)
+    ).execution_options(include_all_years=True)
+     .filter(extract('year', Revenue.date) == year))
     if sid:
         rev_q = rev_q.filter(Revenue.school_id == sid)
 
-    exp_q = db.session.query(
+    exp_q = (db.session.query(
         func.coalesce(func.sum(Expense.amount), 0).label('total')
-    ).filter(extract('year', Expense.date) == year)
+    ).execution_options(include_all_years=True)
+     .filter(extract('year', Expense.date) == year))
     if sid:
         exp_q = exp_q.filter(Expense.school_id == sid)
 
@@ -105,18 +108,20 @@ def index():
     total_exp = float(exp_q.scalar() or 0)
 
     # Monthly breakdown for chart (full year)
-    rev_chart_q = db.session.query(
+    rev_chart_q = (db.session.query(
         extract('month', Revenue.date).label('m'),
         func.sum(Revenue.amount).label('total')
-    ).filter(extract('year', Revenue.date) == year)
+    ).execution_options(include_all_years=True)
+     .filter(extract('year', Revenue.date) == year))
     if sid:
         rev_chart_q = rev_chart_q.filter(Revenue.school_id == sid)
     monthly_rev = {r.m: float(r.total) for r in rev_chart_q.group_by('m').all()}
 
-    exp_chart_q = db.session.query(
+    exp_chart_q = (db.session.query(
         extract('month', Expense.date).label('m'),
         func.sum(Expense.amount).label('total')
-    ).filter(extract('year', Expense.date) == year)
+    ).execution_options(include_all_years=True)
+     .filter(extract('year', Expense.date) == year))
     if sid:
         exp_chart_q = exp_chart_q.filter(Expense.school_id == sid)
     monthly_exp = {r.m: float(r.total) for r in exp_chart_q.group_by('m').all()}
@@ -124,9 +129,9 @@ def index():
     chart_rev = [monthly_rev.get(m, 0) for m in range(1, 13)]
     chart_exp = [monthly_exp.get(m, 0) for m in range(1, 13)]
 
-    # Recent transactions — school-scoped
-    recent_rev_q = Revenue.query
-    recent_exp_q = Expense.query
+    # Recent transactions — school-scoped across all academic years
+    recent_rev_q = Revenue.query.execution_options(include_all_years=True)
+    recent_exp_q = Expense.query.execution_options(include_all_years=True)
     if sid:
         recent_rev_q = recent_rev_q.filter_by(school_id=sid)
         recent_exp_q = recent_exp_q.filter_by(school_id=sid)
@@ -155,7 +160,8 @@ def revenues():
     month  = request.args.get('month', type=int)
     cat_id = request.args.get('category_id', type=int)
 
-    query = Revenue.query.filter(extract('year', Revenue.date) == year)
+    query = (Revenue.query.execution_options(include_all_years=True)
+             .filter(extract('year', Revenue.date) == year))
     if month:
         query = query.filter(extract('month', Revenue.date) == month)
     if cat_id:
@@ -168,7 +174,8 @@ def revenues():
     return render_template('finances/revenues.html',
                            revenues=revenues, categories=categories,
                            total=float(total), year=year, month=month,
-                           cat_id=cat_id, arabic_months=ARABIC_MONTHS)
+                           cat_id=cat_id, arabic_months=ARABIC_MONTHS,
+                           is_historical_year=is_historical_view())
 
 
 @finances_bp.route('/revenues/create', methods=['GET', 'POST'])
@@ -184,9 +191,9 @@ def create_revenue():
     if request.method == 'POST':
         date_str = request.form.get('date')
         tx_date = dt.strptime(date_str, '%Y-%m-%d').date() if date_str else date.today()
-        ay = _academic_year_for_date(school, tx_date)
+        ay = get_active_year(school.id) if school else None
         if not school or not ay:
-            flash('Select a school with an active academic year before recording revenue.', 'danger')
+            flash('لا توجد سنة دراسية نشطة. يرجى التحقق من إعدادات السنة الدراسية.', 'danger')
             return redirect(url_for('finances.revenues'))
         category = _category_for_school(
             RevenueCategory,
@@ -198,8 +205,8 @@ def create_revenue():
             return redirect(url_for('finances.create_revenue'))
         rev = Revenue(
             category_id = category.id,
-            school_id   = school.id if school else None,
-            academic_year_id = ay.id if ay else None,
+            school_id   = school.id,
+            academic_year_id = ay.id,
             amount      = float(request.form.get('amount', 0)),
             description = request.form.get('description', '').strip(),
             date        = tx_date,
@@ -220,7 +227,8 @@ def create_revenue():
 @historical_guard
 @permission_required('manage_revenues')
 def edit_revenue(rev_id):
-    rev        = Revenue.query.get_or_404(rev_id)
+    rev = (Revenue.query.execution_options(include_all_years=True)
+           .filter_by(id=rev_id).first_or_404())
     categories = _category_query(RevenueCategory, _category_school_id(rev)).all()
     if request.method == 'POST':
         date_str = request.form.get('date')
@@ -254,7 +262,8 @@ def edit_revenue(rev_id):
 @historical_guard
 @permission_required('manage_revenues')
 def delete_revenue(rev_id):
-    rev = Revenue.query.get_or_404(rev_id)
+    rev = (Revenue.query.execution_options(include_all_years=True)
+           .filter_by(id=rev_id).first_or_404())
     amount = float(rev.amount)
     db.session.delete(rev)
     db.session.commit()
@@ -276,7 +285,8 @@ def expenses():
     month  = request.args.get('month', type=int)
     cat_id = request.args.get('category_id', type=int)
 
-    query = Expense.query.filter(extract('year', Expense.date) == year)
+    query = (Expense.query.execution_options(include_all_years=True)
+             .filter(extract('year', Expense.date) == year))
     if month:
         query = query.filter(extract('month', Expense.date) == month)
     if cat_id:
@@ -289,7 +299,8 @@ def expenses():
     return render_template('finances/expenses.html',
                            expenses=expenses, categories=categories,
                            total=float(total), year=year, month=month,
-                           cat_id=cat_id, arabic_months=ARABIC_MONTHS)
+                           cat_id=cat_id, arabic_months=ARABIC_MONTHS,
+                           is_historical_year=is_historical_view())
 
 
 @finances_bp.route('/expenses/create', methods=['GET', 'POST'])
@@ -305,9 +316,9 @@ def create_expense():
     if request.method == 'POST':
         date_str = request.form.get('date')
         tx_date = dt.strptime(date_str, '%Y-%m-%d').date() if date_str else date.today()
-        ay = _academic_year_for_date(school, tx_date)
+        ay = get_active_year(school.id) if school else None
         if not school or not ay:
-            flash('Select a school with an active academic year before recording expenses.', 'danger')
+            flash('لا توجد سنة دراسية نشطة. يرجى التحقق من إعدادات السنة الدراسية.', 'danger')
             return redirect(url_for('finances.expenses'))
         category = _category_for_school(
             ExpenseCategory,
@@ -322,8 +333,8 @@ def create_expense():
             receipt = save_uploaded_file(request.files['receipt'], 'receipts')
         exp = Expense(
             category_id = category.id,
-            school_id   = school.id if school else None,
-            academic_year_id = ay.id if ay else None,
+            school_id   = school.id,
+            academic_year_id = ay.id,
             amount      = float(request.form.get('amount', 0)),
             description = request.form.get('description', '').strip(),
             date        = tx_date,
@@ -349,7 +360,8 @@ def create_expense():
 @historical_guard
 @permission_required('manage_expenses')
 def edit_expense(exp_id):
-    exp        = Expense.query.get_or_404(exp_id)
+    exp = (Expense.query.execution_options(include_all_years=True)
+           .filter_by(id=exp_id).first_or_404())
     categories = _category_query(ExpenseCategory, _category_school_id(exp)).all()
     if request.method == 'POST':
         # Payroll-sourced expenses are owned by the payroll module.
@@ -391,7 +403,8 @@ def edit_expense(exp_id):
 @historical_guard
 @permission_required('manage_expenses')
 def delete_expense(exp_id):
-    exp = Expense.query.get_or_404(exp_id)
+    exp = (Expense.query.execution_options(include_all_years=True)
+           .filter_by(id=exp_id).first_or_404())
     if exp.source == 'payroll':
         flash('لا يمكن حذف قيد ناتج من الرواتب مباشرة.', 'danger')
         return redirect(url_for('finances.expenses'))
@@ -445,7 +458,8 @@ def categories():
     exp_counts = _category_record_counts(Expense, exp_cats)
     return render_template('finances/categories.html',
                            rev_cats=rev_cats, exp_cats=exp_cats,
-                           rev_counts=rev_counts, exp_counts=exp_counts)
+                           rev_counts=rev_counts, exp_counts=exp_counts,
+                           is_historical_year=is_historical_view())
 
 
 @finances_bp.route('/categories/<string:ctype>/<int:cat_id>/delete', methods=['POST'])

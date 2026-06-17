@@ -29,6 +29,7 @@ def _year_monthly(model, date_col, amount_col, year, school_id=None):
     q = (db.session.query(
                 extract('month', date_col).label('m'),
                 func.coalesce(func.sum(amount_col), 0).label('t'))
+            .execution_options(include_all_years=True)
             .filter(extract('year', date_col) == year))
     if school_id:
         q = q.filter(model.school_id == school_id)
@@ -64,15 +65,18 @@ def index():
         emp_q = emp_q.filter_by(school_id=school_id)
     emp_active = emp_q.count()
 
-    # Financial year totals
-    rev_q = db.session.query(func.coalesce(func.sum(Revenue.amount), 0))\
-                      .filter(extract('year', Revenue.date) == year)
+    # Financial year totals — include_all_years so the calendar-year filter
+    # works independently of which academic year the records were assigned to.
+    rev_q = (db.session.query(func.coalesce(func.sum(Revenue.amount), 0))
+             .execution_options(include_all_years=True)
+             .filter(extract('year', Revenue.date) == year))
     if school_id:
         rev_q = rev_q.filter(Revenue.school_id == school_id)
     total_rev = float(rev_q.scalar())
 
-    exp_q = db.session.query(func.coalesce(func.sum(Expense.amount), 0))\
-                      .filter(extract('year', Expense.date) == year)
+    exp_q = (db.session.query(func.coalesce(func.sum(Expense.amount), 0))
+             .execution_options(include_all_years=True)
+             .filter(extract('year', Expense.date) == year))
     if school_id:
         exp_q = exp_q.filter(Expense.school_id == school_id)
     total_exp = float(exp_q.scalar())
@@ -143,12 +147,14 @@ def financial():
     year  = request.args.get('year', date.today().year, type=int)
     month = request.args.get('month', type=int)
 
-    rev_q = db.session.query(func.coalesce(func.sum(Revenue.amount), 0))\
-                      .filter(extract('year', Revenue.date) == year)
+    rev_q = (db.session.query(func.coalesce(func.sum(Revenue.amount), 0))
+             .execution_options(include_all_years=True)
+             .filter(extract('year', Revenue.date) == year))
     if school_id:
         rev_q = rev_q.filter(Revenue.school_id == school_id)
-    exp_q = db.session.query(func.coalesce(func.sum(Expense.amount), 0))\
-                      .filter(extract('year', Expense.date) == year)
+    exp_q = (db.session.query(func.coalesce(func.sum(Expense.amount), 0))
+             .execution_options(include_all_years=True)
+             .filter(extract('year', Expense.date) == year))
     if school_id:
         exp_q = exp_q.filter(Expense.school_id == school_id)
 
@@ -163,6 +169,7 @@ def financial():
     rev_cat_q = (db.session.query(
                     RevenueCategory.name,
                     func.coalesce(func.sum(Revenue.amount), 0).label('total'))
+                 .execution_options(include_all_years=True)
                  .join(Revenue, Revenue.category_id == RevenueCategory.id)
                  .filter(extract('year', Revenue.date) == year))
     if school_id:
@@ -175,6 +182,7 @@ def financial():
     exp_cat_q = (db.session.query(
                     ExpenseCategory.name,
                     func.coalesce(func.sum(Expense.amount), 0).label('total'))
+                 .execution_options(include_all_years=True)
                  .join(Expense, Expense.category_id == ExpenseCategory.id)
                  .filter(extract('year', Expense.date) == year))
     if school_id:
