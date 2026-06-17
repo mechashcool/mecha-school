@@ -9,10 +9,16 @@
     <h1 class="page-title">الرسوم الدراسية</h1>
     <p class="page-subtitle">متابعة وإدارة رسوم الطلاب والأقساط</p>
   </div>
-  <div class="d-flex gap-2">
+  <div class="d-flex gap-2 flex-wrap">
     <a href="{{ url_for('fees.fee_types') }}" class="btn btn-outline-secondary">
       <i class="bi bi-tags-fill me-1"></i>أنواع الرسوم
     </a>
+    {% if current_user.has_permission('manage_fees') %}
+    <button type="button" class="btn btn-outline-secondary"
+            data-bs-toggle="modal" data-bs-target="#stmtModal">
+      <i class="bi bi-file-earmark-text-fill me-1"></i>كشف مالي للطالب
+    </button>
+    {% endif %}
     <a href="{{ url_for('fees.print_list', **request.args.to_dict()) }}"
        class="btn btn-outline-secondary"
        target="_blank">
@@ -183,267 +189,284 @@
   </div>
 </div>
 
-<!-- ── Student Financial Statement Selector ──────────────────────────── -->
-{% if current_user.has_permission('manage_fees') %}
-<div class="card mb-4" id="stmtCard">
-  <div class="card-header d-flex align-items-center gap-2">
-    <i class="bi bi-file-earmark-text-fill text-accent"></i>
-    <span>كشف مالي شامل لطالب</span>
-    <span class="text-muted" style="font-size:12px;font-weight:400;margin-right:4px">— اختر طالباً لعرض وطباعة كشفه المالي الكامل عبر جميع السنوات الدراسية</span>
-  </div>
-
-  <!-- Search state -->
-  <div class="card-body" id="stmtSearchState">
-    <div class="row g-3 align-items-center">
-      <div class="col-12 col-md-8 col-lg-7">
-        <label class="form-label fw-semibold" for="stmtStudentSearch">ابحث عن طالب</label>
-        <div style="position:relative">
-          <span style="position:absolute;top:50%;right:12px;transform:translateY(-50%);color:#9aabb8;pointer-events:none;line-height:1">
-            <i class="bi bi-search" style="font-size:15px"></i>
-          </span>
-          <input type="text" id="stmtStudentSearch" class="form-control"
-                 style="padding-right:38px"
-                 placeholder="اكتب اسم الطالب أو رقمه (حرفان على الأقل)..."
-                 autocomplete="off" spellcheck="false">
-          <span id="stmtSpinner" style="position:absolute;top:50%;left:12px;transform:translateY(-50%);display:none">
-            <span class="spinner-border spinner-border-sm text-secondary" role="status"></span>
-          </span>
-        </div>
-        <input type="hidden" id="stmtStudentId">
-        <div style="font-size:12px;color:#9aabb8;margin-top:6px">
-          <i class="bi bi-info-circle me-1"></i>تظهر نتائج الطلاب النشطين في السنة الدراسية الحالية فقط
-        </div>
-      </div>
-      <div class="col-12 col-md-4 col-lg-5 d-flex align-items-end">
-        <div style="font-size:13px;color:#b0bec5;padding-bottom:2px">
-          <i class="bi bi-arrow-right me-1"></i>اختر طالباً من نتائج البحث لتفعيل الكشف
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Selected state (hidden until a student is chosen) -->
-  <div class="card-body" id="stmtSelectedState" style="display:none">
-    <div class="d-flex align-items-center gap-3 flex-wrap">
-      <!-- Avatar -->
-      <div id="stmtAvatar"
-           style="width:52px;height:52px;border-radius:50%;background:#1a3a5c;
-                  display:flex;align-items:center;justify-content:center;
-                  font-size:20px;color:#fff;font-weight:900;flex-shrink:0;
-                  border:3px solid #e8a020"></div>
-      <!-- Student info -->
-      <div style="flex:1;min-width:0">
-        <div id="stmtStudentName" style="font-size:17px;font-weight:800;color:#1e2b3a;line-height:1.2"></div>
-        <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:5px">
-          <span id="stmtStudentCode"
-                style="font-size:12px;color:#fff;background:#1a3a5c;
-                       padding:2px 10px;border-radius:10px;font-weight:600"></span>
-          <span id="stmtStudentGrade"
-                style="font-size:12px;color:#1a3a5c;background:#e4ecf8;
-                       padding:2px 10px;border-radius:10px;font-weight:600"></span>
-        </div>
-      </div>
-      <!-- Actions -->
-      <div class="d-flex gap-2 flex-shrink-0">
-        <button type="button" id="stmtClearBtn" class="btn btn-outline-secondary btn-sm">
-          <i class="bi bi-x-circle me-1"></i>تغيير الطالب
-        </button>
-        <a id="stmtOpenBtn" href="#" target="_blank" class="btn btn-primary">
-          <i class="bi bi-printer-fill me-1"></i>طباعة الكشف المالي
-        </a>
-      </div>
-    </div>
-  </div>
-</div>
-{% endif %}
-
 <div class="card">
   {{ fees_table_body(fee_entries, show_student_col=True, installment_filter=installment_filter) }}
 </div>
 
 {{ fees_modal_and_js() }}
+
+{% if current_user.has_permission('manage_fees') %}
+<!-- ── Student Financial Statement Modal ──────────────────────────────── -->
+<div class="modal fade" id="stmtModal" tabindex="-1"
+     aria-labelledby="stmtModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content" style="border:none;border-radius:14px;overflow:hidden">
+
+      <!-- Header -->
+      <div class="modal-header"
+           style="background:linear-gradient(135deg,#0f2540 0%,#1a3a5c 100%);
+                  padding:18px 24px;border:none">
+        <div>
+          <h5 class="modal-title mb-0" id="stmtModalLabel"
+              style="color:#fff;font-size:16px;font-weight:800">
+            <i class="bi bi-file-earmark-text-fill me-2"></i>كشف مالي شامل للطالب
+          </h5>
+          <div style="color:rgba(255,255,255,.60);font-size:12px;margin-top:3px">
+            يشمل جميع أنواع الرسوم والأقساط والمدفوعات عبر جميع السنوات الدراسية
+          </div>
+        </div>
+        <button type="button" class="btn-close btn-close-white ms-auto"
+                data-bs-dismiss="modal" aria-label="إغلاق"></button>
+      </div>
+
+      <!-- Body -->
+      <div class="modal-body" style="padding:24px 28px">
+
+        <!-- Search panel -->
+        <div id="stmtSearchPanel">
+          <label class="form-label fw-semibold" for="stmtInput"
+                 style="font-size:14px;color:#1a3a5c">
+            <i class="bi bi-search me-1"></i>ابحث عن طالب
+          </label>
+          <div style="position:relative">
+            <input type="text" id="stmtInput" class="form-control form-control-lg"
+                   style="padding-right:16px;padding-left:44px;border-radius:10px;
+                          font-size:14px;border-color:#c8d8ec"
+                   placeholder="اكتب اسم الطالب أو رقمه (حرفان على الأقل)..."
+                   autocomplete="off" spellcheck="false">
+            <span id="stmtSpinnerIcon"
+                  style="position:absolute;top:50%;left:14px;transform:translateY(-50%);
+                         color:#9aabb8;pointer-events:none;display:none">
+              <span class="spinner-border spinner-border-sm" role="status"></span>
+            </span>
+            <span id="stmtSearchIcon"
+                  style="position:absolute;top:50%;left:14px;transform:translateY(-50%);
+                         color:#9aabb8;pointer-events:none">
+              <i class="bi bi-search" style="font-size:15px"></i>
+            </span>
+          </div>
+
+          <!-- Results list — inline, no floating dropdown, no clipping possible -->
+          <div id="stmtResults" style="display:none;margin-top:8px;
+               border:1px solid #dde8f4;border-radius:10px;overflow:hidden;
+               max-height:280px;overflow-y:auto"></div>
+
+          <div style="font-size:12px;color:#b0bec5;margin-top:10px">
+            <i class="bi bi-info-circle me-1"></i>
+            يشمل البحث جميع الطلاب المرتبطين بهذه المدرسة بصرف النظر عن السنة الدراسية أو الحالة
+          </div>
+        </div>
+
+        <!-- Selected student panel (shown after selection) -->
+        <div id="stmtSelectedPanel" style="display:none">
+          <!-- Student identity card -->
+          <div style="background:#f5f8fd;border:1px solid #dde8f4;border-radius:12px;
+                      padding:18px 20px;display:flex;align-items:center;gap:16px">
+            <div id="stmtAvatar"
+                 style="width:56px;height:56px;border-radius:50%;
+                        background:#1a3a5c;color:#fff;
+                        display:flex;align-items:center;justify-content:center;
+                        font-size:22px;font-weight:900;flex-shrink:0;
+                        border:3px solid #e8a020"></div>
+            <div style="flex:1;min-width:0">
+              <div id="stmtName"
+                   style="font-size:18px;font-weight:800;color:#1e2b3a;
+                          line-height:1.2;overflow:hidden;text-overflow:ellipsis;
+                          white-space:nowrap"></div>
+              <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:7px">
+                <span id="stmtCode"
+                      style="background:#1a3a5c;color:#fff;font-size:12px;
+                             font-weight:600;padding:2px 12px;border-radius:10px"></span>
+                <span id="stmtGrade"
+                      style="background:#e4ecf8;color:#1a3a5c;font-size:12px;
+                             font-weight:600;padding:2px 12px;border-radius:10px"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Statement description -->
+          <div style="margin-top:16px;padding:14px 18px;
+                      background:#fffbe6;border:1px solid #f0d060;
+                      border-radius:10px;font-size:13px;color:#7a5c00;
+                      display:flex;align-items:flex-start;gap:10px">
+            <i class="bi bi-file-earmark-text-fill"
+               style="font-size:18px;flex-shrink:0;margin-top:1px"></i>
+            <div>
+              <strong>ما يتضمنه الكشف المالي:</strong>
+              جميع أنواع الرسوم المخصصة للطالب، المبالغ الإجمالية والخصومات والصافي المستحق، جميع الأقساط مع تواريخ الاستحقاق والسداد، تفاصيل كل دفعة (المبلغ والطريقة والإيصال)، ملخص الأرصدة المدفوعة والمتبقية عبر جميع السنوات.
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Footer -->
+      <div class="modal-footer" style="border-top:1px solid #edf1f7;padding:14px 24px;
+           background:#fafbfd">
+        <button type="button" class="btn btn-outline-secondary"
+                data-bs-dismiss="modal">إغلاق</button>
+        <button type="button" id="stmtChangeBtn"
+                class="btn btn-outline-secondary" style="display:none">
+          <i class="bi bi-arrow-counterclockwise me-1"></i>بحث عن طالب آخر
+        </button>
+        <a id="stmtPrintBtn" href="#" target="_blank"
+           class="btn btn-primary" style="display:none">
+          <i class="bi bi-printer-fill me-1"></i>طباعة الكشف المالي
+        </a>
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block extra_js %}
 <script>
-// ── Student financial statement selector ─────────────────────────────────────
+// ── Student financial statement modal ────────────────────────────────────────
 (function () {
-  var searchInput   = document.getElementById('stmtStudentSearch');
-  if (!searchInput) return;
+  var modalEl = document.getElementById('stmtModal');
+  if (!modalEl) return;
 
-  var hiddenId      = document.getElementById('stmtStudentId');
-  var openBtn       = document.getElementById('stmtOpenBtn');
-  var clearBtn      = document.getElementById('stmtClearBtn');
-  var searchState   = document.getElementById('stmtSearchState');
-  var selectedState = document.getElementById('stmtSelectedState');
-  var avatar        = document.getElementById('stmtAvatar');
-  var nameEl        = document.getElementById('stmtStudentName');
-  var codeEl        = document.getElementById('stmtStudentCode');
-  var gradeEl       = document.getElementById('stmtStudentGrade');
-  var spinner       = document.getElementById('stmtSpinner');
+  var input        = document.getElementById('stmtInput');
+  var results      = document.getElementById('stmtResults');
+  var spinnerIcon  = document.getElementById('stmtSpinnerIcon');
+  var searchIcon   = document.getElementById('stmtSearchIcon');
+  var searchPanel  = document.getElementById('stmtSearchPanel');
+  var selectedPanel= document.getElementById('stmtSelectedPanel');
+  var avatar       = document.getElementById('stmtAvatar');
+  var nameEl       = document.getElementById('stmtName');
+  var codeEl       = document.getElementById('stmtCode');
+  var gradeEl      = document.getElementById('stmtGrade');
+  var changeBtn    = document.getElementById('stmtChangeBtn');
+  var printBtn     = document.getElementById('stmtPrintBtn');
 
-  var searchUrl = '{{ url_for("fees.search_students") }}';
+  var searchUrl = '{{ url_for("fees.search_students_statement") }}';
   var stmtTpl   = '{{ url_for("fees.student_statement", student_id=0) }}';
   var timer;
 
-  // ── Dropdown — appended to <body> so no ancestor clips it ──────────────
-  var dd = document.createElement('div');
-  dd.style.cssText = [
-    'position:fixed',
-    'background:#fff',
-    'border:1px solid #dde8f4',
-    'border-radius:10px',
-    'box-shadow:0 8px 32px rgba(26,58,92,.14),0 2px 8px rgba(0,0,0,.08)',
-    'max-height:300px',
-    'overflow-y:auto',
-    'z-index:9999',
-    'display:none',
-    'font-family:inherit',
-    'direction:rtl',
-    'min-width:260px'
-  ].join(';');
-  document.body.appendChild(dd);
-
-  function positionDd() {
-    var r = searchInput.getBoundingClientRect();
-    // position:fixed — coordinates are viewport-relative, no scrollY offset needed.
-    dd.style.top   = r.bottom + 4 + 'px';
-    dd.style.left  = r.left   + 'px';
-    dd.style.width = r.width  + 'px';
+  // ── Helpers ─────────────────────────────────────────────────────────────
+  function showSpinner(on) {
+    spinnerIcon.style.display = on ? 'inline-block' : 'none';
+    searchIcon.style.display  = on ? 'none' : 'inline-block';
   }
 
-  function hideDd() { dd.style.display = 'none'; }
-  function showDd() { if (dd.children.length) { positionDd(); dd.style.display = 'block'; } }
-
-  // ── State switching ─────────────────────────────────────────────────────
-  function showSearchState() {
-    selectedState.style.display = 'none';
-    searchState.style.display   = 'block';
-    searchInput.value = '';
-    hiddenId.value    = '';
-    dd.innerHTML      = '';
-    hideDd();
-    setTimeout(function () { searchInput.focus(); }, 50);
+  function resetToSearch() {
+    input.value             = '';
+    results.innerHTML       = '';
+    results.style.display   = 'none';
+    searchPanel.style.display  = 'block';
+    selectedPanel.style.display= 'none';
+    changeBtn.style.display = 'none';
+    printBtn.style.display  = 'none';
+    showSpinner(false);
+    setTimeout(function () { input.focus(); }, 80);
   }
 
-  function showSelectedState(id, name, code, grade, section) {
-    hiddenId.value  = id;
-    openBtn.href    = stmtTpl.replace('/0/', '/' + id + '/');
+  function selectStudent(id, name, code, grade, section) {
+    printBtn.href = stmtTpl.replace('/0/', '/' + id + '/');
 
-    // Avatar: first letter of name
     avatar.textContent = name.charAt(0) || '؟';
-
-    nameEl.textContent  = name;
-    codeEl.textContent  = code;
+    nameEl.textContent = name;
+    codeEl.textContent = code;
 
     var loc = [grade, section ? 'شعبة ' + section : ''].filter(Boolean).join(' / ');
-    gradeEl.textContent  = loc || '—';
+    gradeEl.textContent   = loc || '';
     gradeEl.style.display = loc ? '' : 'none';
 
-    searchState.style.display   = 'none';
-    selectedState.style.display = 'block';
-    hideDd();
+    searchPanel.style.display  = 'none';
+    selectedPanel.style.display= 'block';
+    changeBtn.style.display    = 'inline-flex';
+    printBtn.style.display     = 'inline-flex';
   }
 
-  // ── Dropdown rendering ──────────────────────────────────────────────────
-  function renderDd(results) {
-    dd.innerHTML = '';
+  // ── Results rendering ────────────────────────────────────────────────────
+  function renderResults(list) {
+    results.innerHTML = '';
 
-    if (!results.length) {
+    if (!list.length) {
       var empty = document.createElement('div');
-      empty.style.cssText = 'padding:14px 16px;color:#9aabb8;font-size:13px;text-align:center';
-      empty.textContent = 'لا توجد نتائج مطابقة';
-      dd.appendChild(empty);
-      positionDd();
-      dd.style.display = 'block';
+      empty.style.cssText = 'padding:18px;text-align:center;color:#9aabb8;font-size:13px';
+      empty.textContent = 'لا توجد نتائج مطابقة للبحث';
+      results.appendChild(empty);
+      results.style.display = 'block';
       return;
     }
 
-    // Header count
+    // Count header
     var hdr = document.createElement('div');
-    hdr.style.cssText = 'padding:7px 14px 5px;font-size:11px;color:#9aabb8;border-bottom:1px solid #f0f4f8;font-weight:600';
-    hdr.textContent = results.length + ' نتيجة';
-    dd.appendChild(hdr);
+    hdr.style.cssText = 'padding:8px 16px 6px;font-size:11px;color:#9aabb8;' +
+                        'border-bottom:1px solid #edf1f7;font-weight:700;background:#fafbfd';
+    hdr.textContent = list.length + (list.length === 20 ? '+ ' : ' ') + 'نتيجة';
+    results.appendChild(hdr);
 
-    results.forEach(function (s) {
+    list.forEach(function (s) {
       var row = document.createElement('div');
-      row.style.cssText = [
-        'display:flex',
-        'align-items:center',
-        'gap:10px',
-        'padding:9px 14px',
-        'cursor:pointer',
-        'border-bottom:1px solid #f5f8fd',
-        'transition:background .12s'
-      ].join(';');
+      row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px 16px;' +
+                          'cursor:pointer;border-bottom:1px solid #f5f8fd;transition:background .1s';
 
-      // Mini-avatar
       var av = document.createElement('div');
-      av.style.cssText = [
-        'width:34px','height:34px','border-radius:50%',
-        'background:#e4ecf8','color:#1a3a5c',
-        'display:flex','align-items:center','justify-content:center',
-        'font-size:14px','font-weight:800','flex-shrink:0'
-      ].join(';');
+      av.style.cssText = 'width:38px;height:38px;border-radius:50%;background:#e4ecf8;' +
+                         'color:#1a3a5c;display:flex;align-items:center;justify-content:center;' +
+                         'font-size:16px;font-weight:800;flex-shrink:0';
       av.textContent = s.full_name.charAt(0) || '؟';
 
-      // Text block
       var txt = document.createElement('div');
-      txt.style.cssText = 'flex:1;min-width:0;overflow:hidden';
+      txt.style.cssText = 'flex:1;min-width:0';
 
-      var nameSpan = document.createElement('div');
-      nameSpan.style.cssText = 'font-weight:700;font-size:13px;color:#1e2b3a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
-      nameSpan.textContent = s.full_name;
+      var n = document.createElement('div');
+      n.style.cssText = 'font-weight:700;font-size:14px;color:#1e2b3a;' +
+                        'overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      n.textContent = s.full_name;
 
-      var metaSpan = document.createElement('div');
-      metaSpan.style.cssText = 'font-size:11px;color:#9aabb8;margin-top:2px';
+      var m = document.createElement('div');
+      m.style.cssText = 'font-size:11.5px;color:#9aabb8;margin-top:2px';
       var parts = [s.student_id];
       if (s.grade)   parts.push(s.grade);
       if (s.section) parts.push('شعبة ' + s.section);
-      metaSpan.textContent = parts.join(' · ');
+      m.textContent = parts.join(' · ');
 
-      txt.appendChild(nameSpan);
-      txt.appendChild(metaSpan);
+      txt.appendChild(n);
+      txt.appendChild(m);
       row.appendChild(av);
       row.appendChild(txt);
 
-      row.addEventListener('mousedown', function (e) {
-        e.preventDefault();
-        showSelectedState(s.id, s.full_name, s.student_id, s.grade, s.section);
+      row.addEventListener('click', function () {
+        selectStudent(s.id, s.full_name, s.student_id, s.grade, s.section);
       });
       row.addEventListener('mouseover', function () { this.style.background = '#f0f6ff'; });
       row.addEventListener('mouseout',  function () { this.style.background = ''; });
 
-      dd.appendChild(row);
+      results.appendChild(row);
     });
 
-    positionDd();
-    dd.style.display = 'block';
+    results.style.display = 'block';
   }
 
-  // ── Search input events ─────────────────────────────────────────────────
-  searchInput.addEventListener('input', function () {
+  // ── Search input ─────────────────────────────────────────────────────────
+  input.addEventListener('input', function () {
     var q = this.value.trim();
     clearTimeout(timer);
-    if (q.length < 2) { hideDd(); spinner.style.display = 'none'; return; }
-    spinner.style.display = 'inline-block';
+    if (q.length < 2) {
+      results.innerHTML = '';
+      results.style.display = 'none';
+      showSpinner(false);
+      return;
+    }
+    showSpinner(true);
     timer = setTimeout(function () {
       fetch(searchUrl + '?q=' + encodeURIComponent(q))
         .then(function (r) { return r.json(); })
-        .then(function (data) { spinner.style.display = 'none'; renderDd(data.results || []); })
-        .catch(function () { spinner.style.display = 'none'; hideDd(); });
+        .then(function (data) { showSpinner(false); renderResults(data.results || []); })
+        .catch(function () { showSpinner(false); });
     }, 250);
   });
 
-  searchInput.addEventListener('blur',  function () { setTimeout(hideDd, 180); });
-  searchInput.addEventListener('focus', showDd);
+  // ── Modal lifecycle ──────────────────────────────────────────────────────
+  modalEl.addEventListener('shown.bs.modal',  resetToSearch);
+  modalEl.addEventListener('hidden.bs.modal', resetToSearch);
 
-  // Clear / change button
-  if (clearBtn) clearBtn.addEventListener('click', showSearchState);
-
-  // Reposition on scroll/resize (fixed coords change when page scrolls).
-  window.addEventListener('scroll', function () { if (dd.style.display !== 'none') positionDd(); }, true);
-  window.addEventListener('resize', function () { if (dd.style.display !== 'none') positionDd(); });
+  if (changeBtn) changeBtn.addEventListener('click', resetToSearch);
 })();
 
 // ── Auto-expand reminder card on save success ─────────────────────────────────

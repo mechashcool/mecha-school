@@ -390,6 +390,40 @@ def search_students():
     return jsonify({'results': [_student_payload(student) for student in students]})
 
 
+@fees_bp.route('/students/search-statement')
+@login_required
+@permission_required('manage_fees')
+def search_students_statement():
+    """Student search for the financial statement selector.
+
+    Searches all students of the school regardless of academic year or active
+    status, because the statement report spans multiple years and may include
+    historical or transferred students. School and building isolation are still
+    applied server-side.
+    """
+    school = get_current_school()
+    if not school:
+        return jsonify({'results': []})
+
+    term = request.args.get('q', '').strip()
+    if len(term) < 2:
+        return jsonify({'results': []})
+
+    query = (
+        Student.query
+        .execution_options(include_all_years=True)
+        .options(joinedload(Student.section).joinedload(Section.grade))
+        .filter(Student.school_id == school.id)
+        .filter(
+            Student.full_name.ilike(f'%{term}%') |
+            Student.student_id.ilike(f'%{term}%')
+        )
+    )
+    query = apply_building_scope_to_students(query, current_user, school)
+    students = query.order_by(Student.full_name).limit(20).all()
+    return jsonify({'results': [_student_payload(student) for student in students]})
+
+
 @fees_bp.route('/api/stages')
 @login_required
 @permission_required('manage_fees')
