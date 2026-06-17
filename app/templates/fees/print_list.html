@@ -185,7 +185,7 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
   display: inline-block;
 }
 
-/* ── Totals row ── */
+/* ── Totals row (screen) ── */
 .totals-row td {
   background: #0f2540 !important;
   color: #fff !important;
@@ -196,6 +196,10 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
   white-space: nowrap;
 }
 .totals-row .lbl { color: rgba(255,255,255,.70); font-weight: 600; text-align: center; }
+
+/* ── Standalone totals block (shown once after the table) ── */
+.totals-block { margin-top: 0; }
+.totals-block table.fee-tbl { border-top: none; }
 
 /* ── Empty ── */
 .empty-row td { text-align: center; padding: 40px; color: #b0bec5; }
@@ -347,7 +351,14 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
     border-radius: 3pt !important;
   }
 
-  /* Totals row */
+  /* Totals block — shown once, at the very end */
+  .totals-block {
+    page-break-inside: avoid;
+    margin-top: 0;
+  }
+  .totals-block table.fee-tbl {
+    border-top: 2pt solid #0f2540 !important;
+  }
   .totals-row td {
     background: #0f2540 !important;
     color: #fff !important;
@@ -516,8 +527,25 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
         </tr>
         {% endfor %}
       </tbody>
-      {% if fee_entries %}
-      <tfoot>
+    </table>
+  </div>
+
+  {% if fee_entries %}
+  <!-- Totals block — outside the data table so it appears only once on the final page -->
+  <div class="totals-block">
+    <table class="fee-tbl">
+      <colgroup>
+        <col class="col-idx">
+        <col class="col-name">
+        <col class="col-type">
+        <col class="col-total">
+        <col class="col-disc">
+        <col class="col-net">
+        <col class="col-paid">
+        <col class="col-rem">
+        <col class="col-year">
+      </colgroup>
+      <tbody>
         <tr class="totals-row">
           <td colspan="3" class="lbl">الإجمالي الكلي — {{ fee_entries | length }} سجل</td>
           <td class="td-amount">{{ '{:,.0f}'.format(grand_total) }}</td>
@@ -526,10 +554,10 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
           <td class="td-paid">{{ '{:,.0f}'.format(grand_paid) }}</td>
           <td colspan="2">{{ 'مسدّد بالكامل' if grand_rem <= 0 else '{:,.0f}'.format(grand_rem) }}</td>
         </tr>
-      </tfoot>
-      {% endif %}
+      </tbody>
     </table>
   </div>
+  {% endif %}
 
 </div><!-- /.screen-card -->
 
@@ -543,12 +571,10 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
     .forEach(function (el) { el.textContent = d; });
 })();
 
-// Auto-print when this window was opened as a popup.
-if (window.opener) {
-  window.onload = function () {
-    setTimeout(function () { window.print(); }, 350);
-  };
-}
+// Auto-open print dialog once fonts and layout are ready.
+window.onload = function () {
+  setTimeout(function () { window.print(); }, 400);
+};
 </script>
 </body>
 </html>

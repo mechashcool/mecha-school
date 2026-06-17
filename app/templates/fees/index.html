@@ -15,7 +15,7 @@
     </a>
     <a href="{{ url_for('fees.print_list', **request.args.to_dict()) }}"
        class="btn btn-outline-secondary"
-       onclick="return openFeePrintWindow(this)">
+       target="_blank">
       <i class="bi bi-printer-fill me-1"></i>طباعة
     </a>
     <a href="{{ url_for('fees.export_excel', **request.args.to_dict()) }}" class="btn btn-outline-success">
@@ -183,6 +183,39 @@
   </div>
 </div>
 
+<!-- ── Student Financial Statement Selector ──────────────────────────── -->
+{% if current_user.has_permission('manage_fees') %}
+<div class="card mb-4">
+  <div class="card-header">
+    <i class="bi bi-file-earmark-text-fill text-accent me-2"></i>كشف مالي شامل لطالب
+  </div>
+  <div class="card-body py-3">
+    <div class="row g-3 align-items-end">
+      <div class="col-md-8">
+        <label class="form-label">اختر الطالب</label>
+        <div class="position-relative">
+          <input type="text" id="stmtStudentSearch" class="form-control"
+                 placeholder="ابحث باسم الطالب أو رقمه..."
+                 autocomplete="off">
+          <input type="hidden" id="stmtStudentId">
+          <div id="stmtStudentDropdown"
+               class="position-absolute w-100 bg-white border rounded shadow-sm"
+               style="top:100%;z-index:1050;max-height:220px;overflow-y:auto;display:none"></div>
+        </div>
+        <div id="stmtSelectedInfo" class="mt-2" style="display:none;font-size:13px;color:#1aab6d;font-weight:600"></div>
+      </div>
+      <div class="col-md-4 d-grid">
+        <a id="stmtOpenBtn" href="#" target="_blank"
+           class="btn btn-outline-primary disabled"
+           style="pointer-events:none">
+          <i class="bi bi-printer-fill me-1"></i>طباعة الكشف المالي
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <div class="card">
   {{ fees_table_body(fee_entries, show_student_col=True, installment_filter=installment_filter) }}
 </div>
@@ -192,12 +225,85 @@
 
 {% block extra_js %}
 <script>
-// ── Open fees print list in a popup window ────────────────────────────────────
-function openFeePrintWindow(el) {
-  window.open(el.href, 'fee_print_window',
-    'width=1040,height=720,scrollbars=yes,resizable=yes');
-  return false;
-}
+// ── Student financial statement selector ─────────────────────────────────────
+(function () {
+  var searchInput  = document.getElementById('stmtStudentSearch');
+  var hiddenId     = document.getElementById('stmtStudentId');
+  var dropdown     = document.getElementById('stmtStudentDropdown');
+  var openBtn      = document.getElementById('stmtOpenBtn');
+  var selectedInfo = document.getElementById('stmtSelectedInfo');
+
+  if (!searchInput) return;
+
+  var searchUrl  = '{{ url_for("fees.search_students") }}';
+  var stmtBase   = '{{ url_for("fees.student_statement", student_id=0) }}'.replace('/0/', '/');
+  var timer;
+
+  function clearSelection() {
+    hiddenId.value = '';
+    openBtn.classList.add('disabled');
+    openBtn.style.pointerEvents = 'none';
+    openBtn.href = '#';
+    selectedInfo.style.display = 'none';
+    selectedInfo.textContent = '';
+  }
+
+  function selectStudent(id, name, studentCode, grade, section) {
+    hiddenId.value = id;
+    openBtn.href = stmtBase + id + '/statement';
+    openBtn.classList.remove('disabled');
+    openBtn.style.pointerEvents = '';
+    var sectionStr = (grade || section) ? ' — ' + [grade, section ? 'شعبة ' + section : ''].filter(Boolean).join(' / ') : '';
+    selectedInfo.textContent = 'تم اختيار: ' + name + ' (' + studentCode + ')' + sectionStr;
+    selectedInfo.style.display = 'block';
+    dropdown.style.display = 'none';
+    searchInput.value = name + ' — ' + studentCode;
+  }
+
+  function renderDropdown(results) {
+    dropdown.innerHTML = '';
+    if (!results.length) {
+      dropdown.innerHTML = '<div style="padding:10px 14px;color:#9aabb8;font-size:13px">لا توجد نتائج</div>';
+      dropdown.style.display = 'block';
+      return;
+    }
+    results.forEach(function (s) {
+      var item = document.createElement('div');
+      item.style.cssText = 'padding:9px 14px;cursor:pointer;font-size:13px;border-bottom:1px solid #f0f4f8';
+      item.innerHTML = '<strong>' + s.full_name + '</strong>'
+        + '<span style="color:#9aabb8;margin-right:8px;font-size:12px">' + s.student_id + '</span>'
+        + (s.grade ? '<span style="color:#64748b;font-size:12px"> — ' + s.grade + (s.section ? ' / شعبة ' + s.section : '') + '</span>' : '');
+      item.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        selectStudent(s.id, s.full_name, s.student_id, s.grade, s.section);
+      });
+      item.addEventListener('mouseover', function () { this.style.background = '#f0f6ff'; });
+      item.addEventListener('mouseout',  function () { this.style.background = ''; });
+      dropdown.appendChild(item);
+    });
+    dropdown.style.display = 'block';
+  }
+
+  searchInput.addEventListener('input', function () {
+    var q = this.value.trim();
+    clearSelection();
+    clearTimeout(timer);
+    if (q.length < 2) { dropdown.style.display = 'none'; return; }
+    timer = setTimeout(function () {
+      fetch(searchUrl + '?q=' + encodeURIComponent(q))
+        .then(function (r) { return r.json(); })
+        .then(function (data) { renderDropdown(data.results || []); })
+        .catch(function () { dropdown.style.display = 'none'; });
+    }, 250);
+  });
+
+  searchInput.addEventListener('blur', function () {
+    setTimeout(function () { dropdown.style.display = 'none'; }, 200);
+  });
+  searchInput.addEventListener('focus', function () {
+    if (dropdown.children.length > 0) dropdown.style.display = 'block';
+  });
+})();
 
 // ── Auto-expand reminder card on save success ─────────────────────────────────
 (function () {
