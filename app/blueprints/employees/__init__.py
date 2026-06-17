@@ -265,16 +265,15 @@ def _handle_employee_post(employee):
     if is_create:
         from app.models import EmployeeDocument
         _ALLOWED_DOC_EXTS = {'pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'}
-        doc_titles = request.form.getlist('doc_title[]')
         doc_types  = request.form.getlist('doc_type[]')
         doc_files  = request.files.getlist('doc_file[]')
         doc_saved  = 0
-        for i in range(len(doc_titles)):
-            title    = doc_titles[i].strip() if i < len(doc_titles) else ''
-            doc_type = doc_types[i].strip()  if i < len(doc_types)  else ''
-            f        = doc_files[i]          if i < len(doc_files)  else None
-            if not title or not f or not f.filename:
+        for i, f in enumerate(doc_files):
+            if not f or not f.filename:
                 continue
+            doc_type = doc_types[i].strip() if i < len(doc_types) else ''
+            _raw = f.filename.rsplit('/', 1)[-1].rsplit('\\', 1)[-1]
+            title = doc_type or _raw.rsplit('.', 1)[0] or 'مستند'
             file_path = save_uploaded_file(
                 f, 'employee_docs',
                 allowed_exts=_ALLOWED_DOC_EXTS,
