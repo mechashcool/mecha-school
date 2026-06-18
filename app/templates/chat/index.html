@@ -649,12 +649,16 @@
 /* ── Group cards ──────────────────────────── */
 .ms-group-card {
   border: 1px solid var(--border); border-radius: var(--radius-md);
-  background: var(--card-bg); overflow: hidden;
+  background: var(--card-bg);
+  /* overflow: hidden removed — it clips position:fixed dropdown menus.
+     border-radius is preserved; footer gets matching bottom-radius instead. */
   height: 100%; display: flex; flex-direction: column;
-  transition: box-shadow .18s, transform .18s;
+  transition: box-shadow .18s;
+  /* transform removed — CSS transform makes this the containing block for
+     position:fixed children, breaking Popper's fixed-strategy positioning. */
 }
 .ms-group-card[data-href] { cursor: pointer; }
-.ms-group-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
+.ms-group-card:hover { box-shadow: var(--shadow-md); }
 .ms-group-card--closed { opacity: .78; }
 
 .ms-group-top {
@@ -699,6 +703,8 @@
   padding: 9px 14px 11px;
   border-top: 1px solid rgba(0,0,0,.05);
   background: #fafbfd;
+  /* Restore visual corner clipping now that the card has no overflow:hidden. */
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
 }
 .ms-group-stat {
   display: inline-flex; align-items: center; gap: 4px;
@@ -880,17 +886,17 @@
       return;
     }
     document.querySelectorAll('.ms-dd-btn').forEach(function (el) {
+      /* Plain-object form works on Bootstrap 5.0.x–5.3.x.
+         strategy:'fixed' positions the menu relative to the viewport so it
+         escapes the overflow-y:auto scroll container without needing the
+         card to have a CSS transform (which would break fixed positioning). */
       bootstrap.Dropdown.getOrCreateInstance(el, {
-        popperConfig: function (cfg) {
-          var mods = (cfg.modifiers || []).map(function (m) {
-            if (m.name === 'flip') return { name: 'flip',
-              options: { fallbackPlacements: ['top-start','top-end','bottom-start','bottom-end'],
-                         boundary: 'clippingParents' } };
-            if (m.name === 'preventOverflow') return { name: 'preventOverflow',
-              options: { rootBoundary: 'viewport', padding: 8 } };
-            return m;
-          });
-          return Object.assign({}, cfg, { strategy: 'fixed', modifiers: mods });
+        popperConfig: {
+          strategy: 'fixed',
+          modifiers: [
+            { name: 'preventOverflow', options: { boundary: 'clippingParents', padding: 8 } },
+            { name: 'flip', options: { fallbackPlacements: ['top-end', 'top-start', 'bottom-end'] } }
+          ]
         }
       });
     });
