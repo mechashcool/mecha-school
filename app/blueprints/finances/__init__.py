@@ -135,8 +135,10 @@ def index():
     if sid:
         recent_rev_q = recent_rev_q.filter_by(school_id=sid)
         recent_exp_q = recent_exp_q.filter_by(school_id=sid)
-    recent_rev = recent_rev_q.order_by(Revenue.date.desc()).limit(5).all()
-    recent_exp = recent_exp_q.order_by(Expense.date.desc()).limit(5).all()
+    recent_rev = (recent_rev_q.filter(Revenue.amount > 0)
+                  .order_by(Revenue.date.desc(), Revenue.id.desc()).limit(5).all())
+    recent_exp = (recent_exp_q.filter(Expense.amount > 0)
+                  .order_by(Expense.date.desc(), Expense.id.desc()).limit(5).all())
 
     return render_template('finances/index.html',
                            total_rev=total_rev, total_exp=total_exp,
