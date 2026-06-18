@@ -2131,8 +2131,13 @@ def school_settings():
         return redirect(url_for('schools.index'))
 
     if request.method == 'POST':
-        school.school_name     = request.form.get('school_name', school.school_name).strip() or school.school_name
-        school.school_name_ar  = request.form.get('school_name_ar', '').strip() or None
+        name_ar = request.form.get('school_name_ar', '').strip()
+        if not name_ar:
+            flash('اسم المدرسة بالعربية مطلوب.', 'danger')
+            return render_template('admin/school_settings.html', settings=school)
+        name_en = request.form.get('school_name', '').strip()
+        school.school_name_ar  = name_ar
+        school.school_name     = name_en if name_en else name_ar
         school.primary_color   = request.form.get('primary_color', '#0d6efd').strip()
         school.address         = request.form.get('address', '').strip() or None
         school.phone           = request.form.get('phone',   '').strip() or None

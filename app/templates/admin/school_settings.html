@@ -25,16 +25,16 @@
         <div class="card-body">
           <div class="row g-3">
             <div class="col-md-6">
-              <label class="form-label">اسم المدرسة (بالعربية)</label>
-              <input type="text" name="school_name_ar"
+              <label class="form-label">اسم المدرسة (بالعربية) <span class="text-danger">*</span></label>
+              <input type="text" name="school_name_ar" required
                      value="{{ settings.school_name_ar or '' }}"
                      class="form-control" maxlength="200"
                      placeholder="مدرسة المهندس النموذجية">
             </div>
             <div class="col-md-6">
-              <label class="form-label">Name (English) <span class="text-danger">*</span></label>
-              <input type="text" name="school_name" required
-                     value="{{ settings.school_name }}"
+              <label class="form-label">Name (English)</label>
+              <input type="text" name="school_name"
+                     value="{{ settings.school_name if settings.school_name != settings.school_name_ar else '' }}"
                      class="form-control" maxlength="200"
                      placeholder="Al-Muhandis Model School">
             </div>
