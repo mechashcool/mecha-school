@@ -4,416 +4,436 @@
 
 {% block content %}
 
+{# ── Pre-compute stats ────────────────────────────────────── #}
+{% set open_privates = private_stats | selectattr('room.is_closed','equalto',False)
+                                     | selectattr('room.is_active','equalto',True) | list %}
+{% set open_groups   = group_stats   | selectattr('room.is_closed','equalto',False)
+                                     | selectattr('room.is_active','equalto',True) | list %}
+
 {# ── Page header ──────────────────────────────────────────── #}
 <div class="page-header mb-4">
   <div>
     <h1 class="page-title">المراسلات</h1>
-    <p class="page-subtitle mb-0">إدارة محادثات المدرسة — المحادثات الخاصة والمجموعات والإعلانات</p>
+    <p class="page-subtitle mb-0">إدارة محادثات المدرسة — الخاصة والمجموعات والإعلانات</p>
   </div>
-  <div class="d-flex gap-2 flex-wrap">
-    <a href="{{ url_for('chat.settings') }}" class="btn btn-outline-secondary btn-sm">
-      <i class="bi bi-gear-fill me-1"></i>الإعدادات
-    </a>
-    <a href="{{ url_for('chat.direct_new') }}" class="btn btn-outline-primary btn-sm">
-      <i class="bi bi-person-lines-fill me-1"></i>محادثة خاصة
-    </a>
-    <a href="{{ url_for('chat.create_room') }}" class="btn btn-primary btn-sm">
-      <i class="bi bi-plus-circle-fill me-1"></i>مجموعة جديدة
-    </a>
-  </div>
+  <a href="{{ url_for('chat.settings') }}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-gear-fill me-1"></i>الإعدادات
+  </a>
 </div>
 
-{# ── Quick-stats row ──────────────────────────────────────── #}
-{% set open_privates  = private_stats | selectattr('room.is_closed','equalto',False) | selectattr('room.is_active','equalto',True) | list %}
-{% set open_groups    = group_stats   | selectattr('room.is_closed','equalto',False) | selectattr('room.is_active','equalto',True) | list %}
+{# ── Top stat strip ───────────────────────────────────────── #}
 <div class="row g-3 mb-4">
-  <div class="col-6 col-md-3">
-    <div class="msg-stat-card">
-      <div class="msg-stat-icon" style="background:rgba(33,102,218,.1);color:#2166da">
+  <div class="col-6 col-sm-3">
+    <div class="ms-stat-card">
+      <div class="ms-stat-icon" style="background:rgba(33,102,218,.1);color:#2166da">
         <i class="bi bi-chat-text-fill"></i>
       </div>
       <div>
-        <div class="msg-stat-value">{{ private_stats | length }}</div>
-        <div class="msg-stat-label">محادثة خاصة</div>
+        <div class="ms-stat-value">{{ private_stats | length }}</div>
+        <div class="ms-stat-label">محادثة خاصة</div>
       </div>
     </div>
   </div>
-  <div class="col-6 col-md-3">
-    <div class="msg-stat-card">
-      <div class="msg-stat-icon" style="background:rgba(22,160,106,.1);color:#16a06a">
+  <div class="col-6 col-sm-3">
+    <div class="ms-stat-card">
+      <div class="ms-stat-icon" style="background:rgba(22,160,106,.1);color:#16a06a">
         <i class="bi bi-people-fill"></i>
       </div>
       <div>
-        <div class="msg-stat-value">{{ group_stats | length }}</div>
-        <div class="msg-stat-label">مجموعة وإعلانات</div>
+        <div class="ms-stat-value">{{ group_stats | length }}</div>
+        <div class="ms-stat-label">مجموعة وإعلانات</div>
       </div>
     </div>
   </div>
-  <div class="col-6 col-md-3">
-    <div class="msg-stat-card">
-      <div class="msg-stat-icon" style="background:rgba(22,160,106,.08);color:#16a06a">
+  <div class="col-6 col-sm-3">
+    <div class="ms-stat-card">
+      <div class="ms-stat-icon" style="background:rgba(22,160,106,.08);color:#16a06a">
         <i class="bi bi-unlock-fill"></i>
       </div>
       <div>
-        <div class="msg-stat-value">{{ open_privates | length + open_groups | length }}</div>
-        <div class="msg-stat-label">محادثة مفتوحة</div>
+        <div class="ms-stat-value">{{ open_privates | length + open_groups | length }}</div>
+        <div class="ms-stat-label">محادثة مفتوحة</div>
       </div>
     </div>
   </div>
-  <div class="col-6 col-md-3">
-    <div class="msg-stat-card">
-      <div class="msg-stat-icon" style="background:rgba(232,160,32,.1);color:#d18a10">
+  <div class="col-6 col-sm-3">
+    <div class="ms-stat-card">
+      <div class="ms-stat-icon" style="background:rgba(232,160,32,.1);color:#d18a10">
         <i class="bi bi-collection-fill"></i>
       </div>
       <div>
-        <div class="msg-stat-value">{{ (private_stats | length) + (group_stats | length) }}</div>
-        <div class="msg-stat-label">إجمالي المحادثات</div>
+        <div class="ms-stat-value">{{ (private_stats | length) + (group_stats | length) }}</div>
+        <div class="ms-stat-label">إجمالي المحادثات</div>
       </div>
     </div>
   </div>
 </div>
 
-{# ── Master search bar ────────────────────────────────────── #}
-<div class="msg-search-bar mb-3">
-  <i class="bi bi-search msg-search-icon"></i>
-  <input type="text" id="msgSearch" class="msg-search-input"
-         placeholder="ابحث باسم المشارك، اسم المجموعة، الدور...">
-  <button type="button" class="msg-search-clear" id="searchClearBtn" style="display:none"
-          title="مسح البحث">
-    <i class="bi bi-x-lg"></i>
-  </button>
-</div>
+{# ════════════════════════════════════════════════════════════
+   TWO-PANEL LAYOUT
+════════════════════════════════════════════════════════════ #}
+<div class="row g-4 align-items-start" id="msgPanelsRow">
 
-{# ── Filter strips ────────────────────────────────────────── #}
-{# Private section filter #}
-<div class="msg-filter-strip mb-3" id="privateFilterStrip">
-  <span class="msg-filter-label">
-    <i class="bi bi-person-fill text-primary me-1"></i>تصفية المحادثات الخاصة:
-  </span>
-  <div class="msg-filter-chips">
-    <label class="msg-chip msg-chip--active" data-filter="priv-status" data-value="">
-      <input type="radio" name="privStatus" value="" checked hidden> الكل
-    </label>
-    <label class="msg-chip" data-filter="priv-status" data-value="open">
-      <input type="radio" name="privStatus" value="open" hidden>
-      <i class="bi bi-circle-fill text-success" style="font-size:7px;vertical-align:middle"></i>
-      مفتوحة
-    </label>
-    <label class="msg-chip" data-filter="priv-status" data-value="closed">
-      <input type="radio" name="privStatus" value="closed" hidden>
-      <i class="bi bi-circle-fill text-danger" style="font-size:7px;vertical-align:middle"></i>
-      مغلقة
-    </label>
-  </div>
-  {# Status filter (server-side, preserved) #}
-  <form method="GET" class="d-inline-flex align-items-center gap-2 ms-3">
-    <span class="small text-muted text-nowrap">الحالة:</span>
-    <select name="status" class="form-select form-select-sm msg-filter-select" onchange="this.form.submit()">
-      <option value="">الكل</option>
-      <option value="open"   {{ 'selected' if status_filter == 'open' }}>مفتوحة</option>
-      <option value="closed" {{ 'selected' if status_filter == 'closed' }}>مغلقة</option>
-    </select>
-  </form>
-</div>
+  {# ══════════════════════════════════════════════════════════
+     LEFT PANEL — Private Conversations
+  ══════════════════════════════════════════════════════════ #}
+  <div class="col-12 col-lg-5">
+    <div class="ms-panel ms-panel--private">
 
-{# Group section filter #}
-<div class="msg-filter-strip mb-4" id="groupFilterStrip">
-  <span class="msg-filter-label">
-    <i class="bi bi-people-fill text-success me-1"></i>تصفية المجموعات:
-  </span>
-  <div class="msg-filter-chips">
-    <label class="msg-chip msg-chip--active" data-filter="grp-type" data-value="">
-      <input type="radio" name="grpType" value="" checked hidden> الكل
-    </label>
-    <label class="msg-chip" data-filter="grp-type" data-value="group">
-      <input type="radio" name="grpType" value="group" hidden>
-      <i class="bi bi-people-fill me-1"></i>مجموعة
-    </label>
-    <label class="msg-chip" data-filter="grp-type" data-value="announcement">
-      <input type="radio" name="grpType" value="announcement" hidden>
-      <i class="bi bi-megaphone-fill me-1"></i>إعلانات
-    </label>
-  </div>
-  {% if all_stages %}
-  <select class="form-select form-select-sm msg-filter-select ms-2" id="grpStageFilter">
-    <option value="">كل المراحل</option>
-    {% for stage in all_stages %}
-    <option value="{{ stage }}">{{ stage }}</option>
-    {% endfor %}
-  </select>
-  {% endif %}
-  {% if all_grades %}
-  <select class="form-select form-select-sm msg-filter-select ms-1" id="grpGradeFilter">
-    <option value="">كل الصفوف</option>
-    {% for grade in all_grades %}
-    <option value="{{ grade.id }}" data-stage="{{ grade.stage or '' }}">{{ grade.name }}</option>
-    {% endfor %}
-  </select>
-  {% endif %}
-  <select class="form-select form-select-sm msg-filter-select ms-1" id="grpStatusFilter">
-    <option value="">كل الحالات</option>
-    <option value="open">مفتوحة</option>
-    <option value="closed">مغلقة</option>
-  </select>
-</div>
-
-{# ═══════════════════════════════════════════════════════════
-   SECTION 1 — Private conversations
-═══════════════════════════════════════════════════════════ #}
-<div class="msg-section mb-5" id="section-private">
-
-  <div class="msg-section-header">
-    <div class="msg-section-title">
-      <span class="msg-section-icon" style="background:rgba(33,102,218,.12);color:#2166da">
-        <i class="bi bi-person-fill"></i>
-      </span>
-      المحادثات الخاصة
-      <span class="msg-section-count" id="privCount">{{ private_stats | length }}</span>
-    </div>
-    <a href="{{ url_for('chat.direct_new') }}" class="btn btn-sm btn-outline-primary rounded-pill px-3">
-      <i class="bi bi-plus me-1"></i>محادثة جديدة
-    </a>
-  </div>
-
-  {% if private_stats %}
-  <div class="msg-convo-list" id="privateList">
-    {% for stat in private_stats %}
-    {% set room  = stat.room %}
-    {% set other = private_other_user.get(room.id) %}
-    <a href="{{ url_for('chat.room_detail', room_id=room.id) }}"
-       class="msg-convo-item priv-item"
-       data-search="{{ (other.full_name if other else room.name) | lower }} {{ (other.role.name if other and other.role else '') | lower }}"
-       data-status="{{ 'closed' if room.is_closed else ('inactive' if not room.is_active else 'open') }}"
-       data-role="{{ other.role.name | lower if other and other.role else '' }}">
-
-      {# Avatar #}
-      <div class="msg-avatar msg-avatar--primary">
-        {{ ((other.full_name[0] if other and other.full_name else 'م') | upper) }}
-      </div>
-
-      {# Body #}
-      <div class="msg-convo-body">
-        <div class="msg-convo-top">
-          <span class="msg-convo-name">
-            {% if other %}{{ other.full_name }}{% else %}{{ room.name }}{% endif %}
+      {# Panel header #}
+      <div class="ms-panel-header ms-panel-header--private">
+        <div class="ms-panel-title">
+          <span class="ms-panel-icon" style="background:rgba(33,102,218,.15);color:#2166da">
+            <i class="bi bi-person-fill"></i>
           </span>
-          {% if stat.last_message %}
-          <span class="msg-convo-time">
-            <i class="bi bi-clock me-1"></i>{{ stat.last_message.created_at | to_baghdad('%H:%M') }}
-          </span>
-          {% endif %}
+          <div>
+            <span class="ms-panel-name">المحادثات الخاصة</span>
+            <span class="ms-panel-count" id="privCount">{{ private_stats | length }}</span>
+          </div>
         </div>
-        <div class="msg-convo-bottom">
-          <span class="msg-convo-preview">
-            {% if other and other.role %}
-            <span class="msg-role-tag">{{ other.role.label }}</span>
-            {% endif %}
-            {% if stat.last_message %}
-            {{ stat.last_message.body or '[مرفق]' }}
-            {% else %}
-            <span class="fst-italic">لا توجد رسائل بعد</span>
-            {% endif %}
-          </span>
-          <span class="flex-shrink-0">
-            {% if not room.is_active %}
-            <span class="msg-status-pill msg-status-pill--inactive">معطلة</span>
-            {% elif room.is_closed %}
-            <span class="msg-status-pill msg-status-pill--closed">مغلقة</span>
-            {% else %}
-            <span class="msg-status-pill msg-status-pill--open">مفتوحة</span>
-            {% endif %}
-          </span>
-        </div>
+        <a href="{{ url_for('chat.direct_new') }}" class="btn btn-sm ms-panel-action ms-panel-action--primary">
+          <i class="bi bi-plus-lg me-1"></i>محادثة جديدة
+        </a>
       </div>
 
-      <i class="bi bi-chevron-left msg-convo-arrow"></i>
-    </a>
-    {% endfor %}
-  </div>
+      {# Panel search #}
+      <div class="ms-panel-search-wrap">
+        <i class="bi bi-search ms-panel-search-icon"></i>
+        <input type="text" id="privSearch" class="ms-panel-search"
+               placeholder="ابحث بالاسم أو الدور...">
+        <button type="button" class="ms-panel-search-clear" id="privSearchClear"
+                style="display:none" title="مسح">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </div>
 
-  <div id="privateEmpty" class="msg-no-results" style="display:none">
-    <i class="bi bi-search me-1"></i>لا توجد محادثات تطابق الفلتر الحالي.
-  </div>
+      {# Status filter chips #}
+      <div class="ms-panel-filters">
+        <label class="ms-chip ms-chip--active" data-pf="priv-status" data-pv="">
+          <input type="radio" name="privStatus" value="" checked hidden>الكل
+        </label>
+        <label class="ms-chip" data-pf="priv-status" data-pv="open">
+          <input type="radio" name="privStatus" value="open" hidden>
+          <span class="ms-dot ms-dot--open"></span>مفتوحة
+        </label>
+        <label class="ms-chip" data-pf="priv-status" data-pv="closed">
+          <input type="radio" name="privStatus" value="closed" hidden>
+          <span class="ms-dot ms-dot--closed"></span>مغلقة
+        </label>
+        {# Server-side status filter preserved #}
+        <form method="GET" class="ms-server-filter">
+          <select name="status" class="ms-select ms-select--sm" onchange="this.form.submit()">
+            <option value="">الكل (خادم)</option>
+            <option value="open"   {{ 'selected' if status_filter == 'open' }}>مفتوحة</option>
+            <option value="closed" {{ 'selected' if status_filter == 'closed' }}>مغلقة</option>
+          </select>
+        </form>
+      </div>
 
-  {% else %}
-  <div class="msg-empty-state">
-    <div class="msg-empty-icon" style="color:#2166da"><i class="bi bi-chat-dots"></i></div>
-    <div class="msg-empty-title">لا توجد محادثات خاصة</div>
-    <div class="msg-empty-body">ابدأ محادثة مباشرة مع ولي أمر أو معلم أو موظف.</div>
-    <a href="{{ url_for('chat.direct_new') }}" class="btn btn-primary btn-sm mt-3">
-      <i class="bi bi-plus-circle me-1"></i>بدء محادثة خاصة
-    </a>
-  </div>
-  {% endif %}
+      {# Conversation list #}
+      {% if private_stats %}
+      <div class="ms-panel-body ms-panel-body--scroll" id="privateList">
+        {% for stat in private_stats %}
+        {% set room  = stat.room %}
+        {% set other = private_other_user.get(room.id) %}
+        <a href="{{ url_for('chat.room_detail', room_id=room.id) }}"
+           class="ms-convo-item priv-item"
+           data-psearch="{{ (other.full_name if other else room.name) | lower }} {{ (other.role.name if other and other.role else '') | lower }}"
+           data-pstatus="{{ 'closed' if room.is_closed else ('inactive' if not room.is_active else 'open') }}">
 
-</div>
+          <div class="ms-avatar ms-avatar--blue">
+            {{ (other.full_name[0] if other and other.full_name else 'م') | upper }}
+          </div>
 
-{# ═══════════════════════════════════════════════════════════
-   SECTION 2 — Groups & announcements
-═══════════════════════════════════════════════════════════ #}
-<div class="msg-section" id="section-groups">
-
-  <div class="msg-section-header">
-    <div class="msg-section-title">
-      <span class="msg-section-icon" style="background:rgba(22,160,106,.12);color:#16a06a">
-        <i class="bi bi-people-fill"></i>
-      </span>
-      المجموعات والإعلانات
-      <span class="msg-section-count" id="grpCount">{{ group_stats | length }}</span>
-    </div>
-    <a href="{{ url_for('chat.create_room') }}" class="btn btn-sm btn-outline-success rounded-pill px-3">
-      <i class="bi bi-plus me-1"></i>مجموعة جديدة
-    </a>
-  </div>
-
-  {% if group_stats %}
-  <div class="row g-3 p-3" id="groupsList">
-    {% for stat in group_stats %}
-    {% set room = stat.room %}
-    <div class="col-12 col-md-6 col-xl-4 grp-item"
-         data-search="{{ room.name | lower }} {{ room.scope | lower }} {{ room.stage or '' }} {{ (room.grade.name if room.grade else '') | lower }} {{ (room.section.name if room.section else '') | lower }}"
-         data-type="{{ room.type }}"
-         data-stage="{{ room.stage or '' }}"
-         data-grade="{{ room.grade_id or '' }}"
-         data-status="{{ 'closed' if room.is_closed else ('inactive' if not room.is_active else 'open') }}">
-      <div class="msg-group-card {% if room.is_closed %}msg-group-card--closed{% endif %}">
-
-        {# Card top #}
-        <div class="msg-group-card-top">
-          {% if room.type == 'announcement' %}
-          <div class="msg-group-icon msg-group-icon--announcement"><i class="bi bi-megaphone-fill"></i></div>
-          {% elif room.scope == 'school' or room.scope == 'announcement' %}
-          <div class="msg-group-icon msg-group-icon--school"><i class="bi bi-building-fill"></i></div>
-          {% elif room.scope == 'grade' %}
-          <div class="msg-group-icon msg-group-icon--grade"><i class="bi bi-mortarboard-fill"></i></div>
-          {% elif room.scope == 'section' %}
-          <div class="msg-group-icon msg-group-icon--section"><i class="bi bi-grid-3x3-gap-fill"></i></div>
-          {% elif room.scope == 'subject' %}
-          <div class="msg-group-icon msg-group-icon--subject"><i class="bi bi-book-fill"></i></div>
-          {% else %}
-          <div class="msg-group-icon msg-group-icon--default"><i class="bi bi-people-fill"></i></div>
-          {% endif %}
-
-          <div class="flex-grow-1 min-w-0">
-            <div class="msg-group-name text-truncate" title="{{ room.name }}">{{ room.name }}</div>
-            <div class="d-flex flex-wrap gap-1 mt-1">
-              {% if room.type == 'group' %}
-              <span class="msg-type-tag msg-type-tag--group"><i class="bi bi-people-fill me-1"></i>مجموعة</span>
-              {% elif room.type == 'announcement' %}
-              <span class="msg-type-tag msg-type-tag--announcement"><i class="bi bi-megaphone-fill me-1"></i>إعلانات</span>
+          <div class="ms-convo-body">
+            <div class="ms-convo-row">
+              <span class="ms-convo-name">
+                {% if other %}{{ other.full_name }}{% else %}{{ room.name }}{% endif %}
+              </span>
+              {% if stat.last_message %}
+              <span class="ms-convo-time">
+                {{ stat.last_message.created_at | to_baghdad('%H:%M') }}
+              </span>
               {% endif %}
-              {% if room.is_announcement_only %}
-              <span class="msg-type-tag msg-type-tag--readonly"><i class="bi bi-eye-fill me-1"></i>للقراءة</span>
-              {% endif %}
-              <span class="msg-type-tag msg-type-tag--scope">
-                {% if room.scope == 'school' %}المدرسة كاملاً
-                {% elif room.scope == 'stage' %}المرحلة: {{ room.stage or '–' }}
-                {% elif room.scope == 'grade' %}{{ room.grade.name if room.grade else '–' }}
-                {% elif room.scope == 'section' %}{{ room.section.name if room.section else '–' }}
-                {% elif room.scope == 'subject' %}{{ room.subject.name if room.subject else '–' }}
-                {% elif room.scope == 'announcement' %}المدرسة كاملاً
-                {% else %}مخصص{% endif %}
+            </div>
+            <div class="ms-convo-row ms-convo-row--sub">
+              <span class="ms-convo-preview">
+                {% if other and other.role %}
+                <span class="ms-role-tag">{{ other.role.label }}</span>
+                {% endif %}
+                {% if stat.last_message %}
+                  {{ stat.last_message.body or '[مرفق]' }}
+                {% else %}
+                  <em class="fst-italic">لا توجد رسائل بعد</em>
+                {% endif %}
+              </span>
+              <span class="flex-shrink-0">
+                {% if not room.is_active %}
+                <span class="ms-pill ms-pill--inactive">معطلة</span>
+                {% elif room.is_closed %}
+                <span class="ms-pill ms-pill--closed">مغلقة</span>
+                {% else %}
+                <span class="ms-pill ms-pill--open">مفتوحة</span>
+                {% endif %}
               </span>
             </div>
           </div>
-
-          {% if not room.is_active %}
-          <span class="msg-dot msg-dot--inactive" title="معطلة"></span>
-          {% elif room.is_closed %}
-          <span class="msg-dot msg-dot--closed" title="مغلقة"></span>
-          {% else %}
-          <span class="msg-dot msg-dot--open" title="مفتوحة"></span>
-          {% endif %}
-        </div>
-
-        {# Last message preview #}
-        <div class="msg-group-preview">
-          {% if stat.last_message %}
-          <div class="msg-group-preview-text">
-            {% if stat.last_message.sender %}
-            <span class="msg-group-preview-sender">{{ stat.last_message.sender.full_name }}:</span>
-            {% endif %}
-            {{ stat.last_message.body or '[مرفق]' }}
-          </div>
-          <div class="msg-group-preview-time">{{ stat.last_message.created_at | to_baghdad }}</div>
-          {% else %}
-          <div class="msg-group-preview-empty">لا توجد رسائل بعد</div>
-          {% endif %}
-        </div>
-
-        {# Footer: stats + action menu #}
-        <div class="msg-group-card-footer">
-          <div class="d-flex align-items-center gap-3">
-            <span class="msg-group-stat"><i class="bi bi-people"></i>{{ stat.member_count }}</span>
-            <span class="msg-group-stat"><i class="bi bi-chat-left-text"></i>{{ stat.message_count }}</span>
-            <span class="msg-group-stat
-              {% if not room.is_active %}text-secondary
-              {% elif room.is_closed %}text-danger
-              {% else %}text-success{% endif %}">
-              <i class="bi bi-circle-fill" style="font-size:7px;vertical-align:middle"></i>
-              {% if not room.is_active %}معطلة{% elif room.is_closed %}مغلقة{% else %}مفتوحة{% endif %}
-            </span>
-          </div>
-          <div class="dropdown">
-            <button class="btn-icon-sm dropdown-toggle group-dd-btn"
-                    data-bs-toggle="dropdown" aria-expanded="false" title="إجراءات">
-              <i class="bi bi-three-dots-vertical"></i>
-            </button>
-            <ul class="dropdown-menu dropdown-menu-end shadow-sm border-0 msg-dropdown">
-              <li><a class="dropdown-item" href="{{ url_for('chat.room_detail', room_id=room.id) }}">
-                <i class="bi bi-eye me-2 text-primary"></i>عرض الرسائل</a></li>
-              <li><a class="dropdown-item" href="{{ url_for('chat.edit_room', room_id=room.id) }}">
-                <i class="bi bi-pencil me-2 text-secondary"></i>تعديل المجموعة</a></li>
-              <li><a class="dropdown-item" href="{{ url_for('chat.room_schedule', room_id=room.id) }}">
-                <i class="bi bi-clock me-2 text-info"></i>أوقات التواصل</a></li>
-              <li><hr class="dropdown-divider my-1"></li>
-              {% if room.is_closed %}
-              <li>
-                <form method="POST" action="{{ url_for('chat.reopen_room', room_id=room.id) }}">
-                  <button class="dropdown-item text-success">
-                    <i class="bi bi-unlock me-2"></i>فتح المحادثة
-                  </button>
-                </form>
-              </li>
-              {% else %}
-              <li>
-                <form method="POST" action="{{ url_for('chat.close_room', room_id=room.id) }}">
-                  <button class="dropdown-item text-warning">
-                    <i class="bi bi-lock me-2"></i>إغلاق المحادثة
-                  </button>
-                </form>
-              </li>
-              {% endif %}
-            </ul>
-          </div>
-        </div>
-
+          <i class="bi bi-chevron-left ms-convo-arrow"></i>
+        </a>
+        {% endfor %}
       </div>
-    </div>
-    {% endfor %}
+
+      <div id="privEmpty" class="ms-no-results" style="display:none">
+        <i class="bi bi-search me-1"></i>لا توجد محادثات تطابق البحث أو الفلتر.
+      </div>
+
+      {% else %}
+      <div class="ms-empty-state">
+        <div class="ms-empty-icon" style="color:#2166da"><i class="bi bi-chat-dots"></i></div>
+        <div class="ms-empty-title">لا توجد محادثات خاصة</div>
+        <div class="ms-empty-body">ابدأ محادثة مباشرة مع ولي أمر أو معلم أو موظف.</div>
+        <a href="{{ url_for('chat.direct_new') }}" class="btn btn-primary btn-sm mt-3">
+          <i class="bi bi-plus-circle me-1"></i>بدء محادثة خاصة
+        </a>
+      </div>
+      {% endif %}
+
+    </div>{# /ms-panel--private #}
   </div>
 
-  <div id="groupsEmpty" class="msg-no-results" style="display:none">
-    <i class="bi bi-search me-1"></i>لا توجد مجموعات تطابق الفلتر الحالي.
+  {# ══════════════════════════════════════════════════════════
+     RIGHT PANEL — Groups & Announcements
+  ══════════════════════════════════════════════════════════ #}
+  <div class="col-12 col-lg-7">
+    <div class="ms-panel ms-panel--groups">
+
+      {# Panel header #}
+      <div class="ms-panel-header ms-panel-header--groups">
+        <div class="ms-panel-title">
+          <span class="ms-panel-icon" style="background:rgba(22,160,106,.15);color:#16a06a">
+            <i class="bi bi-people-fill"></i>
+          </span>
+          <div>
+            <span class="ms-panel-name">المجموعات والإعلانات</span>
+            <span class="ms-panel-count" id="grpCount">{{ group_stats | length }}</span>
+          </div>
+        </div>
+        <a href="{{ url_for('chat.create_room') }}" class="btn btn-sm ms-panel-action ms-panel-action--success">
+          <i class="bi bi-plus-lg me-1"></i>مجموعة جديدة
+        </a>
+      </div>
+
+      {# Panel search #}
+      <div class="ms-panel-search-wrap">
+        <i class="bi bi-search ms-panel-search-icon"></i>
+        <input type="text" id="grpSearch" class="ms-panel-search"
+               placeholder="ابحث باسم المجموعة أو النطاق...">
+        <button type="button" class="ms-panel-search-clear" id="grpSearchClear"
+                style="display:none" title="مسح">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </div>
+
+      {# Filter row: type chips + dropdowns #}
+      <div class="ms-panel-filters ms-panel-filters--wrap">
+        {# Type chips #}
+        <div class="d-flex gap-1 flex-wrap">
+          <label class="ms-chip ms-chip--active" data-gf="grp-type" data-gv="">
+            <input type="radio" name="grpType" value="" checked hidden>الكل
+          </label>
+          <label class="ms-chip" data-gf="grp-type" data-gv="group">
+            <input type="radio" name="grpType" value="group" hidden>
+            <i class="bi bi-people-fill" style="font-size:11px"></i>مجموعة
+          </label>
+          <label class="ms-chip" data-gf="grp-type" data-gv="announcement">
+            <input type="radio" name="grpType" value="announcement" hidden>
+            <i class="bi bi-megaphone-fill" style="font-size:11px"></i>إعلانات
+          </label>
+        </div>
+        {# Academic dropdowns #}
+        <div class="d-flex gap-2 flex-wrap mt-2">
+          {% if all_stages %}
+          <select class="ms-select" id="grpStageFilter">
+            <option value="">كل المراحل</option>
+            {% for stage in all_stages %}
+            <option value="{{ stage }}">{{ stage }}</option>
+            {% endfor %}
+          </select>
+          {% endif %}
+          {% if all_grades %}
+          <select class="ms-select" id="grpGradeFilter">
+            <option value="">كل الصفوف</option>
+            {% for grade in all_grades %}
+            <option value="{{ grade.id }}"
+                    data-stage="{{ grade.stage or '' }}">{{ grade.name }}</option>
+            {% endfor %}
+          </select>
+          {% endif %}
+          <select class="ms-select" id="grpStatusFilter">
+            <option value="">كل الحالات</option>
+            <option value="open">مفتوحة</option>
+            <option value="closed">مغلقة</option>
+          </select>
+        </div>
+      </div>
+
+      {# Group cards #}
+      {% if group_stats %}
+      <div class="ms-panel-body ms-panel-body--scroll ms-panel-body--padded" id="groupsList">
+        <div class="row g-3" id="groupsGrid">
+          {% for stat in group_stats %}
+          {% set room = stat.room %}
+          <div class="col-12 col-md-6 grp-item"
+               data-gsearch="{{ room.name | lower }} {{ room.scope | lower }} {{ room.stage or '' }} {{ (room.grade.name if room.grade else '') | lower }} {{ (room.section.name if room.section else '') | lower }}"
+               data-gtype="{{ room.type }}"
+               data-gstage="{{ room.stage or '' }}"
+               data-ggrade="{{ room.grade_id or '' }}"
+               data-gstatus="{{ 'closed' if room.is_closed else ('inactive' if not room.is_active else 'open') }}">
+
+            <div class="ms-group-card {% if room.is_closed %}ms-group-card--closed{% endif %}">
+
+              {# Card top #}
+              <div class="ms-group-top">
+                {# Scope icon #}
+                {% if room.type == 'announcement' %}
+                <div class="ms-group-icon ms-group-icon--ann"><i class="bi bi-megaphone-fill"></i></div>
+                {% elif room.scope in ('school','announcement') %}
+                <div class="ms-group-icon ms-group-icon--school"><i class="bi bi-building-fill"></i></div>
+                {% elif room.scope == 'grade' %}
+                <div class="ms-group-icon ms-group-icon--grade"><i class="bi bi-mortarboard-fill"></i></div>
+                {% elif room.scope == 'section' %}
+                <div class="ms-group-icon ms-group-icon--section"><i class="bi bi-grid-3x3-gap-fill"></i></div>
+                {% elif room.scope == 'subject' %}
+                <div class="ms-group-icon ms-group-icon--subject"><i class="bi bi-book-fill"></i></div>
+                {% else %}
+                <div class="ms-group-icon ms-group-icon--default"><i class="bi bi-people-fill"></i></div>
+                {% endif %}
+
+                <div class="flex-grow-1 min-w-0">
+                  <div class="ms-group-name text-truncate" title="{{ room.name }}">{{ room.name }}</div>
+                  <div class="d-flex flex-wrap gap-1 mt-1">
+                    {% if room.type == 'group' %}
+                    <span class="ms-tag ms-tag--blue"><i class="bi bi-people-fill me-1"></i>مجموعة</span>
+                    {% elif room.type == 'announcement' %}
+                    <span class="ms-tag ms-tag--cyan"><i class="bi bi-megaphone-fill me-1"></i>إعلانات</span>
+                    {% endif %}
+                    {% if room.is_announcement_only %}
+                    <span class="ms-tag ms-tag--amber"><i class="bi bi-eye-fill me-1"></i>للقراءة</span>
+                    {% endif %}
+                    <span class="ms-tag ms-tag--muted">
+                      {% if room.scope == 'school' %}المدرسة كاملاً
+                      {% elif room.scope == 'stage' %}{{ room.stage or '–' }}
+                      {% elif room.scope == 'grade' %}{{ room.grade.name if room.grade else '–' }}
+                      {% elif room.scope == 'section' %}{{ room.section.name if room.section else '–' }}
+                      {% elif room.scope == 'subject' %}{{ room.subject.name if room.subject else '–' }}
+                      {% elif room.scope == 'announcement' %}المدرسة كاملاً
+                      {% else %}مخصص{% endif %}
+                    </span>
+                  </div>
+                </div>
+
+                {# Status dot #}
+                {% if not room.is_active %}
+                <span class="ms-dot ms-dot--inactive" title="معطلة"></span>
+                {% elif room.is_closed %}
+                <span class="ms-dot ms-dot--closed" title="مغلقة"></span>
+                {% else %}
+                <span class="ms-dot ms-dot--open" title="مفتوحة"></span>
+                {% endif %}
+              </div>
+
+              {# Last message #}
+              <div class="ms-group-preview">
+                {% if stat.last_message %}
+                <div class="ms-group-preview-text">
+                  {% if stat.last_message.sender %}
+                  <span class="ms-group-preview-sender">{{ stat.last_message.sender.full_name }}:</span>
+                  {% endif %}
+                  {{ stat.last_message.body or '[مرفق]' }}
+                </div>
+                <div class="ms-group-preview-time">{{ stat.last_message.created_at | to_baghdad }}</div>
+                {% else %}
+                <div class="ms-group-preview-empty">لا توجد رسائل بعد</div>
+                {% endif %}
+              </div>
+
+              {# Footer #}
+              <div class="ms-group-footer">
+                <div class="d-flex align-items-center gap-3">
+                  <span class="ms-group-stat"><i class="bi bi-people"></i>{{ stat.member_count }}</span>
+                  <span class="ms-group-stat"><i class="bi bi-chat-left-text"></i>{{ stat.message_count }}</span>
+                  <span class="ms-group-stat
+                    {% if not room.is_active %}text-secondary
+                    {% elif room.is_closed %}text-danger
+                    {% else %}text-success{% endif %}">
+                    <i class="bi bi-circle-fill" style="font-size:7px;vertical-align:middle"></i>
+                    {% if not room.is_active %}معطلة{% elif room.is_closed %}مغلقة{% else %}مفتوحة{% endif %}
+                  </span>
+                </div>
+                <div class="dropdown">
+                  <button class="ms-dd-btn dropdown-toggle"
+                          data-bs-toggle="dropdown" aria-expanded="false" title="إجراءات">
+                    <i class="bi bi-three-dots-vertical"></i>
+                  </button>
+                  <ul class="dropdown-menu dropdown-menu-end shadow-sm border-0 ms-dropdown">
+                    <li><a class="dropdown-item" href="{{ url_for('chat.room_detail', room_id=room.id) }}">
+                      <i class="bi bi-eye me-2 text-primary"></i>عرض الرسائل</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('chat.edit_room', room_id=room.id) }}">
+                      <i class="bi bi-pencil me-2 text-secondary"></i>تعديل المجموعة</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('chat.room_schedule', room_id=room.id) }}">
+                      <i class="bi bi-clock me-2 text-info"></i>أوقات التواصل</a></li>
+                    <li><hr class="dropdown-divider my-1"></li>
+                    {% if room.is_closed %}
+                    <li>
+                      <form method="POST" action="{{ url_for('chat.reopen_room', room_id=room.id) }}">
+                        <button class="dropdown-item text-success">
+                          <i class="bi bi-unlock me-2"></i>فتح المحادثة
+                        </button>
+                      </form>
+                    </li>
+                    {% else %}
+                    <li>
+                      <form method="POST" action="{{ url_for('chat.close_room', room_id=room.id) }}">
+                        <button class="dropdown-item text-warning">
+                          <i class="bi bi-lock me-2"></i>إغلاق المحادثة
+                        </button>
+                      </form>
+                    </li>
+                    {% endif %}
+                  </ul>
+                </div>
+              </div>
+
+            </div>{# /ms-group-card #}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div id="groupsEmpty" class="ms-no-results" style="display:none">
+        <i class="bi bi-search me-1"></i>لا توجد مجموعات تطابق البحث أو الفلتر.
+      </div>
+
+      {% else %}
+      <div class="ms-empty-state">
+        <div class="ms-empty-icon" style="color:#16a06a"><i class="bi bi-people"></i></div>
+        <div class="ms-empty-title">لا توجد مجموعات</div>
+        <div class="ms-empty-body">أنشئ مجموعة للتواصل مع فصل أو مرحلة أو المدرسة بأكملها.</div>
+        <a href="{{ url_for('chat.create_room') }}" class="btn btn-success btn-sm mt-3">
+          <i class="bi bi-plus-circle me-1"></i>إنشاء أول مجموعة
+        </a>
+      </div>
+      {% endif %}
+
+    </div>{# /ms-panel--groups #}
   </div>
 
-  {% else %}
-  <div class="msg-empty-state">
-    <div class="msg-empty-icon" style="color:#16a06a"><i class="bi bi-people"></i></div>
-    <div class="msg-empty-title">لا توجد مجموعات</div>
-    <div class="msg-empty-body">أنشئ مجموعة للتواصل مع فصل أو مرحلة أو المدرسة بأكملها.</div>
-    <a href="{{ url_for('chat.create_room') }}" class="btn btn-success btn-sm mt-3">
-      <i class="bi bi-plus-circle me-1"></i>إنشاء أول مجموعة
-    </a>
-  </div>
-  {% endif %}
-
-</div>
+</div>{# /row #}
 
 {# ── Styles ───────────────────────────────────────────────── #}
 <style>
 /* ── Stat cards ───────────────────────────── */
-.msg-stat-card {
+.ms-stat-card {
   display: flex; align-items: center; gap: 14px;
   background: var(--card-bg);
   border: 1px solid var(--border);
@@ -422,349 +442,425 @@
   box-shadow: var(--shadow-xs);
   transition: box-shadow .18s;
 }
-.msg-stat-card:hover { box-shadow: var(--shadow-sm); }
-.msg-stat-icon {
-  width: 42px; height: 42px;
-  border-radius: 10px;
+.ms-stat-card:hover { box-shadow: var(--shadow-sm); }
+.ms-stat-icon {
+  width: 42px; height: 42px; border-radius: 10px;
   display: flex; align-items: center; justify-content: center;
   font-size: 18px; flex-shrink: 0;
 }
-.msg-stat-value { font-size: 22px; font-weight: 700; color: var(--text); line-height: 1; }
-.msg-stat-label { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+.ms-stat-value { font-size: 22px; font-weight: 700; color: var(--text); line-height: 1; }
+.ms-stat-label { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
 
-/* ── Search bar ───────────────────────────── */
-.msg-search-bar {
-  position: relative;
-}
-.msg-search-icon {
-  position: absolute; top: 50%; right: 14px;
-  transform: translateY(-50%);
-  color: var(--text-muted); font-size: 14px; pointer-events: none;
-}
-.msg-search-input {
-  width: 100%;
-  padding: 10px 42px 10px 42px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--card-bg);
-  font-family: inherit; font-size: 14px; color: var(--text);
-  outline: none;
-  transition: border-color .18s, box-shadow .18s;
-  box-shadow: var(--shadow-xs);
-}
-.msg-search-input:focus {
-  border-color: var(--primary-light);
-  box-shadow: 0 0 0 3px rgba(34,80,138,.1);
-}
-.msg-search-clear {
-  position: absolute; top: 50%; left: 12px;
-  transform: translateY(-50%);
-  background: none; border: none;
-  color: var(--text-muted); font-size: 13px;
-  cursor: pointer; padding: 4px; border-radius: 4px;
-  line-height: 1;
-  transition: color .15s;
-}
-.msg-search-clear:hover { color: var(--danger); }
-
-/* ── Filter strip ─────────────────────────── */
-.msg-filter-strip {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
-  padding: 10px 14px;
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-}
-.msg-filter-label {
-  font-size: 12.5px; font-weight: 600; color: var(--text-muted);
-  white-space: nowrap;
-}
-.msg-filter-chips { display: flex; gap: 5px; flex-wrap: wrap; }
-.msg-chip {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 4px 12px;
-  font-size: 12.5px; font-weight: 500;
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  background: #fff;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: all .15s;
-  user-select: none;
-}
-.msg-chip:hover { border-color: var(--primary-light); color: var(--primary); }
-.msg-chip--active {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: #fff;
-}
-.msg-filter-select {
-  border-radius: 20px !important;
-  border-color: var(--border) !important;
-  font-size: 12.5px !important;
-  padding: 3px 28px 3px 10px !important;
-  min-width: 120px;
-  height: auto !important;
-}
-
-/* ── Section wrapper ──────────────────────── */
-.msg-section {
+/* ── Panel shell ──────────────────────────── */
+.ms-panel {
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   overflow: hidden;
-  box-shadow: var(--shadow-xs);
+  box-shadow: var(--shadow-sm);
+  display: flex; flex-direction: column;
 }
-.msg-section-header {
+
+/* ── Panel header ─────────────────────────── */
+.ms-panel-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 18px 22px;
+  padding: 16px 20px;
+  border-bottom: 2px solid transparent;
+}
+.ms-panel-header--private {
+  background: linear-gradient(135deg, rgba(33,102,218,.06) 0%, rgba(33,102,218,.02) 100%);
+  border-bottom-color: rgba(33,102,218,.15);
+}
+.ms-panel-header--groups {
+  background: linear-gradient(135deg, rgba(22,160,106,.06) 0%, rgba(22,160,106,.02) 100%);
+  border-bottom-color: rgba(22,160,106,.15);
+}
+
+.ms-panel-title {
+  display: flex; align-items: center; gap: 12px;
+}
+.ms-panel-icon {
+  width: 36px; height: 36px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; flex-shrink: 0;
+}
+.ms-panel-name {
+  display: block;
+  font-size: 15px; font-weight: 700; color: var(--text);
+  line-height: 1.2;
+}
+.ms-panel-count {
+  display: inline-block;
+  background: var(--border); color: var(--text-muted);
+  font-size: 11px; font-weight: 700;
+  padding: 2px 9px; border-radius: 20px;
+  margin-top: 3px;
+}
+.ms-panel-action {
+  border-radius: 20px !important;
+  font-size: 12.5px; font-weight: 600; padding: 5px 14px !important;
+  white-space: nowrap;
+}
+.ms-panel-action--primary  { border-color: #2166da; color: #2166da; }
+.ms-panel-action--primary:hover  { background: #2166da; color: #fff; }
+.ms-panel-action--success  { border-color: #16a06a; color: #16a06a; }
+.ms-panel-action--success:hover  { background: #16a06a; color: #fff; }
+
+/* ── Panel search ─────────────────────────── */
+.ms-panel-search-wrap {
+  position: relative;
+  padding: 10px 16px 0;
+}
+.ms-panel-search-icon {
+  position: absolute; top: 50%; right: 28px;
+  transform: translateY(-25%);
+  color: var(--text-muted); font-size: 13px; pointer-events: none;
+}
+.ms-panel-search {
+  width: 100%;
+  padding: 9px 38px 9px 36px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #f8f9fc;
+  font-family: inherit; font-size: 13.5px; color: var(--text);
+  outline: none;
+  transition: border-color .16s, box-shadow .16s;
+}
+.ms-panel-search:focus {
+  border-color: var(--primary-light);
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(34,80,138,.08);
+}
+.ms-panel-search-clear {
+  position: absolute; top: 50%; left: 24px;
+  transform: translateY(-25%);
+  background: none; border: none; color: var(--text-muted);
+  font-size: 12px; cursor: pointer; padding: 3px; border-radius: 4px; line-height: 1;
+  transition: color .15s;
+}
+.ms-panel-search-clear:hover { color: var(--danger); }
+
+/* ── Panel filter bar ─────────────────────── */
+.ms-panel-filters {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   background: #fafbfd;
 }
-.msg-section-title {
-  display: flex; align-items: center; gap: 10px;
-  font-size: 15px; font-weight: 700; color: var(--text);
-}
-.msg-section-icon {
-  width: 32px; height: 32px; border-radius: 8px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 15px; flex-shrink: 0;
-}
-.msg-section-count {
-  background: var(--border); color: var(--text-muted);
-  font-size: 11px; font-weight: 700;
-  padding: 2px 8px; border-radius: 20px;
-}
+.ms-panel-filters--wrap { flex-direction: column; align-items: flex-start; }
+.ms-server-filter { margin-right: auto; }
 
-/* ── Private conversation list ────────────── */
-.msg-convo-list { display: flex; flex-direction: column; }
-.msg-convo-item {
-  display: flex; align-items: center; gap: 13px;
-  padding: 14px 22px;
+.ms-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 11px;
+  font-size: 12px; font-weight: 500;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: #fff; color: var(--text-muted);
+  cursor: pointer; transition: all .15s; user-select: none;
+}
+.ms-chip:hover { border-color: var(--primary-light); color: var(--primary); }
+.ms-chip--active { background: var(--primary); border-color: var(--primary); color: #fff; }
+
+.ms-select {
+  border: 1px solid var(--border); border-radius: 20px;
+  font-size: 12px; padding: 4px 26px 4px 10px;
+  background: #fff; color: var(--text);
+  height: auto; cursor: pointer;
+  outline: none;
+  transition: border-color .15s;
+  min-width: 110px;
+}
+.ms-select--sm { min-width: 90px; font-size: 11.5px; }
+.ms-select:focus { border-color: var(--primary-light); }
+
+/* ── Dots ─────────────────────────────────── */
+.ms-dot {
+  display: inline-block; width: 8px; height: 8px;
+  border-radius: 50%; flex-shrink: 0;
+}
+.ms-dot--open     { background: #16a06a; box-shadow: 0 0 0 2px rgba(22,160,106,.25); }
+.ms-dot--closed   { background: #de3d3d; box-shadow: 0 0 0 2px rgba(222,61,61,.2); }
+.ms-dot--inactive { background: #adb5bd; }
+
+/* ── Panel body / scroll area ─────────────── */
+.ms-panel-body { flex: 1; overflow: hidden; }
+.ms-panel-body--scroll {
+  max-height: 560px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0,0,0,.15) transparent;
+}
+.ms-panel-body--padded { padding: 14px; }
+
+/* ── Private conversation items ───────────── */
+.ms-convo-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 13px 20px;
   border-bottom: 1px solid rgba(0,0,0,.04);
   text-decoration: none;
-  transition: background .15s;
-  cursor: pointer;
+  transition: background .14s;
 }
-.msg-convo-item:last-child { border-bottom: none; }
-.msg-convo-item:hover { background: rgba(33,102,218,.04); }
+.ms-convo-item:last-child { border-bottom: none; }
+.ms-convo-item:hover { background: rgba(33,102,218,.04); }
 
-.msg-avatar {
-  width: 44px; height: 44px; border-radius: 50%;
+.ms-avatar {
+  width: 42px; height: 42px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-size: 17px; font-weight: 700; color: #fff;
+  font-size: 16px; font-weight: 700; color: #fff;
   flex-shrink: 0; text-transform: uppercase;
 }
-.msg-avatar--primary { background: linear-gradient(135deg, #2166da, #1a4fa8); }
+.ms-avatar--blue { background: linear-gradient(135deg, #2166da, #1a4fa8); }
 
-.msg-convo-body { flex: 1; min-width: 0; }
-.msg-convo-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
-.msg-convo-bottom { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.msg-convo-name { font-size: 14px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.msg-convo-time { font-size: 11px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
-.msg-convo-preview { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
-.msg-role-tag {
-  display: inline-block; background: rgba(33,102,218,.08); color: #2166da;
-  font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 4px; margin-left: 5px;
+.ms-convo-body { flex: 1; min-width: 0; }
+.ms-convo-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
-.msg-convo-arrow { color: var(--border); font-size: 12px; flex-shrink: 0; transition: color .15s; }
-.msg-convo-item:hover .msg-convo-arrow { color: var(--text-muted); }
+.ms-convo-row--sub { margin-top: 3px; }
+.ms-convo-name {
+  font-size: 13.5px; font-weight: 600; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ms-convo-time  { font-size: 10.5px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+.ms-convo-preview {
+  font-size: 12px; color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1;
+}
+.ms-role-tag {
+  display: inline-block;
+  background: rgba(33,102,218,.08); color: #2166da;
+  font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 4px;
+  margin-left: 4px;
+}
+.ms-convo-arrow { color: var(--border); font-size: 11px; flex-shrink: 0; transition: color .14s; }
+.ms-convo-item:hover .ms-convo-arrow { color: var(--text-muted); }
 
 /* ── Status pills ─────────────────────────── */
-.msg-status-pill { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 2px 9px; border-radius: 20px; white-space: nowrap; }
-.msg-status-pill--open     { background: rgba(22,160,106,.12); color: #16a06a; }
-.msg-status-pill--closed   { background: rgba(222,61,61,.1);   color: #de3d3d; }
-.msg-status-pill--inactive { background: rgba(100,116,139,.12);color: #64748b; }
+.ms-pill {
+  display: inline-block; font-size: 10px; font-weight: 600;
+  padding: 2px 8px; border-radius: 20px; white-space: nowrap;
+}
+.ms-pill--open     { background: rgba(22,160,106,.12); color: #16a06a; }
+.ms-pill--closed   { background: rgba(222,61,61,.1);   color: #de3d3d; }
+.ms-pill--inactive { background: rgba(100,116,139,.12);color: #64748b; }
 
 /* ── Group cards ──────────────────────────── */
-.msg-group-card {
+.ms-group-card {
   border: 1px solid var(--border); border-radius: var(--radius-md);
   background: var(--card-bg); overflow: hidden;
   height: 100%; display: flex; flex-direction: column;
   transition: box-shadow .18s, transform .18s;
 }
-.msg-group-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
-.msg-group-card--closed { opacity: .78; }
+.ms-group-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
+.ms-group-card--closed { opacity: .78; }
 
-.msg-group-card-top { display: flex; align-items: flex-start; gap: 12px; padding: 16px 16px 12px; }
-.msg-group-icon {
-  width: 44px; height: 44px; border-radius: 12px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 19px; flex-shrink: 0;
+.ms-group-top {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 14px 14px 10px;
 }
-.msg-group-icon--announcement { background: rgba(33,150,243,.12); color: #2196f3; }
-.msg-group-icon--school       { background: rgba(26,58,92,.1);    color: var(--primary); }
-.msg-group-icon--grade        { background: rgba(232,160,32,.12); color: #d18a10; }
-.msg-group-icon--section      { background: rgba(156,39,176,.1);  color: #9c27b0; }
-.msg-group-icon--subject      { background: rgba(0,150,136,.1);   color: #009688; }
-.msg-group-icon--default      { background: rgba(22,160,106,.1);  color: #16a06a; }
+.ms-group-icon {
+  width: 42px; height: 42px; border-radius: 11px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; flex-shrink: 0;
+}
+.ms-group-icon--ann     { background: rgba(33,150,243,.12); color: #2196f3; }
+.ms-group-icon--school  { background: rgba(26,58,92,.1);    color: var(--primary); }
+.ms-group-icon--grade   { background: rgba(232,160,32,.12); color: #d18a10; }
+.ms-group-icon--section { background: rgba(156,39,176,.1);  color: #9c27b0; }
+.ms-group-icon--subject { background: rgba(0,150,136,.1);   color: #009688; }
+.ms-group-icon--default { background: rgba(22,160,106,.1);  color: #16a06a; }
 
-.msg-group-name { font-size: 14px; font-weight: 700; color: var(--text); line-height: 1.3; }
+.ms-group-name { font-size: 13.5px; font-weight: 700; color: var(--text); line-height: 1.3; }
 
-.msg-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }
-.msg-dot--open     { background: #16a06a; box-shadow: 0 0 0 3px rgba(22,160,106,.2); }
-.msg-dot--closed   { background: #de3d3d; box-shadow: 0 0 0 3px rgba(222,61,61,.15); }
-.msg-dot--inactive { background: #adb5bd; }
+.ms-tag {
+  display: inline-block; font-size: 10px; font-weight: 600;
+  padding: 2px 7px; border-radius: 5px; line-height: 1.5;
+}
+.ms-tag--blue  { background: rgba(33,102,218,.1);  color: #2166da; }
+.ms-tag--cyan  { background: rgba(33,150,243,.1);  color: #2196f3; }
+.ms-tag--amber { background: rgba(232,160,32,.12); color: #c48a00; }
+.ms-tag--muted { background: rgba(100,116,139,.1); color: #64748b; }
 
-.msg-type-tag { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 5px; line-height: 1.5; }
-.msg-type-tag--group        { background: rgba(33,102,218,.1);  color: #2166da; }
-.msg-type-tag--announcement { background: rgba(33,150,243,.1);  color: #2196f3; }
-.msg-type-tag--readonly     { background: rgba(232,160,32,.12); color: #c48a00; }
-.msg-type-tag--scope        { background: rgba(100,116,139,.1); color: #64748b; }
+.ms-group-preview { padding: 0 14px 10px; flex: 1; }
+.ms-group-preview-text {
+  font-size: 12px; color: var(--text-muted);
+  overflow: hidden; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.5;
+}
+.ms-group-preview-sender { font-weight: 600; color: var(--primary-light); margin-left: 3px; }
+.ms-group-preview-time   { font-size: 10.5px; color: var(--text-muted); margin-top: 3px; }
+.ms-group-preview-empty  { font-size: 12px; color: #adb5bd; font-style: italic; }
 
-.msg-group-preview { padding: 0 16px 12px; flex: 1; }
-.msg-group-preview-text { font-size: 12.5px; color: var(--text-muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.5; }
-.msg-group-preview-sender { font-weight: 600; color: var(--primary-light); margin-left: 3px; }
-.msg-group-preview-time   { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
-.msg-group-preview-empty  { font-size: 12.5px; color: #adb5bd; font-style: italic; }
-
-.msg-group-card-footer {
+.ms-group-footer {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 16px 12px;
+  padding: 9px 14px 11px;
   border-top: 1px solid rgba(0,0,0,.05);
   background: #fafbfd;
 }
-.msg-group-stat { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-muted); font-weight: 500; }
-.msg-group-stat i { font-size: 13px; }
-
-.btn-icon-sm {
-  width: 30px; height: 30px; padding: 0;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid var(--border); border-radius: 8px;
-  background: var(--card-bg); color: var(--text-muted);
-  font-size: 15px; cursor: pointer; transition: all .15s;
+.ms-group-stat {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11.5px; color: var(--text-muted); font-weight: 500;
 }
-.btn-icon-sm:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
-.btn-icon-sm::after { display: none !important; }
+.ms-group-stat i { font-size: 12px; }
 
-.msg-dropdown { border-radius: var(--radius-sm) !important; min-width: 170px; }
-.msg-dropdown .dropdown-item { font-size: 13.5px; padding: 8px 14px; }
-.msg-dropdown .dropdown-item:hover { background: rgba(33,102,218,.06); }
+/* ── Dropdown button ──────────────────────── */
+.ms-dd-btn {
+  width: 28px; height: 28px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: 7px;
+  background: var(--card-bg); color: var(--text-muted);
+  font-size: 14px; cursor: pointer; transition: all .15s;
+}
+.ms-dd-btn:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
+.ms-dd-btn::after { display: none !important; }
+
+.ms-dropdown { border-radius: var(--radius-sm) !important; min-width: 168px; }
+.ms-dropdown .dropdown-item { font-size: 13px; padding: 8px 14px; }
+.ms-dropdown .dropdown-item:hover { background: rgba(33,102,218,.06); }
 
 /* ── Empty / no-results ───────────────────── */
-.msg-empty-state { text-align: center; padding: 48px 24px; }
-.msg-empty-icon  { font-size: 48px; opacity: .35; line-height: 1; margin-bottom: 14px; }
-.msg-empty-title { font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
-.msg-empty-body  { font-size: 13px; color: var(--text-muted); max-width: 320px; margin: 0 auto; }
-.msg-no-results  { padding: 28px; text-align: center; color: var(--text-muted); font-size: 13.5px; }
+.ms-empty-state { text-align: center; padding: 44px 24px; }
+.ms-empty-icon  { font-size: 46px; opacity: .32; line-height: 1; margin-bottom: 12px; }
+.ms-empty-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
+.ms-empty-body  { font-size: 13px; color: var(--text-muted); max-width: 280px; margin: 0 auto; }
+.ms-no-results  { padding: 26px; text-align: center; color: var(--text-muted); font-size: 13px; }
+
+/* ── Responsive: equal heights on desktop ─── */
+@media (min-width: 992px) {
+  #msgPanelsRow { align-items: stretch; }
+  .ms-panel { height: 100%; }
+}
 </style>
 
 {# ── Scripts ──────────────────────────────────────────────── #}
 <script>
 (function () {
 
-  /* ── Grade filter cascade: stage → grade options ─────────── */
-  var stageFilter = document.getElementById('grpStageFilter');
-  var gradeFilter = document.getElementById('grpGradeFilter');
+  /* ── Private panel search ──────────────────────────────── */
+  var privSearch = document.getElementById('privSearch');
+  var privClear  = document.getElementById('privSearchClear');
+
+  function onPrivSearch() {
+    if (privClear) privClear.style.display = privSearch.value ? '' : 'none';
+    applyPrivFilters();
+  }
+  if (privSearch) privSearch.addEventListener('input', onPrivSearch);
+  if (privClear)  privClear.addEventListener('click', function () {
+    privSearch.value = '';
+    this.style.display = 'none';
+    applyPrivFilters();
+  });
+
+  /* ── Private chip filter ───────────────────────────────── */
+  document.querySelectorAll('[data-pf="priv-status"]').forEach(function (chip) {
+    chip.addEventListener('click', function () {
+      document.querySelectorAll('[data-pf="priv-status"]')
+              .forEach(function (c) { c.classList.remove('ms-chip--active'); });
+      this.classList.add('ms-chip--active');
+      applyPrivFilters();
+    });
+  });
+
+  function applyPrivFilters() {
+    var q       = privSearch ? privSearch.value.trim().toLowerCase() : '';
+    var chip    = document.querySelector('[data-pf="priv-status"].ms-chip--active');
+    var status  = chip ? chip.dataset.pv : '';
+    var items   = document.querySelectorAll('.priv-item');
+    var visible = 0;
+
+    items.forEach(function (el) {
+      var hay  = (el.dataset.psearch || el.textContent).toLowerCase();
+      var st   = el.dataset.pstatus || '';
+      var show = (!q || hay.indexOf(q) !== -1) && (!status || st === status);
+      el.hidden = !show;
+      if (show) visible++;
+    });
+
+    var empty = document.getElementById('privEmpty');
+    if (empty && items.length > 0) empty.style.display = visible === 0 ? '' : 'none';
+    var cnt = document.getElementById('privCount');
+    if (cnt) cnt.textContent = visible;
+  }
+
+  /* ── Group panel search ────────────────────────────────── */
+  var grpSearch = document.getElementById('grpSearch');
+  var grpClear  = document.getElementById('grpSearchClear');
+
+  function onGrpSearch() {
+    if (grpClear) grpClear.style.display = grpSearch.value ? '' : 'none';
+    applyGrpFilters();
+  }
+  if (grpSearch) grpSearch.addEventListener('input', onGrpSearch);
+  if (grpClear)  grpClear.addEventListener('click', function () {
+    grpSearch.value = '';
+    this.style.display = 'none';
+    applyGrpFilters();
+  });
+
+  /* ── Group chip filters ────────────────────────────────── */
+  document.querySelectorAll('[data-gf="grp-type"]').forEach(function (chip) {
+    chip.addEventListener('click', function () {
+      document.querySelectorAll('[data-gf="grp-type"]')
+              .forEach(function (c) { c.classList.remove('ms-chip--active'); });
+      this.classList.add('ms-chip--active');
+      applyGrpFilters();
+    });
+  });
+
+  /* ── Group dropdown filters ────────────────────────────── */
+  var stageFilter  = document.getElementById('grpStageFilter');
+  var gradeFilter  = document.getElementById('grpGradeFilter');
   var statusFilter = document.getElementById('grpStatusFilter');
 
   if (stageFilter && gradeFilter) {
     stageFilter.addEventListener('change', function () {
       var stage = this.value;
       Array.from(gradeFilter.options).forEach(function (opt, i) {
-        if (i === 0) return; // "كل الصفوف"
+        if (i === 0) return;
         opt.hidden = stage ? (opt.dataset.stage !== stage) : false;
       });
-      // Reset grade selection if now hidden
       if (gradeFilter.selectedIndex > 0 &&
           gradeFilter.options[gradeFilter.selectedIndex].hidden) {
         gradeFilter.selectedIndex = 0;
       }
-      applyFilters();
+      applyGrpFilters();
     });
   }
+  if (gradeFilter)  gradeFilter.addEventListener('change', applyGrpFilters);
+  if (statusFilter) statusFilter.addEventListener('change', applyGrpFilters);
 
-  /* ── Chip radio filters ──────────────────────────────────── */
-  document.querySelectorAll('.msg-chip').forEach(function (chip) {
-    chip.addEventListener('click', function () {
-      var filterGroup = this.dataset.filter;
-      document.querySelectorAll('[data-filter="' + filterGroup + '"]')
-              .forEach(function (c) { c.classList.remove('msg-chip--active'); });
-      this.classList.add('msg-chip--active');
-      applyFilters();
+  function applyGrpFilters() {
+    var q       = grpSearch  ? grpSearch.value.trim().toLowerCase() : '';
+    var chip    = document.querySelector('[data-gf="grp-type"].ms-chip--active');
+    var type    = chip ? chip.dataset.gv : '';
+    var grade   = gradeFilter  ? gradeFilter.value  : '';
+    var stage   = stageFilter  ? stageFilter.value  : '';
+    var status  = statusFilter ? statusFilter.value : '';
+    var items   = document.querySelectorAll('.grp-item');
+    var visible = 0;
+
+    items.forEach(function (el) {
+      var hay  = (el.dataset.gsearch || el.textContent).toLowerCase();
+      var show = (!q      || hay.indexOf(q) !== -1) &&
+                 (!type   || el.dataset.gtype   === type)   &&
+                 (!grade  || el.dataset.ggrade  === grade)  &&
+                 (!stage  || el.dataset.gstage  === stage)  &&
+                 (!status || el.dataset.gstatus === status);
+      el.hidden = !show;
+      if (show) visible++;
     });
-  });
 
-  if (gradeFilter)  gradeFilter.addEventListener('change', applyFilters);
-  if (statusFilter) statusFilter.addEventListener('change', applyFilters);
-
-  /* ── Search input ────────────────────────────────────────── */
-  var searchInput = document.getElementById('msgSearch');
-  var clearBtn    = document.getElementById('searchClearBtn');
-
-  if (searchInput) {
-    searchInput.addEventListener('input', function () {
-      clearBtn.style.display = this.value ? '' : 'none';
-      applyFilters();
-    });
-  }
-  if (clearBtn) {
-    clearBtn.addEventListener('click', function () {
-      searchInput.value = '';
-      this.style.display = 'none';
-      applyFilters();
-    });
+    var empty = document.getElementById('groupsEmpty');
+    if (empty && items.length > 0) empty.style.display = visible === 0 ? '' : 'none';
+    var cnt = document.getElementById('grpCount');
+    if (cnt) cnt.textContent = visible;
   }
 
-  /* ── Master filter function ──────────────────────────────── */
-  function applyFilters() {
-    var q = searchInput ? searchInput.value.trim().toLowerCase() : '';
-
-    /* Active chip values */
-    var privStatusChip = document.querySelector('[data-filter="priv-status"].msg-chip--active');
-    var grpTypeChip    = document.querySelector('[data-filter="grp-type"].msg-chip--active');
-    var privStatus = privStatusChip ? privStatusChip.dataset.value : '';
-    var grpType    = grpTypeChip    ? grpTypeChip.dataset.value    : '';
-
-    var grpGrade  = gradeFilter  ? gradeFilter.value  : '';
-    var grpStage  = stageFilter  ? stageFilter.value  : '';
-    var grpStatus = statusFilter ? statusFilter.value : '';
-
-    /* ── Private items ── */
-    var privItems   = document.querySelectorAll('.priv-item');
-    var privVisible = 0;
-    privItems.forEach(function (el) {
-      var hay    = (el.dataset.search || el.textContent).toLowerCase();
-      var status = el.dataset.status || '';
-      var showQ   = !q || hay.indexOf(q) !== -1;
-      var showSt  = !privStatus || status === privStatus;
-      el.hidden = !(showQ && showSt);
-      if (!el.hidden) privVisible++;
-    });
-    var privEmpty = document.getElementById('privateEmpty');
-    if (privEmpty && privItems.length > 0)
-      privEmpty.style.display = (privVisible === 0) ? '' : 'none';
-    var privCount = document.getElementById('privCount');
-    if (privCount) privCount.textContent = privVisible;
-
-    /* ── Group items ── */
-    var grpItems   = document.querySelectorAll('.grp-item');
-    var grpVisible = 0;
-    grpItems.forEach(function (el) {
-      var hay    = (el.dataset.search || el.textContent).toLowerCase();
-      var type   = el.dataset.type   || '';
-      var grade  = el.dataset.grade  || '';
-      var stage  = el.dataset.stage  || '';
-      var status = el.dataset.status || '';
-      var showQ     = !q         || hay.indexOf(q) !== -1;
-      var showType  = !grpType   || type === grpType;
-      var showGrade = !grpGrade  || grade === grpGrade;
-      var showStage = !grpStage  || stage === grpStage;
-      var showSt    = !grpStatus || status === grpStatus;
-      el.hidden = !(showQ && showType && showGrade && showStage && showSt);
-      if (!el.hidden) grpVisible++;
-    });
-    var grpEmpty = document.getElementById('groupsEmpty');
-    if (grpEmpty && grpItems.length > 0)
-      grpEmpty.style.display = (grpVisible === 0) ? '' : 'none';
-    var grpCount = document.getElementById('grpCount');
-    if (grpCount) grpCount.textContent = grpVisible;
-  }
-
-  /* ── Group card dropdowns ────────────────────────────────── */
+  /* ── RTL dropdown popper fix ───────────────────────────── */
   document.addEventListener('DOMContentLoaded', function () {
     if (typeof bootstrap === 'undefined' || !bootstrap.Dropdown) return;
-    document.querySelectorAll('.group-dd-btn').forEach(function (el) {
+    document.querySelectorAll('.ms-dd-btn').forEach(function (el) {
       bootstrap.Dropdown.getOrCreateInstance(el, {
         popperConfig: function (cfg) {
           var mods = (cfg.modifiers || []).map(function (m) {
