@@ -129,6 +129,20 @@
 {% block extra_js %}
 <script>
 (function () {
+  /* ── Fix dropdown clipping caused by overflow:hidden on .card and .table-wrapper ──
+     Bootstrap's default dropdown uses position:absolute, which is clipped by any
+     overflow:hidden ancestor. Re-initializing with Popper strategy:'fixed' renders
+     the menu at viewport level, escaping all overflow contexts.                    */
+  document.querySelectorAll('#complaintsBody .dropdown-toggle').forEach(function (toggle) {
+    var existing = bootstrap.Dropdown.getInstance(toggle);
+    if (existing) existing.dispose();
+    new bootstrap.Dropdown(toggle, {
+      popperConfig: function (defaultConfig) {
+        return Object.assign({}, defaultConfig, { strategy: 'fixed' });
+      }
+    });
+  });
+
   /* ── Filter logic ────────────────────────────────── */
   const searchInput = document.getElementById('searchStudent');
   const typeSelect  = document.getElementById('filterType');
@@ -190,15 +204,15 @@
       if (data.ok) {
         /* Update badge */
         const badge = row.querySelector('.complaint-status-badge');
-        badge.textContent  = data.label;
+        badge.textContent    = data.label;
         badge.dataset.status = data.status;
         badge.style.cssText  = STATUS_STYLES[data.status] || '';
 
         /* Update dropdown: mark new active, re-enable previous */
         row.querySelectorAll('.status-change-btn').forEach(function (b) {
           const isCurrent = b.dataset.status === data.status;
-          b.classList.toggle('active',  isCurrent);
-          b.classList.toggle('fw-600',  isCurrent);
+          b.classList.toggle('active', isCurrent);
+          b.classList.toggle('fw-600', isCurrent);
           b.disabled = isCurrent;
         });
 
