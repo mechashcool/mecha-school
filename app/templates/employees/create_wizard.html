@@ -58,20 +58,70 @@
   }
   .wiz-nav .spacer { flex: 1; }
 
-  .review-group { margin-bottom: 18px; }
-  .review-group h6 {
-    font-size: 12.5px; font-weight: 800; color: var(--primary);
-    text-transform: none; margin-bottom: 8px;
+  /* ── Professional Review ── */
+  .rv-header {
+    background: var(--primary); border-radius: 14px; padding: 20px 24px;
+    margin-bottom: 20px; display: flex; align-items: center; gap: 16px; color: #fff; flex-wrap: wrap;
+  }
+  .rv-header-avatar {
+    width: 64px; height: 64px; border-radius: 12px; background: rgba(255,255,255,.2);
+    display: flex; align-items: center; justify-content: center; font-size: 28px; flex-shrink: 0;
+  }
+  .rv-header-info { flex: 1; min-width: 0; }
+  .rv-header-name { font-size: 18px; font-weight: 800; margin-bottom: 4px; }
+  .rv-header-sub { font-size: 13px; opacity: .85; }
+  .rv-header-badge {
+    background: rgba(255,255,255,.2); border-radius: 20px;
+    padding: 5px 14px; font-size: 12px; font-weight: 700;
+  }
+  .rv-section { border: 1.5px solid var(--border); border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
+  .rv-section-hd {
+    padding: 11px 16px; font-size: 13px; font-weight: 800;
     display: flex; align-items: center; gap: 8px;
+    background: var(--bg); border-bottom: 1.5px solid var(--border); color: var(--primary);
   }
-  .review-grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 6px 18px;
+  .rv-edit-link {
+    margin-right: auto; font-size: 11.5px; font-weight: 600;
+    color: var(--text-muted); cursor: pointer; user-select: none;
   }
-  .review-item { font-size: 13px; padding: 5px 0; border-bottom: 1px dashed var(--border); }
-  .review-item .k { color: var(--text-muted); font-weight: 600; }
-  .review-item .v { color: var(--text); font-weight: 700; }
-  .review-empty { color: var(--text-muted); font-size: 12.5px; font-style: italic; }
+  .rv-edit-link:hover { color: var(--primary); }
+  .rv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+  .rv-field { padding: 10px 16px; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); }
+  .rv-field-label { font-size: 11px; font-weight: 700; color: var(--text-muted); margin-bottom: 3px; }
+  .rv-field-value { font-size: 13.5px; font-weight: 700; color: var(--text); line-height: 1.5; }
+  .rv-field-value.highlight { color: var(--primary); }
+  .rv-doc-list { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .rv-doc-item {
+    display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+    border-radius: 8px; background: var(--bg); border: 1px solid var(--border); font-size: 12.5px;
+  }
+  .rv-doc-item i { font-size: 18px; flex-shrink: 0; }
+  .rv-doc-item .doc-name { font-weight: 700; }
+  .rv-doc-item .doc-type { color: var(--text-muted); font-size: 11.5px; }
+  .rv-photo-wrap {
+    padding: 14px 16px; display: flex; align-items: center; gap: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .rv-photo-thumb {
+    width: 64px; height: 64px; border-radius: 10px; object-fit: cover;
+    border: 2px solid var(--border); flex-shrink: 0;
+  }
+  .rv-photo-info .name { font-weight: 700; font-size: 13.5px; }
+  .rv-photo-info .sub { font-size: 12px; color: var(--text-muted); }
+  .rv-fee-summary { display: flex; border-bottom: 1.5px solid var(--border); }
+  .rv-fee-stat { flex: 1; padding: 14px 16px; text-align: center; border-inline-start: 1px solid var(--border); }
+  .rv-fee-stat:first-child { border-inline-start: none; }
+  .rv-fee-stat .fs-label { font-size: 11px; color: var(--text-muted); font-weight: 600; }
+  .rv-fee-stat .fs-value { font-size: 16px; font-weight: 800; color: var(--primary); margin-top: 2px; }
+  .rv-empty {
+    padding: 14px 16px; color: var(--text-muted); font-size: 12.5px;
+    display: flex; align-items: center; gap: 8px; font-style: italic;
+  }
+  @media (max-width: 575px) {
+    .rv-fee-summary { flex-direction: column; }
+    .rv-fee-stat { border-inline-start: none; border-bottom: 1px solid var(--border); }
+    .rv-grid { grid-template-columns: 1fr; }
+  }
 </style>
 {% endblock %}
 
@@ -748,116 +798,195 @@
       return (o && o.value) ? o.textContent.trim() : '';
     };
 
-    const genderMap    = { male: 'ذكر', female: 'أنثى' };
-    const contractMap  = { 'full-time': 'دوام كامل', 'part-time': 'دوام جزئي', 'contract': 'عقد' };
-    const salTypeMap   = { 'monthly': 'شهري', 'daily': 'يومي', 'per_session': 'بالحصة / المحاضرة' };
-    const payMethMap   = { 'cash': 'نقدي', 'bank': 'حوالة بنكية', 'wallet': 'محفظة إلكترونية' };
+    const genderMap   = { male: 'ذكر', female: 'أنثى' };
+    const contractMap = { 'full-time': 'دوام كامل', 'part-time': 'دوام جزئي', 'contract': 'عقد' };
+    const salTypeMap  = { 'monthly': 'شهري', 'daily': 'يومي', 'per_session': 'بالحصة / المحاضرة' };
+    const payMethMap  = { 'cash': 'نقدي', 'bank': 'حوالة بنكية', 'wallet': 'محفظة إلكترونية' };
 
-    const row = (k, v) => v
-      ? `<div class="review-item d-flex justify-content-between gap-3"><span class="k">${k}</span><span class="v">${v}</span></div>`
-      : '';
+    const fld = (label, value, cls = '') =>
+      value
+        ? `<div class="rv-field"><div class="rv-field-label">${label}</div><div class="rv-field-value ${cls}">${value}</div></div>`
+        : '';
 
-    let html = '';
+    const sec = (icon, title, body, stepKey = null) => {
+      const editHtml = stepKey
+        ? `<span class="rv-edit-link" data-goto="${stepKey}"><i class="bi bi-pencil-square me-1"></i>تعديل</span>`
+        : '';
+      return `<div class="rv-section">
+        <div class="rv-section-hd"><i class="bi ${icon}"></i>${title}${editHtml}</div>
+        <div class="rv-section-body">${body}</div>
+      </div>`;
+    };
 
-    // Basic Info
-    html += '<div class="review-group"><h6><i class="bi bi-person-badge-fill text-accent"></i>البيانات الأساسية</h6><div class="review-grid">';
-    html += row('الاسم الكامل',    txt('full_name'));
-    html += row('المسمى الوظيفي', txt('job_title'));
-    html += row('القسم',          txt('department'));
-    html += row('الجنس',          genderMap[txt('gender')] || '');
-    html += row('رقم الهاتف',     txt('phone'));
-    html += row('البريد الإلكتروني', txt('email'));
-    html += row('الجنسية',        txt('nationality'));
-    html += row('تاريخ الميلاد',  txt('date_of_birth'));
-    html += row('نوع العقد',      contractMap[txt('contract_type')] || txt('contract_type'));
-    html += row('تاريخ التعيين',  txt('hire_date'));
-    html += row('العنوان',        txt('address'));
-    html += '</div></div>';
+    // Photo
+    const photoEl  = document.getElementById('photoInput');
+    const hasPhoto = photoEl && photoEl.files && photoEl.files.length;
+    const photoUrl = hasPhoto ? URL.createObjectURL(photoEl.files[0]) : '';
 
-    // Payroll
-    const baseSal = txt('base_salary');
+    // Header
+    const empName  = txt('full_name') || 'موظف جديد';
+    const jobTitle = txt('job_title');
+    const dept     = txt('department');
+    const avatarHtml = hasPhoto
+      ? `<img style="width:64px;height:64px;border-radius:12px;object-fit:cover;border:2px solid rgba(255,255,255,.35);flex-shrink:0" src="${photoUrl}" alt="">`
+      : `<div class="rv-header-avatar"><i class="bi bi-person-badge-fill"></i></div>`;
+
+    let html = `<div class="rv-header">
+      ${avatarHtml}
+      <div class="rv-header-info">
+        <div class="rv-header-name">${empName}</div>
+        <div class="rv-header-sub">${[jobTitle, dept].filter(Boolean).join(' — ') || 'موظف جديد'}</div>
+      </div>
+      <div class="rv-header-badge"><i class="bi bi-check-circle me-1"></i>جاهز للحفظ</div>
+    </div>`;
+
+    // ── Section 1: Basic Info ──
+    let s1 = '<div class="rv-grid">';
+    s1 += fld('الاسم الكامل', txt('full_name'), 'highlight');
+    s1 += fld('المسمى الوظيفي', jobTitle);
+    s1 += fld('القسم', dept);
+    s1 += fld('الجنس', genderMap[txt('gender')] || '');
+    s1 += fld('رقم الهاتف', txt('phone'));
+    s1 += fld('البريد الإلكتروني', txt('email'));
+    s1 += fld('الجنسية', txt('nationality'));
+    s1 += fld('تاريخ الميلاد', txt('date_of_birth'));
+    s1 += fld('نوع العقد', contractMap[txt('contract_type')] || '');
+    s1 += fld('تاريخ التعيين', txt('hire_date'));
+    s1 += fld('العنوان', txt('address'));
+    s1 += '</div>';
+    html += sec('bi-person-badge-fill', 'البيانات الشخصية والوظيفية', s1, 'basic');
+
+    // ── Section 2: Payroll ──
     const payrollStep = document.querySelector('[data-step-key="payroll"]');
     if (payrollStep) {
-      html += '<div class="review-group"><h6><i class="bi bi-cash-stack text-accent"></i>بيانات الراتب</h6>';
+      const baseSal = txt('base_salary');
       if (baseSal) {
-        html += '<div class="review-grid">';
-        html += row('الراتب الأساسي',   Number(baseSal).toLocaleString('ar-IQ') + ' د.ع');
-        html += row('نوع الراتب',       salTypeMap[txt('salary_type')] || '');
-        html += row('حالة الراتب',      selTextByName('payroll_status'));
-        html += row('طريقة الدفع',      payMethMap[txt('pay_method')] || '');
-        html += row('رقم الحساب',       txt('bank_account'));
-        html += row('تاريخ بدء الراتب', txt('salary_start_date'));
-        html += '</div>';
+        let s2 = `<div class="rv-fee-summary">
+          <div class="rv-fee-stat">
+            <div class="fs-label">الراتب الأساسي</div>
+            <div class="fs-value">${Number(baseSal).toLocaleString('ar-IQ')} <small style="font-size:11px">د.ع</small></div>
+          </div>
+          <div class="rv-fee-stat">
+            <div class="fs-label">نوع الراتب</div>
+            <div class="fs-value" style="font-size:14px">${salTypeMap[txt('salary_type')] || txt('salary_type') || '—'}</div>
+          </div>
+        </div>`;
+        s2 += '<div class="rv-grid">';
+        s2 += fld('حالة الراتب', selTextByName('payroll_status'));
+        s2 += fld('طريقة الدفع', payMethMap[txt('pay_method')] || '');
+        s2 += fld('رقم الحساب / المحفظة', txt('bank_account'));
+        s2 += fld('تاريخ بدء الراتب', txt('salary_start_date'));
+        s2 += '</div>';
+        html += sec('bi-cash-stack', 'بيانات الراتب', s2, 'payroll');
       } else {
-        html += '<div class="review-empty">لم يُدخل راتب.</div>';
+        html += sec('bi-cash-stack', 'بيانات الراتب',
+          '<div class="rv-empty"><i class="bi bi-dash-circle"></i>لم يُدخل راتب.</div>', 'payroll');
       }
-      html += '</div>';
     }
 
-    // Photo, Notes & Documents (merged step)
+    // ── Section 3: Photo, Notes & Documents ──
     const docStep = document.querySelector('[data-step-key="documents"]');
     if (docStep) {
-      const photoEl  = document.getElementById('photoInput');
-      const hasPhoto = photoEl && photoEl.files && photoEl.files.length;
       const docItems = [];
       docStep.querySelectorAll('.emp-doc-row').forEach(r => {
-        const type  = (r.querySelector('[name="doc_type[]"]')?.value  || '').trim();
-        const fi    = r.querySelector('[name="doc_file[]"]');
-        const fname = (fi && fi.files && fi.files.length) ? fi.files[0].name : '';
-        if (fname) docItems.push(type ? type + ' — ' + fname : fname);
+        const type = (r.querySelector('[name="doc_type[]"]')?.value || '').trim();
+        const fi   = r.querySelector('[name="doc_file[]"]');
+        if (fi && fi.files && fi.files.length)
+          docItems.push({ type, file: fi.files[0] });
       });
-      html += '<div class="review-group"><h6><i class="bi bi-folder-fill text-accent"></i>الملفات والمستندات</h6><div class="review-grid">';
-      if (hasPhoto) html += row('صورة الموظف', 'تم اختيار صورة');
-      html += row('ملاحظات', txt('notes'));
-      html += '</div>';
-      if (docItems.length) {
-        html += '<div class="review-grid">';
-        docItems.forEach((d, i) => html += row(`مستند ${i + 1}`, d));
-        html += '</div>';
-      } else {
-        html += '<div class="review-empty">لم تُضَف مستندات.</div>';
+      const notes = txt('notes');
+
+      let s3 = '';
+      if (hasPhoto) {
+        s3 += `<div class="rv-photo-wrap">
+          <img class="rv-photo-thumb" src="${photoUrl}" alt="">
+          <div class="rv-photo-info">
+            <div class="name">${photoEl.files[0].name}</div>
+            <div class="sub">صورة الموظف · ${(photoEl.files[0].size / 1024).toFixed(1)} KB</div>
+          </div>
+        </div>`;
       }
-      html += '</div>';
+      if (notes) {
+        s3 += `<div class="rv-grid"><div class="rv-field" style="grid-column:1/-1">
+          <div class="rv-field-label">ملاحظات</div>
+          <div class="rv-field-value" style="white-space:pre-line;font-weight:400">${notes}</div>
+        </div></div>`;
+      }
+      if (docItems.length) {
+        s3 += '<div class="rv-doc-list">';
+        docItems.forEach(d => {
+          const ext = d.file.name.split('.').pop().toLowerCase();
+          const icn = ext === 'pdf' ? 'bi-file-earmark-pdf-fill text-danger'
+                    : ext.match(/docx?/) ? 'bi-file-earmark-word-fill text-primary'
+                    : 'bi-file-earmark-image-fill text-success';
+          s3 += `<div class="rv-doc-item">
+            <i class="bi ${icn}"></i>
+            <div><div class="doc-name">${d.file.name}</div><div class="doc-type">${d.type || 'مستند'}</div></div>
+            <span class="badge bg-light text-dark ms-auto">${(d.file.size / 1024).toFixed(1)} KB</span>
+          </div>`;
+        });
+        s3 += '</div>';
+      } else if (!hasPhoto && !notes) {
+        s3 = '<div class="rv-empty"><i class="bi bi-folder2-open"></i>لم تُرفق صورة أو مستندات.</div>';
+      }
+      html += sec('bi-folder-fill', 'الصورة والملاحظات والمستندات', s3, 'documents');
     }
 
-    // System Account
+    // ── Section 4: System Account ──
     const accountStep = document.querySelector('[data-step-key="account"]');
     if (accountStep) {
       const createAcct = form.querySelector('[name="create_account"]');
-      html += '<div class="review-group"><h6><i class="bi bi-person-lock text-accent"></i>حساب النظام</h6>';
+      let s4 = '';
       if (createAcct && createAcct.checked) {
-        html += '<div class="review-grid">';
-        const uname = txt('username');
-        html += row('اسم المستخدم', uname || '(يُولَّد تلقائياً)');
-        html += row('الدور الوظيفي', selTextByName('role_id'));
-        html += '</div>';
+        const uname    = txt('username');
+        const isActive = form.querySelector('[name="user_is_active"]');
+        s4 = '<div class="rv-grid">';
+        s4 += fld('نوع الحساب', '<span class="badge bg-success">إنشاء حساب دخول</span>');
+        s4 += fld('اسم المستخدم', uname || '(يُولَّد تلقائياً)');
+        s4 += fld('الدور الوظيفي', selTextByName('role_id'));
+        s4 += fld('حالة الحساب', (isActive && isActive.checked)
+          ? '<span class="badge bg-success">فعّال</span>'
+          : '<span class="badge bg-secondary">غير فعّال</span>');
+        s4 += fld('كلمة المرور', '••••••••');
+        s4 += '</div>';
       } else {
-        html += '<div class="review-empty">لن يُنشأ حساب دخول.</div>';
+        s4 = '<div class="rv-empty"><i class="bi bi-person-x"></i>لن يُنشأ حساب دخول للموظف.</div>';
       }
-      html += '</div>';
+      html += sec('bi-person-lock', 'حساب النظام', s4, 'account');
     }
 
-    // Teacher Assignments
+    // ── Section 5: Teacher Assignments ──
     const teacherStep = document.querySelector('[data-step-key="teacher"]');
     if (teacherStep) {
-      const labelOf = cb => cb.closest('.form-check')?.querySelector('label')?.textContent?.trim() || cb.value;
+      const labelOf     = cb => cb.closest('.form-check')?.querySelector('label')?.textContent?.trim() || cb.value;
       const hrChecked   = Array.from(form.querySelectorAll('[name="homeroom_section_ids"]:checked')).map(labelOf);
       const tsChecked   = Array.from(form.querySelectorAll('[name="teaching_section_ids"]:checked')).map(labelOf);
       const subjChecked = Array.from(form.querySelectorAll('[name="subject_ids"]:checked')).map(labelOf);
-      html += '<div class="review-group"><h6><i class="bi bi-journal-bookmark-fill text-accent"></i>إعدادات التدريسي</h6>';
+      let s5 = '';
       if (hrChecked.length || tsChecked.length || subjChecked.length) {
-        html += '<div class="review-grid">';
-        if (hrChecked.length)   html += row('صفوف رئيسية', hrChecked.join('، '));
-        if (tsChecked.length)   html += row('شعب التدريس', tsChecked.join('، '));
-        if (subjChecked.length) html += row('المواد',       subjChecked.join('، '));
-        html += '</div>';
+        s5 = '<div class="rv-grid">';
+        if (hrChecked.length)
+          s5 += fld('مشرف صف (رئيسي)', hrChecked.map(v => `<span class="badge bg-primary me-1 mb-1">${v}</span>`).join(''));
+        if (tsChecked.length)
+          s5 += fld('شعب التدريس', tsChecked.map(v => `<span class="badge bg-info text-dark me-1 mb-1">${v}</span>`).join(''));
+        if (subjChecked.length)
+          s5 += fld('المواد الدراسية', subjChecked.map(v => `<span class="badge bg-secondary me-1 mb-1">${v}</span>`).join(''));
+        s5 += '</div>';
       } else {
-        html += '<div class="review-empty">لم تُحدد تكليفات تدريسية.</div>';
+        s5 = '<div class="rv-empty"><i class="bi bi-journal-x"></i>لم تُحدد تكليفات تدريسية.</div>';
       }
-      html += '</div>';
+      html += sec('bi-journal-bookmark-fill', 'إعدادات التدريسي', s5, 'teacher');
     }
 
     box.innerHTML = html;
+
+    // Wire edit links to jump back to the corresponding wizard step.
+    box.querySelectorAll('.rv-edit-link[data-goto]').forEach(el => {
+      el.addEventListener('click', () => {
+        const idx = steps.findIndex(s => s.dataset.stepKey === el.dataset.goto);
+        if (idx >= 0) goTo(idx);
+      });
+    });
   }
 
   function goTo(i) {
