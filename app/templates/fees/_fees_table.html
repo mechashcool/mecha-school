@@ -240,7 +240,7 @@
   window.printReceipt = function (instId) {
     var url = "{{ url_for('fees.generate_receipt', inst_id=0) }}".replace('/0', '/' + instId);
     var win = window.open(url, '_blank');
-    win.onload = function () { win.print(); };
+    if (win) { win.onload = function () { win.print(); }; }
   };
 
   document.getElementById('payForm').addEventListener('submit', function (e) {
@@ -250,13 +250,22 @@
       body: new FormData(this),
       headers: { 'X-Requested-With': 'XMLHttpRequest' }
     })
-    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      if (!r.ok && r.status !== 400 && r.status !== 403) {
+        return r.json().catch(function () {
+          throw new Error('server_error');
+        });
+      }
+      return r.json();
+    })
     .then(function (data) {
       if (data.status === 'success') {
         bootstrap.Modal.getInstance(document.getElementById('payModal')).hide();
         if (data.receipt_url) {
+          // window.open may return null when a popup-blocker is active.
+          // Guard against that so the success flow always completes.
           var win = window.open(data.receipt_url, '_blank');
-          win.onload = function () { win.print(); };
+          if (win) { win.onload = function () { win.print(); }; }
         }
         alert(data.message);
         location.reload();
@@ -264,7 +273,13 @@
         alert(data.message || 'حدث خطأ أثناء معالجة الدفعة.');
       }
     })
-    .catch(function () { alert('حدث خطأ أثناء معالجة الدفعة.'); });
+    .catch(function (err) {
+      if (err && err.message === 'server_error') {
+        alert('حدث خطأ في الخادم. يرجى المحاولة مرة أخرى.');
+      } else {
+        alert('حدث خطأ أثناء معالجة الدفعة.');
+      }
+    });
   });
 })();
 </script>

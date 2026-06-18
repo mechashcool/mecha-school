@@ -6,6 +6,7 @@ from flask import Blueprint, render_template, redirect, url_for, flash, request,
 from flask_login import login_required, current_user
 from datetime import date, datetime as dt
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
 from app.models import (db, FeeRecord, FeeInstallment, FeeType, Student, AcademicYear, SchoolSettings, Revenue, RevenueCategory, Section, Grade, School)
@@ -496,27 +497,22 @@ def api_sections():
 @permission_required('record_payments')
 def pay_installment(inst_id):
     """
-    Phase 2 rewrite — supports manual partial-payment entry.
+    Record a (partial or full) payment against an installment.
+
+    All mutations — installment fields, receipt number, and the matching Revenue
+    record — are written in a single atomic transaction. Either everything commits
+    or everything rolls back. There is no silent swallowing of Revenue failures.
 
     Form fields:
       received_amount  — Decimal (required). May be less than inst.amount.
       payment_method   — cash | transfer | cheque | card  (default cash)
       paid_date        — YYYY-MM-DD (optional, defaults to today)
       notes            — free text
-
-    Behaviour:
-      * Adds `received_amount` (cumulative) to inst.received_amount.
-      * Calls inst.recompute_status() to transition
-            pending → partial → paid   (and flags overdue automatically).
-      * Writes an AuditLog row.
-      * Generates a fresh receipt_no only on the transaction that *completes*
-        the installment, so partial pays get receipts too but the final one
-        is distinguishable.
     """
     try:
-        # Use include_all_years so installments from prior academic years (which are
-        # legitimately visible on the student profile) can be paid when the current
-        # view year is the active year.  The ORM school filter still applies.
+        # include_all_years lets staff pay installments from prior academic years
+        # that are still visible on the student fee profile. The ORM school filter
+        # still applies; only year filtering is relaxed.
         inst = (
             FeeInstallment.query
             .execution_options(include_all_years=True)
@@ -534,6 +530,13 @@ def pay_installment(inst_id):
             return jsonify({'status': 'error',
                             'message': 'ليس لديك صلاحية الوصول إلى بيانات هذه البناية'}), 403
 
+        # Capture the student name NOW, while the eagerly-loaded relationship is
+        # still live. After db.session.commit() SQLAlchemy expires all attributes;
+        # a subsequent lazy-reload of fee_record goes through the year-scoped ORM
+        # filter and may return None for prior-year installments, making
+        # inst.fee_record.student.full_name raise AttributeError.
+        student_name = _student.full_name if _student else '—'
+
         raw_amount = request.form.get('received_amount', '').strip()
         if not raw_amount:
             return jsonify({'status': 'error', 'message': 'يرجى إدخال المبلغ المستلم.'}), 400
@@ -546,66 +549,93 @@ def pay_installment(inst_id):
         if received <= 0:
             return jsonify({'status': 'error', 'message': 'يجب أن يكون المبلغ المستلم أكبر من صفر.'}), 400
 
-        # Cap at remaining balance so we never record over-pay
+        # Cap at remaining balance so we never record over-pay.
         remaining = Decimal(str(inst.amount)) - Decimal(str(inst.received_amount or 0))
         if received > remaining:
             received = remaining
 
+        # ── Resolve the Revenue category before the main transaction ─────────
+        # Doing this in a separate step means a category-creation IntegrityError
+        # (race condition) can be retried without corrupting the payment transaction.
+        fee_category = (
+            RevenueCategory.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(name='رسوم دراسية', school_id=inst.school_id)
+            .first()
+        )
+        if not fee_category:
+            try:
+                fee_category = RevenueCategory(name='رسوم دراسية', school_id=inst.school_id)
+                db.session.add(fee_category)
+                db.session.flush()
+                db.session.commit()
+            except IntegrityError:
+                # Race condition: another concurrent request created the category.
+                db.session.rollback()
+                fee_category = (
+                    RevenueCategory.query
+                    .execution_options(bypass_tenant_scope=True)
+                    .filter_by(name='رسوم دراسية', school_id=inst.school_id)
+                    .first()
+                )
+                if not fee_category:
+                    raise  # should never happen
+
+        # ── Parse the payment date ────────────────────────────────────────────
+        paid_str = request.form.get('paid_date')
+        if paid_str:
+            try:
+                paid_date = dt.strptime(paid_str, '%Y-%m-%d').date()
+            except ValueError:
+                paid_date = date.today()
+        else:
+            paid_date = date.today()
+
+        # ── Determine academic_year_id for the Revenue record ─────────────────
+        # Use the installment's own academic year. Revenue queries in the finances
+        # module already use include_all_years=True and filter by Revenue.date
+        # (calendar year), so the record will appear correctly regardless.
+        # Fall back to the active year only if the installment somehow has no year.
+        rev_academic_year_id = inst.academic_year_id
+        if not rev_academic_year_id:
+            school = get_current_school()
+            active_year = get_active_year(school.id) if school else None
+            rev_academic_year_id = active_year.id if active_year else None
+
+        # ── Apply ALL DB mutations in ONE atomic transaction ──────────────────
+        # Installment fields, receipt number, and Revenue record are written
+        # together. If any part fails the entire operation rolls back — no
+        # partial state, no missing Revenue records.
         inst.received_amount = Decimal(str(inst.received_amount or 0)) + received
         inst.payment_method  = request.form.get('payment_method', 'cash')
         inst.collected_by    = current_user.id
         inst.notes           = request.form.get('notes', '').strip() or inst.notes
-
-        paid_str = request.form.get('paid_date')
-        if paid_str:
-            try:
-                inst.paid_date = dt.strptime(paid_str, '%Y-%m-%d').date()
-            except ValueError:
-                inst.paid_date = date.today()
-        else:
-            inst.paid_date = date.today()
-
+        inst.paid_date       = paid_date
         inst.recompute_status()
 
-        # Generate receipt number for ANY payment transaction
-        if (Decimal(str(inst.received_amount or 0)) > 0) and not inst.receipt_no:
+        # Assign a receipt number on the first payment against this installment.
+        if Decimal(str(inst.received_amount or 0)) > 0 and not inst.receipt_no:
             inst.receipt_no = generate_receipt_no()
 
-        db.session.commit()
-        
-        # Create revenue record for student fee payment
-        try:
-            # Find or create "Student Fees" revenue category
-            fee_category = (
-                RevenueCategory.query.execution_options(bypass_tenant_scope=True)
-                .filter_by(name='رسوم دراسية', school_id=inst.school_id)
-                .first()
-            )
-            if not fee_category:
-                fee_category = RevenueCategory(
-                    name='رسوم دراسية',
-                    school_id=inst.school_id,
-                )
-                db.session.add(fee_category)
-                db.session.commit()
-            
-            # Create revenue record for this payment
-            revenue_record = Revenue(
-                category_id=fee_category.id,
-                school_id=inst.school_id,
-                academic_year_id=inst.academic_year_id,
-                amount=received,
-                description=f'دفعة رسوم للطالب {inst.fee_record.student.full_name} - قسط #{inst.installment_no}',
-                date=inst.paid_date,
-                recorded_by=current_user.id
-            )
-            db.session.add(revenue_record)
-            db.session.commit()
-            
-        except Exception as e:
-            # Log error but don't fail the payment if revenue recording fails
-            print(f"Warning: Failed to create revenue record for payment: {e}")
-        
+        revenue = Revenue(
+            category_id      = fee_category.id,
+            school_id        = inst.school_id,
+            academic_year_id = rev_academic_year_id,
+            amount           = received,
+            description      = (
+                f'دفعة رسوم للطالب {student_name}'
+                f' - قسط #{inst.installment_no}'
+                + (f' - {inst.receipt_no}' if inst.receipt_no else '')
+            ),
+            date             = paid_date,
+            recorded_by      = current_user.id,
+        )
+        db.session.add(revenue)
+        db.session.commit()  # single commit — installment + revenue are atomic
+
+        # ── Post-commit: audit log and FCM push ───────────────────────────────
+        # These run after the transaction is safe. Neither must ever roll back
+        # the committed payment — both have their own error handling.
         log_action('payment', 'fee_installment', inst.id,
                    details=f'received={received} method={inst.payment_method} '
                            f'status={inst.status}')
@@ -614,12 +644,9 @@ def pay_installment(inst_id):
                         'pending': 'قيد الانتظار', 'overdue': 'متأخر'}.get(inst.status, '')
         receipt = inst.receipt_no or '—'
 
-        # Push after the payment is committed. Resolve the student from the
-        # already-loaded fee_record relationship (server-side, school-scoped).
-        _paid_student = inst.fee_record.student if inst.fee_record else None
-        if _paid_student is not None:
+        if _student is not None:
             _notify_fee_parents(
-                _paid_student.id,
+                _student.id,
                 'تم تسجيل دفعة',
                 f'تم تسجيل دفعة بقيمة {received} لقسط الرسوم رقم {inst.installment_no} '
                 f'({status_label}).',
@@ -628,19 +655,18 @@ def pay_installment(inst_id):
                 installment_id=inst.id,
             )
 
-        # Return JSON with success status and receipt URL
         receipt_url = url_for('fees.generate_receipt', inst_id=inst.id) if inst.receipt_no else None
         return jsonify({
-            'status': 'success',
-            'message': f'تم تسجيل دفعة {received} ({status_label}). رقم الإيصال: {receipt}',
-            'receipt_url': receipt_url
+            'status':      'success',
+            'message':     f'تم تسجيل دفعة {received} ({status_label}). رقم الإيصال: {receipt}',
+            'receipt_url': receipt_url,
         })
 
     except Exception as e:
-        # Rollback any partial changes
         db.session.rollback()
-        print(f"Payment processing error: {e}")
-        return jsonify({'status': 'error', 'message': 'حدث خطأ في معالجة الدفع. يرجى المحاولة مرة أخرى.'}), 500
+        _log.exception('[fees] Payment processing error for inst_id=%s', inst_id)
+        return jsonify({'status': 'error',
+                        'message': 'حدث خطأ في معالجة الدفع. يرجى المحاولة مرة أخرى.'}), 500
 
 
 @fees_bp.route('/installment/<int:inst_id>/receipt')
