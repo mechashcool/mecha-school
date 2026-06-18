@@ -832,7 +832,9 @@ function renderInstDates() {
               <div class="col-6">
                 <label style="font-size:11px;margin-bottom:3px" class="form-label">المبلغ المستلم</label>
                 <input type="number" name="pay_amount_${i}" id="payAmount${i}"
-                       class="form-control form-control-sm" min="0.01" step="0.01" placeholder="0.00">
+                       class="form-control form-control-sm" min="0.01" step="0.01" placeholder="0.00"
+                       oninput="updatePayAmountWords(${i})">
+                <div id="payAmountWords${i}" class="amount-in-words-preview d-none" dir="rtl"></div>
               </div>
               <div class="col-6">
                 <label style="font-size:11px;margin-bottom:3px" class="form-label">طريقة الدفع</label>
@@ -866,6 +868,17 @@ function togglePayFields(i) {
   const on = toggle.checked;
   fields.classList.toggle('d-none', !on);
   if (amtInp) amtInp.required = on;
+}
+function updatePayAmountWords(i) {
+  const inp = document.getElementById('payAmount' + i);
+  const div = document.getElementById('payAmountWords' + i);
+  if (!inp || !div) return;
+  const raw = inp.value;
+  if (!raw) { div.classList.add('d-none'); div.textContent = ''; return; }
+  const n = Math.trunc(parseFloat(raw));
+  if (isNaN(n) || n < 0) { div.classList.add('d-none'); div.textContent = ''; return; }
+  div.textContent = 'المبلغ كتابةً: ' + amountToWordsIQD(n);
+  div.classList.remove('d-none');
 }
 
 /* ════════════ Fee mode (skip / add) ════════════ */
