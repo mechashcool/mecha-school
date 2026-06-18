@@ -6,21 +6,49 @@
 <div class="page-header">
   <div>
     <h1 class="page-title">تعديل: {{ room.name }}</h1>
+    <p class="page-subtitle">إدارة معلومات وأعضاء المجموعة</p>
   </div>
   <a href="{{ url_for('chat.room_detail', room_id=room.id) }}" class="btn btn-outline-secondary">
     <i class="bi bi-arrow-right me-1"></i>رجوع
   </a>
 </div>
 
-<form method="POST">
-  <div class="row g-4">
-    <div class="col-md-8">
-      <div class="card mb-4">
-        <div class="card-header"><i class="bi bi-pencil-fill text-accent"></i>المعلومات الأساسية</div>
-        <div class="card-body">
+{# JS data for cascade picker #}
+<script>
+var EDIT_GRADES_DATA = [
+  {% for item in edit_grades_tree %}
+  {
+    "id":    {{ item.grade.id }},
+    "name":  {{ item.grade.name | tojson }},
+    "stage": {{ (item.grade.stage or '') | tojson }},
+    "sections": [
+      {% for sec in item.sections %}
+      { "id": {{ sec.id }}, "name": {{ sec.name | tojson }} }{% if not loop.last %},{% endif %}
+      {% endfor %}
+    ]
+  }{% if not loop.last %},{% endif %}
+  {% endfor %}
+];
+var SECTIONS_PREVIEW_URL = "{{ url_for('chat.sections_preview') }}";
+</script>
+
+<div class="row g-4">
+
+  {# ── Left column ─────────────────────────────────────── #}
+  <div class="col-lg-8">
+
+    {# ── Basic info form ──────────────────────────────── #}
+    <div class="card mb-4">
+      <div class="card-header fw-semibold">
+        <i class="bi bi-pencil-fill text-primary me-2"></i>المعلومات الأساسية
+      </div>
+      <div class="card-body">
+        <form method="POST" id="editInfoForm">
+          <input type="hidden" name="action" value="update_info">
           <div class="mb-3">
             <label class="form-label">اسم المجموعة</label>
-            <input type="text" name="name" class="form-control" value="{{ room.name }}" required>
+            <input type="text" name="name" class="form-control"
+                   value="{{ room.name }}" required>
           </div>
           <div class="form-check form-switch mb-3">
             <input class="form-check-input" type="checkbox" id="isAnn"
@@ -28,64 +56,455 @@
                    {{ 'checked' if room.is_announcement_only }}>
             <label class="form-check-label" for="isAnn">إعلانات فقط</label>
           </div>
-          <div class="form-check form-switch">
+          <div class="form-check form-switch mb-3">
             <input class="form-check-input" type="checkbox" id="noReplies"
                    name="no_replies" value="1"
                    {{ 'checked' if not room.allow_replies }}>
             <label class="form-check-label" for="noReplies">تعطيل الردود</label>
           </div>
-        </div>
+          <button type="submit" class="btn btn-primary">
+            <i class="bi bi-check-circle me-1"></i>حفظ التغييرات
+          </button>
+        </form>
       </div>
-      <button type="submit" class="btn btn-primary">
-        <i class="bi bi-check-circle me-1"></i>حفظ التغييرات
-      </button>
     </div>
 
-    <div class="col-md-4">
-      <div class="card">
-        <div class="card-header"><i class="bi bi-people-fill text-accent"></i>الأعضاء ({{ members|length }})</div>
-        <div class="card-body p-0">
-          <div style="max-height:400px;overflow-y:auto">
-            <table class="table table-sm mb-0">
-              <tbody>
-                {% for mem in members %}
-                <tr>
-                  <td style="font-size:13px">
-                    {{ mem.user.full_name if mem.user else '—' }}
-                    {% if mem.role == 'owner' %}<span class="badge bg-primary ms-1">المنشئ</span>
-                    {% elif mem.role == 'admin' %}<span class="badge bg-info ms-1">مشرف</span>{% endif %}
-                    {% if mem.is_blocked %}<span class="badge bg-danger ms-1">محظور</span>{% endif %}
-                  </td>
-                  <td class="text-end">
-                    {% if mem.role not in ('owner',) %}
-                      {% if mem.role == 'member' %}
-                      <form method="POST" action="{{ url_for('chat.make_room_admin', room_id=room.id, user_id=mem.user_id) }}" class="d-inline">
-                        <button class="btn btn-xs btn-outline-primary" title="تعيين مشرف">مشرف</button>
-                      </form>
-                      {% elif mem.role == 'admin' %}
-                      <form method="POST" action="{{ url_for('chat.remove_room_admin', room_id=room.id, user_id=mem.user_id) }}" class="d-inline">
-                        <button class="btn btn-xs btn-outline-secondary" title="إزالة">عضو</button>
-                      </form>
-                      {% endif %}
-                      {% if mem.is_blocked %}
-                      <form method="POST" action="{{ url_for('chat.unblock_member', room_id=room.id, user_id=mem.user_id) }}" class="d-inline">
-                        <button class="btn btn-xs btn-outline-success">إلغاء حظر</button>
-                      </form>
-                      {% else %}
-                      <form method="POST" action="{{ url_for('chat.block_member', room_id=room.id, user_id=mem.user_id) }}" class="d-inline">
-                        <button class="btn btn-xs btn-outline-danger">حظر</button>
-                      </form>
-                      {% endif %}
-                    {% endif %}
-                  </td>
-                </tr>
+    {# ── Academic filter member addition ──────────────── #}
+    <div class="card mb-4">
+      <div class="card-header fw-semibold">
+        <i class="bi bi-funnel-fill text-success me-2"></i>إضافة أعضاء بالفلتر الأكاديمي
+      </div>
+      <div class="card-body">
+        <form method="POST" id="addBySectionsForm">
+          <input type="hidden" name="action" value="add_by_sections">
+
+          {# Cascade row #}
+          <div class="row g-2 mb-3">
+            {% if edit_stages %}
+            <div class="col-auto">
+              <label class="form-label small mb-1">المرحلة</label>
+              <select id="esStage" class="form-select form-select-sm" style="min-width:130px">
+                <option value="">كل المراحل</option>
+                {% for st in edit_stages %}
+                <option value="{{ st }}">{{ st }}</option>
                 {% endfor %}
-              </tbody>
-            </table>
+              </select>
+            </div>
+            {% endif %}
+            <div class="col-auto">
+              <label class="form-label small mb-1">الصف</label>
+              <select id="esGrade" class="form-select form-select-sm" style="min-width:150px">
+                <option value="">كل الصفوف</option>
+                {% for item in edit_grades_tree %}
+                <option value="{{ item.grade.id }}"
+                        data-stage="{{ item.grade.stage or '' }}">{{ item.grade.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-auto d-flex align-items-end">
+              <input type="text" id="esSearch" class="form-control form-control-sm"
+                     placeholder="بحث في الشعب..." style="min-width:160px">
+            </div>
           </div>
+
+          {# Section grid header #}
+          <div class="mb-2 d-flex align-items-center justify-content-between">
+            <span class="small fw-semibold text-muted">
+              <i class="bi bi-grid-3x3-gap me-1"></i>الشعب المتاحة
+            </span>
+            <div class="d-flex gap-2">
+              <button type="button" class="btn btn-xs btn-outline-secondary"
+                      onclick="editSelectAll(true)">تحديد الكل</button>
+              <button type="button" class="btn btn-xs btn-outline-secondary"
+                      onclick="editSelectAll(false)">إلغاء الكل</button>
+            </div>
+          </div>
+
+          {# Section checkboxes #}
+          <div id="editSectionGrid" class="er-section-grid mb-3"></div>
+
+          {# AJAX preview panel #}
+          <div id="editPreviewPanel" class="er-preview-panel mb-3" style="display:none">
+            <div class="er-preview-header">
+              <i class="bi bi-people-fill me-2 text-success"></i>
+              <span id="editPreviewTitle">معاينة الأعضاء</span>
+              <span class="ms-auto">
+                <span class="badge bg-success" id="editPreviewTotal">0</span> عضو (بدون تكرار)
+              </span>
+            </div>
+            <div id="editPreviewStats" class="er-preview-stats"></div>
+            <div id="editPreviewList" class="er-preview-list"></div>
+            <div id="editPreviewMore" class="er-preview-more" style="display:none">
+              <i class="bi bi-three-dots me-1"></i>
+              <span id="editPreviewMoreCount"></span>
+            </div>
+          </div>
+
+          <div id="editPreviewLoading" class="text-center text-muted py-2 small" style="display:none">
+            <div class="spinner-border spinner-border-sm me-2" role="status"></div>جاري حساب الأعضاء...
+          </div>
+
+          <div class="d-flex align-items-center gap-2">
+            <button type="submit" class="btn btn-success">
+              <i class="bi bi-person-plus-fill me-1"></i>إضافة الأعضاء المختارين
+            </button>
+            <small class="text-muted">الأعضاء الموجودون لن يُكرَّروا.</small>
+          </div>
+        </form>
+      </div>
+    </div>
+
+  </div>
+
+  {# ── Right column: member list ─────────────────────── #}
+  <div class="col-lg-4">
+    <div class="card sticky-top" style="top:80px">
+      <div class="card-header fw-semibold d-flex align-items-center justify-content-between">
+        <span>
+          <i class="bi bi-people-fill text-primary me-2"></i>الأعضاء
+        </span>
+        <span class="badge bg-primary rounded-pill">{{ members|length }}</span>
+      </div>
+      <div class="card-body p-0">
+        <div style="max-height:520px;overflow-y:auto">
+          <table class="table table-sm mb-0">
+            <tbody>
+              {% for mem in members %}
+              <tr>
+                <td style="font-size:13px">
+                  {{ mem.user.full_name if mem.user else '—' }}
+                  {% if mem.role == 'owner' %}
+                  <span class="badge bg-primary ms-1">المنشئ</span>
+                  {% elif mem.role == 'admin' %}
+                  <span class="badge bg-info ms-1">مشرف</span>
+                  {% endif %}
+                  {% if mem.is_blocked %}
+                  <span class="badge bg-danger ms-1">محظور</span>
+                  {% endif %}
+                </td>
+                <td class="text-end" style="white-space:nowrap">
+                  {% if mem.role not in ('owner',) %}
+                    {% if mem.role == 'member' %}
+                    <form method="POST"
+                          action="{{ url_for('chat.make_room_admin', room_id=room.id, user_id=mem.user_id) }}"
+                          class="d-inline">
+                      <button class="btn btn-xs btn-outline-primary" title="تعيين مشرف">مشرف</button>
+                    </form>
+                    {% elif mem.role == 'admin' %}
+                    <form method="POST"
+                          action="{{ url_for('chat.remove_room_admin', room_id=room.id, user_id=mem.user_id) }}"
+                          class="d-inline">
+                      <button class="btn btn-xs btn-outline-secondary">عضو</button>
+                    </form>
+                    {% endif %}
+                    {% if mem.is_blocked %}
+                    <form method="POST"
+                          action="{{ url_for('chat.unblock_member', room_id=room.id, user_id=mem.user_id) }}"
+                          class="d-inline">
+                      <button class="btn btn-xs btn-outline-success">إلغاء حظر</button>
+                    </form>
+                    {% else %}
+                    <form method="POST"
+                          action="{{ url_for('chat.block_member', room_id=room.id, user_id=mem.user_id) }}"
+                          class="d-inline">
+                      <button class="btn btn-xs btn-outline-danger">حظر</button>
+                    </form>
+                    {% endif %}
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
   </div>
-</form>
+
+</div>
+
+<style>
+.er-section-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  min-height: 56px;
+  background: #fafbfd;
+}
+.er-section-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  transition: all .14s;
+  font-size: 13px;
+  user-select: none;
+}
+.er-section-item:hover { border-color: var(--primary-light); background: rgba(33,102,218,.04); }
+.er-section-item.selected {
+  border-color: #2166da;
+  background: rgba(33,102,218,.08);
+  color: #2166da;
+  font-weight: 600;
+}
+.er-section-item input[type=checkbox] { flex-shrink: 0; accent-color: #2166da; }
+.er-section-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 14px 0;
+}
+.er-grade-label {
+  grid-column: 1 / -1;
+  font-size: 11px; font-weight: 700;
+  color: var(--text-muted); text-transform: uppercase;
+  letter-spacing: .05em;
+  padding: 2px 0 4px;
+  border-bottom: 1px solid var(--border);
+  margin-top: 4px;
+}
+.er-grade-label:first-child { margin-top: 0; }
+.er-preview-panel {
+  border: 1px solid rgba(22,160,106,.3);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+.er-preview-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px;
+  background: rgba(22,160,106,.06);
+  border-bottom: 1px solid rgba(22,160,106,.2);
+  font-size: 13.5px; font-weight: 600; color: var(--text);
+}
+.er-preview-stats {
+  display: flex; gap: 16px; flex-wrap: wrap;
+  padding: 8px 14px;
+  font-size: 12px; color: var(--text-muted);
+  border-bottom: 1px solid rgba(0,0,0,.05);
+}
+.er-preview-list {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 10px 14px;
+  max-height: 120px; overflow-y: auto;
+}
+.er-preview-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 9px;
+  background: rgba(33,102,218,.08); color: #2166da;
+  border-radius: 20px; font-size: 12px; font-weight: 500;
+}
+.er-preview-more {
+  padding: 6px 14px;
+  font-size: 12px; color: var(--text-muted);
+  border-top: 1px solid rgba(0,0,0,.05);
+}
+</style>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ══════════════════════════════════════════════════════════════
+   Edit room — academic cascade section picker
+══════════════════════════════════════════════════════════════ */
+var esStageEl  = document.getElementById('esStage');
+var esGradeEl  = document.getElementById('esGrade');
+var esSearchEl = document.getElementById('esSearch');
+var editGrid   = document.getElementById('editSectionGrid');
+
+var _editSelected = new Set();
+
+function buildEditGrid() {
+  var stageF  = esStageEl  ? esStageEl.value  : '';
+  var gradeF  = esGradeEl  ? esGradeEl.value  : '';
+  var searchF = esSearchEl ? esSearchEl.value.toLowerCase() : '';
+
+  if (esGradeEl) {
+    Array.from(esGradeEl.options).forEach(function (opt, i) {
+      if (i === 0) return;
+      opt.hidden = stageF ? (opt.dataset.stage !== stageF) : false;
+    });
+    if (esGradeEl.selectedIndex > 0 &&
+        esGradeEl.options[esGradeEl.selectedIndex].hidden) {
+      esGradeEl.selectedIndex = 0;
+      gradeF = '';
+    }
+  }
+
+  editGrid.innerHTML = '';
+  var anyVisible = false;
+
+  EDIT_GRADES_DATA.forEach(function (g) {
+    if (stageF && g.stage !== stageF) return;
+    if (gradeF && String(g.id) !== gradeF) return;
+
+    var visibleSecs = g.sections.filter(function (sec) {
+      return !searchF || sec.name.toLowerCase().indexOf(searchF) !== -1 ||
+             g.name.toLowerCase().indexOf(searchF) !== -1;
+    });
+    if (visibleSecs.length === 0) return;
+
+    anyVisible = true;
+
+    var label = document.createElement('div');
+    label.className = 'er-grade-label';
+    label.textContent = g.name + (g.stage ? '  (' + g.stage + ')' : '');
+    editGrid.appendChild(label);
+
+    visibleSecs.forEach(function (sec) {
+      var item = document.createElement('label');
+      item.className = 'er-section-item';
+      item.dataset.secId = sec.id;
+
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.name = 'add_section_ids';
+      cb.value = sec.id;
+      cb.id = 'es_sec_' + sec.id;
+
+      if (_editSelected.has(String(sec.id))) {
+        cb.checked = true;
+        item.classList.add('selected');
+      }
+
+      cb.addEventListener('change', function () {
+        if (this.checked) {
+          _editSelected.add(String(sec.id));
+          item.classList.add('selected');
+        } else {
+          _editSelected.delete(String(sec.id));
+          item.classList.remove('selected');
+        }
+        scheduleEditPreview();
+      });
+
+      var span = document.createElement('span');
+      span.textContent = sec.name;
+
+      item.appendChild(cb);
+      item.appendChild(span);
+      editGrid.appendChild(item);
+    });
+  });
+
+  if (!anyVisible) {
+    var empty = document.createElement('div');
+    empty.className = 'er-section-empty';
+    empty.innerHTML = '<i class="bi bi-inbox me-1"></i>لا توجد شعب تطابق الفلتر الحالي.';
+    editGrid.appendChild(empty);
+  }
+}
+
+function editSelectAll(checked) {
+  editGrid.querySelectorAll('input[type=checkbox]').forEach(function (cb) {
+    cb.checked = checked;
+    if (checked) _editSelected.add(String(cb.value));
+    else         _editSelected.delete(String(cb.value));
+    cb.closest('label').classList.toggle('selected', checked);
+  });
+  scheduleEditPreview();
+}
+
+/* ── AJAX preview ────────────────────────── */
+var _editPreviewTimer = null;
+function scheduleEditPreview() {
+  clearTimeout(_editPreviewTimer);
+  _editPreviewTimer = setTimeout(fetchEditPreview, 350);
+}
+
+function fetchEditPreview() {
+  var ids = [];
+  editGrid.querySelectorAll('input[type=checkbox]:checked').forEach(function (cb) {
+    ids.push(cb.value);
+  });
+
+  var panel   = document.getElementById('editPreviewPanel');
+  var loading = document.getElementById('editPreviewLoading');
+
+  if (ids.length === 0) {
+    if (panel)   panel.style.display   = 'none';
+    if (loading) loading.style.display = 'none';
+    return;
+  }
+
+  if (panel)   panel.style.display   = 'none';
+  if (loading) loading.style.display = '';
+
+  var url = SECTIONS_PREVIEW_URL + '?' +
+            ids.map(function (id) { return 'section_ids=' + encodeURIComponent(id); }).join('&');
+
+  fetch(url, {
+    headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
+    credentials: 'same-origin',
+  })
+  .then(function (r) { return r.json(); })
+  .then(function (data) {
+    if (loading) loading.style.display = 'none';
+    if (!panel)  return;
+
+    var totalEl = document.getElementById('editPreviewTotal');
+    if (totalEl) totalEl.textContent = data.total_members || 0;
+
+    var titleEl = document.getElementById('editPreviewTitle');
+    if (titleEl) titleEl.textContent = 'معاينة — ' + (data.sections || []).length + ' شعبة مختارة';
+
+    var statsEl = document.getElementById('editPreviewStats');
+    if (statsEl && data.stats) {
+      var st = data.stats;
+      statsEl.innerHTML =
+        '<span><i class="bi bi-shield-fill me-1 text-primary"></i>مشرفون: <b>' + (st.admins || 0) + '</b></span>' +
+        '<span><i class="bi bi-person-workspace me-1 text-info"></i>معلمون: <b>' + (st.teachers || 0) + '</b></span>' +
+        '<span><i class="bi bi-person-heart me-1 text-warning"></i>أولياء أمور: <b>' + (st.parents || 0) + '</b></span>';
+    }
+
+    var listEl = document.getElementById('editPreviewList');
+    if (listEl) {
+      listEl.innerHTML = '';
+      (data.preview_members || []).forEach(function (m) {
+        var tag = document.createElement('span');
+        tag.className = 'er-preview-tag';
+        tag.innerHTML = '<i class="bi bi-person-fill"></i>' + m.name;
+        if (m.role) {
+          var s = document.createElement('span');
+          s.style.cssText = 'font-size:10px;opacity:.7;margin-right:2px';
+          s.textContent = '(' + m.role + ')';
+          tag.appendChild(s);
+        }
+        listEl.appendChild(tag);
+      });
+    }
+
+    var moreEl = document.getElementById('editPreviewMore');
+    var moreCt = document.getElementById('editPreviewMoreCount');
+    if (moreEl && moreCt) {
+      var remaining = (data.total_members || 0) - (data.preview_members || []).length;
+      if (data.has_more && remaining > 0) {
+        moreCt.textContent = 'و ' + remaining + ' عضو آخر...';
+        moreEl.style.display = '';
+      } else {
+        moreEl.style.display = 'none';
+      }
+    }
+
+    panel.style.display = '';
+  })
+  .catch(function () {
+    if (loading) loading.style.display = 'none';
+  });
+}
+
+/* ── Initialise ──────────────────────────── */
+if (esStageEl)  esStageEl.addEventListener('change', buildEditGrid);
+if (esGradeEl)  esGradeEl.addEventListener('change', buildEditGrid);
+if (esSearchEl) esSearchEl.addEventListener('input',  buildEditGrid);
+
+buildEditGrid();
+</script>
 {% endblock %}

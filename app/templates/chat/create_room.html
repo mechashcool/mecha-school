@@ -13,30 +13,60 @@
   </a>
 </div>
 
-<form method="POST">
+{# Build JS data objects for the cascade picker #}
+<script>
+var STAGES_DATA = {{ stages | tojson }};
+var GRADES_DATA = [
+  {% for item in grades_tree %}
+  {
+    "id":    {{ item.grade.id }},
+    "name":  {{ item.grade.name | tojson }},
+    "stage": {{ (item.grade.stage or '') | tojson }},
+    "sections": [
+      {% for sec in item.sections %}
+      { "id": {{ sec.id }}, "name": {{ sec.name | tojson }} }{% if not loop.last %},{% endif %}
+      {% endfor %}
+    ]
+  }{% if not loop.last %},{% endif %}
+  {% endfor %}
+];
+var SECTIONS_PREVIEW_URL = "{{ url_for('chat.sections_preview') }}";
+</script>
+
+<form method="POST" id="createRoomForm">
   <div class="row g-4">
 
-    <div class="col-md-8">
+    {# ── Left column: main form ──────────────────────────── #}
+    <div class="col-lg-8">
+
+      {# Group info card #}
       <div class="card mb-4">
-        <div class="card-header"><i class="bi bi-chat-dots-fill text-accent"></i>معلومات المجموعة</div>
+        <div class="card-header fw-semibold">
+          <i class="bi bi-chat-dots-fill text-primary me-2"></i>معلومات المجموعة
+        </div>
         <div class="card-body">
           <div class="row g-3">
+
             <div class="col-12">
               <label class="form-label">اسم المجموعة <span class="text-danger">*</span></label>
               <input type="text" name="name" class="form-control" required
-                     placeholder="مثال: أولياء أمور الصف الأول — شعبة A">
+                     placeholder="مثال: أولياء أمور الصف الأول — شعبة أ">
             </div>
+
             <div class="col-md-6">
               <label class="form-label">نوع المحادثة</label>
-              <select name="type" id="typeSelect" class="form-select">
+              <select name="type" class="form-select">
                 <option value="group">مجموعة</option>
                 <option value="announcement">إعلانات (إدارة فقط)</option>
               </select>
             </div>
+
             <div class="col-md-6">
               <label class="form-label">نطاق الأعضاء</label>
-              <select name="scope" id="scopeSelect" class="form-select" onchange="updateScopeFields()">
-                <option value="section">شعبة محددة</option>
+              <select name="scope" id="scopeSelect" class="form-select"
+                      onchange="updateScopeFields()">
+                <option value="multi_section">شعبات متعددة (مُوصى)</option>
+                <option value="section">شعبة واحدة</option>
                 <option value="grade">صف كامل</option>
                 <option value="stage">مرحلة دراسية</option>
                 <option value="school">المدرسة كاملاً</option>
@@ -46,38 +76,126 @@
               </select>
             </div>
 
-            {# ── Section picker ── #}
-            <div id="sectionField" class="col-md-6 scope-field">
+            {# ══ MULTI-SECTION PANEL ══════════════════════════ #}
+            <div id="multiSectionField" class="col-12 scope-field">
+
+              {# Cascade filter row #}
+              <div class="row g-2 mb-3">
+                {% if stages %}
+                <div class="col-auto">
+                  <label class="form-label small mb-1">المرحلة</label>
+                  <select id="msStage" class="form-select form-select-sm" style="min-width:130px">
+                    <option value="">كل المراحل</option>
+                    {% for st in stages %}
+                    <option value="{{ st }}">{{ st }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                {% endif %}
+                <div class="col-auto">
+                  <label class="form-label small mb-1">الصف</label>
+                  <select id="msGrade" class="form-select form-select-sm" style="min-width:150px">
+                    <option value="">كل الصفوف</option>
+                    {% for item in grades_tree %}
+                    <option value="{{ item.grade.id }}"
+                            data-stage="{{ item.grade.stage or '' }}">{{ item.grade.name }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="col-auto d-flex align-items-end">
+                  <input type="text" id="msSearch" class="form-control form-control-sm"
+                         placeholder="بحث في الشعب..." style="min-width:160px">
+                </div>
+              </div>
+
+              {# Section checkboxes (rendered by JS) #}
+              <div class="mb-2 d-flex align-items-center justify-content-between">
+                <span class="small fw-semibold text-muted">
+                  <i class="bi bi-grid-3x3-gap me-1"></i>الشعب المتاحة
+                </span>
+                <div class="d-flex gap-2">
+                  <button type="button" class="btn btn-xs btn-outline-secondary"
+                          onclick="selectAllSections(true)">تحديد الكل</button>
+                  <button type="button" class="btn btn-xs btn-outline-secondary"
+                          onclick="selectAllSections(false)">إلغاء الكل</button>
+                </div>
+              </div>
+
+              <div id="sectionGrid" class="cr-section-grid">
+                {# Populated by buildSectionGrid() on load and on filter change #}
+              </div>
+
+              <small class="text-muted d-block mt-1">
+                يمكنك اختيار شعبتين أو أكثر من نفس الصف أو من صفوف مختلفة. لا يتكرر أي عضو.
+              </small>
+
+              {# ── AJAX preview panel ── #}
+              <div id="previewPanel" class="cr-preview-panel mt-3" style="display:none">
+                <div class="cr-preview-header">
+                  <i class="bi bi-people-fill me-2 text-success"></i>
+                  <span id="previewTitle">معاينة الأعضاء</span>
+                  <span class="ms-auto">
+                    <span class="badge bg-success" id="previewTotal">0</span> عضو (بدون تكرار)
+                  </span>
+                </div>
+                <div id="previewStats" class="cr-preview-stats"></div>
+                <div id="previewList" class="cr-preview-list"></div>
+                <div id="previewMore" class="cr-preview-more" style="display:none">
+                  <i class="bi bi-three-dots me-1"></i>
+                  <span id="previewMoreCount"></span>
+                </div>
+              </div>
+
+              <div id="previewLoading" class="text-center text-muted py-3 small" style="display:none">
+                <div class="spinner-border spinner-border-sm me-2" role="status"></div>جاري حساب الأعضاء...
+              </div>
+            </div>
+
+            {# ══ SINGLE SECTION ═══════════════════════════════ #}
+            <div id="sectionField" class="col-md-6 scope-field d-none">
               <label class="form-label">الشعبة</label>
               <select name="section_id" class="form-select">
                 <option value="">— اختر —</option>
-                {% for sec in sections %}
-                <option value="{{ sec.id }}">
-                  {{ sec.grade.name if sec.grade else '' }} — {{ sec.name }}
-                </option>
+                {% for item in grades_tree %}
+                  {% if item.sections %}
+                  <optgroup label="{{ item.grade.name }}">
+                    {% for sec in item.sections %}
+                    <option value="{{ sec.id }}">{{ sec.name }}</option>
+                    {% endfor %}
+                  </optgroup>
+                  {% endif %}
                 {% endfor %}
               </select>
             </div>
 
-            {# ── Grade picker ── #}
+            {# ══ GRADE ════════════════════════════════════════ #}
             <div id="gradeField" class="col-md-6 scope-field d-none">
               <label class="form-label">الصف</label>
               <select name="grade_id" class="form-select">
                 <option value="">— اختر —</option>
-                {% for g in grades %}
-                <option value="{{ g.id }}">{{ g.name }}</option>
+                {% for item in grades_tree %}
+                <option value="{{ item.grade.id }}">{{ item.grade.name }}</option>
                 {% endfor %}
               </select>
             </div>
 
-            {# ── Stage input ── #}
+            {# ══ STAGE ════════════════════════════════════════ #}
             <div id="stageField" class="col-md-6 scope-field d-none">
               <label class="form-label">المرحلة الدراسية</label>
+              {% if stages %}
+              <select name="stage" class="form-select">
+                <option value="">— اختر —</option>
+                {% for st in stages %}
+                <option value="{{ st }}">{{ st }}</option>
+                {% endfor %}
+              </select>
+              {% else %}
               <input type="text" name="stage" class="form-control"
                      placeholder="مثال: primary / middle / high">
+              {% endif %}
             </div>
 
-            {# ── Subject picker ── #}
+            {# ══ SUBJECT ══════════════════════════════════════ #}
             <div id="subjectField" class="col-md-6 scope-field d-none">
               <label class="form-label">المادة الدراسية</label>
               <select name="subject_id" class="form-select">
@@ -88,15 +206,15 @@
               </select>
             </div>
 
-            {# ── Custom member picker ── #}
+            {# ══ CUSTOM ═══════════════════════════════════════ #}
             <div id="customField" class="col-12 scope-field d-none">
-              <label class="form-label fw-semibold">اختيار الأعضاء</label>
+              <label class="form-label fw-semibold">اختيار الأعضاء يدوياً</label>
               <div class="mb-2">
                 <input type="text" id="memberSearch" class="form-control form-control-sm"
                        placeholder="بحث بالاسم أو الدور..." oninput="filterMembers()">
               </div>
-              <div style="max-height:320px;overflow-y:auto;border:1px solid #dee2e6;border-radius:6px;padding:8px"
-                   id="memberList">
+              <div id="memberList"
+                   style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:10px">
                 {% if school_users %}
                   {% set ns = namespace(last_role='') %}
                   {% for u in school_users %}
@@ -106,49 +224,54 @@
                       <div class="text-muted fw-semibold border-bottom mb-1 mt-2"
                            style="font-size:11px;letter-spacing:.05em">{{ role_label }}</div>
                     {% endif %}
-                    <div class="form-check member-item" data-name="{{ u.full_name|lower }}"
-                         data-role="{{ role_label|lower }}">
+                    <div class="form-check member-item py-1"
+                         data-name="{{ u.full_name | lower }}"
+                         data-role="{{ role_label | lower }}">
                       <input class="form-check-input" type="checkbox"
-                             name="member_ids" value="{{ u.id }}"
-                             id="mu{{ u.id }}">
+                             name="member_ids" value="{{ u.id }}" id="mu{{ u.id }}">
                       <label class="form-check-label" for="mu{{ u.id }}" style="font-size:13px">
                         {{ u.full_name }}
-                        <span class="text-muted">({{ u.username }})</span>
+                        <span class="text-muted small">({{ u.username }})</span>
                       </label>
                     </div>
                   {% endfor %}
                 {% else %}
-                  <p class="text-muted text-center py-3 mb-0">لا يوجد مستخدمون نشطون في هذه المدرسة.</p>
+                  <p class="text-muted text-center py-3 mb-0">لا يوجد مستخدمون نشطون.</p>
                 {% endif %}
               </div>
-              <div class="mt-1 d-flex gap-2">
+              <div class="mt-2 d-flex gap-2">
                 <button type="button" class="btn btn-xs btn-outline-secondary"
                         onclick="toggleAll(true)">تحديد الكل</button>
                 <button type="button" class="btn btn-xs btn-outline-secondary"
                         onclick="toggleAll(false)">إلغاء التحديد</button>
               </div>
               <small class="text-muted mt-1 d-block">
-                المنشئ يُضاف تلقائياً كمالك للمجموعة بغض النظر عن التحديد.
+                المنشئ يُضاف تلقائياً كمالك بغض النظر عن التحديد.
               </small>
             </div>
 
-          </div>
+          </div>{# /row g-3 #}
         </div>
       </div>
 
+      {# Options card #}
       <div class="card mb-4">
-        <div class="card-header"><i class="bi bi-gear-fill text-accent"></i>خيارات المجموعة</div>
+        <div class="card-header fw-semibold">
+          <i class="bi bi-gear-fill text-secondary me-2"></i>خيارات المجموعة
+        </div>
         <div class="card-body">
           <div class="form-check form-switch mb-3">
-            <input class="form-check-input" type="checkbox" id="isAnn" name="is_announcement_only" value="1">
+            <input class="form-check-input" type="checkbox"
+                   id="isAnn" name="is_announcement_only" value="1">
             <label class="form-check-label" for="isAnn">
               إعلانات فقط — يرسل الإدارة/المشرف فقط؛ الأعضاء يقرؤون فقط
             </label>
           </div>
           <div class="form-check form-switch">
-            <input class="form-check-input" type="checkbox" id="noReplies" name="no_replies" value="1">
+            <input class="form-check-input" type="checkbox"
+                   id="noReplies" name="no_replies" value="1">
             <label class="form-check-label" for="noReplies">
-              تعطيل الردود (لا أحد يستطيع الرد حتى المشرفون)
+              تعطيل الردود
             </label>
           </div>
         </div>
@@ -159,65 +282,409 @@
       </button>
     </div>
 
-    <div class="col-md-4">
+    {# ── Right column: help panel ────────────────────────── #}
+    <div class="col-lg-4">
       <div class="card mb-4">
-        <div class="card-header"><i class="bi bi-info-circle text-accent"></i>كيف يعمل النطاق</div>
+        <div class="card-header fw-semibold">
+          <i class="bi bi-info-circle text-info me-2"></i>كيف يعمل النطاق
+        </div>
         <div class="card-body" style="font-size:13px">
-          <ul class="mb-0 ps-3">
-            <li><b>شعبة:</b> أولياء أمور الطلاب + معلمو الشعبة</li>
-            <li><b>صف:</b> كل شعب الصف + معلموها + أولياء أمورها</li>
-            <li><b>مرحلة:</b> كل صفوف المرحلة وشعبها</li>
-            <li><b>مادة:</b> معلمو المادة + أولياء أمور طلابهم</li>
-            <li><b>المدرسة:</b> جميع المستخدمين النشطين</li>
-            <li><b>اختيار يدوي:</b> حدد الأعضاء بنفسك</li>
+          <ul class="mb-3 ps-3">
+            <li class="mb-1"><b>شعبات متعددة:</b> اختر شعبتين أو أكثر — الأعضاء يُحسبون بدون تكرار</li>
+            <li class="mb-1"><b>شعبة:</b> أولياء أمور الطلاب + معلمو الشعبة</li>
+            <li class="mb-1"><b>صف:</b> جميع شعب الصف + معلموها + أولياء أمورها</li>
+            <li class="mb-1"><b>مرحلة:</b> كل صفوف المرحلة وشعبها</li>
+            <li class="mb-1"><b>مادة:</b> معلمو المادة + أولياء أمور طلابهم</li>
+            <li class="mb-1"><b>المدرسة:</b> جميع المستخدمين النشطين</li>
+            <li class="mb-1"><b>اختيار يدوي:</b> حدد الأعضاء بنفسك</li>
           </ul>
-          <div class="alert alert-info mt-3 mb-0 py-2" style="font-size:12px">
-            الإدارة وأصحاب الأدوار الإدارية تُضاف تلقائياً لجميع الأنواع.
-            المنشئ يُضاف دائماً كمالك.
+          <div class="alert alert-info py-2 mb-0" style="font-size:12px">
+            <i class="bi bi-shield-check me-1"></i>
+            الإدارة تُضاف تلقائياً. المنشئ يُضاف كمالك دائماً.
           </div>
+        </div>
+      </div>
+
+      <div class="card" id="selectionSummaryCard" style="display:none">
+        <div class="card-header fw-semibold text-success">
+          <i class="bi bi-check2-circle me-2"></i>الشعب المختارة
+        </div>
+        <div class="card-body p-0">
+          <ul class="list-group list-group-flush" id="selectedSectionsList"
+              style="max-height:260px;overflow-y:auto;font-size:13px"></ul>
         </div>
       </div>
     </div>
 
   </div>
 </form>
+
+<style>
+/* ── Section grid ─────────────────────────── */
+.cr-section-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  min-height: 60px;
+  background: #fafbfd;
+}
+.cr-section-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  transition: all .14s;
+  font-size: 13px;
+  user-select: none;
+}
+.cr-section-item:hover { border-color: var(--primary-light); background: rgba(33,102,218,.04); }
+.cr-section-item.selected {
+  border-color: #2166da;
+  background: rgba(33,102,218,.08);
+  color: #2166da;
+  font-weight: 600;
+}
+.cr-section-item input[type=checkbox] { flex-shrink: 0; accent-color: #2166da; }
+.cr-section-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 16px 0;
+}
+.cr-grade-label {
+  grid-column: 1 / -1;
+  font-size: 11px; font-weight: 700;
+  color: var(--text-muted); text-transform: uppercase;
+  letter-spacing: .05em;
+  padding: 2px 0 4px;
+  border-bottom: 1px solid var(--border);
+  margin-top: 4px;
+}
+.cr-grade-label:first-child { margin-top: 0; }
+/* ── Preview panel ────────────────────────── */
+.cr-preview-panel {
+  border: 1px solid rgba(22,160,106,.3);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+.cr-preview-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px;
+  background: rgba(22,160,106,.06);
+  border-bottom: 1px solid rgba(22,160,106,.2);
+  font-size: 13.5px; font-weight: 600; color: var(--text);
+}
+.cr-preview-stats {
+  display: flex; gap: 16px; flex-wrap: wrap;
+  padding: 8px 14px;
+  font-size: 12px; color: var(--text-muted);
+  border-bottom: 1px solid rgba(0,0,0,.05);
+}
+.cr-preview-list {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 10px 14px;
+  max-height: 130px; overflow-y: auto;
+}
+.cr-preview-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 9px;
+  background: rgba(33,102,218,.08); color: #2166da;
+  border-radius: 20px; font-size: 12px; font-weight: 500;
+}
+.cr-preview-more {
+  padding: 6px 14px;
+  font-size: 12px; color: var(--text-muted);
+  border-top: 1px solid rgba(0,0,0,.05);
+}
+</style>
+
 {% endblock %}
 
 {% block scripts %}
 <script>
+/* ══════════════════════════════════════════════════════════════
+   Scope field toggle
+══════════════════════════════════════════════════════════════ */
 function updateScopeFields() {
-  const scope = document.getElementById('scopeSelect').value;
-  document.querySelectorAll('.scope-field').forEach(el => el.classList.add('d-none'));
-  if (scope === 'section') {
-    document.getElementById('sectionField').classList.remove('d-none');
-  } else if (scope === 'grade') {
-    document.getElementById('gradeField').classList.remove('d-none');
-  } else if (scope === 'stage') {
-    document.getElementById('stageField').classList.remove('d-none');
-  } else if (scope === 'subject') {
-    document.getElementById('subjectField').classList.remove('d-none');
-  } else if (scope === 'custom') {
-    document.getElementById('customField').classList.remove('d-none');
+  var scope = document.getElementById('scopeSelect').value;
+  document.querySelectorAll('.scope-field').forEach(function (el) {
+    el.classList.add('d-none');
+  });
+  var map = {
+    'multi_section': 'multiSectionField',
+    'section':       'sectionField',
+    'grade':         'gradeField',
+    'stage':         'stageField',
+    'subject':       'subjectField',
+    'custom':        'customField',
+  };
+  var target = map[scope];
+  if (target) document.getElementById(target).classList.remove('d-none');
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Multi-section cascade
+══════════════════════════════════════════════════════════════ */
+var msStageEl  = document.getElementById('msStage');
+var msGradeEl  = document.getElementById('msGrade');
+var msSearchEl = document.getElementById('msSearch');
+var sectionGrid = document.getElementById('sectionGrid');
+
+/* Build the visible section list given current stage/grade/search filters */
+function buildSectionGrid() {
+  var stageF = msStageEl  ? msStageEl.value  : '';
+  var gradeF = msGradeEl  ? msGradeEl.value  : '';
+  var searchF = msSearchEl ? msSearchEl.value.toLowerCase() : '';
+
+  /* Filter grade options in the grade dropdown */
+  if (msGradeEl) {
+    Array.from(msGradeEl.options).forEach(function (opt, i) {
+      if (i === 0) return;
+      opt.hidden = stageF ? (opt.dataset.stage !== stageF) : false;
+    });
+    if (msGradeEl.selectedIndex > 0 &&
+        msGradeEl.options[msGradeEl.selectedIndex].hidden) {
+      msGradeEl.selectedIndex = 0;
+      gradeF = '';
+    }
+  }
+
+  sectionGrid.innerHTML = '';
+  var anyVisible = false;
+
+  GRADES_DATA.forEach(function (g) {
+    /* Stage filter */
+    if (stageF && g.stage !== stageF) return;
+    /* Grade filter */
+    if (gradeF && String(g.id) !== gradeF) return;
+
+    /* Filter sections by search text */
+    var visibleSecs = g.sections.filter(function (sec) {
+      return !searchF || sec.name.toLowerCase().indexOf(searchF) !== -1 ||
+             g.name.toLowerCase().indexOf(searchF) !== -1;
+    });
+    if (visibleSecs.length === 0) return;
+
+    anyVisible = true;
+
+    /* Grade label */
+    var label = document.createElement('div');
+    label.className = 'cr-grade-label';
+    label.textContent = g.name + (g.stage ? '  (' + g.stage + ')' : '');
+    sectionGrid.appendChild(label);
+
+    visibleSecs.forEach(function (sec) {
+      var item = document.createElement('label');
+      item.className = 'cr-section-item';
+      item.dataset.secId = sec.id;
+
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.name = 'section_ids';
+      cb.value = sec.id;
+      cb.id = 'ms_sec_' + sec.id;
+
+      /* Restore checked state if it was previously selected */
+      if (_selectedSections.has(String(sec.id))) {
+        cb.checked = true;
+        item.classList.add('selected');
+      }
+
+      cb.addEventListener('change', function () {
+        if (this.checked) {
+          _selectedSections.add(String(sec.id));
+          item.classList.add('selected');
+        } else {
+          _selectedSections.delete(String(sec.id));
+          item.classList.remove('selected');
+        }
+        updateSelectedSummary();
+        schedulePreview();
+      });
+
+      var span = document.createElement('span');
+      span.textContent = sec.name;
+
+      item.appendChild(cb);
+      item.appendChild(span);
+      sectionGrid.appendChild(item);
+    });
+  });
+
+  if (!anyVisible) {
+    var empty = document.createElement('div');
+    empty.className = 'cr-section-empty';
+    empty.innerHTML = '<i class="bi bi-inbox me-1"></i>لا توجد شعب تطابق الفلتر الحالي.';
+    sectionGrid.appendChild(empty);
   }
 }
 
+/* Track selected section IDs across grid rebuilds */
+var _selectedSections = new Set();
+
+function selectAllSections(checked) {
+  sectionGrid.querySelectorAll('input[type=checkbox]').forEach(function (cb) {
+    if (!cb.closest('label').hidden) {
+      cb.checked = checked;
+      if (checked) _selectedSections.add(String(cb.value));
+      else         _selectedSections.delete(String(cb.value));
+      cb.closest('label').classList.toggle('selected', checked);
+    }
+  });
+  updateSelectedSummary();
+  schedulePreview();
+}
+
+/* ── Right-panel selected list ───────────── */
+function updateSelectedSummary() {
+  var card  = document.getElementById('selectionSummaryCard');
+  var list  = document.getElementById('selectedSectionsList');
+  if (!card || !list) return;
+
+  /* Collect checked items directly from the grid */
+  var checked = sectionGrid.querySelectorAll('input[type=checkbox]:checked');
+  if (checked.length === 0) {
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+  list.innerHTML = '';
+  checked.forEach(function (cb) {
+    var li = document.createElement('li');
+    li.className = 'list-group-item py-2';
+    li.innerHTML = '<i class="bi bi-check-circle-fill text-success me-2"></i>' +
+                   cb.closest('label').querySelector('span').textContent;
+    list.appendChild(li);
+  });
+}
+
+/* ── AJAX member preview ──────────────────── */
+var _previewTimer = null;
+function schedulePreview() {
+  clearTimeout(_previewTimer);
+  _previewTimer = setTimeout(fetchPreview, 350);
+}
+
+function fetchPreview() {
+  var ids = [];
+  sectionGrid.querySelectorAll('input[type=checkbox]:checked').forEach(function (cb) {
+    ids.push(cb.value);
+  });
+
+  var panel   = document.getElementById('previewPanel');
+  var loading = document.getElementById('previewLoading');
+
+  if (ids.length === 0) {
+    if (panel)   panel.style.display   = 'none';
+    if (loading) loading.style.display = 'none';
+    return;
+  }
+
+  if (panel)   panel.style.display   = 'none';
+  if (loading) loading.style.display = '';
+
+  var url = SECTIONS_PREVIEW_URL + '?' +
+            ids.map(function (id) { return 'section_ids=' + encodeURIComponent(id); }).join('&');
+
+  fetch(url, {
+    headers: {
+      'X-Requested-With': 'XMLHttpRequest',
+      'Accept': 'application/json',
+    },
+    credentials: 'same-origin',
+  })
+  .then(function (r) { return r.json(); })
+  .then(function (data) {
+    if (loading) loading.style.display = 'none';
+    if (!panel)  return;
+
+    /* Update counts */
+    var totalEl = document.getElementById('previewTotal');
+    if (totalEl) totalEl.textContent = data.total_members || 0;
+
+    var titleEl = document.getElementById('previewTitle');
+    if (titleEl) titleEl.textContent = 'معاينة — ' + (data.sections || []).length + ' شعبة مختارة';
+
+    /* Stats row */
+    var statsEl = document.getElementById('previewStats');
+    if (statsEl && data.stats) {
+      var st = data.stats;
+      statsEl.innerHTML =
+        '<span><i class="bi bi-shield-fill me-1 text-primary"></i>مشرفون: <b>' + (st.admins || 0) + '</b></span>' +
+        '<span><i class="bi bi-person-workspace me-1 text-info"></i>معلمون: <b>' + (st.teachers || 0) + '</b></span>' +
+        '<span><i class="bi bi-person-heart me-1 text-warning"></i>أولياء أمور: <b>' + (st.parents || 0) + '</b></span>';
+    }
+
+    /* Member tags */
+    var listEl = document.getElementById('previewList');
+    if (listEl) {
+      listEl.innerHTML = '';
+      (data.preview_members || []).forEach(function (m) {
+        var tag = document.createElement('span');
+        tag.className = 'cr-preview-tag';
+        tag.innerHTML = '<i class="bi bi-person-fill"></i>' + m.name;
+        if (m.role) {
+          var s = document.createElement('span');
+          s.style.cssText = 'font-size:10px;opacity:.7;margin-right:2px';
+          s.textContent = '(' + m.role + ')';
+          tag.appendChild(s);
+        }
+        listEl.appendChild(tag);
+      });
+    }
+
+    /* "And N more…" notice */
+    var moreEl = document.getElementById('previewMore');
+    var moreCt = document.getElementById('previewMoreCount');
+    if (moreEl && moreCt) {
+      var remaining = (data.total_members || 0) - (data.preview_members || []).length;
+      if (data.has_more && remaining > 0) {
+        moreCt.textContent = 'و ' + remaining + ' عضو آخر...';
+        moreEl.style.display = '';
+      } else {
+        moreEl.style.display = 'none';
+      }
+    }
+
+    panel.style.display = '';
+  })
+  .catch(function () {
+    if (loading) loading.style.display = 'none';
+  });
+}
+
+/* ── Cascade listeners ───────────────────── */
+if (msStageEl)  msStageEl.addEventListener('change',  buildSectionGrid);
+if (msGradeEl)  msGradeEl.addEventListener('change',  buildSectionGrid);
+if (msSearchEl) msSearchEl.addEventListener('input',   buildSectionGrid);
+
+/* ══════════════════════════════════════════════════════════════
+   Custom scope helpers
+══════════════════════════════════════════════════════════════ */
 function filterMembers() {
-  const q = document.getElementById('memberSearch').value.toLowerCase();
-  document.querySelectorAll('.member-item').forEach(function(item) {
-    const name = item.dataset.name || '';
-    const role = item.dataset.role || '';
-    item.style.display = (name.includes(q) || role.includes(q)) ? '' : 'none';
+  var q = document.getElementById('memberSearch').value.toLowerCase();
+  document.querySelectorAll('.member-item').forEach(function (item) {
+    var n = item.dataset.name || '';
+    var r = item.dataset.role || '';
+    item.style.display = (n.indexOf(q) !== -1 || r.indexOf(q) !== -1) ? '' : 'none';
   });
 }
 
 function toggleAll(checked) {
-  document.querySelectorAll('#memberList input[type="checkbox"]').forEach(function(cb) {
-    if (cb.closest('.member-item').style.display !== 'none') {
-      cb.checked = checked;
-    }
+  document.querySelectorAll('#memberList input[type="checkbox"]').forEach(function (cb) {
+    if (cb.closest('.member-item').style.display !== 'none') cb.checked = checked;
   });
 }
 
+/* ── Initialise ──────────────────────────── */
 updateScopeFields();
+buildSectionGrid();
 </script>
 {% endblock %}

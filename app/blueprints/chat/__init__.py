@@ -599,12 +599,21 @@ def index():
         if other_mem and other_mem.user:
             private_other_user[room.id] = other_mem.user
 
+    # ── Load grades/stages for filter dropdowns ───────────────────────────────
+    all_grades = (Grade.query
+                  .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+                  .filter_by(school_id=school.id)
+                  .order_by(Grade.name).all())
+    all_stages = sorted(set(g.stage for g in all_grades if g.stage))
+
     return render_template('chat/index.html',
                            private_stats=private_stats,
                            group_stats=group_stats,
                            private_other_user=private_other_user,
                            type_filter=type_filter,
                            status_filter=status_filter,
+                           all_grades=all_grades,
+                           all_stages=all_stages,
                            school=school)
 
 
@@ -643,6 +652,13 @@ def create_room():
         .all()
     )
 
+    # Build grades→sections tree for cascade picker in the template
+    grades_tree = []
+    for g in grades:
+        g_sections = [s for s in sections if s.grade_id == g.id]
+        grades_tree.append({'grade': g, 'sections': g_sections})
+    stages = sorted(set(g.stage for g in grades if g.stage))
+
     if request.method == 'POST':
         name       = request.form.get('name', '').strip()
         rtype      = request.form.get('type', 'group')
@@ -658,11 +674,81 @@ def create_room():
             flash('اسم المحادثة مطلوب.', 'danger')
             return render_template('chat/create_room.html',
                                    grades=grades, sections=sections,
-                                   subjects=subjects, school_users=school_users)
+                                   subjects=subjects, school_users=school_users,
+                                   grades_tree=grades_tree, stages=stages)
 
         _log.info('[chat] create_room scope=%s section=%s grade=%s stage=%r subject=%s',
                   scope, section_id, grade_id, stage, subject_id)
 
+        # ── Multi-section scope: collect members from multiple sections ────────
+        if scope == 'multi_section':
+            raw_ids = request.form.getlist('section_ids')
+            uid_set: set[int] = set()
+            stats = {'admins': 0, 'teachers': 0, 'parents': 0, 'no_parent_students': 0}
+
+            # Always include school admins (same as _collect_user_ids does for every scope)
+            try:
+                admins = (
+                    User.query
+                    .execution_options(bypass_tenant_scope=True)
+                    .join(User.role)
+                    .filter(User.school_id == school.id,
+                            User.is_active == True,
+                            Role.is_admin == True)
+                    .all()
+                )
+                for u in admins:
+                    uid_set.add(u.id)
+                stats['admins'] = len(admins)
+            except Exception as exc:
+                _log.error('[chat] multi_section admin query failed: %s', exc)
+
+            valid_section_ids = []
+            for sid_raw in raw_ids:
+                try:
+                    sid = int(sid_raw)
+                except (ValueError, TypeError):
+                    continue
+                # Strict school ownership check before collecting members
+                sec = (Section.query
+                       .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+                       .filter_by(id=sid, school_id=school.id)
+                       .first())
+                if sec:
+                    valid_section_ids.append(sid)
+                    _add_section_members(school.id, sid, uid_set, stats)
+                else:
+                    _log.warning('[chat] create_room multi_section: section %s not in school %s',
+                                 sid, school.id)
+
+            _log.info('[chat] multi_section: %d sections → %d unique users stats=%s',
+                      len(valid_section_ids), len(uid_set), stats)
+
+            # Store as custom scope (multi-section is a special form of custom)
+            room = ChatRoom(
+                school_id            = school.id,
+                academic_year_id     = year.id if year else None,
+                name                 = name,
+                type                 = rtype,
+                scope                = 'custom',
+                created_by_user_id   = current_user.id,
+                is_announcement_only = is_ann,
+                allow_replies        = allow_rep,
+            )
+            db.session.add(room)
+            db.session.flush()
+            uid_set.add(current_user.id)
+            added = _sync_members(room, uid_set, current_user.id)
+            db.session.commit()
+
+            flash(f'تم إنشاء المحادثة "{name}" بنجاح من {len(valid_section_ids)} شعبة. '
+                  f'الأعضاء: {added} (مشرفون: {stats["admins"]} — معلمون: {stats["teachers"]} — '
+                  f'أولياء أمور: {stats["parents"]}).', 'success')
+            if stats.get('no_parent_students', 0) > 0:
+                flash(f'تنبيه: {stats["no_parent_students"]} طالب ليس لهم أولياء أمور مرتبطون.', 'warning')
+            return redirect(url_for('chat.room_detail', room_id=room.id))
+
+        # ── All other scopes (unchanged) ──────────────────────────────────────
         room = ChatRoom(
             school_id            = school.id,
             academic_year_id     = year.id if year else None,
@@ -722,7 +808,8 @@ def create_room():
 
     return render_template('chat/create_room.html',
                            grades=grades, sections=sections,
-                           subjects=subjects, school_users=school_users)
+                           subjects=subjects, school_users=school_users,
+                           grades_tree=grades_tree, stages=stages)
 
 
 # ─── Room detail (messages viewer) ───────────────────────────────────────────
@@ -873,6 +960,43 @@ def edit_room(room_id):
             .first_or_404())
 
     if request.method == 'POST':
+        action = request.form.get('action', 'update')
+
+        # ── Add members from selected sections (academic filter) ──────────────
+        if action == 'add_by_sections':
+            raw_ids = request.form.getlist('add_section_ids')
+            uid_set: set[int] = set()
+            stats = {'admins': 0, 'teachers': 0, 'parents': 0, 'no_parent_students': 0}
+            valid_count = 0
+            for sid_raw in raw_ids:
+                try:
+                    sid = int(sid_raw)
+                except (ValueError, TypeError):
+                    continue
+                # Strict school ownership check
+                sec = (Section.query
+                       .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+                       .filter_by(id=sid, school_id=school.id)
+                       .first())
+                if sec:
+                    valid_count += 1
+                    _add_section_members(school.id, sid, uid_set, stats)
+                else:
+                    _log.warning('[chat] edit_room add_by_sections: section %s not in school %s',
+                                 sid, school.id)
+            if uid_set:
+                added = _sync_members(room,
+                                      uid_set,
+                                      room.created_by_user_id or current_user.id)
+                room.updated_at = datetime.utcnow()
+                db.session.commit()
+                flash(f'تمت إضافة {added} عضو جديد من {valid_count} شعبة. '
+                      f'(معلمون: {stats["teachers"]} — أولياء أمور: {stats["parents"]}).', 'success')
+            else:
+                flash('لم يتم اختيار أي شعبة أو لم يتم العثور على أعضاء.', 'warning')
+            return redirect(url_for('chat.edit_room', room_id=room.id))
+
+        # ── Standard update ───────────────────────────────────────────────────
         room.name                = (request.form.get('name', room.name).strip()
                                     or room.name)
         room.is_announcement_only = bool(request.form.get('is_announcement_only'))
@@ -885,7 +1009,28 @@ def edit_room(room_id):
     members = (ChatRoomMember.query
                .filter_by(room_id=room.id)
                .order_by(ChatRoomMember.role).all())
-    return render_template('chat/edit_room.html', room=room, members=members)
+
+    # Grades/sections/stages for academic filter panel
+    edit_grades   = (Grade.query
+                     .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+                     .filter_by(school_id=school.id)
+                     .order_by(Grade.name).all())
+    edit_sections = (Section.query
+                     .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+                     .filter_by(school_id=school.id)
+                     .order_by(Section.name).all())
+    edit_stages   = sorted(set(g.stage for g in edit_grades if g.stage))
+
+    # Build grades→sections tree
+    edit_grades_tree = []
+    for g in edit_grades:
+        g_secs = [s for s in edit_sections if s.grade_id == g.id]
+        edit_grades_tree.append({'grade': g, 'sections': g_secs})
+
+    return render_template('chat/edit_room.html',
+                           room=room, members=members,
+                           edit_grades_tree=edit_grades_tree,
+                           edit_stages=edit_stages)
 
 
 # ─── Close / reopen ───────────────────────────────────────────────────────────
@@ -1105,6 +1250,69 @@ def rebuild_members(room_id):
         flash(f'تنبيه: {stats["no_parent_students"]} طالب ليس لهم أولياء أمور مرتبطون في النظام.', 'warning')
 
     return redirect(url_for('chat.room_detail', room_id=room.id))
+
+
+# ─── Sections preview AJAX (for create/edit academic filter) ─────────────────
+
+@chat_bp.route('/ajax/sections-preview')
+@login_required
+@admin_required
+def sections_preview():
+    """
+    AJAX: given section_ids[], return deduplicated member list for preview.
+    Each section is validated to belong to the current school before use.
+    """
+    _require_chat_module()
+    school = get_current_school()
+    if not school:
+        return jsonify({'error': 'school not found'}), 403
+
+    raw_ids = request.args.getlist('section_ids')
+    uid_set: set[int] = set()
+    stats = {'admins': 0, 'teachers': 0, 'parents': 0, 'no_parent_students': 0}
+    sections_info = []
+
+    for sid_raw in raw_ids:
+        try:
+            sid = int(sid_raw)
+        except (ValueError, TypeError):
+            continue
+        # Strict school ownership — never accept a section from another school
+        sec = (Section.query
+               .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+               .filter_by(id=sid, school_id=school.id)
+               .first())
+        if not sec:
+            continue
+        grade_name = sec.grade.name if sec.grade else ''
+        sections_info.append({'id': sec.id, 'name': sec.name, 'grade': grade_name})
+        _add_section_members(school.id, sid, uid_set, stats)
+
+    # Build a preview member list (cap at 30 for the UI panel)
+    preview_members = []
+    if uid_set:
+        users = (
+            User.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter(User.id.in_(uid_set), User.school_id == school.id)
+            .join(User.role)
+            .order_by(Role.name, User.full_name)
+            .limit(30)
+            .all()
+        )
+        for u in users:
+            preview_members.append({
+                'name': u.full_name,
+                'role': u.role.label if u.role else '',
+            })
+
+    return jsonify({
+        'sections':        sections_info,
+        'total_members':   len(uid_set),
+        'preview_members': preview_members,
+        'has_more':        len(uid_set) > 30,
+        'stats':           stats,
+    })
 
 
 # ─── Block / unblock member ───────────────────────────────────────────────────
