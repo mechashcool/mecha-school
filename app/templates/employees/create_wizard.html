@@ -266,8 +266,9 @@
 
           <div class="col-md-6">
             <label class="form-label">الراتب الأساسي (د.ع) <span class="text-danger">*</span></label>
-            <input type="number" name="base_salary" class="form-control" min="0" step="1000" required
-                   value="{{ sf.get('base_salary', '') }}">
+            <input type="number" name="base_salary" id="wizBaseSalary" class="form-control" min="0" step="1000" required
+                   value="{{ sf.get('base_salary', '') }}" oninput="updateWizBaseSalaryWords()">
+            <div id="wizBaseSalaryWords" class="amount-in-words-preview d-none" dir="rtl"></div>
           </div>
 
           <div class="col-md-6">
@@ -1031,6 +1032,84 @@
   if (startIdx < 0) startIdx = 0;
   maxReached = startIdx;
   goTo(startIdx);
+
+  // Initialize base-salary words preview if the field has a pre-filled value.
+  if (document.getElementById('wizBaseSalary') && document.getElementById('wizBaseSalary').value) {
+    updateWizBaseSalaryWords();
+  }
 })();
+
+/* ── Amount-in-words helpers (Iraqi dinar) ── */
+const _IQD_ONES = ['','واحد','اثنان','ثلاثة','أربعة','خمسة','ستة','سبعة','ثمانية','تسعة',
+  'عشرة','أحد عشر','اثنا عشر','ثلاثة عشر','أربعة عشر','خمسة عشر',
+  'ستة عشر','سبعة عشر','ثمانية عشر','تسعة عشر'];
+const _IQD_TENS = ['','','عشرون','ثلاثون','أربعون','خمسون','ستون','سبعون','ثمانون','تسعون'];
+const _IQD_HUNDREDS = ['','مائة','مائتان','ثلاثمائة','أربعمائة','خمسمائة',
+  'ستمائة','سبعمائة','ثمانمائة','تسعمائة'];
+
+function _iqdBelow1000(n) {
+  if (n === 0) return '';
+  if (n < 20) return _IQD_ONES[n];
+  if (n < 100) {
+    const t = Math.floor(n / 10), o = n % 10;
+    return o === 0 ? _IQD_TENS[t] : _IQD_ONES[o] + ' و' + _IQD_TENS[t];
+  }
+  const h = Math.floor(n / 100), r = n % 100;
+  return r === 0 ? _IQD_HUNDREDS[h] : _IQD_HUNDREDS[h] + ' و' + _iqdBelow1000(r);
+}
+function _iqdGroup(count, hasLower, singular, dualAcc, dualNom, plural310, plural11) {
+  if (count === 1) return singular;
+  if (count === 2) return hasLower ? dualNom : dualAcc;
+  if (count <= 10) return _IQD_ONES[count] + ' ' + plural310;
+  return _iqdBelow1000(count) + ' ' + plural11;
+}
+function _iqdIntToWords(n) {
+  const parts = [];
+  const billions  = Math.floor(n / 1e9); n = n % 1e9;
+  const millions  = Math.floor(n / 1e6); n = n % 1e6;
+  const thousands = Math.floor(n / 1e3); n = n % 1e3;
+  const remainder = n;
+  const hasLoB = millions > 0 || thousands > 0 || remainder > 0;
+  const hasLoM = thousands > 0 || remainder > 0;
+  const hasLoT = remainder > 0;
+  if (billions)  parts.push(_iqdGroup(billions,  hasLoB, 'مليار','مليارا','ملياران','مليارات','مليار'));
+  if (millions)  parts.push(_iqdGroup(millions,  hasLoM, 'مليون','مليونا','مليونان','ملايين','مليون'));
+  if (thousands) parts.push(_iqdGroup(thousands, hasLoT, 'ألف','ألفا','ألفان','آلاف','ألف'));
+  if (remainder) parts.push(_iqdBelow1000(remainder));
+  return parts.join(' و');
+}
+function amountToWordsIQD_wiz(value) {
+  if (value === '' || value === null || value === undefined) return '';
+  const n = Math.trunc(Number(value));
+  if (isNaN(n) || n < 0) return '';
+  if (n === 0) return 'صفر دينار عراقي';
+  if (n === 1) return 'دينار عراقي واحد';
+  if (n === 2) return 'ديناران عراقيان';
+  const w = _iqdIntToWords(n);
+  return (n >= 3 && n <= 10) ? w + ' دنانير عراقية' : w + ' دينار عراقي';
+}
+function updateWizBaseSalaryWords() {
+  const raw = document.getElementById('wizBaseSalary').value;
+  const div = document.getElementById('wizBaseSalaryWords');
+  if (!raw) { div.classList.add('d-none'); div.textContent = ''; return; }
+  const n = Math.trunc(parseFloat(raw));
+  if (isNaN(n) || n < 0) { div.classList.add('d-none'); div.textContent = ''; return; }
+  div.textContent = 'المبلغ كتابةً: ' + amountToWordsIQD_wiz(n);
+  div.classList.remove('d-none');
+}
 </script>
+<style>
+.amount-in-words-preview {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--text-muted, #6c757d);
+  background: var(--bs-light, #f8f9fa);
+  border: 1px solid var(--bs-border-color, #dee2e6);
+  border-radius: 6px;
+  padding: 6px 10px;
+  word-break: break-word;
+  line-height: 1.6;
+}
+@media print { .amount-in-words-preview { display: none !important; } }
+</style>
 {% endblock %}

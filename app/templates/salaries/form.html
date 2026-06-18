@@ -47,6 +47,7 @@
             <div class="col-12">
               <label class="form-label">الراتب الأساسي</label>
               <div class="form-control bg-light fw-700" id="baseSalaryDisplay">—</div>
+              <div id="baseSalaryWords" class="amount-in-words-preview d-none" dir="rtl"></div>
               <small class="text-muted">يؤخذ من ملف الموظف. أضف البدلات والخصومات من صفحة المراجعة بعد الإنشاء.</small>
             </div>
           </div>
@@ -64,13 +65,90 @@
 {% endblock %}
 
 {% block extra_js %}
+<style>
+.amount-in-words-preview {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--text-muted, #6c757d);
+  background: var(--bs-light, #f8f9fa);
+  border: 1px solid var(--bs-border-color, #dee2e6);
+  border-radius: 6px;
+  padding: 6px 10px;
+  word-break: break-word;
+  line-height: 1.6;
+}
+@media print { .amount-in-words-preview { display: none !important; } }
+</style>
 <script>
+const _IQD_ONES = ['','واحد','اثنان','ثلاثة','أربعة','خمسة','ستة','سبعة','ثمانية','تسعة',
+  'عشرة','أحد عشر','اثنا عشر','ثلاثة عشر','أربعة عشر','خمسة عشر',
+  'ستة عشر','سبعة عشر','ثمانية عشر','تسعة عشر'];
+const _IQD_TENS = ['','','عشرون','ثلاثون','أربعون','خمسون','ستون','سبعون','ثمانون','تسعون'];
+const _IQD_HUNDREDS = ['','مائة','مائتان','ثلاثمائة','أربعمائة','خمسمائة',
+  'ستمائة','سبعمائة','ثمانمائة','تسعمائة'];
+
+function _iqdBelow1000(n) {
+  if (n === 0) return '';
+  if (n < 20) return _IQD_ONES[n];
+  if (n < 100) {
+    const t = Math.floor(n / 10), o = n % 10;
+    return o === 0 ? _IQD_TENS[t] : _IQD_ONES[o] + ' و' + _IQD_TENS[t];
+  }
+  const h = Math.floor(n / 100), r = n % 100;
+  return r === 0 ? _IQD_HUNDREDS[h] : _IQD_HUNDREDS[h] + ' و' + _iqdBelow1000(r);
+}
+function _iqdGroup(count, hasLower, singular, dualAcc, dualNom, plural310, plural11) {
+  if (count === 1) return singular;
+  if (count === 2) return hasLower ? dualNom : dualAcc;
+  if (count <= 10) return _IQD_ONES[count] + ' ' + plural310;
+  return _iqdBelow1000(count) + ' ' + plural11;
+}
+function _iqdIntToWords(n) {
+  const parts = [];
+  const billions  = Math.floor(n / 1e9); n = n % 1e9;
+  const millions  = Math.floor(n / 1e6); n = n % 1e6;
+  const thousands = Math.floor(n / 1e3); n = n % 1e3;
+  const remainder = n;
+  const hasLoB = millions > 0 || thousands > 0 || remainder > 0;
+  const hasLoM = thousands > 0 || remainder > 0;
+  const hasLoT = remainder > 0;
+  if (billions)  parts.push(_iqdGroup(billions,  hasLoB, 'مليار','مليارا','ملياران','مليارات','مليار'));
+  if (millions)  parts.push(_iqdGroup(millions,  hasLoM, 'مليون','مليونا','مليونان','ملايين','مليون'));
+  if (thousands) parts.push(_iqdGroup(thousands, hasLoT, 'ألف','ألفا','ألفان','آلاف','ألف'));
+  if (remainder) parts.push(_iqdBelow1000(remainder));
+  return parts.join(' و');
+}
+function _amountToWordsIQD(value) {
+  if (value === '' || value === null || value === undefined) return '';
+  const n = Math.trunc(Number(value));
+  if (isNaN(n) || n < 0) return '';
+  if (n === 0) return 'صفر دينار عراقي';
+  if (n === 1) return 'دينار عراقي واحد';
+  if (n === 2) return 'ديناران عراقيان';
+  const w = _iqdIntToWords(n);
+  return (n >= 3 && n <= 10) ? w + ' دنانير عراقية' : w + ' دينار عراقي';
+}
+
 async function loadBaseSalary(empId) {
-  if (!empId) return;
+  const wordsDiv = document.getElementById('baseSalaryWords');
+  if (!empId) {
+    document.getElementById('baseSalaryDisplay').textContent = '—';
+    wordsDiv.classList.add('d-none');
+    wordsDiv.textContent = '';
+    return;
+  }
   const res  = await fetch(`/salaries/api/employee/${empId}/salary`);
   const data = await res.json();
+  const amount = data.base_salary || 0;
   document.getElementById('baseSalaryDisplay').textContent =
-    (data.base_salary || 0).toLocaleString('ar-IQ') + ' د.ع';
+    amount.toLocaleString('ar-IQ') + ' د.ع';
+  if (amount > 0) {
+    wordsDiv.textContent = 'المبلغ كتابةً: ' + _amountToWordsIQD(amount);
+    wordsDiv.classList.remove('d-none');
+  } else {
+    wordsDiv.classList.add('d-none');
+    wordsDiv.textContent = '';
+  }
 }
 </script>
 {% endblock %}
