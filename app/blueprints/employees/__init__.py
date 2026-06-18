@@ -795,3 +795,251 @@ def attendance_report_employee_pdf(emp_id):
         mimetype='application/pdf',
         headers={'Content-Disposition': f'attachment; filename={filename}'},
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Employee Manual Attendance
+# ─────────────────────────────────────────────────────────────────────────────
+
+@employees_bp.route('/attendance/manual')
+@login_required
+@permission_required('manage_employees')
+def manual_attendance():
+    """Manual employee attendance entry page."""
+    from app.utils.attendance_helpers import get_local_date
+
+    school = get_current_school()
+    today  = get_local_date(school)   # School carries att_* and timezone settings
+    employees   = _all_employees(school)
+    departments = sorted({e.department for e in employees if e.department})
+
+    return render_template(
+        'employees/manual_attendance.html',
+        today       = today,
+        departments = departments,
+        school      = school,
+    )
+
+
+@employees_bp.route('/attendance/manual/list')
+@login_required
+@permission_required('manage_employees')
+def manual_attendance_list():
+    """AJAX: return employee list with existing attendance for a date."""
+    from flask import jsonify
+    from datetime import time as _time
+    from app.utils.attendance_helpers import get_local_now
+
+    school     = get_current_school()
+    settings   = school
+    date_str   = request.args.get('date', '')
+    department = request.args.get('department', '').strip()
+
+    local_now = get_local_now(settings)
+    try:
+        att_date = dt.strptime(date_str, '%Y-%m-%d').date() if date_str else local_now.date()
+    except ValueError:
+        att_date = local_now.date()
+
+    # Departure-window check (mirrors student attendance logic)
+    departure_time = getattr(settings, 'att_departure_time', None)
+    if departure_time == _time(0, 0, 0):
+        departure_time = None
+    now_time    = local_now.time().replace(microsecond=0)
+    is_departure = (
+        att_date == local_now.date()
+        and departure_time is not None
+        and now_time >= departure_time
+    )
+
+    # Employees — explicitly scoped to current school
+    q = (Employee.query
+         .filter_by(school_id=school.id, status='active')
+         .order_by(Employee.full_name))
+    if department:
+        q = q.filter(Employee.department == department)
+    employees = q.all()
+
+    emp_ids = [e.id for e in employees]
+
+    # Fetch existing attendance for this date
+    # bypass_tenant_scope + explicit school_id filter: same pattern as report routes
+    existing: dict = {}
+    if emp_ids:
+        for a in (EmployeeAttendance.query
+                  .execution_options(bypass_tenant_scope=True)
+                  .filter(
+                      EmployeeAttendance.school_id   == school.id,
+                      EmployeeAttendance.employee_id.in_(emp_ids),
+                      EmployeeAttendance.date        == att_date,
+                  ).all()):
+            existing[a.employee_id] = a
+
+    result = []
+    for emp in employees:
+        rec = existing.get(emp.id)
+        result.append({
+            'id':          emp.id,
+            'full_name':   emp.full_name,
+            'employee_id': emp.employee_id or '',
+            'department':  emp.department  or '',
+            'job_title':   emp.job_title   or '',
+            'existing': {
+                'status':    rec.status,
+                'check_in':  rec.check_in.strftime('%H:%M')  if rec.check_in  else '',
+                'check_out': rec.check_out.strftime('%H:%M') if rec.check_out else '',
+                'source':    rec.source or '',
+                'notes':     rec.notes  or '',
+            } if rec else None,
+        })
+
+    return jsonify({
+        'employees':    result,
+        'is_departure': is_departure,
+        'total':        len(result),
+    })
+
+
+@employees_bp.route('/attendance/manual/save', methods=['POST'])
+@login_required
+@historical_guard
+@permission_required('manage_employees')
+def manual_attendance_save():
+    """Create or update employee attendance records for a selected date."""
+    from datetime import time as _time
+    from app.utils.attendance_helpers import get_local_now, determine_check_in_status
+
+    school = get_current_school()
+    year   = get_active_year(school.id) if school else None
+
+    if not school or not year:
+        flash('لا توجد سنة دراسية نشطة.', 'danger')
+        return redirect(url_for('employees.manual_attendance'))
+
+    settings  = school
+    date_str  = request.form.get('att_date', '').strip()
+    att_dept  = request.form.get('att_dept', '').strip()
+    local_now = get_local_now(settings)
+
+    try:
+        att_date = dt.strptime(date_str, '%Y-%m-%d').date()
+    except (ValueError, TypeError):
+        att_date = local_now.date()
+
+    now_time = local_now.time().replace(microsecond=0)
+
+    # Employee IDs come from hidden fields injected by JS
+    raw_ids = request.form.getlist('emp_ids')
+    try:
+        emp_ids = [int(x) for x in raw_ids if str(x).isdigit()]
+    except (ValueError, TypeError):
+        emp_ids = []
+
+    if not emp_ids:
+        flash('لم يتم إرسال أي موظفين.', 'warning')
+        return redirect(url_for('employees.manual_attendance', date=att_date.isoformat()))
+
+    # Security: validate every submitted ID belongs to this school
+    employees = (Employee.query
+                 .filter(
+                     Employee.id.in_(emp_ids),
+                     Employee.school_id == school.id,
+                     Employee.status    == 'active',
+                 ).all())
+    emp_map = {e.id: e for e in employees}
+    valid_ids = list(emp_map.keys())
+
+    # Fetch existing records for update (bypass ORM scope, explicit school filter)
+    existing: dict = {}
+    if valid_ids:
+        for a in (EmployeeAttendance.query
+                  .execution_options(bypass_tenant_scope=True)
+                  .filter(
+                      EmployeeAttendance.school_id   == school.id,
+                      EmployeeAttendance.employee_id.in_(valid_ids),
+                      EmployeeAttendance.date        == att_date,
+                  ).all()):
+            existing[a.employee_id] = a
+
+    created = updated = 0
+
+    for emp_id in emp_ids:
+        if emp_id not in emp_map:
+            continue  # Cross-school attempt — silently rejected
+
+        status_choice = request.form.get(f'status_{emp_id}', 'absent').strip()
+        if status_choice not in ('present', 'late', 'absent'):
+            continue
+
+        check_in_val  = None
+        check_out_val = None
+        notes_val     = request.form.get(f'notes_{emp_id}', '').strip() or None
+
+        if status_choice in ('present', 'late'):
+            ci_str = request.form.get(f'check_in_{emp_id}',  '').strip()
+            co_str = request.form.get(f'check_out_{emp_id}', '').strip()
+
+            if ci_str:
+                try:
+                    check_in_val = dt.strptime(ci_str, '%H:%M').time()
+                except ValueError:
+                    pass
+
+            # Fall back to server time only for today (not for historical dates)
+            if check_in_val is None and att_date == local_now.date():
+                check_in_val = now_time
+
+            # Auto-determine late vs present from check-in time
+            if check_in_val and status_choice == 'present':
+                status_choice = determine_check_in_status(check_in_val, settings)
+
+            if co_str:
+                try:
+                    check_out_val = dt.strptime(co_str, '%H:%M').time()
+                except ValueError:
+                    pass
+
+        rec = existing.get(emp_id)
+        if rec:
+            rec.status      = status_choice
+            rec.check_in    = check_in_val
+            rec.check_out   = check_out_val
+            if notes_val is not None:
+                rec.notes = notes_val
+            rec.source      = 'manual'
+            rec.recorded_by = current_user.id
+            updated += 1
+        else:
+            db.session.add(EmployeeAttendance(
+                employee_id      = emp_id,
+                school_id        = school.id,
+                academic_year_id = year.id,
+                date             = att_date,
+                status           = status_choice,
+                check_in         = check_in_val,
+                check_out        = check_out_val,
+                notes            = notes_val,
+                source           = 'manual',
+                recorded_by      = current_user.id,
+            ))
+            created += 1
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        _log.exception('[emp-manual-att] commit failed date=%s school_id=%s', att_date, school.id)
+        flash('حدث خطأ أثناء الحفظ. يرجى المحاولة مرة أخرى.', 'danger')
+        return redirect(url_for('employees.manual_attendance', date=att_date.isoformat()))
+
+    parts = []
+    if created:
+        parts.append(f'تم تسجيل {created} موظف')
+    if updated:
+        parts.append(f'تحديث {updated} سجل')
+    flash(('، '.join(parts) or 'لم تطرأ أي تغييرات') + f' ليوم {att_date.isoformat()}.', 'success')
+
+    redirect_kwargs = {'date': att_date.isoformat()}
+    if att_dept:
+        redirect_kwargs['department'] = att_dept
+    return redirect(url_for('employees.manual_attendance', **redirect_kwargs))

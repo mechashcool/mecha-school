@@ -1,0 +1,447 @@
+{% extends "shared/base.html" %}
+{% block title %}تسجيل حضور الموظفين يدوياً{% endblock %}
+{% block page_title %}حضور الموظفين — إدخال يدوي{% endblock %}
+
+{% block extra_css %}
+<style>
+/* ── Employee attendance cards ───────────────────────────────────────────── */
+.att-card { border-radius: 12px; transition: box-shadow .15s; }
+.att-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.1); }
+.att-card.has-record { border-right: 4px solid #0d6efd; }
+
+.att-avatar {
+  width: 44px; height: 44px; border-radius: 10px;
+  background: #1a3a5c;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; color: #fff; font-weight: 700;
+  flex-shrink: 0;
+}
+
+.att-status-btn {
+  flex: 1; font-size: 12px; font-weight: 700;
+  padding: 5px 4px; border-radius: 6px !important;
+  transition: all .15s;
+}
+.att-status-btn.active-present { background: #1aab6d !important; color: #fff !important; border-color: #1aab6d !important; }
+.att-status-btn.active-absent  { background: #e03e3e !important; color: #fff !important; border-color: #e03e3e !important; }
+.att-status-btn.active-late    { background: #e8a020 !important; color: #fff !important; border-color: #e8a020 !important; }
+
+.time-row { font-size: 12px; margin-top: 6px; }
+.time-row input[type=time] { font-size: 12px; padding: 2px 6px; height: 28px; }
+.time-row input[type=text]  { font-size: 12px; padding: 2px 6px; height: 28px; }
+
+.save-bar {
+  position: sticky; bottom: 0; z-index: 90;
+  background: rgba(255,255,255,.97);
+  border-top: 2px solid #e8edf2;
+  padding: 10px 16px;
+  backdrop-filter: blur(8px);
+  border-radius: 0 0 12px 12px;
+  margin-top: 16px;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">تسجيل حضور الموظفين يدوياً</h1>
+    <p class="page-subtitle">اختر التاريخ والقسم ثم سجّل الحضور</p>
+  </div>
+  <a href="{{ url_for('employees.attendance_report') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>تقرير الحضور
+  </a>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ cat }} alert-dismissible fade show">{{ msg }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+{% endwith %}
+
+{% if is_historical_year %}
+<div class="alert alert-warning d-flex align-items-center gap-2 mb-4">
+  <i class="bi bi-lock-fill" style="font-size:20px;flex-shrink:0"></i>
+  <div>
+    <strong>وضع العرض فقط</strong> — أنت تشاهد سنة دراسية مؤرشفة. لا يمكن تسجيل الحضور.
+  </div>
+</div>
+{% endif %}
+
+{# ── Selection card ─────────────────────────────────────────────────────────── #}
+<div class="card mb-4">
+  <div class="card-header">
+    <i class="bi bi-filter-square-fill text-accent me-1"></i>
+    اختيار التاريخ والقسم
+  </div>
+  <div class="card-body">
+    <div class="row g-3 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label fw-600">القسم</label>
+        <select id="deptSelect" class="form-select">
+          <option value="">— جميع الأقسام —</option>
+          {% for dept in departments %}
+          <option value="{{ dept }}">{{ dept }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label fw-600">التاريخ</label>
+        <input type="date" id="dateInput" class="form-control"
+               value="{{ today.isoformat() }}"
+               max="{{ today.isoformat() }}">
+      </div>
+      <div class="col-md-2">
+        <button type="button" id="loadBtn" class="btn btn-primary w-100">
+          <i class="bi bi-arrow-down-circle-fill me-1"></i>تحميل
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Loading indicator ───────────────────────────────────────────────────────── #}
+<div id="loadingArea" style="display:none;text-align:center;padding:48px">
+  <div class="spinner-border text-primary" role="status"></div>
+  <p class="text-muted mt-3">جاري تحميل بيانات الموظفين…</p>
+</div>
+
+{# ── Error area ──────────────────────────────────────────────────────────────── #}
+<div id="errorArea" style="display:none"></div>
+
+{# ── Workspace (filled by JS) ────────────────────────────────────────────────── #}
+<div id="workspace" style="display:none">
+
+  {# Info bar #}
+  <div class="card mb-3">
+    <div class="card-body py-2 d-flex align-items-center justify-content-between flex-wrap gap-2">
+      <div>
+        <strong id="wsDate" style="font-size:16px"></strong>
+        <span class="text-muted ms-2 small" id="wsDept"></span>
+      </div>
+      <div class="d-flex gap-3 align-items-center flex-wrap">
+        <span class="fw-600" style="font-size:13px;color:#1aab6d">
+          <i class="bi bi-check-circle-fill me-1"></i>حاضر: <b id="cntP">0</b>
+        </span>
+        <span class="fw-600" style="font-size:13px;color:#e03e3e">
+          <i class="bi bi-x-circle-fill me-1"></i>غائب: <b id="cntA">0</b>
+        </span>
+        <span class="fw-600" style="font-size:13px;color:#e8a020">
+          <i class="bi bi-clock-fill me-1"></i>متأخر: <b id="cntL">0</b>
+        </span>
+        <span class="text-muted" style="font-size:12px">الإجمالي: <b id="cntTot">0</b></span>
+      </div>
+    </div>
+  </div>
+
+  {# Toolbar #}
+  <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+    <button type="button" id="markAllPresent" class="btn btn-outline-success btn-sm">
+      <i class="bi bi-check-all me-1"></i>تحديد الجميع حاضر
+    </button>
+    <button type="button" id="markAllAbsent" class="btn btn-outline-danger btn-sm">
+      <i class="bi bi-x-circle me-1"></i>تحديد الجميع غائب
+    </button>
+    <span class="text-muted small ms-2" id="updateNotice" style="display:none">
+      <i class="bi bi-info-circle me-1"></i>
+      السجلات المميزة بـ <span class="badge" style="background:#cce5ff;color:#004085;font-size:10px">سُجِّل مسبقاً</span> ستُحدَّث عند الحفظ.
+    </span>
+  </div>
+
+  {# Attendance form #}
+  <form id="attForm" method="POST" action="{{ url_for('employees.manual_attendance_save') }}">
+    <input type="hidden" name="att_date" id="hdnDate" value="">
+    <input type="hidden" name="att_dept" id="hdnDept" value="">
+
+    <div id="empGrid" class="row g-3 mb-2"></div>
+
+    {# Sticky save bar #}
+    <div class="save-bar">
+      <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div class="d-flex gap-3 align-items-center">
+          <span class="fw-600" style="font-size:13px;color:#1aab6d">
+            <i class="bi bi-check-circle-fill me-1"></i>حاضر: <b id="cntP2">0</b>
+          </span>
+          <span class="fw-600" style="font-size:13px;color:#e03e3e">
+            <i class="bi bi-x-circle-fill me-1"></i>غائب: <b id="cntA2">0</b>
+          </span>
+          <span class="fw-600" style="font-size:13px;color:#e8a020">
+            <i class="bi bi-clock-fill me-1"></i>متأخر: <b id="cntL2">0</b>
+          </span>
+        </div>
+        {% if not is_historical_year %}
+        <button type="submit" class="btn btn-primary px-5" id="saveBtn">
+          <i class="bi bi-save-fill me-2"></i>حفظ الحضور
+        </button>
+        {% endif %}
+      </div>
+    </div>
+  </form>
+</div>
+
+<script>
+const EMP_LIST_URL = "{{ url_for('employees.manual_attendance_list') }}";
+const IS_HIST      = {{ 'true' if is_historical_year else 'false' }};
+</script>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+/* ── DOM refs ───────────────────────────────────────────────────────────────── */
+const dateEl  = document.getElementById('dateInput');
+const deptEl  = document.getElementById('deptSelect');
+const loadBtn = document.getElementById('loadBtn');
+
+/* ── Dirty-flag (unsaved changes) ───────────────────────────────────────────── */
+let dirty = false;
+let currentEmpIds = [];
+
+function setDirty(v) { dirty = v; }
+window.addEventListener('beforeunload', e => {
+    if (dirty) {
+        e.preventDefault();
+        e.returnValue = 'هناك تغييرات لم تُحفظ. هل تريد المغادرة؟';
+    }
+});
+
+/* ── Load employees ─────────────────────────────────────────────────────────── */
+loadBtn.addEventListener('click', loadEmployees);
+
+function loadEmployees() {
+    const date = dateEl.value;
+    const dept = deptEl.value;
+    if (!date) return;
+
+    document.getElementById('workspace').style.display   = 'none';
+    document.getElementById('errorArea').style.display   = 'none';
+    document.getElementById('loadingArea').style.display = 'block';
+
+    let url = `${EMP_LIST_URL}?date=${encodeURIComponent(date)}`;
+    if (dept) url += `&department=${encodeURIComponent(dept)}`;
+
+    fetch(url)
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('loadingArea').style.display = 'none';
+            if (data.error) throw new Error(data.error);
+            renderWorkspace(data, date, dept);
+        })
+        .catch(err => {
+            document.getElementById('loadingArea').style.display = 'none';
+            document.getElementById('errorArea').style.display   = 'block';
+            document.getElementById('errorArea').innerHTML =
+                `<div class="alert alert-danger"><i class="bi bi-exclamation-triangle-fill me-2"></i>
+                 تعذّر تحميل البيانات: ${err.message || 'خطأ غير معروف'}</div>`;
+        });
+}
+
+/* ── Render workspace ───────────────────────────────────────────────────────── */
+function renderWorkspace(data, date, dept) {
+    document.getElementById('wsDate').textContent = date;
+    document.getElementById('wsDept').textContent = dept ? `— ${dept}` : '— جميع الأقسام';
+    document.getElementById('cntTot').textContent = data.total;
+
+    document.getElementById('hdnDate').value = date;
+    document.getElementById('hdnDept').value = dept;
+
+    // Remove any employee hidden fields from a previous load
+    document.querySelectorAll('.injected-emp-id').forEach(el => el.remove());
+
+    const grid = document.getElementById('empGrid');
+    grid.innerHTML = '';
+    currentEmpIds  = [];
+
+    let hasExisting = false;
+    data.employees.forEach(emp => {
+        grid.insertAdjacentHTML('beforeend', buildCard(emp));
+        currentEmpIds.push(emp.id);
+        if (emp.existing) hasExisting = true;
+        // Inject emp_ids hidden field into the form
+        const inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'emp_ids'; inp.value = emp.id;
+        inp.className = 'injected-emp-id';
+        document.getElementById('attForm').appendChild(inp);
+    });
+
+    // Show hint about existing records
+    const notice = document.getElementById('updateNotice');
+    if (notice) notice.style.display = hasExisting ? '' : 'none';
+
+    updateCounts();
+    setDirty(false);
+    document.getElementById('workspace').style.display = '';
+}
+
+/* ── Build employee card ────────────────────────────────────────────────────── */
+function buildCard(emp) {
+    const initStatus = emp.existing ? emp.existing.status  : 'present';
+    const initCin    = emp.existing ? (emp.existing.check_in  || '') : '';
+    const initCout   = emp.existing ? (emp.existing.check_out || '') : '';
+    const initNotes  = emp.existing ? (emp.existing.notes || '') : '';
+    const hasRec     = !!emp.existing;
+    const srcBadge   = hasRec ? sourceIcon(emp.existing.source) : '';
+
+    // Avatar: first letter of name
+    const avatarLetter = escHtml((emp.full_name || '؟')[0]);
+
+    // Existing-record badge
+    let existingBadge = '';
+    if (hasRec) {
+        existingBadge = `<span class="badge ms-1" title="يوجد سجل مسبق — سيُحدَّث عند الحفظ"
+            style="background:#cce5ff;color:#004085;font-size:10px;white-space:nowrap">
+            ${srcBadge} سُجِّل مسبقاً</span>`;
+    }
+
+    // Time / notes row — hidden when absent
+    const timesDisplay = initStatus === 'absent' ? 'display:none' : '';
+
+    return `
+      <div class="col-md-4 col-lg-3 col-sm-6">
+        <div class="card att-card ${hasRec ? 'has-record' : ''}" style="min-height:0">
+          <div class="card-body py-2 px-3">
+
+            {/* Header: avatar + name + badge */}
+            <div class="d-flex align-items-start gap-2 mb-2">
+              <div class="att-avatar">${avatarLetter}</div>
+              <div class="flex-grow-1" style="min-width:0">
+                <div class="fw-700 text-truncate" style="font-size:13px">${escHtml(emp.full_name)}</div>
+                <div class="text-muted" style="font-size:10px">
+                  ${emp.employee_id ? '#' + escHtml(emp.employee_id) : ''}
+                  ${emp.department  ? ' · ' + escHtml(emp.department) : ''}
+                  ${emp.job_title   ? '<br>' + escHtml(emp.job_title) : ''}
+                </div>
+                ${existingBadge}
+              </div>
+            </div>
+
+            {/* Status toggle */}
+            <div class="d-flex gap-1 mb-1">
+              <button type="button"
+                class="att-status-btn btn btn-sm ${initStatus==='present'?'active-present':'btn-outline-secondary'}"
+                data-eid="${emp.id}" data-status="present"
+                onclick="setStatus(${emp.id},'present')">
+                <i class="bi bi-check-circle-fill me-1"></i>حاضر
+              </button>
+              <button type="button"
+                class="att-status-btn btn btn-sm ${initStatus==='absent'?'active-absent':'btn-outline-secondary'}"
+                data-eid="${emp.id}" data-status="absent"
+                onclick="setStatus(${emp.id},'absent')">
+                <i class="bi bi-x-circle-fill me-1"></i>غائب
+              </button>
+              <button type="button"
+                class="att-status-btn btn btn-sm ${initStatus==='late'?'active-late':'btn-outline-secondary'}"
+                data-eid="${emp.id}" data-status="late"
+                onclick="setStatus(${emp.id},'late')">
+                <i class="bi bi-clock-fill me-1"></i>متأخر
+              </button>
+            </div>
+            <input type="hidden" name="status_${emp.id}" id="sv_${emp.id}" value="${initStatus}">
+
+            {/* Time + notes inputs (hidden when absent) */}
+            <div class="time-row" id="times_${emp.id}" style="${timesDisplay}">
+              <div class="row g-1 mb-1">
+                <div class="col">
+                  <label class="form-label mb-0 text-muted" style="font-size:10px">
+                    <i class="bi bi-box-arrow-in-right me-1"></i>وقت الحضور
+                  </label>
+                  <input type="time" class="form-control form-control-sm"
+                         name="check_in_${emp.id}" id="ci_${emp.id}"
+                         value="${escHtml(initCin)}">
+                </div>
+                <div class="col">
+                  <label class="form-label mb-0 text-muted" style="font-size:10px">
+                    <i class="bi bi-box-arrow-right me-1"></i>وقت الانصراف
+                  </label>
+                  <input type="time" class="form-control form-control-sm"
+                         name="check_out_${emp.id}" id="co_${emp.id}"
+                         value="${escHtml(initCout)}">
+                </div>
+              </div>
+              <input type="text" class="form-control form-control-sm"
+                     name="notes_${emp.id}" id="no_${emp.id}"
+                     placeholder="ملاحظات (اختياري)…"
+                     value="${escHtml(initNotes)}">
+            </div>
+
+          </div>
+        </div>
+      </div>`;
+}
+
+function sourceIcon(src) {
+    if (src === 'aiface') return '<i class="bi bi-camera-video-fill" title="AI Face"></i>';
+    if (src === 'manual') return '<i class="bi bi-pencil"             title="يدوي"></i>';
+    if (src)              return `<i class="bi bi-hdd-network"        title="${escHtml(src)}"></i>`;
+    return '';
+}
+
+/* ── Status toggle ──────────────────────────────────────────────────────────── */
+function setStatus(eid, status) {
+    document.getElementById('sv_' + eid).value = status;
+
+    document.querySelectorAll(`.att-status-btn[data-eid="${eid}"]`).forEach(btn => {
+        const bStatus = btn.dataset.status;
+        btn.className = btn.className
+            .replace(/\bactive-(present|absent|late)\b/g, '')
+            .replace(/\bbtn-outline-secondary\b/g, '')
+            .trim();
+        btn.classList.add(bStatus === status ? `active-${status}` : 'btn-outline-secondary');
+    });
+
+    // Show/hide time + notes inputs based on status
+    const timesRow = document.getElementById('times_' + eid);
+    if (timesRow) timesRow.style.display = (status === 'absent') ? 'none' : '';
+
+    setDirty(true);
+    updateCounts();
+}
+
+/* ── Bulk actions ───────────────────────────────────────────────────────────── */
+document.getElementById('markAllPresent').addEventListener('click', () => {
+    currentEmpIds.forEach(id => setStatus(id, 'present'));
+    setDirty(true);
+});
+document.getElementById('markAllAbsent').addEventListener('click', () => {
+    currentEmpIds.forEach(id => setStatus(id, 'absent'));
+    setDirty(true);
+});
+
+/* ── Live count update ──────────────────────────────────────────────────────── */
+function updateCounts() {
+    let p = 0, a = 0, l = 0;
+    currentEmpIds.forEach(id => {
+        const el = document.getElementById('sv_' + id);
+        if (!el) return;
+        if      (el.value === 'present') p++;
+        else if (el.value === 'absent')  a++;
+        else if (el.value === 'late')    l++;
+    });
+    ['cntP','cntP2'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = p; });
+    ['cntA','cntA2'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = a; });
+    ['cntL','cntL2'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = l; });
+}
+
+/* ── Clear dirty flag on submit ─────────────────────────────────────────────── */
+document.getElementById('attForm').addEventListener('submit', () => setDirty(false));
+
+/* ── HTML escape ────────────────────────────────────────────────────────────── */
+function escHtml(str) {
+    return String(str || '')
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ── Auto-load from URL params (post-save redirect) ────────────────────────── */
+(function () {
+    const params   = new URLSearchParams(window.location.search);
+    const autoDate = params.get('date');
+    const autoDept = params.get('department');
+    if (!autoDate) return;
+    dateEl.value = autoDate;
+    if (autoDept) deptEl.value = autoDept;
+    if (!IS_HIST) loadEmployees();
+})();
+</script>
+{% endblock %}

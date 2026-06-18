@@ -9,6 +9,11 @@
     <p class="page-subtitle mb-0">ملخص الحضور والغياب مع احتساب الأيام الافتراضية</p>
   </div>
   <div class="d-flex gap-2 flex-wrap">
+    {% if not is_historical_year %}
+    <a href="{{ url_for('employees.manual_attendance') }}" class="btn btn-primary btn-sm">
+      <i class="bi bi-pencil-square me-1"></i>تسجيل يدوي
+    </a>
+    {% endif %}
     <a href="{{ url_for('admin.attendance_settings') }}" class="btn btn-outline-secondary btn-sm">
       <i class="bi bi-gear me-1"></i>إعدادات الحضور
     </a>
