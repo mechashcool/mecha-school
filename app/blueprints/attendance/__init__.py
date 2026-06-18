@@ -476,10 +476,11 @@ def manual_students():
             'locked':         locked,
             'needs_checkout': needs_checkout,
             'existing': {
-                'status':    rec.status,
-                'check_in':  rec.check_in.strftime('%H:%M')  if rec.check_in  else None,
-                'check_out': rec.check_out.strftime('%H:%M') if rec.check_out else None,
-                'source':    rec.source,
+                'status':      rec.status,
+                'check_in':    rec.check_in.strftime('%H:%M')  if rec.check_in  else None,
+                'check_out':   rec.check_out.strftime('%H:%M') if rec.check_out else None,
+                'source':      rec.source,
+                'is_on_leave': (rec.status == 'on_leave' and rec.source == 'leave'),
             } if rec else None,
         })
 
@@ -576,34 +577,64 @@ def take(section_id):
             if student.id in existing:
                 rec = existing[student.id]
                 if rec.check_in is not None:
+                    # Physical check-in recorded — allow departure only.
                     if post_is_departure and rec.check_out is None:
-                        # Only check out students whose checkbox was ticked
                         if request.form.get(f'checkout_{student.id}'):
                             rec.check_out = now_time
                             note = request.form.get(f'departure_note_{student.id}', '').strip()
                             if note:
                                 rec.notes = note
                             newly_checked_out.append(student)
-                        # else: left unchecked — skip silently
                     else:
                         already_marked_count += 1
                     continue
-                # Absent record (check_in is None) — already finalized.
-                # Block re-registration to match device behaviour: any existing
-                # record (regardless of status) is treated as already processed.
-                already_marked_count += 1
+                if rec.status == 'absent':
+                    # Absent record with no physical check-in — treat as finalized.
+                    already_marked_count += 1
+                    continue
+                # on_leave record (no check_in) — can be updated via manual selection.
+                # The admin may override approved leave with present, late, absent, or
+                # keep it as on_leave by selecting the مجاز option.
+                _shift = get_student_shift(student, school)
+                if status_choice == 'on_leave':
+                    pass  # Keep the existing on_leave record unchanged.
+                elif status_choice == 'present':
+                    rec.status      = determine_check_in_status(now_time, settings, shift=_shift)
+                    rec.check_in    = now_time
+                    rec.source      = 'manual'
+                    rec.recorded_by = current_user.id
+                    newly_checked_in.append((student, rec.status))
+                elif status_choice == 'late':
+                    rec.status      = 'late'
+                    rec.check_in    = now_time
+                    rec.source      = 'manual'
+                    rec.recorded_by = current_user.id
+                    newly_checked_in.append((student, 'late'))
+                else:  # absent selected for an on_leave student
+                    rec.status      = 'absent'
+                    rec.check_in    = None
+                    rec.source      = 'manual'
+                    rec.recorded_by = current_user.id
+                    newly_absent.append(student)
                 continue
             else:
                 _shift = get_student_shift(student, school)
-                if status_choice == 'present':
+                if status_choice == 'on_leave':
+                    actual_status = 'on_leave'
+                    check_in_val  = None
+                    _src          = 'manual'
+                elif status_choice == 'present':
                     actual_status = determine_check_in_status(now_time, settings, shift=_shift)
                     check_in_val  = now_time
+                    _src          = None
                 elif status_choice == 'late':
                     actual_status = 'late'
                     check_in_val  = now_time
+                    _src          = None
                 else:
                     actual_status = 'absent'
                     check_in_val  = None
+                    _src          = None
                 db.session.add(StudentAttendance(
                     student_id       = student.id,
                     school_id        = school.id if school else None,
@@ -613,11 +644,13 @@ def take(section_id):
                     check_in         = check_in_val,
                     recorded_by      = current_user.id,
                     shift_id         = _shift.id if _shift else None,
+                    source           = _src,
                 ))
                 if actual_status in ('present', 'late'):
                     newly_checked_in.append((student, actual_status))
                 elif actual_status == 'absent':
                     newly_absent.append(student)
+                # on_leave: no notification sent
 
         db.session.commit()
 
@@ -762,15 +795,19 @@ def student_profile(student_id):
                .order_by(StudentAttendance.date.asc())
                .all())
 
-    total   = len(records)
-    present = sum(1 for r in records if r.status == 'present')
-    absent  = sum(1 for r in records if r.status == 'absent')
-    late    = sum(1 for r in records if r.status == 'late')
-    att_pct = round(present / total * 100, 1) if total else 0
+    total    = len(records)
+    present  = sum(1 for r in records if r.status == 'present')
+    absent   = sum(1 for r in records if r.status == 'absent')
+    late     = sum(1 for r in records if r.status == 'late')
+    on_leave = sum(1 for r in records if r.status == 'on_leave')
+    # Approved leave days are excused — exclude from attendance rate denominator
+    billable = total - on_leave
+    att_pct  = round((present + late) / billable * 100, 1) if billable else 0
 
     stats = {
         'total': total, 'present': present,
-        'absent': absent, 'late': late, 'att_pct': att_pct,
+        'absent': absent, 'late': late,
+        'on_leave': on_leave, 'att_pct': att_pct,
     }
     now = get_local_now(settings)
     return render_template('attendance/student_profile.html',
@@ -861,7 +898,7 @@ def _get_student_query(school, all_sections, stage=None, grade_id=None,
 
 
 def _student_stats(student_id, start_date, end_date, status_filter=None):
-    """Return (present, absent, late, checkout, details) for one student/range."""
+    """Return (present, absent, late, on_leave, checkout, details) for one student/range."""
     q = (StudentAttendance.query
          .filter_by(student_id=student_id)
          .filter(StudentAttendance.date.between(start_date, end_date)))
@@ -871,8 +908,9 @@ def _student_stats(student_id, start_date, end_date, status_filter=None):
     present  = sum(1 for a in atts if a.status == 'present')
     absent   = sum(1 for a in atts if a.status == 'absent')
     late     = sum(1 for a in atts if a.status == 'late')
+    on_leave = sum(1 for a in atts if a.status == 'on_leave')
     checkout = sum(1 for a in atts if a.check_out is not None)
-    return present, absent, late, checkout, atts
+    return present, absent, late, on_leave, checkout, atts
 
 
 @attendance_bp.route('/report')
@@ -930,16 +968,17 @@ def report():
                 grade_buckets[gid].append(s)
             for gid, sts in grade_buckets.items():
                 g = grade_map.get(gid)
-                total_p = total_a = total_l = 0
+                total_p = total_a = total_l = total_ol = 0
                 for s in sts:
-                    p, a, l, _co, _det = _student_stats(s.id, start_date, end_date, status_f or None)
-                    total_p += p; total_a += a; total_l += l
+                    p, a, l, ol, _co, _det = _student_stats(s.id, start_date, end_date, status_f or None)
+                    total_p += p; total_a += a; total_l += l; total_ol += ol
                 total = total_p + total_a + total_l
                 pct = round((total_p + total_l) / total * 100, 1) if total else 0
                 grade_summary.append({
                     'grade': g, 'grade_id': gid,
                     'total_students': len(sts),
                     'present': total_p, 'absent': total_a, 'late': total_l,
+                    'on_leave': total_ol,
                     'total': total, 'pct': pct,
                 })
 
@@ -950,16 +989,17 @@ def report():
                 sec_buckets[s.section_id].append(s)
             for sid, sts in sec_buckets.items():
                 sec = next((s for s in all_sections if s.id == sid), None)
-                total_p = total_a = total_l = 0
+                total_p = total_a = total_l = total_ol = 0
                 for s in sts:
-                    p, a, l, _co, _det = _student_stats(s.id, start_date, end_date, status_f or None)
-                    total_p += p; total_a += a; total_l += l
+                    p, a, l, ol, _co, _det = _student_stats(s.id, start_date, end_date, status_f or None)
+                    total_p += p; total_a += a; total_l += l; total_ol += ol
                 total = total_p + total_a + total_l
                 pct = round((total_p + total_l) / total * 100, 1) if total else 0
                 section_summary.append({
                     'section': sec, 'section_id': sid,
                     'total_students': len(sts),
                     'present': total_p, 'absent': total_a, 'late': total_l,
+                    'on_leave': total_ol,
                     'total': total, 'pct': pct,
                 })
 
@@ -977,26 +1017,28 @@ def report():
             for eff_sid, sts in shift_buckets.items():
                 sh = (AttendanceShift.query.get(eff_sid)
                       if eff_sid else None)
-                total_p = total_a = total_l = 0
+                total_p = total_a = total_l = total_ol = 0
                 for s in sts:
-                    p, a, l, _co, _det = _student_stats(s.id, start_date, end_date, status_f or None)
-                    total_p += p; total_a += a; total_l += l
+                    p, a, l, ol, _co, _det = _student_stats(s.id, start_date, end_date, status_f or None)
+                    total_p += p; total_a += a; total_l += l; total_ol += ol
                 total = total_p + total_a + total_l
                 pct = round((total_p + total_l) / total * 100, 1) if total else 0
                 shift_summary.append({
                     'shift': sh, 'shift_id': eff_sid,
                     'total_students': len(sts),
                     'present': total_p, 'absent': total_a, 'late': total_l,
+                    'on_leave': total_ol,
                     'total': total, 'pct': pct,
                 })
 
         else:
             # detail / student modes — per-student rows
             for s in students:
-                p, a, l, co, atts = _student_stats(s.id, start_date, end_date, status_f or None)
+                p, a, l, ol, co, atts = _student_stats(s.id, start_date, end_date, status_f or None)
                 records.append({
                     'student': s,
-                    'present': p, 'absent': a, 'late': l, 'checkout': co,
+                    'present': p, 'absent': a, 'late': l,
+                    'on_leave': ol, 'checkout': co,
                     'details': atts,
                 })
 
@@ -1056,9 +1098,9 @@ def report_export_pdf():
 
     rows = []
     for s in students:
-        p, a, l, co, atts = _student_stats(s.id, start_date, end_date, status_f or None)
+        p, a, l, ol, co, atts = _student_stats(s.id, start_date, end_date, status_f or None)
         rows.append({'student': s, 'present': p, 'absent': a, 'late': l,
-                     'checkout': co, 'details': atts})
+                     'on_leave': ol, 'checkout': co, 'details': atts})
 
     pdf_bytes = generate_attendance_report_pdf(
         rows=rows,
@@ -1115,9 +1157,9 @@ def report_export_excel():
 
     rows = []
     for s in students:
-        p, a, l, co, atts = _student_stats(s.id, start_date, end_date, status_f or None)
+        p, a, l, ol, co, atts = _student_stats(s.id, start_date, end_date, status_f or None)
         rows.append({'student': s, 'present': p, 'absent': a, 'late': l,
-                     'checkout': co, 'details': atts})
+                     'on_leave': ol, 'checkout': co, 'details': atts})
 
     xlsx_bytes = generate_attendance_excel(
         rows=rows,

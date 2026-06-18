@@ -82,6 +82,34 @@
         </form>
       </div>
     </div>
+
+    <div class="card mt-3">
+      <div class="card-body">
+        <h5 class="mb-3">تعديل تواريخ الإجازة</h5>
+        {% if leave_request.status == 'approved' %}
+        <div class="alert alert-warning py-2 mb-3" style="font-size:12px">
+          <i class="bi bi-exclamation-triangle-fill me-1"></i>
+          الإجازة مُعتمدة — سيتم تحديث سجلات الحضور تلقائيًا عند تغيير التواريخ.
+        </div>
+        {% endif %}
+        <form method="POST" action="{{ url_for('admin.employee_leave_request_edit_dates', request_id=leave_request.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+          <div class="mb-3">
+            <label class="form-label">من تاريخ</label>
+            <input type="date" name="from_date" class="form-control" required
+                   value="{{ leave_request.from_date.isoformat() if leave_request.from_date else '' }}">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">إلى تاريخ</label>
+            <input type="date" name="to_date" class="form-control" required
+                   value="{{ leave_request.to_date.isoformat() if leave_request.to_date else '' }}">
+          </div>
+          <button class="btn btn-outline-warning">
+            <i class="bi bi-calendar-range me-1"></i>تحديث التواريخ
+          </button>
+        </form>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}

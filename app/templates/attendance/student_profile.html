@@ -110,7 +110,14 @@
       <div class="stat-label">غائب</div>
     </div>
   </div>
-  <div class="col-12 col-md-4">
+  <div class="col-6 col-md-2">
+    <div class="card text-center py-3">
+      <div class="stat-ring mx-auto mb-2"
+           style="border-color:#2e7d32;color:#2e7d32">{{ stats.on_leave or 0 }}</div>
+      <div class="stat-label">مجاز</div>
+    </div>
+  </div>
+  <div class="col-12 col-md-2">
     <div class="card text-center py-3">
       <div class="stat-ring mx-auto mb-2"
            style="border-color:{% if stats.att_pct >= 90 %}#1aab6d{% elif stats.att_pct >= 75 %}#e8a020{% else %}#e03e3e{% endif %};
@@ -149,11 +156,20 @@
            title="غائب: {{ stats.absent }}">
       </div>
       {% endif %}
+      {% if stats.on_leave and stats.on_leave > 0 %}
+      <div class="progress-bar"
+           style="width:{{ (stats.on_leave / stats.total * 100)|round(1) }}%;background:#2e7d32"
+           title="مجاز: {{ stats.on_leave }}">
+      </div>
+      {% endif %}
     </div>
     <div class="d-flex gap-4 mt-2" style="font-size:12px;color:#888">
       <span><span class="badge" style="background:#e8f8f0;color:#1aab6d">حاضر</span> {{ stats.present }}</span>
       <span><span class="badge" style="background:#fff8ec;color:#e8a020">متأخر</span> {{ stats.late }}</span>
       <span><span class="badge" style="background:#fef0f0;color:#e03e3e">غائب</span> {{ stats.absent }}</span>
+      {% if stats.on_leave and stats.on_leave > 0 %}
+      <span><span class="badge" style="background:#e8f5e9;color:#2e7d32">مجاز</span> {{ stats.on_leave }}</span>
+      {% endif %}
     </div>
   </div>
 </div>
@@ -211,12 +227,16 @@
             <span class="badge-status badge-inactive">غائب</span>
             {% elif r.status == 'late' %}
             <span class="badge-status" style="background:#fff8ec;color:#e8a020;font-weight:700">متأخر</span>
+            {% elif r.status == 'on_leave' %}
+            <span class="badge-status" style="background:#e8f5e9;color:#2e7d32;font-weight:700">مجاز</span>
             {% else %}
             <span class="badge-status">{{ r.status }}</span>
             {% endif %}
           </td>
           <td style="font-size:12px">
-            {% if r.source == 'rfid' %}
+            {% if r.source == 'leave' %}
+            <i class="bi bi-calendar-check text-success"></i> إجازة
+            {% elif r.source == 'rfid' %}
             <i class="bi bi-credit-card-2-back text-accent"></i> RFID
             {% else %}
             <i class="bi bi-pencil-square"></i> يدوي

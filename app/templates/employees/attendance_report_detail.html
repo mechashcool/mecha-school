@@ -121,6 +121,16 @@
           </div>
         </div>
       </div>
+      {% if stats.on_leave is defined and stats.on_leave > 0 %}
+      <div class="col-6 col-md-4">
+        <div class="card text-center h-100 border-success">
+          <div class="card-body py-3">
+            <div style="font-size:2rem;font-weight:800;color:#2e7d32">{{ stats.on_leave }}</div>
+            <div class="text-muted small">مجاز (إجازة مجازة)</div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
       <div class="col-6 col-md-4">
         <div class="card text-center h-100
           {% if stats.rate >= 90 %}border-success
@@ -149,6 +159,9 @@
       <span class="badge bg-success">حاضر: {{ stats.present }}</span>
       <span class="badge bg-warning text-dark">متأخر: {{ stats.late }}</span>
       <span class="badge bg-danger">غائب: {{ stats.absent }}</span>
+      {% if stats.on_leave is defined and stats.on_leave > 0 %}
+      <span class="badge" style="background:#2e7d32">مجاز: {{ stats.on_leave }}</span>
+      {% endif %}
     </div>
   </div>
 
@@ -172,7 +185,7 @@
         {% set days_ar = ['الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت','الأحد'] %}
         {% for day in stats.daily %}
         <tr class="
-          {% if day.status == 'absent' %}table-danger{% elif day.status == 'late' %}table-warning{% endif %}
+          {% if day.status == 'absent' %}table-danger{% elif day.status == 'late' %}table-warning{% elif day.status == 'on_leave' %}table-success{% endif %}
           {{ 'opacity-75' if day.is_virtual }}">
           <td class="text-muted small">{{ loop.index }}</td>
           <td class="small">{{ day.date.strftime('%Y-%m-%d') }}</td>
@@ -186,6 +199,8 @@
               <span class="badge bg-danger">
                 غائب{% if day.is_virtual %} <i class="bi bi-cloud" title="افتراضي"></i>{% endif %}
               </span>
+            {% elif day.status == 'on_leave' %}
+              <span class="badge" style="background:#2e7d32">مجاز</span>
             {% else %}
               <span class="badge bg-secondary">{{ day.status }}</span>
             {% endif %}
@@ -205,7 +220,9 @@
             {% endif %}
           </td>
           <td class="text-muted small">
-            {% if day.source == 'aiface' %}
+            {% if day.source == 'leave' %}
+            <i class="bi bi-calendar-check text-success me-1"></i>إجازة
+            {% elif day.source == 'aiface' %}
             <i class="bi bi-camera-video-fill text-primary me-1"></i>AI Face
             {% elif day.source == 'manual' %}
             <i class="bi bi-pencil-fill text-secondary me-1"></i>يدوي

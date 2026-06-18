@@ -885,11 +885,12 @@ def manual_attendance_list():
             'department':  emp.department  or '',
             'job_title':   emp.job_title   or '',
             'existing': {
-                'status':    rec.status,
-                'check_in':  rec.check_in.strftime('%H:%M')  if rec.check_in  else '',
-                'check_out': rec.check_out.strftime('%H:%M') if rec.check_out else '',
-                'source':    rec.source or '',
-                'notes':     rec.notes  or '',
+                'status':      rec.status,
+                'check_in':    rec.check_in.strftime('%H:%M')  if rec.check_in  else '',
+                'check_out':   rec.check_out.strftime('%H:%M') if rec.check_out else '',
+                'source':      rec.source or '',
+                'notes':       rec.notes  or '',
+                'is_on_leave': (rec.status == 'on_leave' and rec.source == 'leave'),
             } if rec else None,
         })
 
@@ -968,7 +969,7 @@ def manual_attendance_save():
             continue  # Cross-school attempt — silently rejected
 
         status_choice = request.form.get(f'status_{emp_id}', 'absent').strip()
-        if status_choice not in ('present', 'late', 'absent'):
+        if status_choice not in ('present', 'late', 'absent', 'on_leave'):
             continue
 
         check_in_val  = None
@@ -998,9 +999,12 @@ def manual_attendance_save():
                     check_out_val = dt.strptime(co_str, '%H:%M').time()
                 except ValueError:
                     pass
+        # on_leave and absent: check_in_val and check_out_val remain None
 
         rec = existing.get(emp_id)
         if rec:
+            # Actual manual selection always wins — including overriding on_leave
+            # records created by the leave sync. Actual attendance takes priority.
             rec.status      = status_choice
             rec.check_in    = check_in_val
             rec.check_out   = check_out_val

@@ -199,11 +199,14 @@ def compute_attendance(record: SalaryRecord, settings: PayrollSettings, school) 
 
     # Iterate over working days exactly as calculate_employee_stats() does:
     # a missing record on a working day is a virtual absence.
+    # Days with status='on_leave' are approved leave — no deduction of any kind.
     for d in working_days:
         rec = records_by_date.get(d)
         if rec is None:
             absence_days += 1  # virtual absence
             continue
+        if rec.status == 'on_leave':
+            continue  # approved leave — exempt from all attendance deductions
         if rec.status == 'absent':
             absence_days += 1
         elif rec.status == 'late':

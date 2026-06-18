@@ -5,7 +5,7 @@ from io import BytesIO
 from datetime import datetime
 
 
-_STATUS_AR = {'present': 'حاضر', 'absent': 'غائب', 'late': 'متأخر'}
+_STATUS_AR = {'present': 'حاضر', 'absent': 'غائب', 'late': 'متأخر', 'on_leave': 'مجاز'}
 
 
 def generate_attendance_excel(rows, report_type='detail', date_from='', date_to='',
@@ -80,23 +80,27 @@ def generate_attendance_excel(rows, report_type='detail', date_from='', date_to=
     row_idx += 2
 
     # ── Summary block ─────────────────────────────────────────────────────────
-    total_present = sum(r['present'] for r in rows)
-    total_absent  = sum(r['absent']  for r in rows)
-    total_late    = sum(r['late']    for r in rows)
-    grand_total   = total_present + total_absent + total_late
-    grand_pct     = round((total_present + total_late) / grand_total * 100, 1) if grand_total > 0 else 0
+    total_present  = sum(r['present']           for r in rows)
+    total_absent   = sum(r['absent']            for r in rows)
+    total_late     = sum(r['late']              for r in rows)
+    total_on_leave = sum(r.get('on_leave', 0)  for r in rows)
+    # Attendance total excludes on_leave days (they are excused absences)
+    grand_total    = total_present + total_absent + total_late
+    grand_pct      = round((total_present + total_late) / grand_total * 100, 1) if grand_total > 0 else 0
 
-    sum_headers = ['عدد الطلاب', 'حاضر', 'متأخر', 'غائب', 'إجمالي السجلات', 'نسبة الحضور']
+    sum_headers = ['عدد الطلاب', 'حاضر', 'متأخر', 'غائب', 'مجاز', 'إجمالي السجلات', 'نسبة الحضور']
     for ci, h in enumerate(sum_headers, 1):
         hdr(ws.cell(row_idx, ci), h)
     row_idx += 1
-    for ci, v in enumerate([len(rows), total_present, total_late, total_absent, grand_total, f'{grand_pct}%'], 1):
+    for ci, v in enumerate(
+            [len(rows), total_present, total_late, total_absent,
+             total_on_leave, grand_total, f'{grand_pct}%'], 1):
         val(ws.cell(row_idx, ci), v)
     row_idx += 2
 
     # ── Main table headers ────────────────────────────────────────────────────
     col_headers = ['#', 'اسم الطالب', 'الرقم', 'الصف', 'الشعبة', 'الشفت',
-                   'حاضر', 'متأخر', 'غائب', 'الإجمالي', 'نسبة الحضور']
+                   'حاضر', 'متأخر', 'غائب', 'مجاز', 'الإجمالي', 'نسبة الحضور']
     for ci, h in enumerate(col_headers, 1):
         hdr(ws.cell(row_idx, ci), h)
     row_idx += 1
@@ -119,18 +123,21 @@ def generate_attendance_excel(rows, report_type='detail', date_from='', date_to=
                   and s.section.grade.shift):
                 shift_n = s.section.grade.shift.name
 
+        ol      = row.get('on_leave', 0)
+        # Rate denominator excludes on_leave days (excused — should not penalise)
         total   = row['present'] + row['absent'] + row['late']
         pct_val = round((row['present'] + row['late']) / total * 100, 1) if total else 0
         alt     = (i % 2 == 0)
 
         row_vals = [i, s.full_name, s.student_id, grade_n, sec_n, shift_n,
-                    row['present'], row['late'], row['absent'], total, f'{pct_val}%']
+                    row['present'], row['late'], row['absent'], ol,
+                    total + ol, f'{pct_val}%']
         for ci, v in enumerate(row_vals, 1):
             val(ws.cell(row_idx, ci), v, alt=alt)
         row_idx += 1
 
     # ── Column widths ─────────────────────────────────────────────────────────
-    col_widths = [5, 30, 14, 22, 12, 16, 8, 8, 8, 10, 14]
+    col_widths = [5, 30, 14, 22, 12, 16, 8, 8, 8, 8, 10, 14]
     for ci, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
 

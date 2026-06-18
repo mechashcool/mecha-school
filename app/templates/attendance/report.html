@@ -108,9 +108,10 @@
           <label class="form-label mb-1 fw-600">الحالة</label>
           <select name="status" class="form-select">
             <option value="" {% if not status_f %}selected{% endif %}>الكل</option>
-            <option value="present" {% if status_f == 'present' %}selected{% endif %}>حاضر</option>
-            <option value="late"    {% if status_f == 'late'    %}selected{% endif %}>متأخر</option>
-            <option value="absent"  {% if status_f == 'absent'  %}selected{% endif %}>غائب</option>
+            <option value="present"  {% if status_f == 'present'  %}selected{% endif %}>حاضر</option>
+            <option value="late"     {% if status_f == 'late'     %}selected{% endif %}>متأخر</option>
+            <option value="absent"   {% if status_f == 'absent'   %}selected{% endif %}>غائب</option>
+            <option value="on_leave" {% if status_f == 'on_leave' %}selected{% endif %}>مجاز</option>
           </select>
         </div>
 
@@ -344,6 +345,7 @@
           <th class="text-success">حاضر</th>
           <th class="text-warning">متأخر</th>
           <th class="text-danger">غائب</th>
+          <th style="color:#2e7d32">مجاز</th>
           <th>الإجمالي</th>
           <th>نسبة الحضور</th>
           <th></th>
@@ -351,8 +353,10 @@
       </thead>
       <tbody>
         {% for r in records %}
-        {% set total = r.present + r.absent + r.late %}
-        {% set pct   = ((r.present + r.late) / total * 100) | round(1) if total else 0 %}
+        {% set on_leave = r.on_leave if r.on_leave is defined else 0 %}
+        {% set total = r.present + r.absent + r.late + on_leave %}
+        {% set billable = r.present + r.absent + r.late %}
+        {% set pct   = ((r.present + r.late) / billable * 100) | round(1) if billable else 0 %}
         <tr>
           <td class="fw-600">{{ r.student.full_name }}</td>
           <td><code>{{ r.student.student_id }}</code></td>
@@ -376,6 +380,7 @@
           <td class="text-success fw-700">{{ r.present }}</td>
           <td class="text-warning fw-700">{{ r.late }}</td>
           <td class="text-danger fw-700">{{ r.absent }}</td>
+          <td style="color:#2e7d32;font-weight:700">{{ on_leave }}</td>
           <td>{{ total }}</td>
           <td>
             <div class="d-flex align-items-center gap-2">
@@ -421,14 +426,15 @@
                     <td>{{ att.check_in.strftime('%H:%M') if att.check_in else '—' }}</td>
                     <td>{{ att.check_out.strftime('%H:%M') if att.check_out else '—' }}</td>
                     <td>
-                      <span class="badge-status
-                        {% if att.status == 'present' %}badge-active
-                        {% elif att.status == 'late' %}badge-pending
-                        {% else %}badge-inactive{% endif %}">
-                        {% if att.status == 'present' %}حاضر
-                        {% elif att.status == 'late' %}متأخر
-                        {% else %}غائب{% endif %}
-                      </span>
+                      {% if att.status == 'present' %}
+                      <span class="badge-status badge-active">حاضر</span>
+                      {% elif att.status == 'late' %}
+                      <span class="badge-status badge-pending">متأخر</span>
+                      {% elif att.status == 'on_leave' %}
+                      <span class="badge-status" style="background:#e8f5e9;color:#2e7d32;font-weight:700">مجاز</span>
+                      {% else %}
+                      <span class="badge-status badge-inactive">غائب</span>
+                      {% endif %}
                     </td>
                     <td style="font-size:12px">{{ att.source or '—' }}</td>
                     {% if shifts_enabled %}

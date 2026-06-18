@@ -55,14 +55,17 @@ def calculate_employee_stats(employee,
         present       – count of on-time days
         late          – count of late days
         absent        – count of absent days (real DB records + virtual)
+        on_leave      – count of approved-leave days (status='on_leave')
         checked_out   – count of days with a check_out time
         working_days  – total number of working days in range
         attended      – present + late (employee showed up)
-        rate          – attended / working_days * 100, rounded to 1 dp
+        rate          – attended / (working_days - on_leave) * 100; approved
+                        leave days are excluded from the denominator so they
+                        do not penalise the attendance percentage
         daily         – list of per-day dicts (date, status, check_in, ...)
     """
     daily: list = []
-    present = absent = late = checked_out = 0
+    present = absent = late = checked_out = on_leave = 0
 
     for d in working_days:
         rec = records_by_date.get(d)
@@ -87,6 +90,8 @@ def calculate_employee_stats(employee,
                 late += 1
             elif status == 'absent':
                 absent += 1
+            elif status == 'on_leave':
+                on_leave += 1
             if rec.check_out:
                 checked_out += 1
             daily.append({
@@ -103,13 +108,16 @@ def calculate_employee_stats(employee,
 
     total = len(working_days)
     attended = present + late
-    rate = round(attended / total * 100, 1) if total > 0 else 0.0
+    # Approved leave days are excused — exclude them from the rate denominator
+    billable = total - on_leave
+    rate = round(attended / billable * 100, 1) if billable > 0 else 0.0
 
     return {
         'employee': employee,
         'present': present,
         'late': late,
         'absent': absent,
+        'on_leave': on_leave,
         'checked_out': checked_out,
         'working_days': total,
         'attended': attended,
@@ -134,7 +142,7 @@ def get_employees_attendance_summary(
     Fetches all EmployeeAttendance records in one bulk query, then assembles
     per-employee stats.  Filters are applied in Python after the bulk fetch.
 
-    status_filter values: 'present' | 'late' | 'absent' | '' (= all)
+    status_filter values: 'present' | 'late' | 'absent' | 'on_leave' | '' (= all)
     The filter keeps rows where the employee has AT LEAST ONE day of that status.
     """
     from app.models import EmployeeAttendance
@@ -183,6 +191,8 @@ def get_employees_attendance_summary(
         if status_filter == 'late' and stats['late'] == 0:
             continue
         if status_filter == 'absent' and stats['absent'] == 0:
+            continue
+        if status_filter == 'on_leave' and stats.get('on_leave', 0) == 0:
             continue
 
         results.append(stats)

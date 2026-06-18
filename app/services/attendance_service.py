@@ -37,6 +37,21 @@ def process_attendance_punch(student, school, punch_dt, source='api', dedup_tag=
         return 'duplicate', existing
 
     if existing:
+        # Actual attendance overrides an approved-leave record: a device scan
+        # is proof the student physically arrived, regardless of leave status.
+        if existing.status == 'on_leave' and existing.source == 'leave':
+            _shift = get_student_shift(student, school)
+            status = determine_check_in_status(now_time, school, shift=_shift)
+            existing.status   = status
+            existing.check_in = now_time
+            existing.source   = source
+            if dedup_tag:
+                existing.notes = (
+                    (existing.notes or '').rstrip() + ' ' + dedup_tag
+                ).strip()
+            db.session.commit()
+            return 'check_in', existing
+
         # Checkout cutoff: prefer the student's shift dismissal_time when shift
         # mode is on and a shift resolves; otherwise fall back to the school
         # default att_departure_time (normal mode — unchanged behaviour).
@@ -152,6 +167,30 @@ def process_student_scan(student_id_str, device_sn_str=None,
     src = 'hikvision' if hik_serial_no is not None else 'api'
 
     if existing:
+        # Actual attendance overrides an approved-leave record: a device scan
+        # is proof the student physically arrived, regardless of leave status.
+        if existing.status == 'on_leave' and existing.source == 'leave':
+            _shift = get_student_shift(student, school)
+            status = determine_check_in_status(now_time, school, shift=_shift)
+            existing.status   = status
+            existing.check_in = now_time
+            existing.source   = src
+            if hik_serial_no is not None:
+                existing.notes = (
+                    (existing.notes or '').rstrip() + f' hik:sn={hik_serial_no}'
+                ).strip()
+            db.session.commit()
+            return {
+                "ok":           True,
+                "action":       "check_in",
+                "student_name": student.full_name,
+                "student_id":   student.student_id,
+                "date":         today.isoformat(),
+                "check_in":     now_time.strftime('%H:%M'),
+                "check_out":    None,
+                "status":       status,
+            }, 200
+
         # Checkout cutoff: prefer shift dismissal_time when in shift mode with a
         # resolved shift; otherwise the school default att_departure_time.
         _co_shift = get_student_shift(student, school)

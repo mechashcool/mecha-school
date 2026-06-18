@@ -1279,6 +1279,14 @@ def leave_request_detail(request_id):
                     **notification_kwargs,
                 )
         db.session.commit()
+        # Sync approved leave \u2192 StudentAttendance (or clear if revoked)
+        try:
+            from app.services.leave_attendance import sync_student_leave
+            sync_student_leave(leave_request)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                '[leave-att] sync_student_leave failed leave_id=%s', leave_request.id)
         flash('\u062a\u0645 \u062a\u062d\u062f\u064a\u062b \u0637\u0644\u0628 \u0627\u0644\u0625\u062c\u0627\u0632\u0629 \u0628\u0646\u062c\u0627\u062d.', 'success')
         return redirect(url_for('admin.leave_request_detail', request_id=leave_request.id))
 
@@ -1287,6 +1295,55 @@ def leave_request_detail(request_id):
                            status_labels=LEAVE_STATUS,
                            type_labels=LEAVE_TYPES,
                            source_labels=LEAVE_SOURCE_LABELS)
+
+
+@admin_bp.route('/leave-requests/<int:request_id>/edit-dates', methods=['POST'])
+@login_required
+@admin_required
+def leave_request_edit_dates(request_id):
+    """Edit the date range of a student leave request.
+
+    When the leave is currently approved, attendance records are resynced:
+    records for dates no longer covered are revoked (deleted or restored to
+    absent), and records for newly covered dates are created or converted.
+    """
+    school_id = _admin_scope_id()
+    query = LeaveRequest.query.execution_options(include_all_years=True).filter_by(id=request_id)
+    if school_id:
+        query = query.filter_by(school_id=school_id)
+    leave_request = query.first_or_404()
+
+    new_from = _parse_leave_date(request.form.get('from_date'))
+    new_to   = _parse_leave_date(request.form.get('to_date'))
+
+    if not new_from or not new_to:
+        flash('تواريخ الإجازة مطلوبة.', 'danger')
+        return redirect(url_for('admin.leave_request_detail', request_id=leave_request.id))
+    if new_to < new_from:
+        flash('تاريخ النهاية يجب أن يكون بعد تاريخ البداية.', 'danger')
+        return redirect(url_for('admin.leave_request_detail', request_id=leave_request.id))
+
+    if new_from == leave_request.from_date and new_to == leave_request.to_date:
+        flash('لم تتغير التواريخ.', 'info')
+        return redirect(url_for('admin.leave_request_detail', request_id=leave_request.id))
+
+    old_from = leave_request.from_date
+    old_to   = leave_request.to_date
+    leave_request.from_date = new_from
+    leave_request.to_date   = new_to
+    db.session.commit()
+
+    if leave_request.status == 'approved':
+        try:
+            from app.services.leave_attendance import resync_student_leave_dates
+            resync_student_leave_dates(leave_request, old_from, old_to)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                '[leave-att] resync_student_leave_dates failed leave_id=%s', leave_request.id)
+
+    flash('تم تحديث تواريخ الإجازة بنجاح.', 'success')
+    return redirect(url_for('admin.leave_request_detail', request_id=leave_request.id))
 
 
 # ── Employee (teacher) leave requests ─────────────────────────────────────────
@@ -1384,6 +1441,14 @@ def employee_leave_request_detail(request_id):
                 },
             )
         db.session.commit()
+        # Sync approved leave → EmployeeAttendance (or clear if revoked)
+        try:
+            from app.services.leave_attendance import sync_employee_leave
+            sync_employee_leave(leave_request)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                '[leave-att] sync_employee_leave failed leave_id=%s', leave_request.id)
         flash('تم تحديث طلب الإجازة بنجاح.', 'success')
         return redirect(url_for('admin.employee_leave_request_detail',
                                 request_id=leave_request.id))
@@ -1393,6 +1458,57 @@ def employee_leave_request_detail(request_id):
                            status_labels=LEAVE_STATUS,
                            type_labels=LEAVE_TYPES,
                            source_labels=LEAVE_SOURCE_LABELS)
+
+
+@admin_bp.route('/employee-leave-requests/<int:request_id>/edit-dates', methods=['POST'])
+@login_required
+@admin_required
+def employee_leave_request_edit_dates(request_id):
+    """Edit the date range of an employee leave request.
+
+    When the leave is currently approved, attendance records are resynced:
+    records for dates no longer covered are revoked (deleted or restored to
+    absent), and records for newly covered dates are created or converted.
+    """
+    school_id = _admin_scope_id()
+    query = (EmployeeLeaveRequest.query
+             .execution_options(bypass_tenant_scope=True)
+             .filter_by(id=request_id))
+    if school_id:
+        query = query.filter_by(school_id=school_id)
+    leave_request = query.first_or_404()
+
+    new_from = _parse_leave_date(request.form.get('from_date'))
+    new_to   = _parse_leave_date(request.form.get('to_date'))
+
+    if not new_from or not new_to:
+        flash('تواريخ الإجازة مطلوبة.', 'danger')
+        return redirect(url_for('admin.employee_leave_request_detail', request_id=leave_request.id))
+    if new_to < new_from:
+        flash('تاريخ النهاية يجب أن يكون بعد تاريخ البداية.', 'danger')
+        return redirect(url_for('admin.employee_leave_request_detail', request_id=leave_request.id))
+
+    if new_from == leave_request.from_date and new_to == leave_request.to_date:
+        flash('لم تتغير التواريخ.', 'info')
+        return redirect(url_for('admin.employee_leave_request_detail', request_id=leave_request.id))
+
+    old_from = leave_request.from_date
+    old_to   = leave_request.to_date
+    leave_request.from_date = new_from
+    leave_request.to_date   = new_to
+    db.session.commit()
+
+    if leave_request.status == 'approved':
+        try:
+            from app.services.leave_attendance import resync_employee_leave_dates
+            resync_employee_leave_dates(leave_request, old_from, old_to)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                '[leave-att] resync_employee_leave_dates failed leave_id=%s', leave_request.id)
+
+    flash('تم تحديث تواريخ الإجازة بنجاح.', 'success')
+    return redirect(url_for('admin.employee_leave_request_detail', request_id=leave_request.id))
 
 
 # ── Admin-created leave requests ──────────────────────────────────────────────
@@ -1535,6 +1651,15 @@ def leave_request_create_admin():
             },
         )
         db.session.commit()
+        # If admin created leave as already-approved, write attendance records now
+        if status_val == 'approved':
+            try:
+                from app.services.leave_attendance import sync_student_leave
+                sync_student_leave(leave_obj)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception(
+                    '[leave-att] sync_student_leave failed leave_id=%s', leave_obj.id)
         flash('تم إضافة طلب الإجازة بنجاح.', 'success')
         return redirect(url_for('admin.leave_requests_list'))
 
@@ -1849,6 +1974,35 @@ def api_leave_students_search():
         {'id': s.id, 'name': s.full_name, 'code': s.student_id}
         for s in students
     ])
+
+
+@admin_bp.route('/backfill-leave-attendance', methods=['GET', 'POST'])
+@login_required
+@super_admin_required
+def backfill_leave_attendance():
+    """
+    One-time backfill route: sync all existing approved leave requests with the
+    attendance tables.  Super-admin-only.  Processes every school with full
+    school isolation — each sync call is school-scoped via the leave request's
+    own school_id field.  Safe to run multiple times (idempotent).
+    """
+    result = None
+    if request.method == 'POST':
+        from app.services.leave_attendance import backfill_all_approved_leaves
+        try:
+            result = backfill_all_approved_leaves(school_id=None)
+            flash(
+                f"تم مزامنة الإجازات المعتمدة: "
+                f"{result['student_leaves_processed']} إجازة طالب، "
+                f"{result['employee_leaves_processed']} إجازة موظف. "
+                f"أخطاء: {result['student_errors'] + result['employee_errors']}",
+                'success' if (result['student_errors'] + result['employee_errors']) == 0 else 'warning',
+            )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception('[backfill] leave-attendance backfill failed')
+            flash('حدث خطأ أثناء المزامنة. راجع السجلات.', 'danger')
+    return render_template('admin/backfill_leave_attendance.html', result=result)
 
 
 @admin_bp.route('/roles')

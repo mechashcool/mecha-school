@@ -178,13 +178,16 @@
             <th>حاضر</th>
             <th>غائب</th>
             <th>متأخر</th>
+            <th style="color:#2e7d32">مجاز</th>
             <th>الحالة الحالية</th>
           </tr>
         </thead>
         <tbody>
           {% for student in students %}
           {% set current = existing.get(student.id) %}
-          {% set locked = current is not none %}
+          {# Lock only when a physical check-in exists or student is marked absent.
+             on_leave records are unlocked — admin can override approved leave. #}
+          {% set locked = current is not none and (current.check_in is not none or current.status == 'absent') %}
           {% set is_suspended = student.id in suspended_ids %}
           <tr {% if locked or is_suspended %}style="opacity:.55;background:#f8f9fa"{% endif %}>
             <td class="text-muted">{{ loop.index }}</td>
@@ -199,12 +202,12 @@
             </td>
 
             {% if is_suspended %}
-            <td colspan="3" class="text-center text-muted" style="font-size:12px">
+            <td colspan="4" class="text-center text-muted" style="font-size:12px">
               <i class="bi bi-slash-circle me-1 text-warning"></i>
               الطالب موقوف — لا يُسجَّل حضوره
             </td>
             {% elif locked %}
-            <td colspan="3" class="text-center text-muted" style="font-size:12px">
+            <td colspan="4" class="text-center text-muted" style="font-size:12px">
               <i class="bi bi-lock-fill me-1"></i>
               {% if current.check_in %}
               سُجِّل الدخول الساعة
@@ -238,6 +241,13 @@
                        {{ 'checked' if current and current.status == 'late' }}>
               </div>
             </td>
+            <td>
+              <div class="form-check">
+                <input type="radio" class="form-check-input att-radio-{{ loop.index }}"
+                       name="status_{{ student.id }}" value="on_leave"
+                       {{ 'checked' if current and current.status == 'on_leave' }}>
+              </div>
+            </td>
             {% endif %}
 
             <td style="font-size:12px">
@@ -250,9 +260,13 @@
                 <span class="badge-status" style="background:#fff8ec;color:#e8a020">متأخر</span>
                 {% elif current.status == 'absent' %}
                 <span class="badge-status badge-inactive">غائب</span>
+                {% elif current.status == 'on_leave' %}
+                <span class="badge-status" style="background:#e8f5e9;color:#2e7d32">مجاز</span>
                 {% endif %}
                 {% if current.source == 'rfid' %}
                 <i class="bi bi-credit-card-2-back text-accent ms-1" title="RFID"></i>
+                {% elif current.source == 'leave' %}
+                <i class="bi bi-calendar-check text-success ms-1" title="إجازة مجازة"></i>
                 {% endif %}
               {% else %}
                 <span class="text-muted">—</span>
@@ -274,7 +288,8 @@
       <div class="text-muted" style="font-size:13px">
         <span id="presentCount" class="text-success fw-600">0</span> حاضر ·
         <span id="absentCount"  class="text-danger fw-600">0</span> غائب ·
-        <span id="lateCount"    class="text-warning fw-600">0</span> متأخر
+        <span id="lateCount"    class="text-warning fw-600">0</span> متأخر ·
+        <span id="onLeaveCount" class="fw-600" style="color:#2e7d32">0</span> مجاز
       </div>
       <button type="submit" class="btn btn-primary px-5">
         <i class="bi bi-save-fill me-2"></i>حفظ الحضور
@@ -323,18 +338,20 @@ function markAll(status) {
 }
 
 function updateCounts() {
-  let p=0, a=0, l=0;
+  let p=0, a=0, l=0, ol=0;
   document.querySelectorAll('tbody tr').forEach(row => {
     const checked = row.querySelector('input[type=radio]:checked');
     if (checked) {
-      if (checked.value === 'present') p++;
-      else if (checked.value === 'absent') a++;
-      else l++;
+      if      (checked.value === 'present')  p++;
+      else if (checked.value === 'absent')   a++;
+      else if (checked.value === 'late')     l++;
+      else if (checked.value === 'on_leave') ol++;
     }
   });
-  document.getElementById('presentCount').textContent = p;
-  document.getElementById('absentCount').textContent  = a;
-  document.getElementById('lateCount').textContent    = l;
+  document.getElementById('presentCount').textContent  = p;
+  document.getElementById('absentCount').textContent   = a;
+  document.getElementById('lateCount').textContent     = l;
+  document.getElementById('onLeaveCount').textContent  = ol;
 }
 
 document.querySelectorAll('input[type=radio]').forEach(r => r.addEventListener('change', updateCounts));

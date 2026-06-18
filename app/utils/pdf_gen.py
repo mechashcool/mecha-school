@@ -804,10 +804,10 @@ def generate_employee_attendance_pdf(rows, date_from: str, date_to: str,
     elements.append(Paragraph(ar(f'{date_from}  —  {date_to}'), sub_s))
     elements.append(Spacer(1, 0.6 * cm))
 
-    col_headers = ['نسبة الحضور', 'انصراف', 'غائب', 'متأخر', 'حاضر',
+    col_headers = ['نسبة الحضور', 'انصراف', 'مجاز', 'غائب', 'متأخر', 'حاضر',
                    'أيام العمل', 'المسمى الوظيفي', 'القسم', 'اسم الموظف', '#']
-    col_widths = [2.8*cm, 2*cm, 1.8*cm, 1.8*cm, 1.8*cm,
-                  2.2*cm, 3.5*cm, 3*cm, 4.5*cm, 1*cm]
+    col_widths = [2.6*cm, 1.8*cm, 1.8*cm, 1.8*cm, 1.8*cm, 1.8*cm,
+                  2*cm, 3.2*cm, 2.8*cm, 4*cm, 1*cm]
 
     th_s = ParagraphStyle('th2', fontName=fn_b, fontSize=8, alignment=1, textColor=WHITE)
     td_s = ParagraphStyle('td2', fontName=fn, fontSize=8, alignment=1)
@@ -819,6 +819,7 @@ def generate_employee_attendance_pdf(rows, date_from: str, date_to: str,
         table_data.append([
             Paragraph(ar(f"{row['rate']}%"), td_s),
             Paragraph(str(row['checked_out']), td_s),
+            Paragraph(str(row.get('on_leave', 0)), td_s),
             Paragraph(str(row['absent']), td_s),
             Paragraph(str(row['late']), td_s),
             Paragraph(str(row['present']), td_s),
@@ -882,11 +883,12 @@ def generate_single_employee_attendance_pdf(emp_row, date_from: str, date_to: st
     ar = _shape_arabic_text
     emp = emp_row['employee']
 
-    HEADER_BG = HexColor('#1a3a5c')
-    ALT_BG = HexColor('#f0f4f8')
-    ABSENT_BG = HexColor('#ffe0e0')
-    LATE_BG = HexColor('#fff3cd')
-    WHITE = colors.white
+    HEADER_BG    = HexColor('#1a3a5c')
+    ALT_BG       = HexColor('#f0f4f8')
+    ABSENT_BG    = HexColor('#ffe0e0')
+    LATE_BG      = HexColor('#fff3cd')
+    ON_LEAVE_BG  = HexColor('#e8f5e9')
+    WHITE        = colors.white
 
     buf_emp = BytesIO()
     doc = SimpleDocTemplate(buf_emp, pagesize=portrait(A4),
@@ -911,16 +913,20 @@ def generate_single_employee_attendance_pdf(emp_row, date_from: str, date_to: st
     elements.append(Spacer(1, 0.5 * cm))
 
     # Summary row
+    _on_leave_count = emp_row.get('on_leave', 0)
+    summary_headers = ['أيام العمل', 'حاضر', 'متأخر', 'غائب', 'مجاز', 'انصراف', 'نسبة الحضور']
+    summary_values  = [emp_row['working_days'], emp_row['present'], emp_row['late'],
+                       emp_row['absent'], _on_leave_count, emp_row['checked_out'],
+                       f"{emp_row['rate']}%"]
     summary_data = [
         [Paragraph(ar(h), ParagraphStyle('ssh', fontName=fn_b, fontSize=9,
                                           alignment=1, textColor=WHITE))
-         for h in ['أيام العمل', 'حاضر', 'متأخر', 'غائب', 'انصراف', 'نسبة الحضور']],
+         for h in summary_headers],
         [Paragraph(ar(str(v)), ParagraphStyle('ssv', fontName=fn_b, fontSize=11,
                                                alignment=1, textColor=HexColor('#1a3a5c')))
-         for v in [emp_row['working_days'], emp_row['present'], emp_row['late'],
-                   emp_row['absent'], emp_row['checked_out'], f"{emp_row['rate']}%"]],
+         for v in summary_values],
     ]
-    s_tbl = Table(summary_data, colWidths=[2.8*cm]*6)
+    s_tbl = Table(summary_data, colWidths=[2.4*cm]*7)
     s_tbl.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), HEADER_BG),
         ('FONTNAME', (0, 0), (-1, -1), fn),
@@ -933,7 +939,7 @@ def generate_single_employee_attendance_pdf(emp_row, date_from: str, date_to: st
     elements.append(s_tbl)
     elements.append(Spacer(1, 0.5 * cm))
 
-    STATUS_AR = {'present': 'حاضر', 'absent': 'غائب', 'late': 'متأخر'}
+    STATUS_AR = {'present': 'حاضر', 'absent': 'غائب', 'late': 'متأخر', 'on_leave': 'مجاز'}
     d_headers = ['ملاحظات', 'الجهاز', 'المصدر', 'الحالة',
                  'وقت الانصراف', 'وقت الحضور', 'التاريخ', '#']
     d_widths = [3*cm, 2.5*cm, 2*cm, 2*cm, 2.5*cm, 2.5*cm, 2.8*cm, 1*cm]
@@ -957,6 +963,8 @@ def generate_single_employee_attendance_pdf(emp_row, date_from: str, date_to: st
             row_bgs.append((i, ABSENT_BG))
         elif status == 'late':
             row_bgs.append((i, LATE_BG))
+        elif status == 'on_leave':
+            row_bgs.append((i, ON_LEAVE_BG))
         elif i % 2 == 0:
             row_bgs.append((i, ALT_BG))
 
@@ -1065,17 +1073,19 @@ def generate_attendance_report_pdf(rows, report_type='detail', date_from='', dat
         return Paragraph(ar(str(t or '')), th_s)
 
     # Summary row
-    total_present = sum(r['present'] for r in rows)
-    total_absent  = sum(r['absent']  for r in rows)
-    total_late    = sum(r['late']    for r in rows)
-    grand_total   = total_present + total_absent + total_late
-    grand_pct     = round((total_present + total_late) / grand_total * 100, 1) if grand_total > 0 else 0
+    total_present  = sum(r['present']          for r in rows)
+    total_absent   = sum(r['absent']           for r in rows)
+    total_late     = sum(r['late']             for r in rows)
+    total_on_leave = sum(r.get('on_leave', 0) for r in rows)
+    grand_total    = total_present + total_absent + total_late + total_on_leave
+    billable       = total_present + total_absent + total_late
+    grand_pct      = round((total_present + total_late) / billable * 100, 1) if billable > 0 else 0
 
     sum_data = [
-        [ph('عدد الطلاب'), ph('حاضر'), ph('متأخر'), ph('غائب'), ph('إجمالي'), ph('نسبة الحضور')],
-        [p(len(rows)), p(total_present), p(total_late), p(total_absent), p(grand_total), p(f'{grand_pct}%')],
+        [ph('عدد الطلاب'), ph('حاضر'), ph('متأخر'), ph('غائب'), ph('مجاز'), ph('إجمالي'), ph('نسبة الحضور')],
+        [p(len(rows)), p(total_present), p(total_late), p(total_absent), p(total_on_leave), p(grand_total), p(f'{grand_pct}%')],
     ]
-    s_tbl = Table(sum_data, colWidths=[3*cm]*6)
+    s_tbl = Table(sum_data, colWidths=[2.6*cm]*7)
     s_tbl.setStyle(TableStyle([
         ('BACKGROUND',    (0, 0), (-1, 0), HEADER_BG),
         ('FONTNAME',      (0, 0), (-1, -1), fn),
@@ -1090,23 +1100,25 @@ def generate_attendance_report_pdf(rows, report_type='detail', date_from='', dat
 
     # Main detail table
     col_h = [ph('#'), ph('اسم الطالب'), ph('الرقم'), ph('الصف'), ph('الشعبة'),
-             ph('حاضر'), ph('متأخر'), ph('غائب'), ph('إجمالي'), ph('نسبة الحضور')]
-    col_w = [0.8*cm, 4.5*cm, 2*cm, 3.5*cm, 2*cm,
-             1.5*cm, 1.5*cm, 1.5*cm, 1.8*cm, 2.5*cm]
+             ph('حاضر'), ph('متأخر'), ph('غائب'), ph('مجاز'), ph('إجمالي'), ph('نسبة الحضور')]
+    col_w = [0.8*cm, 4*cm, 2*cm, 3*cm, 1.8*cm,
+             1.4*cm, 1.4*cm, 1.4*cm, 1.4*cm, 1.8*cm, 2.4*cm]
 
     table_data = [col_h]
     row_bgs    = []
     for i, row in enumerate(rows, 1):
-        s       = row['student']
-        grade_n = s.section.grade.name if s.section and s.section.grade else '—'
-        sec_n   = s.section.name       if s.section else '—'
-        total   = row['present'] + row['absent'] + row['late']
-        pct_val = round((row['present'] + row['late']) / total * 100, 1) if total else 0
+        s         = row['student']
+        grade_n   = s.section.grade.name if s.section and s.section.grade else '—'
+        sec_n     = s.section.name       if s.section else '—'
+        ol        = row.get('on_leave', 0)
+        billable  = row['present'] + row['absent'] + row['late']
+        total     = billable + ol
+        pct_val   = round((row['present'] + row['late']) / billable * 100, 1) if billable else 0
         table_data.append([
             p(i), p(s.full_name), p(s.student_id),
             p(grade_n), p(sec_n),
             p(row['present']), p(row['late']), p(row['absent']),
-            p(total), p(f'{pct_val}%'),
+            p(ol), p(total), p(f'{pct_val}%'),
         ])
         if i % 2 == 0:
             row_bgs.append(i)

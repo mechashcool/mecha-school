@@ -586,10 +586,11 @@ def export_employee_attendance(rows, date_from: str, date_to: str) -> bytes | No
     from openpyxl.styles import Font, PatternFill, Alignment
 
     hs = _header_style()
-    STATUS_AR = {'present': 'حاضر', 'absent': 'غائب', 'late': 'متأخر'}
+    STATUS_AR = {'present': 'حاضر', 'absent': 'غائب', 'late': 'متأخر', 'on_leave': 'مجاز'}
     ALT_FILL = PatternFill('solid', fgColor='F0F4F8')
     ABSENT_FILL = PatternFill('solid', fgColor='FFE0E0')
     LATE_FILL = PatternFill('solid', fgColor='FFF3CD')
+    ON_LEAVE_FILL = PatternFill('solid', fgColor='E8F5E9')
 
     # ── Sheet 1: Summary ──────────────────────────────────────────────────────
     ws = wb.active
@@ -598,10 +599,10 @@ def export_employee_attendance(rows, date_from: str, date_to: str) -> bytes | No
 
     title = f'تقرير حضور الموظفين — {date_from} إلى {date_to}'
     ws.cell(row=1, column=1, value=title).font = Font(bold=True, size=13)
-    ws.merge_cells('A1:J1')
+    ws.merge_cells('A1:K1')
 
     headers = ['#', 'اسم الموظف', 'القسم', 'المسمى الوظيفي',
-               'أيام العمل', 'حاضر', 'متأخر', 'غائب', 'انصراف', 'نسبة الحضور %']
+               'أيام العمل', 'حاضر', 'متأخر', 'غائب', 'مجاز', 'انصراف', 'نسبة الحضور %']
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=2, column=col, value=h)
         cell.font = hs['font']
@@ -613,7 +614,7 @@ def export_employee_attendance(rows, date_from: str, date_to: str) -> bytes | No
         row_data = [
             i, emp.full_name, emp.department or '', emp.job_title or '',
             row['working_days'], row['present'], row['late'],
-            row['absent'], row['checked_out'], row['rate'],
+            row['absent'], row.get('on_leave', 0), row['checked_out'], row['rate'],
         ]
         fill = ALT_FILL if i % 2 == 0 else None
         for col, val in enumerate(row_data, 1):
@@ -664,6 +665,8 @@ def export_employee_attendance(rows, date_from: str, date_to: str) -> bytes | No
                 fill = ABSENT_FILL
             elif status == 'late':
                 fill = LATE_FILL
+            elif status == 'on_leave':
+                fill = ON_LEAVE_FILL
             elif detail_row % 2 == 0:
                 fill = ALT_FILL
             else:
@@ -694,10 +697,11 @@ def export_single_employee_attendance(emp_row, date_from: str, date_to: str) -> 
     from openpyxl.styles import Font, PatternFill, Alignment
 
     hs = _header_style()
-    STATUS_AR = {'present': 'حاضر', 'absent': 'غائب', 'late': 'متأخر'}
+    STATUS_AR = {'present': 'حاضر', 'absent': 'غائب', 'late': 'متأخر', 'on_leave': 'مجاز'}
     ALT_FILL = PatternFill('solid', fgColor='F0F4F8')
     ABSENT_FILL = PatternFill('solid', fgColor='FFE0E0')
     LATE_FILL = PatternFill('solid', fgColor='FFF3CD')
+    ON_LEAVE_FILL = PatternFill('solid', fgColor='E8F5E9')
 
     emp = emp_row['employee']
     ws = wb.active
@@ -714,6 +718,7 @@ def export_single_employee_attendance(emp_row, date_from: str, date_to: str) -> 
         ('حاضر',       emp_row['present']),
         ('متأخر',      emp_row['late']),
         ('غائب',       emp_row['absent']),
+        ('مجاز',       emp_row.get('on_leave', 0)),
         ('انصراف',     emp_row['checked_out']),
         ('نسبة الحضور', f"{emp_row['rate']}%"),
     ]
@@ -750,6 +755,8 @@ def export_single_employee_attendance(emp_row, date_from: str, date_to: str) -> 
             fill = ABSENT_FILL
         elif status == 'late':
             fill = LATE_FILL
+        elif status == 'on_leave':
+            fill = ON_LEAVE_FILL
         elif i % 2 == 0:
             fill = ALT_FILL
         else:

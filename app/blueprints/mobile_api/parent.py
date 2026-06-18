@@ -121,12 +121,18 @@ def parent_child_profile(student_id):
                 .filter_by(student_id=s.id)
                 .filter(StudentAttendance.date >= since)
                 .all())
+    _on_leave_30 = sum(1 for r in att_rows if r.status == 'on_leave')
+    _billable_30 = len(att_rows) - _on_leave_30
     att_stats = {
-        'total':   len(att_rows),
-        'present': sum(1 for r in att_rows if r.status == 'present'),
-        'absent':  sum(1 for r in att_rows if r.status == 'absent'),
-        'late':    sum(1 for r in att_rows if r.status == 'late'),
-        'excused': sum(1 for r in att_rows if r.status == 'excused'),
+        'total':    len(att_rows),
+        'present':  sum(1 for r in att_rows if r.status == 'present'),
+        'absent':   sum(1 for r in att_rows if r.status == 'absent'),
+        'late':     sum(1 for r in att_rows if r.status == 'late'),
+        'on_leave': _on_leave_30,
+        'excused':  sum(1 for r in att_rows if r.status == 'excused'),
+        'att_pct':  round(
+            (sum(1 for r in att_rows if r.status in ('present', 'late')) / _billable_30 * 100), 1
+        ) if _billable_30 > 0 else 0.0,
     }
 
     # Latest exam result
@@ -213,12 +219,18 @@ def parent_child_attendance(student_id):
             .order_by(StudentAttendance.date.desc())
             .all())
 
+    _on_leave_rng = sum(1 for r in rows if r.status == 'on_leave')
+    _billable_rng = len(rows) - _on_leave_rng
     summary = {
-        'total':   len(rows),
-        'present': sum(1 for r in rows if r.status == 'present'),
-        'absent':  sum(1 for r in rows if r.status == 'absent'),
-        'late':    sum(1 for r in rows if r.status == 'late'),
-        'excused': sum(1 for r in rows if r.status == 'excused'),
+        'total':    len(rows),
+        'present':  sum(1 for r in rows if r.status == 'present'),
+        'absent':   sum(1 for r in rows if r.status == 'absent'),
+        'late':     sum(1 for r in rows if r.status == 'late'),
+        'on_leave': _on_leave_rng,
+        'excused':  sum(1 for r in rows if r.status == 'excused'),
+        'att_pct':  round(
+            (sum(1 for r in rows if r.status in ('present', 'late')) / _billable_rng * 100), 1
+        ) if _billable_rng > 0 else 0.0,
     }
 
     return ok(
