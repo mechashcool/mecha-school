@@ -302,7 +302,6 @@ function buildCard(emp) {
         <div class="card att-card ${hasRec ? 'has-record' : ''}" style="min-height:0">
           <div class="card-body py-2 px-3">
 
-            {/* Header: avatar + name + badge */}
             <div class="d-flex align-items-start gap-2 mb-2">
               <div class="att-avatar">${avatarLetter}</div>
               <div class="flex-grow-1" style="min-width:0">
@@ -316,7 +315,6 @@ function buildCard(emp) {
               </div>
             </div>
 
-            {/* Status toggle */}
             <div class="d-flex gap-1 mb-1">
               <button type="button"
                 class="att-status-btn btn btn-sm ${initStatus==='present'?'active-present':'btn-outline-secondary'}"
@@ -339,7 +337,6 @@ function buildCard(emp) {
             </div>
             <input type="hidden" name="status_${emp.id}" id="sv_${emp.id}" value="${initStatus}">
 
-            {/* Time + notes inputs (hidden when absent) */}
             <div class="time-row" id="times_${emp.id}" style="${timesDisplay}">
               <div class="row g-1 mb-1">
                 <div class="col">
