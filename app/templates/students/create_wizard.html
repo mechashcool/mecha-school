@@ -572,9 +572,10 @@
           </div>
 
           <div class="col-12" id="instDatesSection">
-            <div class="mb-2 fw-700" style="font-size:13px;color:var(--primary)">
-              <i class="bi bi-calendar3 me-1"></i>تواريخ استحقاق الأقساط
+            <div class="mb-1 fw-700" style="font-size:13px;color:var(--primary)">
+              <i class="bi bi-calendar3 me-1"></i>تواريخ الاستحقاق والمدفوعات
             </div>
+            <p class="text-muted small mb-2">يمكنك تسجيل دفعة فورية لأي قسط عند إضافة الطالب — هذا اختياري لكل قسط على حدة.</p>
             <div id="instDates" class="row g-2"></div>
           </div>
         </div>
@@ -813,11 +814,58 @@ function renderInstDates() {
     const d = new Date(today); d.setMonth(d.getMonth() + (i - 1));
     const iso = d.toISOString().split('T')[0];
     div.innerHTML += `
-      <div class="col-md-4">
-        <label class="form-label" style="font-size:12.5px">استحقاق القسط ${i}</label>
-        <input type="date" name="due_date_${i}" class="form-control form-control-sm" value="${iso}">
+      <div class="col-12 col-md-6">
+        <div class="border rounded p-3 mb-1" style="background:var(--card-bg,#f8f9fa)">
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <span class="badge px-2 py-1" style="background:var(--primary,#1a3a5c);font-size:11px">قسط ${i}</span>
+            <small class="text-muted fw-600">تاريخ الاستحقاق</small>
+          </div>
+          <input type="date" name="due_date_${i}" class="form-control form-control-sm mb-2" value="${iso}">
+          <div class="form-check">
+            <input type="checkbox" class="form-check-input" id="payToggle${i}" onchange="togglePayFields(${i})">
+            <label class="form-check-label" for="payToggle${i}" style="font-size:12px">
+              <i class="bi bi-cash-stack text-success me-1"></i>تسجيل دفعة لهذا القسط الآن
+            </label>
+          </div>
+          <div id="payFields${i}" class="d-none mt-2 pt-2" style="border-top:1px solid var(--border,#dee2e6)">
+            <div class="row g-2">
+              <div class="col-6">
+                <label style="font-size:11px;margin-bottom:3px" class="form-label">المبلغ المستلم</label>
+                <input type="number" name="pay_amount_${i}" id="payAmount${i}"
+                       class="form-control form-control-sm" min="0.01" step="0.01" placeholder="0.00">
+              </div>
+              <div class="col-6">
+                <label style="font-size:11px;margin-bottom:3px" class="form-label">طريقة الدفع</label>
+                <select name="pay_method_${i}" class="form-select form-select-sm">
+                  <option value="cash">نقداً</option>
+                  <option value="transfer">تحويل بنكي</option>
+                  <option value="cheque">شيك</option>
+                  <option value="card">بطاقة</option>
+                </select>
+              </div>
+              <div class="col-6">
+                <label style="font-size:11px;margin-bottom:3px" class="form-label">تاريخ الدفع</label>
+                <input type="date" name="pay_date_${i}" class="form-control form-control-sm" value="${iso}">
+              </div>
+              <div class="col-6">
+                <label style="font-size:11px;margin-bottom:3px" class="form-label">ملاحظات الدفع</label>
+                <input type="text" name="pay_notes_${i}" class="form-control form-control-sm" placeholder="اختياري">
+              </div>
+            </div>
+          </div>
+        </div>
       </div>`;
   }
+}
+
+function togglePayFields(i) {
+  const toggle = document.getElementById('payToggle' + i);
+  const fields  = document.getElementById('payFields' + i);
+  const amtInp  = document.getElementById('payAmount' + i);
+  if (!toggle || !fields) return;
+  const on = toggle.checked;
+  fields.classList.toggle('d-none', !on);
+  if (amtInp) amtInp.required = on;
 }
 
 /* ════════════ Fee mode (skip / add) ════════════ */
@@ -837,6 +885,10 @@ function renderInstDates() {
     // Required only while the admin is actually adding a fee, so skipping never blocks submit.
     if (feeType) feeType.required = on;
     if (total) total.required = on;
+    if (!on) {
+      // Remove required from any payment amount inputs so skipping never blocks the wizard.
+      document.querySelectorAll('[name^="pay_amount_"]').forEach(el => { el.required = false; });
+    }
     if (on) { onDiscountTypeChange(); calcNet(); }
   }
   skip.addEventListener('change', apply);
@@ -973,6 +1025,24 @@ calcNet();
       html += row('الصافي بعد الخصم', net ? net.textContent : '');
       html += row('عدد الأقساط', selText('numInst'));
       html += row('ملاحظات الرسوم', txt('fee_notes'));
+      // Summarise wizard payments per installment
+      const numInstEl = document.getElementById('numInst');
+      const numInstVal = numInstEl ? parseInt(numInstEl.value) : 0;
+      const methodLabels = {cash: 'نقداً', transfer: 'تحويل بنكي', cheque: 'شيك', card: 'بطاقة'};
+      const payLines = [];
+      for (let pi = 1; pi <= numInstVal; pi++) {
+        const tog = document.getElementById('payToggle' + pi);
+        if (tog && tog.checked) {
+          const amtEl  = form.querySelector('[name="pay_amount_' + pi + '"]');
+          const mthEl  = form.querySelector('[name="pay_method_' + pi + '"]');
+          const dateEl = form.querySelector('[name="pay_date_'   + pi + '"]');
+          const amt  = amtEl  ? amtEl.value  : '';
+          const mth  = mthEl  ? (methodLabels[mthEl.value] || mthEl.value) : '';
+          const pdt  = dateEl ? dateEl.value : '';
+          if (amt) payLines.push('قسط ' + pi + ': ' + parseFloat(amt).toLocaleString('ar-IQ') + ' د.ع (' + mth + (pdt ? ' — ' + pdt : '') + ')');
+        }
+      }
+      if (payLines.length) html += row('مدفوعات مسجلة مباشرةً', payLines.join('<br>'));
       html += '</div></div>';
     } else if (feeFlag) {
       html += '<div class="review-group"><h6><i class="bi bi-cash-coin text-accent"></i>الرسوم</h6><div class="review-empty">تم تخطّي الرسوم.</div></div>';

@@ -1,15 +1,17 @@
 """Mecha-School — Students Blueprint  (Phase 6: multi-tenant + capacity check)"""
+from decimal import Decimal, InvalidOperation
+
 from flask import (Blueprint, render_template, redirect, url_for,
                    flash, request, abort)
 from flask_login import login_required, current_user
 from sqlalchemy.orm import joinedload
 from app.models import (db, Student, Section, Grade, AcademicYear, StudentDocument,
                         parent_students, User, Role, AttendanceDevice, DeviceStudentMapping,
-                        FeeRecord, FeeInstallment, FeeType)
+                        FeeRecord, FeeInstallment, FeeType, Revenue, RevenueCategory)
 from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    get_current_school, get_active_year, get_view_year,
                                    historical_guard)
-from app.utils.helpers import save_uploaded_file
+from app.utils.helpers import save_uploaded_file, generate_receipt_no
 from app.utils import code_generator
 from app.utils.features import feature_required, is_feature_enabled
 from app.utils.student_form_config import get_student_form_config
@@ -309,6 +311,20 @@ def create():
                 _fee_total, _fee_discount, _ = compute_fee_amounts(request.form)
             except FeeValidationError as _fexc:
                 return _re_render(str(_fexc), error_step=5)
+            # Pre-validate any payment amounts submitted for wizard installments.
+            _pre_num_inst = max(1, min(12, int(request.form.get('num_installments', '1') or '1')))
+            for _pi in range(1, _pre_num_inst + 1):
+                _pre_pay = request.form.get(f'pay_amount_{_pi}', '').strip()
+                if _pre_pay:
+                    try:
+                        _pre_pv = Decimal(_pre_pay)
+                        if _pre_pv <= 0:
+                            return _re_render(
+                                f'المبلغ المدفوع للقسط {_pi} يجب أن يكون أكبر من صفر.',
+                                error_step=5)
+                    except InvalidOperation:
+                        return _re_render(
+                            f'المبلغ المدفوع للقسط {_pi} غير صالح.', error_step=5)
 
         from datetime import datetime as dt
         student_id = code_generator.generate_student_id(school.id)
@@ -464,10 +480,12 @@ def create():
 
         # ── Create optional fee record (shared fee logic, manage_fees gated) ──
         _fee_created = False
+        _fee_payment_data = []   # plain dicts for post-commit Revenue records
+        _paid_inst_count  = 0
         if create_fee:
             from app.blueprints.fees import persist_fee_record, FeeValidationError
             try:
-                persist_fee_record(
+                _fee_record = persist_fee_record(
                     request.form,
                     school=school,
                     student_id=student.id,
@@ -478,6 +496,83 @@ def create():
                     notes=request.form.get('fee_notes', ''),
                 )
                 _fee_created = True
+
+                # Apply any payments entered per-installment in the wizard.
+                # Flush first so the installments have IDs and are queryable.
+                db.session.flush()
+                _num_inst = max(1, min(12, int(request.form.get('num_installments', 1) or 1)))
+                for _wi in range(1, _num_inst + 1):
+                    _pay_raw = request.form.get(f'pay_amount_{_wi}', '').strip()
+                    if not _pay_raw:
+                        continue
+                    try:
+                        _received = Decimal(_pay_raw)
+                    except InvalidOperation:
+                        continue
+                    if _received <= 0:
+                        continue
+                    _inst = (FeeInstallment.query
+                             .filter_by(fee_record_id=_fee_record.id,
+                                        installment_no=_wi,
+                                        school_id=school.id)
+                             .first())
+                    if _inst is None:
+                        continue
+                    # Cap at installment amount — never record an overpayment.
+                    _inst_amount = Decimal(str(_inst.amount))
+                    if _received > _inst_amount:
+                        _received = _inst_amount
+                    _inst.received_amount = float(_received)
+                    _inst.payment_method  = request.form.get(f'pay_method_{_wi}', 'cash')
+                    _inst.collected_by    = current_user.id
+                    _pay_date_str = request.form.get(f'pay_date_{_wi}', '').strip()
+                    if _pay_date_str:
+                        try:
+                            _inst.paid_date = dt.strptime(_pay_date_str, '%Y-%m-%d').date()
+                        except ValueError:
+                            _inst.paid_date = dt.today().date()
+                    else:
+                        _inst.paid_date = dt.today().date()
+                    _pay_notes = request.form.get(f'pay_notes_{_wi}', '').strip()
+                    if _pay_notes:
+                        _inst.notes = _pay_notes
+                    _inst.recompute_status()
+                    if not _inst.receipt_no:
+                        _inst.receipt_no = generate_receipt_no()
+                    _fee_payment_data.append({
+                        'school_id':        school.id,
+                        'academic_year_id': year.id,
+                        'amount':           float(_received),
+                        'installment_no':   _wi,
+                        'paid_date':        _inst.paid_date,
+                    })
+                _paid_inst_count = len(_fee_payment_data)
+
+                # Revenue records staged in the same transaction — every payment must
+                # have its matching accounting entry before the single final commit.
+                if _fee_payment_data:
+                    _fee_cat = (
+                        RevenueCategory.query
+                        .execution_options(bypass_tenant_scope=True)
+                        .filter_by(name='رسوم دراسية', school_id=school.id)
+                        .first()
+                    )
+                    if not _fee_cat:
+                        _fee_cat = RevenueCategory(name='رسوم دراسية', school_id=school.id)
+                        db.session.add(_fee_cat)
+                        db.session.flush()
+                    for _pd in _fee_payment_data:
+                        db.session.add(Revenue(
+                            category_id      = _fee_cat.id,
+                            school_id        = _pd['school_id'],
+                            academic_year_id = _pd['academic_year_id'],
+                            amount           = _pd['amount'],
+                            description      = (f'دفعة رسوم للطالب {student.full_name}'
+                                                f' - قسط #{_pd["installment_no"]}'),
+                            date             = _pd['paid_date'],
+                            recorded_by      = current_user.id,
+                        ))
+
             except (FeeValidationError, ValueError):
                 # Keep registration atomic: discard the student and everything
                 # staged in this transaction, return to the fee step.
@@ -485,7 +580,15 @@ def create():
                 return _re_render(
                     'تعذر حفظ بيانات الرسوم. يرجى مراجعة المبالغ وعدد الأقساط وتواريخ الاستحقاق.',
                     error_step=5)
+            except Exception:
+                # Unexpected DB or system error (e.g. constraint on Revenue) — roll back
+                # the entire operation and let Flask's error handler surface the 500.
+                db.session.rollback()
+                raise
 
+        # ── Single final commit ──────────────────────────────────────────────
+        # Student, fee record, installments, payments, receipt numbers, and
+        # Revenue records are all staged in the same session and committed here.
         db.session.commit()
         flash(f'تم إضافة الطالب {student.full_name} برقم {student.student_id}.', 'success')
         if parent_created:
@@ -494,6 +597,8 @@ def create():
             flash(f'تم ربط الطالب بولي الأمر {_linked_parent_name} بنجاح.', 'success')
         if _fee_created:
             flash('تم إنشاء سجل الرسوم للطالب بنجاح.', 'success')
+        if _paid_inst_count:
+            flash(f'تم تسجيل {_paid_inst_count} دفعة للرسوم بنجاح.', 'success')
         return redirect(url_for('students.create_success', student_id=student.id))
 
     return render_template('students/create_wizard.html', student=None, sections=sections,
