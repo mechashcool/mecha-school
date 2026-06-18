@@ -1,6 +1,13 @@
 {% extends "shared/base.html" %}
 {% block title %}{{ complaint.title }}{% endblock %}
-{% block page_title %}&#1578;&#1601;&#1575;&#1589;&#1610;&#1604; &#1575;&#1604;&#1588;&#1603;&#1608;&#1609;{% endblock %}
+{% block page_title %}تفاصيل الشكوى{% endblock %}
+
+{% set status_styles = {
+  'new':          'background:#e3f0fb;color:#1565c0',
+  'under_review': 'background:#fdf6e8;color:#b07410',
+  'replied':      'background:#e7f7f0;color:#16a06a',
+  'closed':       'background:#f0f4f8;color:#6b7a8d'
+} %}
 
 {% block content %}
 <div class="page-header">
@@ -35,7 +42,7 @@
         <div class="mb-2 text-muted">&#1575;&#1604;&#1606;&#1608;&#1593;</div>
         <div class="fw-600 mb-3">{{ type_labels.get(complaint.complaint_type, complaint.complaint_type) }}</div>
         <div class="mb-2 text-muted">&#1575;&#1604;&#1581;&#1575;&#1604;&#1577;</div>
-        <span class="badge-status badge-active">{{ status_labels.get(complaint.status, complaint.status) }}</span>
+        <span class="badge-status" style="{{ status_styles.get(complaint.status, '') }}">{{ status_labels.get(complaint.status, complaint.status) }}</span>
       </div>
     </div>
     <div class="card">

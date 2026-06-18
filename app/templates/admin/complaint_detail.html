@@ -1,6 +1,13 @@
 {% extends "shared/base.html" %}
 {% block title %}{{ complaint.title }}{% endblock %}
-{% block page_title %}&#1578;&#1601;&#1575;&#1589;&#1610;&#1604; &#1575;&#1604;&#1588;&#1603;&#1608;&#1609;{% endblock %}
+{% block page_title %}تفاصيل الشكوى{% endblock %}
+
+{% set status_styles = {
+  'new':          'background:#e3f0fb;color:#1565c0',
+  'under_review': 'background:#fdf6e8;color:#b07410',
+  'replied':      'background:#e7f7f0;color:#16a06a',
+  'closed':       'background:#f0f4f8;color:#6b7a8d'
+} %}
 
 {% block content %}
 <div class="page-header">
@@ -9,60 +16,111 @@
     <p class="page-subtitle">{{ complaint.student.full_name if complaint.student else '-' }}</p>
   </div>
   <a href="{{ url_for('admin.complaints_list') }}" class="btn btn-outline-secondary">
-    <i class="bi bi-arrow-right me-1"></i>&#1585;&#1580;&#1608;&#1593;
+    <i class="bi bi-arrow-right me-1"></i>رجوع
   </a>
 </div>
 
 <div class="row g-3">
+  <!-- Complaint details -->
   <div class="col-lg-7">
     <div class="card mb-3">
       <div class="card-body">
         <div class="row g-3 mb-3">
           <div class="col-md-6">
-            <div class="text-muted">&#1608;&#1604;&#1610; &#1575;&#1604;&#1571;&#1605;&#1585;</div>
+            <div class="text-muted small mb-1">ولي الأمر</div>
             <div class="fw-600">{{ complaint.parent.full_name if complaint.parent else '-' }}</div>
           </div>
           <div class="col-md-6">
-            <div class="text-muted">&#1606;&#1608;&#1593; &#1575;&#1604;&#1588;&#1603;&#1608;&#1609;</div>
+            <div class="text-muted small mb-1">نوع الشكوى</div>
             <div class="fw-600">{{ type_labels.get(complaint.complaint_type, complaint.complaint_type) }}</div>
           </div>
+          <div class="col-md-6">
+            <div class="text-muted small mb-1">الحالة الحالية</div>
+            <span class="badge-status"
+                  style="{{ status_styles.get(complaint.status, '') }}">
+              {{ status_labels.get(complaint.status, complaint.status) }}
+            </span>
+          </div>
+          <div class="col-md-6">
+            <div class="text-muted small mb-1">تاريخ التقديم</div>
+            <div class="fw-600">{{ complaint.created_at.strftime('%Y-%m-%d') if complaint.created_at else '-' }}</div>
+          </div>
         </div>
-        <h5 class="mb-3">&#1578;&#1601;&#1575;&#1589;&#1610;&#1604; &#1575;&#1604;&#1588;&#1603;&#1608;&#1609;</h5>
-        <div style="white-space:pre-wrap">{{ complaint.details }}</div>
+        <h6 class="fw-600 mb-2">تفاصيل الشكوى</h6>
+        <div class="p-3 rounded" style="background:#f8fafc;white-space:pre-wrap;line-height:1.7">{{ complaint.details }}</div>
         {% if complaint.attachment_path %}
-        <hr>
-        <a href="{{ resolve_photo_url(complaint.attachment_path) or complaint.attachment_path }}"
-           target="_blank" class="btn btn-sm btn-outline-primary">
-          <i class="bi bi-paperclip me-1"></i>&#1593;&#1585;&#1590; &#1575;&#1604;&#1605;&#1585;&#1601;&#1602;
-        </a>
+        <div class="mt-3">
+          <a href="{{ resolve_photo_url(complaint.attachment_path) or complaint.attachment_path }}"
+             target="_blank" class="btn btn-sm btn-outline-primary">
+            <i class="bi bi-paperclip me-1"></i>عرض المرفق
+          </a>
+        </div>
         {% endif %}
       </div>
     </div>
   </div>
+
+  <!-- Update panel -->
   <div class="col-lg-5">
     <div class="card">
       <div class="card-body">
-        <h5 class="mb-3">&#1578;&#1581;&#1583;&#1610;&#1579; &#1575;&#1604;&#1588;&#1603;&#1608;&#1609;</h5>
+        <h6 class="fw-600 mb-3">تحديث الشكوى</h6>
         <form method="POST">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+
           <div class="mb-3">
-            <label class="form-label">&#1575;&#1604;&#1581;&#1575;&#1604;&#1577;</label>
-            <select name="status" class="form-select" required>
+            <label class="form-label small fw-600">الحالة</label>
+            <div class="d-flex flex-column gap-2">
               {% for key, label in status_labels.items() %}
-              <option value="{{ key }}" {% if complaint.status == key %}selected{% endif %}>{{ label }}</option>
+              <label class="d-flex align-items-center gap-2 p-2 rounded border cursor-pointer status-radio-label
+                            {{ 'border-primary bg-light' if complaint.status == key else '' }}"
+                     style="cursor:pointer">
+                <input type="radio" name="status" value="{{ key }}"
+                       class="form-check-input m-0 status-radio"
+                       {{ 'checked' if complaint.status == key else '' }}>
+                <span class="badge-status" style="{{ status_styles.get(key, '') }};flex-shrink:0">{{ label }}</span>
+              </label>
               {% endfor %}
-            </select>
+            </div>
           </div>
+
           <div class="mb-3">
-            <label class="form-label">&#1585;&#1583; &#1575;&#1604;&#1573;&#1583;&#1575;&#1585;&#1577;</label>
-            <textarea name="manager_reply" class="form-control" rows="6">{{ complaint.manager_reply or '' }}</textarea>
+            <label class="form-label small fw-600">رد الإدارة</label>
+            <textarea name="manager_reply" class="form-control" rows="6"
+                      placeholder="اكتب ردك على الشكوى هنا...">{{ complaint.manager_reply or '' }}</textarea>
           </div>
-          <button class="btn btn-primary">
-            <i class="bi bi-check2-circle me-1"></i>&#1581;&#1601;&#1592;
+
+          <button class="btn btn-primary w-100">
+            <i class="bi bi-check2-circle me-1"></i>حفظ التحديث
           </button>
         </form>
       </div>
     </div>
+
+    {% if complaint.replied_at %}
+    <div class="card mt-3">
+      <div class="card-body py-3">
+        <div class="text-muted small mb-1">آخر تحديث</div>
+        <div class="fw-600 small">{{ complaint.replied_at.strftime('%Y-%m-%d %H:%M') }}</div>
+      </div>
+    </div>
+    {% endif %}
   </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  /* Highlight selected status radio label */
+  document.querySelectorAll('.status-radio').forEach(function (radio) {
+    radio.addEventListener('change', function () {
+      document.querySelectorAll('.status-radio-label').forEach(function (lbl) {
+        lbl.classList.remove('border-primary', 'bg-light');
+      });
+      this.closest('.status-radio-label').classList.add('border-primary', 'bg-light');
+    });
+  });
+})();
+</script>
 {% endblock %}

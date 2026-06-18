@@ -1,6 +1,13 @@
 {% extends "shared/base.html" %}
-{% block title %}&#1575;&#1604;&#1588;&#1603;&#1575;&#1608;&#1609;{% endblock %}
-{% block page_title %}&#1575;&#1604;&#1588;&#1603;&#1575;&#1608;&#1609;{% endblock %}
+{% block title %}الشكاوى{% endblock %}
+{% block page_title %}الشكاوى{% endblock %}
+
+{% set status_styles = {
+  'new':          'background:#e3f0fb;color:#1565c0',
+  'under_review': 'background:#fdf6e8;color:#b07410',
+  'replied':      'background:#e7f7f0;color:#16a06a',
+  'closed':       'background:#f0f4f8;color:#6b7a8d'
+} %}
 
 {% block content %}
 <div class="page-header">
@@ -61,7 +68,7 @@
           <td class="fw-600">{{ complaint.title }}</td>
           <td>{{ complaint.student.full_name if complaint.student else '-' }}</td>
           <td>{{ type_labels.get(complaint.complaint_type, complaint.complaint_type) }}</td>
-          <td><span class="badge-status badge-active">{{ status_labels.get(complaint.status, complaint.status) }}</span></td>
+          <td><span class="badge-status" style="{{ status_styles.get(complaint.status, '') }}">{{ status_labels.get(complaint.status, complaint.status) }}</span></td>
           <td class="text-muted">{{ complaint.created_at.strftime('%Y-%m-%d') if complaint.created_at else '-' }}</td>
           <td>
             <a href="{{ url_for('parent.complaint_detail', complaint_id=complaint.id) }}"
@@ -87,7 +94,7 @@
   </div>
 </div>
 
-{% block scripts %}
+{% block extra_js %}
 <script>
 (function () {
   const searchInput = document.getElementById('searchStudent');

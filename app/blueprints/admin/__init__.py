@@ -1006,6 +1006,44 @@ def complaint_detail(complaint_id):
                            type_labels=COMPLAINT_TYPES)
 
 
+@admin_bp.route('/complaints/<int:complaint_id>/status', methods=['POST'])
+@login_required
+@admin_required
+def complaint_quick_status(complaint_id):
+    """AJAX endpoint: update complaint status only (from list view)."""
+    school_id = _admin_scope_id()
+    query = Complaint.query.execution_options(include_all_years=True).filter_by(id=complaint_id)
+    if school_id:
+        query = query.filter_by(school_id=school_id)
+    complaint = query.first_or_404()
+
+    payload = request.get_json(silent=True) or {}
+    new_status = payload.get('status', '').strip()
+    if new_status not in COMPLAINT_STATUS:
+        return jsonify({'ok': False, 'error': 'حالة غير صالحة'}), 400
+
+    changed = new_status != complaint.status
+    complaint.status = new_status
+    if changed:
+        if not complaint.replied_by:
+            complaint.replied_by = current_user.id
+            complaint.replied_at = datetime.utcnow()
+        _notify_parent(
+            complaint.parent_id,
+            complaint.school_id,
+            'تحديث الشكوى',
+            f'تم تحديث شكواك بحالة: {COMPLAINT_STATUS[new_status]}.',
+            fcm_data={
+                'type':         'complaint_reply',
+                'complaint_id': str(complaint.id),
+                'student_id':   str(complaint.student_id) if complaint.student_id else '',
+                'screen':       'complaints',
+            },
+        )
+    db.session.commit()
+    return jsonify({'ok': True, 'status': new_status, 'label': COMPLAINT_STATUS[new_status]})
+
+
 @admin_bp.route('/leave-requests')
 @login_required
 @admin_required

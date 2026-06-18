@@ -1,12 +1,19 @@
 {% extends "shared/base.html" %}
-{% block title %}&#1575;&#1604;&#1588;&#1603;&#1575;&#1608;&#1609;{% endblock %}
-{% block page_title %}&#1575;&#1604;&#1588;&#1603;&#1575;&#1608;&#1609;{% endblock %}
+{% block title %}الشكاوى{% endblock %}
+{% block page_title %}الشكاوى{% endblock %}
+
+{% set status_styles = {
+  'new':          'background:#e3f0fb;color:#1565c0',
+  'under_review': 'background:#fdf6e8;color:#b07410',
+  'replied':      'background:#e7f7f0;color:#16a06a',
+  'closed':       'background:#f0f4f8;color:#6b7a8d'
+} %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">&#1575;&#1604;&#1588;&#1603;&#1575;&#1608;&#1609;</h1>
-    <p class="page-subtitle">&#1588;&#1603;&#1575;&#1608;&#1609; &#1571;&#1608;&#1604;&#1610;&#1575;&#1569; &#1575;&#1604;&#1571;&#1605;&#1608;&#1585; &#1575;&#1604;&#1605;&#1585;&#1578;&#1576;&#1591;&#1577; &#1576;&#1575;&#1604;&#1605;&#1583;&#1585;&#1587;&#1577;</p>
+    <h1 class="page-title">الشكاوى</h1>
+    <p class="page-subtitle">شكاوى أولياء الأمور المرتبطة بالمدرسة</p>
   </div>
 </div>
 
@@ -14,16 +21,16 @@
   <div class="card-body py-3">
     <div class="row g-3 align-items-end">
       <div class="col-12 col-md-6">
-        <label class="form-label small text-muted mb-1">&#1576;&#1581;&#1579; &#1576;&#1575;&#1587;&#1605; &#1575;&#1604;&#1591;&#1575;&#1604;&#1576;</label>
+        <label class="form-label small text-muted mb-1">بحث باسم الطالب</label>
         <div class="input-group">
           <span class="input-group-text"><i class="bi bi-search"></i></span>
-          <input type="text" id="searchStudent" class="form-control" placeholder="&#1575;&#1603;&#1578;&#1576; &#1575;&#1587;&#1605; &#1575;&#1604;&#1591;&#1575;&#1604;&#1576;...">
+          <input type="text" id="searchStudent" class="form-control" placeholder="اكتب اسم الطالب...">
         </div>
       </div>
       <div class="col-12 col-md-4">
-        <label class="form-label small text-muted mb-1">&#1578;&#1589;&#1601;&#1610;&#1577; &#1581;&#1587;&#1576; &#1575;&#1604;&#1606;&#1608;&#1593;</label>
+        <label class="form-label small text-muted mb-1">تصفية حسب النوع</label>
         <select id="filterType" class="form-select">
-          <option value="">&#1603;&#1604; &#1575;&#1604;&#1571;&#1606;&#1608;&#1575;&#1593;</option>
+          <option value="">كل الأنواع</option>
           {% for key, label in type_labels.items() %}
           <option value="{{ key }}">{{ label }}</option>
           {% endfor %}
@@ -31,7 +38,7 @@
       </div>
       <div class="col-12 col-md-2">
         <button type="button" id="clearFilters" class="btn btn-outline-secondary w-100">
-          <i class="bi bi-x-circle me-1"></i>&#1605;&#1587;&#1581;
+          <i class="bi bi-x-circle me-1"></i>مسح
         </button>
       </div>
     </div>
@@ -43,37 +50,69 @@
     <table class="table table-hover mb-0" id="complaintsTable">
       <thead>
         <tr>
-          <th>&#1575;&#1604;&#1593;&#1606;&#1608;&#1575;&#1606;</th>
-          <th>&#1575;&#1604;&#1591;&#1575;&#1604;&#1576;</th>
-          <th>&#1608;&#1604;&#1610; &#1575;&#1604;&#1571;&#1605;&#1585;</th>
-          <th>&#1575;&#1604;&#1606;&#1608;&#1593;</th>
-          <th>&#1575;&#1604;&#1581;&#1575;&#1604;&#1577;</th>
-          <th>&#1575;&#1604;&#1578;&#1575;&#1585;&#1610;&#1582;</th>
-          <th>&#1575;&#1604;&#1573;&#1580;&#1585;&#1575;&#1569;&#1575;&#1578;</th>
+          <th>العنوان</th>
+          <th>الطالب</th>
+          <th>ولي الأمر</th>
+          <th>النوع</th>
+          <th>الحالة</th>
+          <th>التاريخ</th>
+          <th>الإجراءات</th>
         </tr>
       </thead>
       <tbody id="complaintsBody">
         {% for complaint in complaints %}
         <tr data-student="{{ (complaint.student.full_name if complaint.student else '') | lower }}"
-            data-type="{{ complaint.complaint_type }}">
+            data-type="{{ complaint.complaint_type }}"
+            data-status-url="{{ url_for('admin.complaint_quick_status', complaint_id=complaint.id) }}">
           <td class="fw-600">{{ complaint.title }}</td>
           <td>{{ complaint.student.full_name if complaint.student else '-' }}</td>
           <td>{{ complaint.parent.full_name if complaint.parent else '-' }}</td>
           <td>{{ type_labels.get(complaint.complaint_type, complaint.complaint_type) }}</td>
-          <td><span class="badge-status badge-active">{{ status_labels.get(complaint.status, complaint.status) }}</span></td>
+          <td>
+            <span class="badge-status complaint-status-badge"
+                  data-status="{{ complaint.status }}"
+                  style="{{ status_styles.get(complaint.status, '') }}">
+              {{ status_labels.get(complaint.status, complaint.status) }}
+            </span>
+          </td>
           <td class="text-muted">{{ complaint.created_at.strftime('%Y-%m-%d') if complaint.created_at else '-' }}</td>
           <td>
-            <a href="{{ url_for('admin.complaint_detail', complaint_id=complaint.id) }}"
-               class="btn btn-sm btn-outline-primary" title="&#1593;&#1585;&#1590;">
-              <i class="bi bi-eye"></i>
-            </a>
+            <div class="d-flex gap-1 align-items-center">
+              <a href="{{ url_for('admin.complaint_detail', complaint_id=complaint.id) }}"
+                 class="btn btn-sm btn-outline-primary" title="عرض التفاصيل">
+                <i class="bi bi-eye"></i>
+              </a>
+              <div class="dropdown">
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle px-2"
+                        type="button" data-bs-toggle="dropdown" aria-expanded="false"
+                        title="تغيير الحالة">
+                  <i class="bi bi-arrow-repeat"></i>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end shadow-sm" style="min-width:140px">
+                  <li><span class="dropdown-header small">تغيير الحالة</span></li>
+                  {% for key, label in status_labels.items() %}
+                  <li>
+                    <button class="dropdown-item status-change-btn d-flex align-items-center gap-2 py-2
+                                   {{ 'active fw-600' if complaint.status == key else '' }}"
+                            type="button"
+                            data-status="{{ key }}"
+                            {{ 'disabled' if complaint.status == key else '' }}>
+                      <span class="badge-status" style="{{ status_styles.get(key, '') }};padding:2px 8px;font-size:11px">
+                        {{ label }}
+                      </span>
+                    </button>
+                  </li>
+                  {% endfor %}
+                </ul>
+              </div>
+            </div>
           </td>
         </tr>
         {% else %}
         <tr id="emptyRow">
           <td colspan="7" class="text-center text-muted py-5">
             <i class="bi bi-chat-left-text" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-            &#1604;&#1575; &#1578;&#1608;&#1580;&#1583; &#1588;&#1603;&#1575;&#1608;&#1609;.
+            لا توجد شكاوى.
           </td>
         </tr>
         {% endfor %}
@@ -81,14 +120,16 @@
     </table>
     <div id="noResults" class="text-center text-muted py-5" style="display:none;">
       <i class="bi bi-funnel" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-      &#1604;&#1575; &#1578;&#1608;&#1580;&#1583; &#1606;&#1578;&#1575;&#1574;&#1580; &#1578;&#1591;&#1575;&#1576;&#1602; &#1605;&#1593;&#1575;&#1610;&#1610;&#1585; &#1575;&#1604;&#1576;&#1581;&#1579;.
+      لا توجد نتائج تطابق معايير البحث.
     </div>
   </div>
 </div>
+{% endblock %}
 
-{% block scripts %}
+{% block extra_js %}
 <script>
 (function () {
+  /* ── Filter logic ────────────────────────────────── */
   const searchInput = document.getElementById('searchStudent');
   const typeSelect  = document.getElementById('filterType');
   const clearBtn    = document.getElementById('clearFilters');
@@ -100,27 +141,92 @@
     const type = typeSelect.value;
     const rows = tbody.querySelectorAll('tr[data-student]');
     let visible = 0;
-
     rows.forEach(function (row) {
-      const studentMatch = !term || row.dataset.student.includes(term);
-      const typeMatch    = !type || row.dataset.type === type;
-      const show = studentMatch && typeMatch;
+      const show = (!term || row.dataset.student.includes(term)) &&
+                   (!type || row.dataset.type === type);
       row.style.display = show ? '' : 'none';
       if (show) visible++;
     });
-
     noResults.style.display = (rows.length > 0 && visible === 0) ? 'block' : 'none';
   }
 
   searchInput.addEventListener('input', applyFilters);
   typeSelect.addEventListener('change', applyFilters);
-
   clearBtn.addEventListener('click', function () {
     searchInput.value = '';
     typeSelect.value  = '';
     applyFilters();
   });
+
+  /* ── Status badge styles ─────────────────────────── */
+  const STATUS_STYLES = {
+    'new':          'background:#e3f0fb;color:#1565c0',
+    'under_review': 'background:#fdf6e8;color:#b07410',
+    'replied':      'background:#e7f7f0;color:#16a06a',
+    'closed':       'background:#f0f4f8;color:#6b7a8d'
+  };
+
+  /* ── Quick status change ─────────────────────────── */
+  const csrfToken = document.querySelector('meta[name="csrf-token"]')
+                             .getAttribute('content');
+
+  tbody.addEventListener('click', async function (e) {
+    const btn = e.target.closest('.status-change-btn');
+    if (!btn || btn.disabled) return;
+
+    const row       = btn.closest('tr');
+    const statusUrl = row.dataset.statusUrl;
+    const newStatus = btn.dataset.status;
+
+    btn.disabled = true;
+    try {
+      const resp = await fetch(statusUrl, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+        body:    JSON.stringify({ status: newStatus }),
+      });
+      const data = await resp.json();
+
+      if (data.ok) {
+        /* Update badge */
+        const badge = row.querySelector('.complaint-status-badge');
+        badge.textContent  = data.label;
+        badge.dataset.status = data.status;
+        badge.style.cssText  = STATUS_STYLES[data.status] || '';
+
+        /* Update dropdown: mark new active, re-enable previous */
+        row.querySelectorAll('.status-change-btn').forEach(function (b) {
+          const isCurrent = b.dataset.status === data.status;
+          b.classList.toggle('active',  isCurrent);
+          b.classList.toggle('fw-600',  isCurrent);
+          b.disabled = isCurrent;
+        });
+
+        showToast('تم تحديث الحالة بنجاح', 'success');
+      } else {
+        showToast(data.error || 'حدث خطأ', 'danger');
+        btn.disabled = false;
+      }
+    } catch (_) {
+      showToast('حدث خطأ في الاتصال', 'danger');
+      btn.disabled = false;
+    }
+  });
+
+  /* ── Toast helper ────────────────────────────────── */
+  function showToast(msg, type) {
+    let container = document.getElementById('flash-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'flash-container';
+      document.body.appendChild(container);
+    }
+    const item = document.createElement('div');
+    item.className = 'flash-item alert alert-' + type + ' alert-dismissible';
+    item.innerHTML = msg + '<button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
+    container.appendChild(item);
+    setTimeout(function () { item.remove(); }, 3000);
+  }
 })();
 </script>
-{% endblock %}
 {% endblock %}
