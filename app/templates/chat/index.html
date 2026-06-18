@@ -290,7 +290,8 @@
                data-ggrade="{{ room.grade_id or '' }}"
                data-gstatus="{{ 'closed' if room.is_closed else ('inactive' if not room.is_active else 'open') }}">
 
-            <div class="ms-group-card {% if room.is_closed %}ms-group-card--closed{% endif %}">
+            <div class="ms-group-card {% if room.is_closed %}ms-group-card--closed{% endif %}"
+                 data-href="{{ url_for('chat.room_detail', room_id=room.id) }}">
 
               {# Card top #}
               <div class="ms-group-top">
@@ -652,6 +653,7 @@
   height: 100%; display: flex; flex-direction: column;
   transition: box-shadow .18s, transform .18s;
 }
+.ms-group-card[data-href] { cursor: pointer; }
 .ms-group-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
 .ms-group-card--closed { opacity: .78; }
 
@@ -857,9 +859,26 @@
     if (cnt) cnt.textContent = visible;
   }
 
-  /* ── RTL dropdown popper fix ───────────────────────────── */
-  document.addEventListener('DOMContentLoaded', function () {
-    if (typeof bootstrap === 'undefined' || !bootstrap.Dropdown) return;
+  /* ── Card navigation ───────────────────────────────────── */
+  /* Delegate from the static parent so dynamically hidden cards still work. */
+  document.addEventListener('click', function (e) {
+    /* Ignore clicks that originated inside a dropdown toggle or menu. */
+    if (e.target.closest('.dropdown')) return;
+    var card = e.target.closest('.ms-group-card[data-href]');
+    if (card) window.location.href = card.dataset.href;
+  });
+
+  /* ── RTL dropdown Popper fix ────────────────────────────
+     The script block runs after DOMContentLoaded has already fired
+     (script is at the bottom of the page), so we cannot use
+     addEventListener('DOMContentLoaded', …) — that callback would
+     never execute.  Run the initialisation directly instead.      */
+  (function initDropdowns() {
+    if (typeof bootstrap === 'undefined' || !bootstrap.Dropdown) {
+      /* Bootstrap not yet available — retry once on next tick. */
+      setTimeout(initDropdowns, 50);
+      return;
+    }
     document.querySelectorAll('.ms-dd-btn').forEach(function (el) {
       bootstrap.Dropdown.getOrCreateInstance(el, {
         popperConfig: function (cfg) {
@@ -875,7 +894,7 @@
         }
       });
     });
-  });
+  }());
 
 })();
 </script>
