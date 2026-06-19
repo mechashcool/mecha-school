@@ -6,7 +6,7 @@ NOTE: When adding PDF generation routes to reports, ensure they handle Arabic fo
 loading failures gracefully by using generate_error_pdf() fallback, similar to
 generate_schedule_pdf() in schedules blueprint.
 """
-from flask import Blueprint, render_template, request
+from flask import Blueprint, render_template, request, jsonify
 from flask_login import login_required
 from sqlalchemy import func, extract
 from datetime import date
@@ -15,7 +15,7 @@ from app.models import (db, Revenue, Expense, FeeInstallment, FeeRecord,
                          Student, Employee, StudentAttendance, ExamResult,
                          SalaryRecord, Section, Grade, RevenueCategory,
                          ExpenseCategory)
-from app.utils.decorators import permission_required, get_current_school, get_active_year
+from app.utils.decorators import permission_required, get_current_school, get_active_year, get_view_year
 
 reports_bp = Blueprint('reports', __name__,
                         template_folder='../../templates/reports')
@@ -324,39 +324,183 @@ def attendance_report():
     end_str   = request.args.get('end',   date.today().isoformat())
     start_d   = dt.strptime(start_str, '%Y-%m-%d').date()
     end_d     = dt.strptime(end_str,   '%Y-%m-%d').date()
-    section_id = request.args.get('section_id', type=int)
 
-    sec_q = Section.query.join(Grade).order_by(Grade.name)
-    if school_id:
-        sec_q = sec_q.filter(Grade.school_id == school_id)
-    sections = sec_q.all()
+    section_id = request.args.get('section_id', type=int)
+    grade_id   = request.args.get('grade_id',   type=int)
+    student_pk = request.args.get('student_pk', type=int)
+
+    # Validate each filter against school ownership
+    selected_student_obj = None
+    selected_section_obj = None
+    selected_grade_obj   = None
+
+    if student_pk and school_id:
+        selected_student_obj = Student.query.filter_by(
+            id=student_pk, school_id=school_id, status='active').first()
+    if section_id and school_id:
+        selected_section_obj = (Section.query.join(Grade)
+                                .filter(Section.id == section_id,
+                                        Grade.school_id == school_id).first())
+    if grade_id and school_id:
+        selected_grade_obj = Grade.query.filter_by(
+            id=grade_id, school_id=school_id).first()
+
+    # Resolve the student list based on highest-priority filter
+    students = []
+    if student_pk and selected_student_obj:
+        students = [selected_student_obj]
+    elif section_id and selected_section_obj:
+        students = (Student.query
+                    .filter_by(section_id=section_id, status='active',
+                               school_id=school_id)
+                    .order_by(Student.full_name).all())
+    elif grade_id and selected_grade_obj:
+        sec_ids = [s.id for s in Section.query.filter_by(
+            grade_id=grade_id, school_id=school_id).all()]
+        if sec_ids:
+            students = (Student.query
+                        .filter_by(status='active', school_id=school_id)
+                        .filter(Student.section_id.in_(sec_ids))
+                        .order_by(Student.full_name).all())
 
     rows = []
-    if section_id:
-        stud_q = Student.query.filter_by(section_id=section_id, status='active')
+    for s in students:
+        att_q = (StudentAttendance.query
+                 .filter_by(student_id=s.id)
+                 .filter(StudentAttendance.date.between(start_d, end_d)))
         if school_id:
-            stud_q = stud_q.filter_by(school_id=school_id)
-        students = stud_q.all()
-        for s in students:
-            att_q = (StudentAttendance.query
-                     .filter_by(student_id=s.id)
-                     .filter(StudentAttendance.date.between(start_d, end_d)))
-            if school_id:
-                att_q = att_q.filter_by(school_id=school_id)
-            recs = att_q.all()
-            p = sum(1 for r in recs if r.status == 'present')
-            a = sum(1 for r in recs if r.status == 'absent')
-            l = sum(1 for r in recs if r.status == 'late')
-            total = p + a + l
-            rows.append({'student': s, 'present': p, 'absent': a,
-                         'late': l, 'total': total,
-                         'rate': round((p + l) / total * 100 if total else 0, 1)})
-        rows.sort(key=lambda x: x['rate'], reverse=True)
+            att_q = att_q.filter_by(school_id=school_id)
+        recs = att_q.all()
+        p = sum(1 for r in recs if r.status == 'present')
+        a = sum(1 for r in recs if r.status == 'absent')
+        l = sum(1 for r in recs if r.status == 'late')
+        total = p + a + l
+        rows.append({'student': s, 'present': p, 'absent': a,
+                     'late': l, 'total': total,
+                     'rate': round((p + l) / total * 100 if total else 0, 1)})
+    rows.sort(key=lambda x: x['rate'], reverse=True)
+
+    has_filter = bool(student_pk or section_id or grade_id)
 
     return render_template('reports/attendance.html',
-                           rows=rows, sections=sections,
+                           rows=rows,
                            section_id=section_id,
-                           start=start_str, end=end_str)
+                           grade_id=grade_id,
+                           student_pk=student_pk,
+                           selected_student_obj=selected_student_obj,
+                           selected_section_obj=selected_section_obj,
+                           selected_grade_obj=selected_grade_obj,
+                           start=start_str, end=end_str,
+                           has_filter=has_filter)
+
+
+@reports_bp.route('/attendance/api/stages')
+@login_required
+@permission_required('view_reports')
+def attendance_api_stages():
+    school = get_current_school()
+    year = get_view_year(school.id) if school else None
+    if not school or not year:
+        return jsonify([])
+    rows = (db.session.query(Grade.stage)
+            .filter(Grade.school_id == school.id,
+                    Grade.academic_year_id == year.id,
+                    Grade.stage.isnot(None),
+                    Grade.stage != '')
+            .distinct().order_by(Grade.stage).all())
+    return jsonify([{'value': r[0], 'label': r[0]} for r in rows])
+
+
+@reports_bp.route('/attendance/api/grades')
+@login_required
+@permission_required('view_reports')
+def attendance_api_grades():
+    school = get_current_school()
+    year = get_view_year(school.id) if school else None
+    stage = request.args.get('stage', '').strip()
+    if not school or not year or not stage:
+        return jsonify([])
+    grades = (Grade.query
+              .filter_by(school_id=school.id, academic_year_id=year.id, stage=stage)
+              .order_by(Grade.name).all())
+    return jsonify([{'id': g.id, 'name': g.name} for g in grades])
+
+
+@reports_bp.route('/attendance/api/sections')
+@login_required
+@permission_required('view_reports')
+def attendance_api_sections():
+    school = get_current_school()
+    year = get_view_year(school.id) if school else None
+    grade_id = request.args.get('grade_id', type=int)
+    if not school or not year or not grade_id:
+        return jsonify([])
+    grade = Grade.query.filter_by(id=grade_id, school_id=school.id,
+                                   academic_year_id=year.id).first()
+    if not grade:
+        return jsonify([])
+    sections = (Section.query
+                .filter_by(grade_id=grade_id, school_id=school.id,
+                           academic_year_id=year.id)
+                .order_by(Section.name).all())
+    return jsonify([{'id': s.id, 'name': s.name} for s in sections])
+
+
+@reports_bp.route('/attendance/api/students')
+@login_required
+@permission_required('view_reports')
+def attendance_api_students():
+    school = get_current_school()
+    if not school:
+        return jsonify({'results': []})
+
+    term       = request.args.get('q', '').strip()
+    section_id = request.args.get('section_id', type=int)
+    grade_id   = request.args.get('grade_id',   type=int)
+
+    if len(term) < 2 and not section_id and not grade_id:
+        return jsonify({'results': []})
+
+    q = Student.query.filter_by(status='active', school_id=school.id)
+
+    if section_id:
+        sec = (Section.query.join(Grade)
+               .filter(Section.id == section_id,
+                       Grade.school_id == school.id).first())
+        if not sec:
+            return jsonify({'results': []})
+        q = q.filter(Student.section_id == section_id)
+    elif grade_id:
+        grd = Grade.query.filter_by(id=grade_id, school_id=school.id).first()
+        if not grd:
+            return jsonify({'results': []})
+        sec_ids = [s.id for s in Section.query.filter_by(
+            grade_id=grade_id, school_id=school.id).all()]
+        if not sec_ids:
+            return jsonify({'results': []})
+        q = q.filter(Student.section_id.in_(sec_ids))
+
+    if term:
+        q = q.filter(
+            Student.full_name.ilike(f'%{term}%') |
+            Student.student_id.ilike(f'%{term}%')
+        )
+
+    limit = 200 if (section_id and not term) else 20
+    students = q.order_by(Student.full_name).limit(limit).all()
+
+    results = []
+    for s in students:
+        sec = Section.query.get(s.section_id) if s.section_id else None
+        grd = Grade.query.get(sec.grade_id) if sec else None
+        results.append({
+            'id':         s.id,
+            'full_name':  s.full_name,
+            'student_id': s.student_id or '',
+            'grade':      grd.name if grd else '',
+            'section':    sec.name if sec else '',
+        })
+    return jsonify({'results': results})
 
 
 # ── SALARY ────────────────────────────────────────────────────────────────────

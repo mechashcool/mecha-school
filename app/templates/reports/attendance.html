@@ -4,68 +4,158 @@
 
 {% block content %}
 <div class="page-header">
-  <div><h1 class="page-title">تقرير الحضور</h1></div>
+  <div><h1 class="page-title">تقرير الحضور والغياب</h1></div>
   <a href="{{ url_for('reports.index') }}" class="btn btn-outline-secondary">
     <i class="bi bi-arrow-right me-1"></i>رجوع
   </a>
 </div>
 
-<div class="card mb-4">
+{# ── Filters ───────────────────────────────────────────────────────────────── #}
+<div class="card filters-card mb-4">
+  <div class="card-header fw-700">
+    <i class="bi bi-funnel-fill text-accent me-1"></i>فلاتر التقرير
+  </div>
   <div class="card-body py-3">
-    <form method="GET" class="d-flex gap-3 align-items-end flex-wrap">
-      <div>
-        <label class="form-label mb-1" style="font-size:12.5px">الشعبة</label>
-        <select name="section_id" class="form-select" style="width:200px">
-          <option value="">— اختر الشعبة —</option>
-          {% for sec in sections %}
-          <option value="{{ sec.id }}" {{ 'selected' if section_id == sec.id }}>
-            {{ sec.grade.name }} / شعبة {{ sec.name }}
-          </option>
-          {% endfor %}
-        </select>
+    <form method="GET" id="reportForm">
+      <input type="hidden" name="stage"      id="hiddenStage"     value="{{ request.args.get('stage','') }}">
+      <input type="hidden" name="grade_id"   id="hiddenGradeId"   value="{{ grade_id or '' }}">
+      <input type="hidden" name="section_id" id="hiddenSectionId" value="{{ section_id or '' }}">
+      <input type="hidden" name="student_pk" id="hiddenStudentPk" value="{{ student_pk or '' }}">
+
+      <div class="row g-2 align-items-end mb-2">
+
+        {# Stage #}
+        <div class="col-6 col-md-2">
+          <label class="form-label mb-1 fw-600" style="font-size:12px">المرحلة</label>
+          <select id="stageFilter" class="form-select">
+            <option value="">— كل المراحل —</option>
+          </select>
+        </div>
+
+        {# Grade #}
+        <div class="col-6 col-md-2">
+          <label class="form-label mb-1 fw-600" style="font-size:12px">الصف</label>
+          <select id="gradeFilter" class="form-select" disabled>
+            <option value="">— اختر الصف —</option>
+          </select>
+        </div>
+
+        {# Section #}
+        <div class="col-6 col-md-2">
+          <label class="form-label mb-1 fw-600" style="font-size:12px">الشعبة</label>
+          <select id="sectionFilter" class="form-select" disabled>
+            <option value="">— اختر الشعبة —</option>
+          </select>
+        </div>
+
+        {# Date from #}
+        <div class="col-6 col-md-2">
+          <label class="form-label mb-1 fw-600" style="font-size:12px">من</label>
+          <input type="date" name="start" id="startDate" class="form-control" value="{{ start }}">
+        </div>
+
+        {# Date to #}
+        <div class="col-6 col-md-2">
+          <label class="form-label mb-1 fw-600" style="font-size:12px">إلى</label>
+          <input type="date" name="end" id="endDate" class="form-control" value="{{ end }}">
+        </div>
+
+        {# Buttons #}
+        <div class="col-6 col-md-2 d-flex gap-2">
+          <button type="submit" id="submitBtn" class="btn btn-primary flex-fill" disabled>
+            <i class="bi bi-search me-1"></i>عرض
+          </button>
+          {% if has_filter %}
+          <a href="{{ url_for('reports.attendance_report') }}" class="btn btn-outline-secondary" title="مسح الفلاتر">
+            <i class="bi bi-x-lg"></i>
+          </a>
+          {% endif %}
+        </div>
       </div>
-      <div>
-        <label class="form-label mb-1" style="font-size:12.5px">من</label>
-        <input type="date" name="start" class="form-control" style="width:150px" value="{{ start }}">
+
+      {# Student name search #}
+      <div class="row g-2 align-items-end">
+        <div class="col-md-6">
+          <label class="form-label mb-1 fw-600" style="font-size:12px">
+            <i class="bi bi-search me-1 text-muted"></i>بحث مباشر بالاسم
+          </label>
+          <div class="student-search">
+            <div class="input-group">
+              <span class="input-group-text"><i class="bi bi-person-search"></i></span>
+              <input type="search" id="studentSearch" class="form-control"
+                     placeholder="اكتب اسم الطالب أو رقمه للبحث المباشر..."
+                     autocomplete="off">
+            </div>
+            <div id="studentResults" class="student-results d-none"></div>
+            <div id="selectedStudentCard" class="selected-student d-none mt-2"></div>
+          </div>
+        </div>
+        <div class="col-md-6 d-flex align-items-end">
+          <small class="text-muted" style="font-size:12px">
+            <i class="bi bi-info-circle me-1"></i>
+            يمكنك اختيار المرحلة / الصف / الشعبة لعرض جميع طلابها، أو البحث باسم طالب محدد، أو الجمع بينهما.
+          </small>
+        </div>
       </div>
-      <div>
-        <label class="form-label mb-1" style="font-size:12.5px">إلى</label>
-        <input type="date" name="end" class="form-control" style="width:150px" value="{{ end }}">
-      </div>
-      <button class="btn btn-primary align-self-end">
-        <i class="bi bi-search me-1"></i>عرض
-      </button>
+
     </form>
   </div>
 </div>
 
+{# ── Results ───────────────────────────────────────────────────────────────── #}
 {% if rows %}
-<!-- Summary stats -->
+
+{# Context breadcrumb #}
+<div class="mb-3 d-flex align-items-center gap-2 flex-wrap">
+  {% if selected_student_obj %}
+    <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-size:13px;font-weight:600;padding:6px 12px">
+      <i class="bi bi-person-fill me-1"></i>{{ selected_student_obj.full_name }}
+      {% if selected_student_obj.section and selected_student_obj.section.grade %}
+        — {{ selected_student_obj.section.grade.name }} / شعبة {{ selected_student_obj.section.name }}
+      {% endif %}
+    </span>
+  {% elif selected_section_obj %}
+    <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-size:13px;font-weight:600;padding:6px 12px">
+      <i class="bi bi-door-open me-1"></i>
+      {% if selected_section_obj.grade %}{{ selected_section_obj.grade.name }} / {% endif %}شعبة {{ selected_section_obj.name }}
+    </span>
+  {% elif selected_grade_obj %}
+    <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-size:13px;font-weight:600;padding:6px 12px">
+      <i class="bi bi-building me-1"></i>صف {{ selected_grade_obj.name }}
+    </span>
+  {% endif %}
+  <span class="text-muted" style="font-size:13px">
+    <i class="bi bi-calendar-range me-1"></i>{{ start }} — {{ end }}
+  </span>
+  <span class="badge bg-secondary" style="font-size:12px">{{ rows | length }} طالب</span>
+</div>
+
+{# Summary stats #}
 {% set total_p = rows | sum(attribute='present') %}
 {% set total_a = rows | sum(attribute='absent') %}
 {% set total_l = rows | sum(attribute='late') %}
 {% set grand   = total_p + total_a + total_l %}
 
 <div class="row g-3 mb-4">
-  <div class="col-md-3">
+  <div class="col-6 col-md-3">
     <div class="stat-card">
       <div class="stat-icon" style="background:linear-gradient(135deg,#1aab6d,#16c879)"><i class="bi bi-check-circle-fill"></i></div>
       <div><div class="stat-value">{{ total_p }}</div><div class="stat-label">إجمالي الحضور</div></div>
     </div>
   </div>
-  <div class="col-md-3">
+  <div class="col-6 col-md-3">
     <div class="stat-card">
       <div class="stat-icon" style="background:linear-gradient(135deg,#e03e3e,#f87171)"><i class="bi bi-x-circle-fill"></i></div>
       <div><div class="stat-value">{{ total_a }}</div><div class="stat-label">إجمالي الغياب</div></div>
     </div>
   </div>
-  <div class="col-md-3">
+  <div class="col-6 col-md-3">
     <div class="stat-card">
       <div class="stat-icon" style="background:linear-gradient(135deg,#e8a020,#f5c25a)"><i class="bi bi-clock-fill"></i></div>
       <div><div class="stat-value">{{ total_l }}</div><div class="stat-label">إجمالي التأخر</div></div>
     </div>
   </div>
-  <div class="col-md-3">
+  <div class="col-6 col-md-3">
     <div class="stat-card">
       <div class="stat-icon" style="background:linear-gradient(135deg,#2196f3,#64b5f6)"><i class="bi bi-percent"></i></div>
       <div>
@@ -83,7 +173,12 @@
     <table class="table table-hover">
       <thead>
         <tr>
-          <th>الترتيب</th><th>الطالب</th><th>رقمه</th>
+          <th>#</th>
+          <th>الطالب</th>
+          <th>الرمز</th>
+          {% if not selected_student_obj %}
+          <th>الصف / الشعبة</th>
+          {% endif %}
           <th class="text-success">حاضر</th>
           <th class="text-danger">غائب</th>
           <th class="text-warning">متأخر</th>
@@ -97,6 +192,14 @@
           <td class="text-muted">{{ loop.index }}</td>
           <td class="fw-600">{{ r.student.full_name }}</td>
           <td><code>{{ r.student.student_id }}</code></td>
+          {% if not selected_student_obj %}
+          <td class="text-muted" style="font-size:13px">
+            {% if r.student.section %}
+              {{ r.student.section.grade.name if r.student.section.grade else '—' }}
+              / شعبة {{ r.student.section.name }}
+            {% else %}—{% endif %}
+          </td>
+          {% endif %}
           <td class="fw-700 text-success">{{ r.present }}</td>
           <td class="fw-700 text-danger">{{ r.absent }}</td>
           <td class="fw-700 text-warning">{{ r.late }}</td>
@@ -121,13 +224,333 @@
   </div>
 </div>
 
-{% elif section_id %}
+{% elif has_filter %}
+{# Filters applied but no results #}
 <div class="card">
-  <div class="card-body text-center text-muted py-5">لا توجد بيانات حضور لهذه الشعبة في الفترة المحددة</div>
+  <div class="card-body text-center py-5">
+    <i class="bi bi-search" style="font-size:40px;opacity:.25;display:block;margin-bottom:12px;color:var(--text-muted)"></i>
+    <div class="fw-700 mb-1" style="font-size:15px">لا توجد بيانات حضور مطابقة</div>
+    <div class="text-muted" style="font-size:13px">
+      لم يُعثر على سجلات حضور للفلاتر المحددة في الفترة من {{ start }} إلى {{ end }}.
+    </div>
+  </div>
 </div>
+
 {% else %}
+{# No filter selected yet #}
 <div class="card">
-  <div class="card-body text-center text-muted py-5">اختر شعبة وفترة زمنية من الفلتر أعلاه</div>
+  <div class="card-body text-center py-5">
+    <i class="bi bi-funnel" style="font-size:40px;opacity:.25;display:block;margin-bottom:12px;color:var(--text-muted)"></i>
+    <div class="fw-700 mb-1" style="font-size:15px">اختر فلتراً لبدء التقرير</div>
+    <div class="text-muted" style="font-size:13px">
+      اختر المرحلة أو الصف أو الشعبة، أو ابحث مباشرةً بالاسم، ثم اضغط <strong>عرض</strong>.
+    </div>
+  </div>
 </div>
 {% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+<style>
+.filters-card, .filters-card .card-body { overflow: visible; }
+.student-search { position: relative; }
+.student-results {
+  position: absolute;
+  z-index: 1050;
+  top: calc(100% + 4px);
+  right: 0; left: 0;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(15,37,64,.18);
+  max-height: 280px;
+  overflow-y: auto;
+  min-width: 280px;
+}
+.student-result-item {
+  width: 100%; border: 0; background: transparent;
+  text-align: right; padding: 10px 14px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  cursor: pointer;
+  border-bottom: 1px solid #f0f4f8;
+}
+.student-result-item:last-child { border-bottom: 0; }
+.student-result-item:hover, .student-result-item:focus { background: #f0f4f8; outline: none; }
+.student-result-name { font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.student-result-meta { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+.selected-student {
+  border: 1px solid #cfe8dc; background: #e8f8f0; color: #155724;
+  border-radius: 8px; padding: 8px 10px;
+  display: flex; align-items: center; gap: 8px;
+}
+.selected-student span { flex: 1; font-weight: 700; }
+.selected-student small { display: block; color: #49725c; font-size: 12px; margin-top: 2px; }
+</style>
+
+<script>
+const stagesUrl   = "{{ url_for('reports.attendance_api_stages') }}";
+const gradesUrl   = "{{ url_for('reports.attendance_api_grades') }}";
+const sectionsUrl = "{{ url_for('reports.attendance_api_sections') }}";
+const studentsUrl = "{{ url_for('reports.attendance_api_students') }}";
+
+const stageFilter     = document.getElementById('stageFilter');
+const gradeFilter     = document.getElementById('gradeFilter');
+const sectionFilter   = document.getElementById('sectionFilter');
+const hiddenStage     = document.getElementById('hiddenStage');
+const hiddenGradeId   = document.getElementById('hiddenGradeId');
+const hiddenSectionId = document.getElementById('hiddenSectionId');
+const hiddenStudentPk = document.getElementById('hiddenStudentPk');
+const studentSearch   = document.getElementById('studentSearch');
+const studentResults  = document.getElementById('studentResults');
+const studentCard     = document.getElementById('selectedStudentCard');
+const submitBtn       = document.getElementById('submitBtn');
+
+let searchTimer    = null;
+let currentGradeId = null;
+let currentSecId   = null;
+
+// ── Pre-population data from server ────────────────────────────────────────────
+{% set pre_stage = '' %}
+{% set pre_grade_id = 'null' %}
+{% set pre_grade_name = '' %}
+{% set pre_sec_id = 'null' %}
+{% set pre_sec_name = '' %}
+
+{% if selected_section_obj %}
+  {% if selected_section_obj.grade %}
+    {% set pre_stage = selected_section_obj.grade.stage or '' %}
+    {% set pre_grade_id = selected_section_obj.grade.id %}
+    {% set pre_grade_name = selected_section_obj.grade.name %}
+  {% endif %}
+  {% set pre_sec_id = selected_section_obj.id %}
+  {% set pre_sec_name = selected_section_obj.name %}
+{% elif selected_grade_obj %}
+  {% set pre_stage = selected_grade_obj.stage or '' %}
+  {% set pre_grade_id = selected_grade_obj.id %}
+  {% set pre_grade_name = selected_grade_obj.name %}
+{% endif %}
+
+const preStage    = "{{ pre_stage | e }}";
+const preGradeId  = {{ pre_grade_id }};
+const preGradeName= "{{ pre_grade_name | e }}";
+const preSecId    = {{ pre_sec_id }};
+const preSecName  = "{{ pre_sec_name | e }}";
+
+// ── Restore selected student card on page load ─────────────────────────────────
+{% if selected_student_obj %}
+showStudentCard({
+  id:         {{ selected_student_obj.id }},
+  full_name:  "{{ selected_student_obj.full_name | e }}",
+  student_id: "{{ selected_student_obj.student_id or '' }}",
+  grade:      "{{ (selected_student_obj.section.grade.name if selected_student_obj.section and selected_student_obj.section.grade else '') | e }}",
+  section:    "{{ (selected_student_obj.section.name if selected_student_obj.section else '') | e }}"
+});
+{% endif %}
+
+// ── Submit-button state ────────────────────────────────────────────────────────
+function updateSubmit() {
+  const ok = hiddenStudentPk.value || hiddenSectionId.value || hiddenGradeId.value;
+  submitBtn.disabled = !ok;
+}
+
+// ── Grade reset ────────────────────────────────────────────────────────────────
+function resetGrade() {
+  gradeFilter.innerHTML = '<option value="">— اختر الصف —</option>';
+  gradeFilter.disabled = true;
+  hiddenGradeId.value = '';
+  currentGradeId = null;
+  resetSection();
+}
+
+function resetSection() {
+  sectionFilter.innerHTML = '<option value="">— اختر الشعبة —</option>';
+  sectionFilter.disabled = true;
+  hiddenSectionId.value = '';
+  currentSecId = null;
+  clearStudentPick();
+}
+
+// ── Cascading events ───────────────────────────────────────────────────────────
+stageFilter.addEventListener('change', function () {
+  hiddenStage.value = this.value;
+  resetGrade();
+  if (!this.value) return;
+  fetch(`${gradesUrl}?stage=${encodeURIComponent(this.value)}`, { headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      gradeFilter.innerHTML = '<option value="">— اختر الصف —</option>';
+      data.forEach(g => {
+        const o = document.createElement('option');
+        o.value = g.id; o.textContent = g.name;
+        gradeFilter.appendChild(o);
+      });
+      gradeFilter.disabled = data.length === 0;
+    }).catch(() => {});
+});
+
+gradeFilter.addEventListener('change', function () {
+  hiddenGradeId.value = this.value;
+  currentGradeId = this.value || null;
+  resetSection();
+  if (!this.value) { updateSubmit(); return; }
+  fetch(`${sectionsUrl}?grade_id=${encodeURIComponent(this.value)}`, { headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      sectionFilter.innerHTML = '<option value="">— كل الشعب —</option>';
+      data.forEach(s => {
+        const o = document.createElement('option');
+        o.value = s.id; o.textContent = s.name;
+        sectionFilter.appendChild(o);
+      });
+      sectionFilter.disabled = data.length === 0;
+      updateSubmit();
+    }).catch(() => {});
+});
+
+sectionFilter.addEventListener('change', function () {
+  hiddenSectionId.value = this.value;
+  currentSecId = this.value || null;
+  clearStudentPick();
+  updateSubmit();
+});
+
+// ── Student search widget ──────────────────────────────────────────────────────
+function hideResults() {
+  studentResults.classList.add('d-none');
+  studentResults.innerHTML = '';
+}
+
+function clearStudentPick() {
+  hiddenStudentPk.value = '';
+  studentSearch.value   = '';
+  studentCard.classList.add('d-none');
+  studentCard.innerHTML = '';
+  hideResults();
+  updateSubmit();
+}
+
+function studentMeta(s) {
+  return [s.grade, s.section ? 'شعبة ' + s.section : '', s.student_id].filter(Boolean).join(' — ');
+}
+
+function showStudentCard(s) {
+  hiddenStudentPk.value = s.id;
+  studentCard.classList.remove('d-none');
+  studentCard.innerHTML = `
+    <i class="bi bi-person-check-fill" style="font-size:18px;flex-shrink:0"></i>
+    <span>${s.full_name}<small>${studentMeta(s)}</small></span>
+    <button type="button" id="clearStudentBtn" class="btn btn-sm btn-outline-secondary">تغيير</button>`;
+  hideResults();
+  updateSubmit();
+}
+
+function chooseStudent(s) {
+  studentSearch.value = s.full_name;
+  showStudentCard(s);
+}
+
+function renderResults(students) {
+  if (!students.length) {
+    studentResults.innerHTML = '<div class="text-muted text-center py-3" style="font-size:13px">لا توجد نتائج مطابقة</div>';
+  } else {
+    studentResults.innerHTML = students.map(s => `
+      <button type="button" class="student-result-item"
+              data-student="${encodeURIComponent(JSON.stringify(s))}">
+        <span>
+          <span class="student-result-name">${s.full_name}</span>
+          <span class="student-result-meta d-block">${studentMeta(s)}</span>
+        </span>
+        <i class="bi bi-chevron-left text-muted"></i>
+      </button>`).join('');
+  }
+  studentResults.classList.remove('d-none');
+}
+
+studentSearch.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  hiddenStudentPk.value = '';
+  studentCard.classList.add('d-none');
+  updateSubmit();
+  const q = studentSearch.value.trim();
+  if (q.length < 2) { hideResults(); return; }
+  searchTimer = setTimeout(() => {
+    let url = `${studentsUrl}?q=${encodeURIComponent(q)}`;
+    if (currentSecId)   url += `&section_id=${encodeURIComponent(currentSecId)}`;
+    else if (currentGradeId) url += `&grade_id=${encodeURIComponent(currentGradeId)}`;
+    fetch(url, { headers: { Accept: 'application/json' } })
+      .then(r => r.ok ? r.json() : { results: [] })
+      .then(data => renderResults(data.results || []))
+      .catch(() => renderResults([]));
+  }, 250);
+});
+
+studentResults.addEventListener('click', e => {
+  const item = e.target.closest('.student-result-item');
+  if (!item) return;
+  chooseStudent(JSON.parse(decodeURIComponent(item.dataset.student)));
+});
+
+studentCard.addEventListener('click', e => {
+  if (!e.target.closest('#clearStudentBtn')) return;
+  clearStudentPick();
+  studentSearch.focus();
+});
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.student-search')) hideResults();
+});
+
+// ── Initialise cascading dropdowns (with pre-populated values) ─────────────────
+function initFilters() {
+  fetch(stagesUrl, { headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      stageFilter.innerHTML = '<option value="">— كل المراحل —</option>';
+      data.forEach(s => {
+        const o = document.createElement('option');
+        o.value = s.value; o.textContent = s.label;
+        stageFilter.appendChild(o);
+      });
+      if (!preStage) { updateSubmit(); return; }
+      stageFilter.value = preStage;
+      hiddenStage.value = preStage;
+      return fetch(`${gradesUrl}?stage=${encodeURIComponent(preStage)}`, { headers: { Accept: 'application/json' } });
+    })
+    .then(r => r && r.ok ? r.json() : null)
+    .then(data => {
+      if (!data || !preGradeId) { updateSubmit(); return; }
+      gradeFilter.innerHTML = '<option value="">— اختر الصف —</option>';
+      data.forEach(g => {
+        const o = document.createElement('option');
+        o.value = g.id; o.textContent = g.name;
+        gradeFilter.appendChild(o);
+      });
+      gradeFilter.disabled = data.length === 0;
+      gradeFilter.value    = preGradeId;
+      hiddenGradeId.value  = preGradeId;
+      currentGradeId       = String(preGradeId);
+      if (!preSecId) { updateSubmit(); return; }
+      return fetch(`${sectionsUrl}?grade_id=${encodeURIComponent(preGradeId)}`, { headers: { Accept: 'application/json' } });
+    })
+    .then(r => r && r.ok ? r.json() : null)
+    .then(data => {
+      if (!data || !preSecId) { updateSubmit(); return; }
+      sectionFilter.innerHTML = '<option value="">— كل الشعب —</option>';
+      data.forEach(s => {
+        const o = document.createElement('option');
+        o.value = s.id; o.textContent = s.name;
+        sectionFilter.appendChild(o);
+      });
+      sectionFilter.disabled = data.length === 0;
+      sectionFilter.value    = preSecId;
+      hiddenSectionId.value  = preSecId;
+      currentSecId           = String(preSecId);
+      updateSubmit();
+    })
+    .catch(() => updateSubmit());
+}
+
+initFilters();
+</script>
 {% endblock %}
