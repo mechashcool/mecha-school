@@ -30,8 +30,8 @@ import time
 from datetime import datetime, timezone
 
 from flask import (
-    Blueprint, Response, abort, flash, jsonify, redirect, render_template,
-    request, stream_with_context, url_for,
+    Blueprint, Response, abort, current_app, flash, jsonify, redirect,
+    render_template, request, stream_with_context, url_for,
 )
 from flask_login import current_user, login_required
 
@@ -885,8 +885,22 @@ def room_detail(room_id):
             flash('حدث خطأ أثناء حفظ الرسالة.', 'danger')
             return redirect(url_for('chat.room_detail', room_id=room.id))
 
-        # FCM push runs in a daemon thread so the AJAX response returns immediately.
-        threading.Thread(target=_push_chat_message, args=(room, msg), daemon=True).start()
+        # Capture all data needed by the daemon thread before the request context ends.
+        # current_user and db.session are NOT available inside daemon threads.
+        _push_data = {
+            'room_id':              room.id,
+            'room_name':            room.name,
+            'room_type':            room.type,
+            'is_announcement_only': room.is_announcement_only,
+            'msg_id':               msg.id,
+            'msg_body':             msg.body,
+            'sender_user_id':       msg.sender_user_id,
+            'sender_name':          current_user.full_name or 'مستخدم',
+        }
+        _app = current_app._get_current_object()
+        threading.Thread(
+            target=_push_chat_message, args=(_app, _push_data), daemon=True
+        ).start()
 
         if is_ajax:
             _log.info('[chat-send] returning ajax json message_id=%s room_id=%s', msg.id, room.id)
@@ -1512,99 +1526,117 @@ def settings():
 
 # ─── FCM push helper (shared with user routes) ───────────────────────────────
 
-def _push_chat_message(room: ChatRoom, msg: ChatMessage) -> None:
+def _push_chat_message(app, push_data: dict) -> None:
     """
-    Push FCM notification to non-blocked, non-sender members with active device tokens.
+    Push FCM to non-blocked, non-sender members with active device tokens.
 
-    Optimizations:
-    - Batch-queries active tokens upfront (not per-user)
-    - Only sends to users with active tokens
-    - Aggregates logging instead of per-user warnings
-    - Defers non-critical FCM work; never fails message send
+    Runs in a daemon thread — the Flask request context (current_user, scoped
+    db.session) is NOT available in the new thread.  All values that would
+    require the request context are captured as plain primitives before the
+    thread is started and passed in `push_data`.  The Flask application context
+    is passed explicitly as `app` and re-pushed here so that SQLAlchemy queries
+    work correctly.
+
+    push_data keys (all captured in the request context before thread start):
+        room_id, room_name, room_type, is_announcement_only,
+        msg_id, msg_body, sender_user_id, sender_name
     """
     import time
-    from app.models import MobileDeviceToken
+    from app.models import MobileDeviceToken, ChatRoomMember as _CRM
     from app.services.fcm_service import is_enabled, send_push_to_user
 
     start_ms = time.time() * 1000
-    try:
-        if not is_enabled():
-            return
+    room_id  = push_data.get('room_id', '?')
 
-        # ── Query members and active tokens in batch ────────────────────────
-        members = (ChatRoomMember.query
-                   .filter_by(room_id=room.id, is_blocked=False)
-                   .all())
-        if not members:
-            return
-
-        # Batch-query active tokens for all room members
-        member_ids = {m.user_id for m in members if m.user_id != msg.sender_user_id}
-        if not member_ids:
-            return
-
-        token_query_start = time.time() * 1000
+    with app.app_context():
         try:
-            tokens = (MobileDeviceToken.query
-                      .filter(MobileDeviceToken.user_id.in_(member_ids),
-                              MobileDeviceToken.is_active == True)
-                      .all())
-            users_with_tokens = {t.user_id for t in tokens}
-        except Exception as exc:
-            _log.error('[chat-fcm] failed to query device tokens room_id=%s: %s',
-                      room.id, exc)
-            return
+            if not is_enabled():
+                return
 
-        token_query_elapsed = time.time() * 1000 - token_query_start
-        users_without_tokens = member_ids - users_with_tokens
+            room_id              = push_data['room_id']
+            room_name            = push_data['room_name']
+            room_type            = push_data['room_type']
+            is_announcement_only = push_data['is_announcement_only']
+            msg_id               = push_data['msg_id']
+            msg_body             = push_data['msg_body']
+            sender_user_id       = push_data['sender_user_id']
+            sender_name          = push_data['sender_name']
 
-        # ── Aggregate token statistics ─────────────────────────────────────
-        _log.info(
-            '[chat-fcm] room_id=%s recipients=%d with_tokens=%d without_tokens=%d query_ms=%.1f',
-            room.id, len(member_ids), len(users_with_tokens), len(users_without_tokens),
-            token_query_elapsed,
-        )
+            # ── Query members and active tokens in batch ─────────────────────
+            members = (_CRM.query
+                       .filter_by(room_id=room_id, is_blocked=False)
+                       .all())
+            if not members:
+                _log.info('[chat-fcm] room_id=%s no non-blocked members — skip', room_id)
+                return
 
-        if not users_with_tokens:
-            return
+            member_ids = {m.user_id for m in members if m.user_id != sender_user_id}
+            if not member_ids:
+                _log.info('[chat-fcm] room_id=%s sender is only member — skip', room_id)
+                return
 
-        # ── Send FCM to users with active tokens only ──────────────────────
-        ntype      = 'school_announcement' if room.is_announcement_only else 'chat_message'
-        sender_name = current_user.full_name or 'مستخدم'
-        title = (f'رسالة جديدة في {room.name}'
-                 if room.type in ('group', 'announcement')
-                 else f'رسالة جديدة من {sender_name}')
-        body_text = (msg.body or '[مرفق]')[:150]
-        data = {
-            'type':       'message',   # Flutter routes on data.type
-            'route':      '/chat',     # Flutter navigates to this screen
-            'ntype':      ntype,       # internal sub-type
-            'room_id':    str(room.id),
-            'message_id': str(msg.id),
-        }
-
-        fcm_start = time.time() * 1000
-        fcm_sent = fcm_failed = 0
-        for user_id in users_with_tokens:
+            token_query_start = time.time() * 1000
             try:
-                sent, failed = send_push_to_user(user_id, title, body_text, data)
-                fcm_sent += sent
-                fcm_failed += failed
+                tokens = (MobileDeviceToken.query
+                          .filter(MobileDeviceToken.user_id.in_(member_ids),
+                                  MobileDeviceToken.is_active == True)
+                          .all())
+                users_with_tokens = {t.user_id for t in tokens}
             except Exception as exc:
-                _log.warning('[chat-fcm] push failed user_id=%s room_id=%s: %s',
-                            user_id, room.id, exc)
-                fcm_failed += 1
+                _log.error('[chat-fcm] failed to query device tokens room_id=%s: %s',
+                           room_id, exc)
+                return
 
-        fcm_elapsed = time.time() * 1000 - fcm_start
-        total_elapsed = time.time() * 1000 - start_ms
+            token_query_elapsed = time.time() * 1000 - token_query_start
+            users_without_tokens = member_ids - users_with_tokens
 
-        _log.info(
-            '[chat-fcm] room_id=%s fcm_sent=%d fcm_failed=%d fcm_ms=%.1f total_ms=%.1f',
-            room.id, fcm_sent, fcm_failed, fcm_elapsed, total_elapsed,
-        )
+            _log.info(
+                '[chat-fcm] room_id=%s recipients=%d with_tokens=%d without_tokens=%d query_ms=%.1f',
+                room_id, len(member_ids), len(users_with_tokens),
+                len(users_without_tokens), token_query_elapsed,
+            )
 
-    except Exception as exc:
-        _log.error('[chat-fcm] _push_chat_message error room_id=%s: %s', room.id, exc)
+            if not users_with_tokens:
+                return
+
+            # ── Build FCM payload ─────────────────────────────────────────────
+            ntype = 'school_announcement' if is_announcement_only else 'chat_message'
+            title = (f'رسالة جديدة في {room_name}'
+                     if room_type in ('group', 'announcement')
+                     else f'رسالة جديدة من {sender_name}')
+            body_text = (msg_body or '[مرفق]')[:150]
+            data = {
+                'type':        'message',    # Flutter routes on data['type']
+                'route':       '/chat',      # Flutter navigates to this screen
+                'ntype':       ntype,
+                'room_id':     str(room_id),
+                'message_id':  str(msg_id),
+                'room_type':   room_type,    # helps Flutter choose private vs group view
+                'sender_name': sender_name,  # display name for Flutter notification tap
+            }
+
+            fcm_start = time.time() * 1000
+            fcm_sent = fcm_failed = 0
+            for user_id in users_with_tokens:
+                try:
+                    sent, failed = send_push_to_user(user_id, title, body_text, data)
+                    fcm_sent   += sent
+                    fcm_failed += failed
+                except Exception as exc:
+                    _log.warning('[chat-fcm] push failed user_id=%s room_id=%s: %s',
+                                 user_id, room_id, exc)
+                    fcm_failed += 1
+
+            fcm_elapsed   = time.time() * 1000 - fcm_start
+            total_elapsed = time.time() * 1000 - start_ms
+
+            _log.info(
+                '[chat-fcm] room_id=%s fcm_sent=%d fcm_failed=%d fcm_ms=%.1f total_ms=%.1f',
+                room_id, fcm_sent, fcm_failed, fcm_elapsed, total_elapsed,
+            )
+
+        except Exception as exc:
+            _log.error('[chat-fcm] _push_chat_message error room_id=%s: %s', room_id, exc)
 
 
 # ─── User-facing routes (parent / teacher) ───────────────────────────────────
@@ -1791,8 +1823,22 @@ def user_room(room_id):
             flash('حدث خطأ أثناء حفظ الرسالة.', 'danger')
             return redirect(url_for('chat.user_room', room_id=room.id))
 
-        # FCM push runs in a daemon thread so the AJAX response returns immediately.
-        threading.Thread(target=_push_chat_message, args=(room, msg), daemon=True).start()
+        # Capture all data needed by the daemon thread before the request context ends.
+        # current_user and db.session are NOT available inside daemon threads.
+        _push_data = {
+            'room_id':              room.id,
+            'room_name':            room.name,
+            'room_type':            room.type,
+            'is_announcement_only': room.is_announcement_only,
+            'msg_id':               msg.id,
+            'msg_body':             msg.body,
+            'sender_user_id':       msg.sender_user_id,
+            'sender_name':          current_user.full_name or 'مستخدم',
+        }
+        _app = current_app._get_current_object()
+        threading.Thread(
+            target=_push_chat_message, args=(_app, _push_data), daemon=True
+        ).start()
 
         if is_ajax:
             _log.info('[chat-send] returning ajax json message_id=%s room_id=%s', msg.id, room.id)

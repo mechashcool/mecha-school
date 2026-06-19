@@ -172,11 +172,13 @@ def _push_new_message(room: ChatRoom, msg: ChatMessage, sender_name: str) -> Non
                   else f'رسالة جديدة من {sender_name}')
         body   = (msg.body or '[مرفق]')[:150]
         data   = {
-            'type':       'message',   # Flutter routes on data.type
-            'route':      '/chat',     # Flutter navigates to this screen
-            'ntype':      ntype,       # keep internal sub-type for Flutter to inspect if needed
-            'room_id':    str(room.id),
-            'message_id': str(msg.id),
+            'type':        'message',    # Flutter routes on data['type']
+            'route':       '/chat',      # Flutter navigates to this screen
+            'ntype':       ntype,
+            'room_id':     str(room.id),
+            'message_id':  str(msg.id),
+            'room_type':   room.type,    # helps Flutter choose private vs group view
+            'sender_name': sender_name,  # display name for Flutter notification tap
         }
         for mem in members:
             if mem.user_id == msg.sender_user_id:
