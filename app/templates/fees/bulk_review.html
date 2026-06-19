@@ -1,0 +1,296 @@
+{% extends "shared/base.html" %}
+{% block title %}مراجعة الرسوم الجماعية{% endblock %}
+{% block page_title %}مراجعة الرسوم الجماعية{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">مراجعة الرسوم الجماعية</h1>
+    <p class="page-subtitle">راجع التفاصيل أدناه قبل تأكيد الإنشاء</p>
+  </div>
+  <a href="{{ url_for('fees.bulk_create') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع وتعديل
+  </a>
+</div>
+
+{# ── Statistics cards ──────────────────────────────────────────────────────── #}
+<div class="row g-3 mb-4">
+
+  <div class="col-md-4">
+    <div class="card text-center py-3 border-0"
+         style="background:{% if eligible_students %}#e8f8f0{% else %}#f8f9fa{% endif %}">
+      <div style="font-size:2rem;font-weight:900;
+                  color:{% if eligible_students %}#16a06a{% else %}#64748b{% endif %}">
+        {{ eligible_students | length }}
+      </div>
+      <div class="text-muted mt-1" style="font-size:13px">
+        <i class="bi bi-person-check-fill me-1"
+           style="color:{% if eligible_students %}#16a06a{% else %}#64748b{% endif %}"></i>
+        طالب مؤهل — سيتم إنشاء سجل له
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card text-center py-3 border-0"
+         style="background:{% if duplicate_students %}#fff8e1{% else %}#f8f9fa{% endif %}">
+      <div style="font-size:2rem;font-weight:900;
+                  color:{% if duplicate_students %}#e8a020{% else %}#64748b{% endif %}">
+        {{ duplicate_students | length }}
+      </div>
+      <div class="text-muted mt-1" style="font-size:13px">
+        <i class="bi bi-exclamation-triangle-fill me-1"
+           style="color:{% if duplicate_students %}#e8a020{% else %}#64748b{% endif %}"></i>
+        طالب لديه رسوم مماثلة — سيتم تخطيه
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card text-center py-3 border-0"
+         style="background:{% if eligible_students %}#e8f0ff{% else %}#f8f9fa{% endif %}">
+      <div style="font-size:2rem;font-weight:900;
+                  color:{% if eligible_students %}#1a3a5c{% else %}#64748b{% endif %}">
+        {{ '{:,.0f}'.format(total_financial_value) }}
+      </div>
+      <div class="text-muted mt-1" style="font-size:13px">
+        <i class="bi bi-cash-stack me-1"
+           style="color:{% if eligible_students %}#1a3a5c{% else %}#64748b{% endif %}"></i>
+        إجمالي القيمة المالية (دينار عراقي)
+      </div>
+    </div>
+  </div>
+
+</div>
+
+{# ── Fee details card ──────────────────────────────────────────────────────── #}
+<div class="card mb-4">
+  <div class="card-header">
+    <i class="bi bi-receipt text-accent me-1"></i>تفاصيل سجل الرسوم (لكل طالب)
+  </div>
+  <div class="card-body">
+    <div class="row g-3">
+
+      <div class="col-sm-6 col-md-3">
+        <div class="detail-block">
+          <div class="detail-label">نوع الرسم</div>
+          <div class="detail-value">{{ fee_type.name }}</div>
+        </div>
+      </div>
+
+      <div class="col-sm-6 col-md-3">
+        <div class="detail-block">
+          <div class="detail-label">المبلغ الإجمالي</div>
+          <div class="detail-value">{{ '{:,.2f}'.format(total_amount) }} <small>د.ع</small></div>
+        </div>
+      </div>
+
+      <div class="col-sm-6 col-md-3">
+        <div class="detail-block">
+          <div class="detail-label">الخصم</div>
+          <div class="detail-value {% if discount > 0 %}text-danger{% endif %}">
+            {{ '{:,.2f}'.format(discount) }} <small>د.ع</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-sm-6 col-md-3">
+        <div class="detail-block">
+          <div class="detail-label">الصافي بعد الخصم</div>
+          <div class="detail-value fw-700" style="color:var(--primary)">
+            {{ '{:,.2f}'.format(net_amount) }} <small>د.ع</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-sm-6 col-md-3">
+        <div class="detail-block">
+          <div class="detail-label">عدد الأقساط</div>
+          <div class="detail-value">{{ num_inst }}</div>
+        </div>
+      </div>
+
+      {% if num_inst > 0 %}
+      <div class="col-sm-12 col-md-9">
+        <div class="detail-block">
+          <div class="detail-label">تواريخ استحقاق الأقساط</div>
+          <div class="detail-value d-flex flex-wrap gap-2 mt-1">
+            {% for d in installment_dates %}
+            <span class="badge" style="background:#e8f0ff;color:#1a3a5c;font-size:12px;font-weight:600">
+              القسط {{ loop.index }} — {{ d.strftime('%Y/%m/%d') }}
+            </span>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      {% if passthrough.get('notes') %}
+      <div class="col-12">
+        <div class="detail-block">
+          <div class="detail-label">ملاحظات</div>
+          <div class="detail-value text-muted">{{ passthrough.notes }}</div>
+        </div>
+      </div>
+      {% endif %}
+
+    </div>
+  </div>
+</div>
+
+{# ── Eligible students table ───────────────────────────────────────────────── #}
+{% if eligible_students %}
+<div class="card mb-4">
+  <div class="card-header d-flex align-items-center justify-content-between">
+    <span>
+      <i class="bi bi-check-circle-fill text-success me-1"></i>
+      سيتم إنشاء سجل رسوم لهم
+    </span>
+    <span class="badge bg-success">{{ eligible_students | length }} طالب</span>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0">
+        <thead class="table-light">
+          <tr>
+            <th style="width:40px">#</th>
+            <th>اسم الطالب</th>
+            <th>رمز الطالب</th>
+            <th>الصف</th>
+            <th>الشعبة</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for student in eligible_students %}
+          {% set sec   = student.section %}
+          {% set grade = sec.grade if sec else none %}
+          <tr>
+            <td class="text-muted">{{ loop.index }}</td>
+            <td class="fw-700">{{ student.full_name }}</td>
+            <td><code>{{ student.student_id }}</code></td>
+            <td>{{ grade.name if grade else '—' }}</td>
+            <td>{{ sec.name if sec else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# ── Duplicate students table ──────────────────────────────────────────────── #}
+{% if duplicate_students %}
+<div class="card mb-4 border-warning">
+  <div class="card-header d-flex align-items-center justify-content-between"
+       style="background:#fff8e1">
+    <span>
+      <i class="bi bi-exclamation-triangle-fill text-warning me-1"></i>
+      لديهم رسوم مماثلة — سيتم تخطيهم تلقائياً
+    </span>
+    <span class="badge bg-warning text-dark">{{ duplicate_students | length }} طالب</span>
+  </div>
+  <div class="card-body p-0">
+    <div class="alert alert-warning mb-0 rounded-0 border-0 py-2 px-3" style="font-size:13px">
+      <i class="bi bi-info-circle me-1"></i>
+      هؤلاء الطلاب لديهم بالفعل سجل رسوم من نوع
+      <strong>{{ fee_type.name }}</strong>
+      للسنة الدراسية الحالية. لن يتم إنشاء سجل مكرر لهم.
+    </div>
+    <div class="table-responsive">
+      <table class="table table-sm mb-0">
+        <thead class="table-light">
+          <tr>
+            <th style="width:40px">#</th>
+            <th>اسم الطالب</th>
+            <th>رمز الطالب</th>
+            <th>الصف</th>
+            <th>الشعبة</th>
+          </tr>
+        </thead>
+        <tbody class="text-muted">
+          {% for student in duplicate_students %}
+          {% set sec   = student.section %}
+          {% set grade = sec.grade if sec else none %}
+          <tr>
+            <td>{{ loop.index }}</td>
+            <td>{{ student.full_name }}</td>
+            <td><code>{{ student.student_id }}</code></td>
+            <td>{{ grade.name if grade else '—' }}</td>
+            <td>{{ sec.name if sec else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# ── Action area ───────────────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="card-body">
+
+    {% if not eligible_students %}
+    <div class="alert alert-warning mb-3">
+      <i class="bi bi-exclamation-circle-fill me-1"></i>
+      جميع الطلاب المحددين لديهم رسوم مماثلة. لا يوجد طلاب مؤهلون لإنشاء سجلات جديدة.
+    </div>
+    {% else %}
+    <div class="alert alert-info mb-3" style="font-size:13.5px">
+      <i class="bi bi-info-circle-fill me-1"></i>
+      سيتم إنشاء <strong>{{ eligible_students | length }}</strong> سجل رسوم
+      {% if duplicate_students %}
+        وتخطي <strong>{{ duplicate_students | length }}</strong> طالب لديهم رسوم مماثلة
+      {% endif %}.
+      إجمالي القيمة المالية:
+      <strong>{{ '{:,.2f}'.format(total_financial_value) }} دينار عراقي</strong>.
+    </div>
+    {% endif %}
+
+    <div class="d-flex flex-wrap gap-3">
+
+      {% if eligible_students %}
+      {# Confirm form — only eligible IDs are submitted; server re-validates before creating. #}
+      <form method="POST" action="{{ url_for('fees.bulk_create') }}" id="confirmForm">
+        <input type="hidden" name="action" value="confirm">
+        <input type="hidden" name="student_ids" value="{{ eligible_ids }}">
+
+        {# Pass through validated fee configuration as hidden fields #}
+        {% for key, val in passthrough.items() %}
+        <input type="hidden" name="{{ key }}" value="{{ val }}">
+        {% endfor %}
+
+        <button type="submit" class="btn btn-success px-5"
+                onclick="return confirmSubmit({{ eligible_students | length }})">
+          <i class="bi bi-check-circle-fill me-2"></i>
+          تأكيد إنشاء سجلات الرسوم لـ {{ eligible_students | length }} طالب
+        </button>
+      </form>
+      {% endif %}
+
+      <a href="{{ url_for('fees.bulk_create') }}" class="btn btn-outline-secondary px-4">
+        <i class="bi bi-arrow-right me-1"></i>إلغاء والعودة
+      </a>
+
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<style>
+.detail-block { padding: 4px 0; }
+.detail-label { font-size: 11.5px; color: var(--text-muted); margin-bottom: 3px; }
+.detail-value { font-size: 15px; font-weight: 600; color: var(--text); }
+.detail-value small { font-size: 11px; font-weight: 400; color: var(--text-muted); }
+</style>
+<script>
+function confirmSubmit(count) {
+  return confirm(
+    `سيتم إنشاء ${count} سجل رسوم بشكل نهائي.\n\nهل تريد المتابعة؟`
+  );
+}
+</script>
+{% endblock %}

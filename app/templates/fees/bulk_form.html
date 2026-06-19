@@ -1,0 +1,710 @@
+{% extends "shared/base.html" %}
+{% block title %}إضافة رسوم جماعية{% endblock %}
+{% block page_title %}إضافة رسوم جماعية{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">إضافة رسوم جماعية</h1>
+    <p class="page-subtitle">إنشاء سجل رسوم موحد لعدة طلاب في آن واحد</p>
+  </div>
+  <a href="{{ url_for('fees.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<form id="bulkForm" method="POST" action="{{ url_for('fees.bulk_create') }}">
+  <input type="hidden" name="action" value="preview">
+  <input type="hidden" name="student_ids" id="studentIdsInput">
+
+  <div class="row g-4 align-items-start">
+
+    <!-- ══ LEFT: Student Selection ══════════════════════════════════════════ -->
+    <div class="col-lg-5">
+      <div class="card">
+        <div class="card-header d-flex align-items-center gap-2">
+          <i class="bi bi-people-fill text-accent"></i>
+          <span>اختيار الطلاب</span>
+          <span class="badge bg-primary ms-auto" id="selBadge" style="display:none">0</span>
+        </div>
+        <div class="card-body pb-2">
+
+          <!-- Cascade filters -->
+          <div class="row g-2 mb-2">
+            <div class="col-4">
+              <select id="bStage" class="form-select form-select-sm" title="المرحلة">
+                <option value="">المرحلة</option>
+              </select>
+            </div>
+            <div class="col-4">
+              <select id="bGrade" class="form-select form-select-sm" disabled title="الصف">
+                <option value="">الصف</option>
+              </select>
+            </div>
+            <div class="col-4">
+              <select id="bSection" class="form-select form-select-sm" disabled title="الشعبة">
+                <option value="">الشعبة</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Search -->
+          <div class="input-group input-group-sm mb-2">
+            <span class="input-group-text"><i class="bi bi-search"></i></span>
+            <input type="search" id="bSearch" class="form-control"
+                   placeholder="ابحث بالاسم أو رمز الطالب (٢ أحرف على الأقل)"
+                   autocomplete="off">
+          </div>
+
+          <!-- List controls (shown after results load) -->
+          <div id="listControls" class="d-flex align-items-center justify-content-between mb-2"
+               style="display:none!important">
+            <div class="d-flex gap-2">
+              <button type="button" class="btn btn-outline-primary btn-xs"
+                      onclick="selectAllVisible()">تحديد الكل</button>
+              <button type="button" class="btn btn-outline-secondary btn-xs"
+                      onclick="deselectAllVisible()">إلغاء الكل</button>
+            </div>
+            <small class="text-muted" id="resultCount"></small>
+          </div>
+
+          <!-- Student checkbox list -->
+          <div id="studentList" class="bulk-student-list">
+            <div class="text-center text-muted py-5">
+              <i class="bi bi-funnel" style="font-size:2rem;opacity:.25"></i>
+              <div class="mt-2" style="font-size:13px">اختر مرحلة أو صفاً أو ابحث عن طالب</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Selected students chip panel -->
+      <div class="card mt-3" id="selectedPanel" style="display:none">
+        <div class="card-header d-flex align-items-center justify-content-between py-2">
+          <span style="font-size:13.5px;font-weight:700">
+            <i class="bi bi-person-check-fill text-success me-1"></i>الطلاب المحددون
+          </span>
+          <span class="badge bg-primary" id="selCount2">0</span>
+        </div>
+        <div class="card-body p-2">
+          <div id="selectedChips" class="chips-wrap"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ RIGHT: Fee Configuration — exact same fields as fees/form.html ══ -->
+    <div class="col-lg-7">
+      <div class="card">
+        <div class="card-header"><i class="bi bi-cash-coin text-accent"></i>بيانات الرسوم</div>
+        <div class="card-body">
+          <div class="row g-3 mb-4">
+
+            <!-- ── Academic Year ──────────────────────────────────────────── -->
+            <div class="col-md-6">
+              <label class="form-label">العام الدراسي <span class="text-danger">*</span></label>
+              <select name="academic_year_id" class="form-select" required>
+                <option value="">— اختر العام —</option>
+                {% for y in years %}
+                <option value="{{ y.id }}" {{ 'selected' if y.is_current }}>
+                  {{ y.name }}{{ ' (الحالي)' if y.is_current }}
+                </option>
+                {% endfor %}
+              </select>
+            </div>
+
+            <!-- ── Fee Type ──────────────────────────────────────────────── -->
+            <div class="col-md-6">
+              <label class="form-label">نوع الرسم <span class="text-danger">*</span></label>
+              <select name="fee_type_id" class="form-select" required>
+                <option value="">— اختر النوع —</option>
+                {% for ft in fee_types %}
+                <option value="{{ ft.id }}">{{ ft.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+
+            <!-- ── Total Amount ──────────────────────────────────────────── -->
+            <div class="col-md-6">
+              <label class="form-label">المبلغ الإجمالي <span class="text-danger">*</span></label>
+              <input type="number" name="total_amount" id="totalAmount" class="form-control"
+                     min="0" step="0.01" required oninput="calcNet()">
+              <div id="amountInWords" class="amount-in-words-preview d-none" dir="rtl"></div>
+            </div>
+
+            <!-- ── Discount Type ─────────────────────────────────────────── -->
+            <div class="col-12">
+              <label class="form-label">نوع الخصم</label>
+              <div class="d-flex gap-4 mt-1">
+                <div class="form-check">
+                  <input class="form-check-input" type="radio" name="discount_type"
+                         id="discountFixed" value="fixed" checked onchange="onDiscountTypeChange()">
+                  <label class="form-check-label" for="discountFixed">مبلغ ثابت</label>
+                </div>
+                <div class="form-check">
+                  <input class="form-check-input" type="radio" name="discount_type"
+                         id="discountPct" value="percentage" onchange="onDiscountTypeChange()">
+                  <label class="form-check-label" for="discountPct">نسبة مئوية</label>
+                </div>
+              </div>
+            </div>
+
+            <!-- ── Discount Value ────────────────────────────────────────── -->
+            <div class="col-md-4">
+              <label class="form-label" id="discountValueLabel">قيمة الخصم</label>
+              <div class="input-group">
+                <input type="number" name="discount_value" id="discountValue" class="form-control"
+                       min="0" step="0.01" value="0" oninput="calcNet()">
+                <span class="input-group-text" id="discountUnit">د.ع</span>
+              </div>
+            </div>
+
+            <!-- ── Calculated Discount Amount (percentage mode only) ──────── -->
+            <div class="col-md-4 d-none" id="calcDiscountRow">
+              <label class="form-label">قيمة الخصم المحسوبة</label>
+              <div class="form-control bg-light text-danger fw-700" id="calcDiscountAmount">—</div>
+            </div>
+
+            <!-- ── Net Amount ────────────────────────────────────────────── -->
+            <div class="col-md-4">
+              <label class="form-label">الصافي بعد الخصم</label>
+              <div class="form-control bg-light fw-700 text-primary-custom" id="netAmount">—</div>
+            </div>
+
+            <!-- ── Installment Count ─────────────────────────────────────── -->
+            <div class="col-md-6">
+              <label class="form-label">عدد الأقساط <span class="text-danger">*</span></label>
+              <select name="num_installments" id="numInst" class="form-select"
+                      onchange="renderInstDates()" required>
+                <option value="1">قسط واحد</option>
+                <option value="2">قسطان</option>
+                <option value="3">3 أقساط</option>
+                <option value="4">4 أقساط</option>
+                <option value="5">5 أقساط</option>
+                <option value="6">6 أقساط</option>
+                <option value="7">7 أقساط</option>
+                <option value="8">8 أقساط</option>
+                <option value="9">9 أقساط</option>
+                <option value="10">10 أقساط</option>
+                <option value="11">11 قسطاً</option>
+                <option value="12">12 قسطاً</option>
+              </select>
+            </div>
+
+            <!-- ── Notes ────────────────────────────────────────────────── -->
+            <div class="col-12">
+              <label class="form-label">ملاحظات</label>
+              <textarea name="notes" class="form-control" rows="2"></textarea>
+            </div>
+          </div>
+
+          <!-- Dynamic installment dates (identical to form.html) -->
+          <div id="instDatesSection">
+            <div class="mb-2 fw-700" style="font-size:13px;color:#1a3a5c">
+              <i class="bi bi-calendar3 me-1"></i>تواريخ استحقاق الأقساط
+            </div>
+            <div id="instDates" class="row g-2"></div>
+          </div>
+
+          <!-- Submit -->
+          <div class="mt-4 d-flex flex-wrap gap-3 align-items-center">
+            <button type="submit" id="reviewBtn" class="btn btn-primary px-4" disabled>
+              <i class="bi bi-eye-fill me-2"></i>مراجعة وتأكيد
+            </button>
+            <span id="selWarn" class="text-danger" style="font-size:13px;display:none">
+              <i class="bi bi-exclamation-circle me-1"></i>يرجى اختيار طالب واحد على الأقل
+            </span>
+            <a href="{{ url_for('fees.index') }}" class="btn btn-outline-secondary">إلغاء</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div><!-- /row -->
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<style>
+/* ── Bulk-form styles ──────────────────────────────────────────────────────── */
+.bulk-student-list {
+  max-height: 420px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fafbfd;
+}
+.bsi {               /* bulk student item */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background .1s;
+}
+.bsi:last-child { border-bottom: 0; }
+.bsi:hover      { background: #f0f4f8; }
+.bsi input[type=checkbox] { flex-shrink: 0; width: 16px; height: 16px; }
+.bsi-name  { font-weight: 700; font-size: 13.5px; color: var(--text); }
+.bsi-meta  { font-size: 11.5px; color: var(--text-muted); margin-top: 1px; }
+.bsi-code  { font-size: 11.5px; color: var(--text-muted); margin-right: auto; white-space: nowrap; }
+.btn-xs    { font-size: 12px; padding: 3px 10px; border-radius: 6px; }
+.chips-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 2px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #e8f8f0;
+  border: 1px solid #cfe8dc;
+  color: #155724;
+  border-radius: 20px;
+  padding: 3px 8px 3px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  max-width: 200px;
+}
+.chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-x {
+  flex-shrink: 0;
+  cursor: pointer;
+  border: 0;
+  background: none;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  color: #5a8a6c;
+  opacity: .8;
+}
+.chip-x:hover { opacity: 1; color: #de3d3d; }
+/* Copied from form.html */
+.amount-in-words-preview {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--text-muted, #6c757d);
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--bg-secondary, #f8f9fa);
+  border: 1px solid var(--border, #dee2e6);
+  direction: rtl;
+  text-align: right;
+  word-break: break-word;
+  line-height: 1.6;
+}
+@media print { .amount-in-words-preview { display: none !important; } }
+#listControls { display: flex !important; }
+</style>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════════════
+   STUDENT SELECTION (bulk-specific)
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── API URLs ─────────────────────────────────────────────────────────────── */
+const URL_STAGES   = "{{ url_for('fees.api_stages') }}";
+const URL_GRADES   = "{{ url_for('fees.api_grades') }}";
+const URL_SECTIONS = "{{ url_for('fees.api_sections') }}";
+const URL_STUDENTS = "{{ url_for('fees.api_students_bulk') }}";
+
+/* ── State ────────────────────────────────────────────────────────────────── */
+const sel   = new Map();   // id (Number) → student object  (persistent selection)
+const rMap  = new Map();   // id (Number) → student object  (current result set)
+let   curResults = [];
+let   searchTimer = null;
+
+const DEFAULT_PLACEHOLDER = `<div class="text-center text-muted py-5">
+  <i class="bi bi-funnel" style="font-size:2rem;opacity:.25"></i>
+  <div class="mt-2" style="font-size:13px">اختر مرحلة أو صفاً أو ابحث عن طالب</div>
+</div>`;
+
+/* ── DOM refs ─────────────────────────────────────────────────────────────── */
+const bStage    = document.getElementById('bStage');
+const bGrade    = document.getElementById('bGrade');
+const bSection  = document.getElementById('bSection');
+const bSearch   = document.getElementById('bSearch');
+const sList     = document.getElementById('studentList');
+const lCtrl     = document.getElementById('listControls');
+const rCount    = document.getElementById('resultCount');
+const selBadge  = document.getElementById('selBadge');
+const selCount2 = document.getElementById('selCount2');
+const selPanel  = document.getElementById('selectedPanel');
+const chipsEl   = document.getElementById('selectedChips');
+const reviewBtn = document.getElementById('reviewBtn');
+const selWarn   = document.getElementById('selWarn');
+
+/* ── HTML escaping ────────────────────────────────────────────────────────── */
+function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+/* ── Selection management ─────────────────────────────────────────────────── */
+function add(s)    { sel.set(Number(s.id), s); refresh(); }
+function remove(id){ sel.delete(Number(id));   refreshChips(); refreshCheckboxes(); refreshBtn(); }
+function toggle(s, checked) {
+  if (checked) sel.set(Number(s.id), s); else sel.delete(Number(s.id));
+  refresh();
+}
+
+function selectAllVisible()   { curResults.forEach(s => sel.set(Number(s.id), s)); reRender(); }
+function deselectAllVisible() { curResults.forEach(s => sel.delete(Number(s.id))); reRender(); }
+
+function reRender() { renderList(curResults); refreshChips(); refreshBtn(); }
+
+function refreshCheckboxes() {
+  sList.querySelectorAll('.bulk-cb').forEach(cb => {
+    cb.checked = sel.has(Number(cb.dataset.id));
+  });
+}
+
+function refreshChips() {
+  const n = sel.size;
+  selBadge.textContent = n;
+  selBadge.style.display = n ? '' : 'none';
+  selCount2.textContent = n;
+  selPanel.style.display = n ? '' : 'none';
+  if (!n) { chipsEl.innerHTML = ''; return; }
+  chipsEl.innerHTML = Array.from(sel.values()).map(s =>
+    `<span class="chip">
+       <span title="${esc(s.full_name)}">${esc(s.full_name)}</span>
+       <button type="button" class="chip-x" data-id="${s.id}" title="حذف">×</button>
+     </span>`
+  ).join('');
+}
+
+function refreshBtn() {
+  const has = sel.size > 0;
+  reviewBtn.disabled = !has;
+}
+
+function refresh() { refreshChips(); refreshBtn(); }
+
+/* Chip remove handler */
+chipsEl.addEventListener('click', e => {
+  const b = e.target.closest('.chip-x');
+  if (b) remove(Number(b.dataset.id));
+});
+
+/* ── Student list rendering ────────────────────────────────────────────────── */
+function renderList(students) {
+  curResults = students;
+  rMap.clear();
+  students.forEach(s => rMap.set(Number(s.id), s));
+
+  if (!students.length) {
+    sList.innerHTML = `<div class="text-center text-muted py-4" style="font-size:13px">
+      لا توجد نتائج مطابقة</div>`;
+    lCtrl.style.display = 'none';
+    return;
+  }
+
+  lCtrl.style.display = 'flex';
+  rCount.textContent = `${students.length} طالب`;
+
+  sList.innerHTML = students.map(s => {
+    const meta    = [s.grade, s.section].filter(Boolean).join(' – ');
+    const checked = sel.has(Number(s.id)) ? 'checked' : '';
+    return `<label class="bsi">
+      <input type="checkbox" class="bulk-cb form-check-input"
+             data-id="${s.id}" ${checked}>
+      <div style="flex:1;min-width:0">
+        <div class="bsi-name">${esc(s.full_name)}</div>
+        ${meta ? `<div class="bsi-meta">${esc(meta)}</div>` : ''}
+      </div>
+      <span class="bsi-code">${esc(s.student_id || '')}</span>
+    </label>`;
+  }).join('');
+
+  sList.querySelectorAll('.bulk-cb').forEach(cb => {
+    cb.addEventListener('change', function () {
+      const id = Number(this.dataset.id);
+      const s  = rMap.get(id);
+      if (s) toggle(s, this.checked);
+      else refreshCheckboxes();
+    });
+  });
+}
+
+function showPlaceholder(msg) {
+  curResults = [];
+  rMap.clear();
+  lCtrl.style.display = 'none';
+  sList.innerHTML = `<div class="text-center text-muted py-5">${msg}</div>`;
+}
+
+function showLoading() {
+  sList.innerHTML = `<div class="text-center text-muted py-4">
+    <div class="spinner-border spinner-border-sm" role="status"></div>
+    <span class="ms-2" style="font-size:13px">جاري التحميل...</span></div>`;
+}
+
+/* ── API helpers ──────────────────────────────────────────────────────────── */
+function fetchStudents(params) {
+  showLoading();
+  const url = URL_STUDENTS + '?' + new URLSearchParams(params);
+  fetch(url, { headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : { results: [] })
+    .then(d => {
+      const students = d.results || [];
+      if (students.length === 0 && params.q === undefined) {
+        showPlaceholder('<i class="bi bi-inbox" style="font-size:2rem;opacity:.25"></i><div class="mt-2">لا يوجد طلاب في هذه الشعبة</div>');
+      } else {
+        renderList(students);
+      }
+    })
+    .catch(() => showPlaceholder('حدث خطأ أثناء التحميل'));
+}
+
+/* ── Cascade: Stage → Grade → Section ─────────────────────────────────────── */
+function resetGrade() {
+  bGrade.innerHTML = '<option value="">الصف</option>';
+  bGrade.disabled = true;
+  resetSection();
+}
+function resetSection() {
+  bSection.innerHTML = '<option value="">الشعبة</option>';
+  bSection.disabled = true;
+  sList.innerHTML = DEFAULT_PLACEHOLDER;
+  lCtrl.style.display = 'none';
+  curResults = [];
+  rMap.clear();
+}
+
+bStage.addEventListener('change', function () {
+  resetGrade();
+  if (!this.value) return;
+  fetch(`${URL_GRADES}?stage=${encodeURIComponent(this.value)}`, { headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      bGrade.innerHTML = '<option value="">الصف</option>';
+      data.forEach(g => {
+        const o = document.createElement('option');
+        o.value = g.id; o.textContent = g.name;
+        bGrade.appendChild(o);
+      });
+      bGrade.disabled = !data.length;
+    }).catch(() => {});
+});
+
+bGrade.addEventListener('change', function () {
+  resetSection();
+  const gradeId = this.value;
+  if (!gradeId) return;
+  fetch(`${URL_SECTIONS}?grade_id=${encodeURIComponent(gradeId)}`, { headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      bSection.innerHTML = '<option value="">الشعبة</option>';
+      data.forEach(s => {
+        const o = document.createElement('option');
+        o.value = s.id; o.textContent = s.name;
+        bSection.appendChild(o);
+      });
+      bSection.disabled = !data.length;
+      // Auto-select single section
+      if (data.length === 1) { bSection.value = data[0].id; bSection.dispatchEvent(new Event('change')); }
+    }).catch(() => {});
+});
+
+bSection.addEventListener('change', function () {
+  curResults = []; rMap.clear(); lCtrl.style.display = 'none';
+  if (!this.value) {
+    // Grade selected but no section — load all students in this grade
+    const gradeId = bGrade.value;
+    if (gradeId) fetchStudents({ grade_id: gradeId });
+    else resetSection();
+    return;
+  }
+  fetchStudents({ section_id: this.value });
+});
+
+/* ── Search (with debounce) ───────────────────────────────────────────────── */
+bSearch.addEventListener('input', function () {
+  clearTimeout(searchTimer);
+  const q = this.value.trim();
+  if (q.length < 2) {
+    // Restore section-based list if a filter is still active
+    if (bSection.value) {
+      fetchStudents({ section_id: bSection.value });
+    } else if (bGrade.value) {
+      fetchStudents({ grade_id: bGrade.value });
+    } else {
+      sList.innerHTML = DEFAULT_PLACEHOLDER;
+      lCtrl.style.display = 'none';
+      curResults = []; rMap.clear();
+    }
+    return;
+  }
+  searchTimer = setTimeout(() => {
+    const params = { q };
+    if (bSection.value) params.section_id = bSection.value;
+    else if (bGrade.value) params.grade_id = bGrade.value;
+    fetchStudents(params);
+  }, 250);
+});
+
+/* ── Form submit: populate student_ids ────────────────────────────────────── */
+document.getElementById('bulkForm').addEventListener('submit', function (e) {
+  if (sel.size === 0) {
+    e.preventDefault();
+    selWarn.style.display = '';
+    return;
+  }
+  selWarn.style.display = 'none';
+  document.getElementById('studentIdsInput').value =
+    Array.from(sel.keys()).join(',');
+});
+
+/* ── Initialise cascade stages ────────────────────────────────────────────── */
+fetch(URL_STAGES, { headers: { Accept: 'application/json' } })
+  .then(r => r.ok ? r.json() : [])
+  .then(data => {
+    data.forEach(s => {
+      const o = document.createElement('option');
+      o.value = s.value; o.textContent = s.label;
+      bStage.appendChild(o);
+    });
+  }).catch(() => {});
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FEE CALCULATION — copied verbatim from fees/form.html
+   Single source of truth: same element IDs, same field names, same logic.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+// ── Iraqi Dinar amount-to-words ───────────────────────────────────────────────
+const _IQD_ONES = ['','واحد','اثنان','ثلاثة','أربعة','خمسة','ستة','سبعة','ثمانية','تسعة',
+  'عشرة','أحد عشر','اثنا عشر','ثلاثة عشر','أربعة عشر','خمسة عشر',
+  'ستة عشر','سبعة عشر','ثمانية عشر','تسعة عشر'];
+const _IQD_TENS = ['','','عشرون','ثلاثون','أربعون','خمسون','ستون','سبعون','ثمانون','تسعون'];
+const _IQD_HUNDREDS = ['','مائة','مائتان','ثلاثمائة','أربعمائة','خمسمائة',
+  'ستمائة','سبعمائة','ثمانمائة','تسعمائة'];
+
+function _iqdBelow1000(n) {
+  if (n === 0) return '';
+  if (n < 20) return _IQD_ONES[n];
+  if (n < 100) {
+    const t = Math.floor(n / 10), o = n % 10;
+    return o === 0 ? _IQD_TENS[t] : _IQD_ONES[o] + ' و' + _IQD_TENS[t];
+  }
+  const h = Math.floor(n / 100), r = n % 100;
+  return r === 0 ? _IQD_HUNDREDS[h] : _IQD_HUNDREDS[h] + ' و' + _iqdBelow1000(r);
+}
+
+function _iqdGroup(count, hasLower, singular, dualAcc, dualNom, plural310, plural11) {
+  if (count === 1) return singular;
+  if (count === 2) return hasLower ? dualNom : dualAcc;
+  if (count <= 10) return _IQD_ONES[count] + ' ' + plural310;
+  return _iqdBelow1000(count) + ' ' + plural11;
+}
+
+function _iqdIntToWords(n) {
+  const parts = [];
+  const billions  = Math.floor(n / 1e9); n = n % 1e9;
+  const millions  = Math.floor(n / 1e6); n = n % 1e6;
+  const thousands = Math.floor(n / 1e3); n = n % 1e3;
+  const remainder = n;
+  const hasLoB = millions > 0 || thousands > 0 || remainder > 0;
+  const hasLoM = thousands > 0 || remainder > 0;
+  const hasLoT = remainder > 0;
+  if (billions)  parts.push(_iqdGroup(billions,  hasLoB, 'مليار','مليارا','ملياران','مليارات','مليار'));
+  if (millions)  parts.push(_iqdGroup(millions,  hasLoM, 'مليون','مليونا','مليونان','ملايين','مليون'));
+  if (thousands) parts.push(_iqdGroup(thousands, hasLoT, 'ألف','ألفا','ألفان','آلاف','ألف'));
+  if (remainder) parts.push(_iqdBelow1000(remainder));
+  return parts.join(' و');
+}
+
+function amountToWordsIQD(value) {
+  if (value === '' || value === null || value === undefined) return '';
+  const n = Math.trunc(Number(value));
+  if (isNaN(n) || n < 0) return '';
+  if (n === 0) return 'صفر دينار عراقي';
+  if (n === 1) return 'دينار عراقي واحد';
+  if (n === 2) return 'ديناران عراقيان';
+  const w = _iqdIntToWords(n);
+  return (n >= 3 && n <= 10) ? w + ' دنانير عراقية' : w + ' دينار عراقي';
+}
+
+function updateAmountInWords() {
+  const raw = document.getElementById('totalAmount').value;
+  const div = document.getElementById('amountInWords');
+  if (!raw) { div.classList.add('d-none'); div.textContent = ''; return; }
+  const n = Math.trunc(parseFloat(raw));
+  if (isNaN(n) || n < 0) { div.classList.add('d-none'); div.textContent = ''; return; }
+  div.textContent = 'المبلغ كتابةً: ' + amountToWordsIQD(n);
+  div.classList.remove('d-none');
+}
+
+// ── Discount type switching ──────────────────────────────────────────────────
+function onDiscountTypeChange() {
+  const isPct = document.getElementById('discountPct').checked;
+  const label = document.getElementById('discountValueLabel');
+  const unit  = document.getElementById('discountUnit');
+  const calcRow = document.getElementById('calcDiscountRow');
+  if (isPct) {
+    label.textContent = 'نسبة الخصم (%)';
+    unit.textContent  = '%';
+    const inp = document.getElementById('discountValue');
+    inp.step = '0.01';
+    inp.max  = '100';
+    calcRow.classList.remove('d-none');
+  } else {
+    label.textContent = 'قيمة الخصم';
+    unit.textContent  = 'د.ع';
+    const inp = document.getElementById('discountValue');
+    inp.removeAttribute('max');
+    inp.step = '0.01';
+    calcRow.classList.add('d-none');
+  }
+  calcNet();
+}
+
+// ── Net amount calculation ────────────────────────────────────────────────────
+function calcNet() {
+  const total = parseFloat(document.getElementById('totalAmount').value) || 0;
+  const val   = parseFloat(document.getElementById('discountValue').value) || 0;
+  const isPct = document.getElementById('discountPct').checked;
+
+  let discount = 0;
+  if (isPct) {
+    const pct = Math.min(100, Math.max(0, val));
+    discount = Math.round(total * pct) / 100;   // integer IQD rounding
+    document.getElementById('calcDiscountAmount').textContent =
+      discount.toLocaleString('ar-IQ') + ' د.ع';
+  } else {
+    discount = val;
+  }
+
+  const net = total - discount;
+  document.getElementById('netAmount').textContent =
+    (net >= 0 ? net : 0).toLocaleString('ar-IQ') + ' د.ع';
+  updateAmountInWords();
+}
+
+function renderInstDates() {
+  const n   = parseInt(document.getElementById('numInst').value);
+  const div = document.getElementById('instDates');
+  div.innerHTML = '';
+  const today = new Date();
+  for (let i = 1; i <= n; i++) {
+    const d = new Date(today);
+    d.setMonth(d.getMonth() + (i - 1));
+    const iso = d.toISOString().split('T')[0];
+    div.innerHTML += `
+      <div class="col-md-4">
+        <label class="form-label" style="font-size:12.5px">استحقاق القسط ${i}</label>
+        <input type="date" name="due_date_${i}" class="form-control form-control-sm" value="${iso}" required>
+      </div>`;
+  }
+}
+
+renderInstDates();
+</script>
+{% endblock %}

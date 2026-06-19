@@ -491,6 +491,317 @@ def api_sections():
     return jsonify([{'id': s.id, 'name': s.name} for s in sections])
 
 
+@fees_bp.route('/api/students-bulk')
+@login_required
+@permission_required('manage_fees')
+def api_students_bulk():
+    """Students for bulk fee selection — filter by grade/section or name/code search.
+
+    Scoped to the current school, active year, and building-level access.
+    Returns up to 500 students when filtered by section/grade; up to 50 for open search.
+    """
+    school = get_current_school()
+    year = get_active_year(school.id) if school else None
+    if not school or not year:
+        return jsonify({'results': [], 'total': 0})
+
+    grade_id = request.args.get('grade_id', type=int)
+    section_id = request.args.get('section_id', type=int)
+    q = request.args.get('q', '').strip()
+
+    if not grade_id and not section_id and len(q) < 2:
+        return jsonify({'results': [], 'total': 0})
+
+    query = _active_fee_student_query(school, year)
+
+    if section_id:
+        valid_section = Section.query.filter_by(
+            id=section_id, school_id=school.id, academic_year_id=year.id
+        ).first()
+        if not valid_section:
+            return jsonify({'results': [], 'total': 0})
+        query = query.filter(Student.section_id == section_id)
+    elif grade_id:
+        valid_grade = Grade.query.filter_by(
+            id=grade_id, school_id=school.id, academic_year_id=year.id
+        ).first()
+        if not valid_grade:
+            return jsonify({'results': [], 'total': 0})
+        # Resolve grade → section IDs to avoid a cross-join with the eager joinedload.
+        section_ids = [
+            row.id for row in
+            Section.query
+            .filter_by(grade_id=grade_id, school_id=school.id, academic_year_id=year.id)
+            .with_entities(Section.id)
+            .all()
+        ]
+        if not section_ids:
+            return jsonify({'results': [], 'total': 0})
+        query = query.filter(Student.section_id.in_(section_ids))
+
+    if q:
+        query = query.filter(
+            Student.full_name.ilike(f'%{q}%') |
+            Student.student_id.ilike(f'%{q}%')
+        )
+
+    limit = 500 if (section_id or grade_id) else 50
+    students = query.order_by(Student.full_name).limit(limit).all()
+    return jsonify({
+        'results': [_student_payload(s) for s in students],
+        'total': len(students),
+    })
+
+
+@fees_bp.route('/bulk-create', methods=['GET', 'POST'])
+@login_required
+@historical_guard
+@permission_required('manage_fees')
+def bulk_create():
+    """Bulk fee assignment — create the same fee record for multiple students at once.
+
+    Two-step flow:
+      Step 1 (GET / POST action=preview): select students + configure fee → show review.
+      Step 2 (POST action=confirm): re-validate → create records atomically → redirect.
+
+    Security: all student IDs are re-validated against the authenticated school + active
+    year + building scope on every POST. Duplicates are detected and surfaced to the user
+    before any record is created. The entire creation is wrapped in a single DB transaction
+    that rolls back completely on any unexpected failure.
+    """
+    school = get_current_school()
+    year = get_active_year(school.id) if school else None
+    if not school or not year:
+        flash('يرجى اختيار مدرسة ذات سنة دراسية نشطة قبل إنشاء سجلات الرسوم.', 'danger')
+        return redirect(url_for('fees.index'))
+
+    fee_types = FeeType.query.all()
+    years_q = AcademicYear.query
+    if school:
+        years_q = years_q.filter_by(school_id=school.id)
+    years = years_q.order_by(AcademicYear.start_date.desc()).all()
+
+    if request.method == 'GET':
+        return render_template('fees/bulk_form.html', fee_types=fee_types, years=years)
+
+    # ── POST (preview or confirm) ─────────────────────────────────────────────
+    action = request.form.get('action', 'preview')
+
+    # ── Parse and deduplicate submitted student IDs ───────────────────────────
+    raw_ids = request.form.get('student_ids', '').strip()
+    try:
+        student_id_list = list(dict.fromkeys(
+            int(x) for x in raw_ids.split(',') if x.strip().isdigit()
+        ))
+    except Exception:
+        student_id_list = []
+
+    if not student_id_list:
+        flash('يرجى اختيار طالب واحد على الأقل.', 'danger')
+        return render_template('fees/bulk_form.html', fee_types=fee_types, years=years), 400
+
+    # ── Validate fee type (school-scoped) ─────────────────────────────────────
+    selected_fee_type_id = request.form.get('fee_type_id', type=int)
+    selected_year_id = request.form.get('academic_year_id', type=int) or year.id
+
+    fee_type = FeeType.query.filter_by(
+        id=selected_fee_type_id, school_id=school.id
+    ).first()
+    if not fee_type:
+        flash('نوع الرسم المحدد غير صالح.', 'danger')
+        return render_template('fees/bulk_form.html', fee_types=fee_types, years=years), 400
+
+    # ── Validate amounts ──────────────────────────────────────────────────────
+    try:
+        total_amount, discount, net_amount = compute_fee_amounts(request.form)
+    except FeeValidationError as exc:
+        flash(str(exc), 'danger')
+        return render_template('fees/bulk_form.html', fee_types=fee_types, years=years), 400
+
+    if total_amount <= 0:
+        flash('يجب أن يكون المبلغ الإجمالي أكبر من صفر.', 'danger')
+        return render_template('fees/bulk_form.html', fee_types=fee_types, years=years), 400
+
+    # ── Validate installments ─────────────────────────────────────────────────
+    num_inst = max(1, min(12, int(request.form.get('num_installments', 1) or 1)))
+    installment_dates = []
+    for i in range(1, num_inst + 1):
+        due_str = request.form.get(f'due_date_{i}')
+        try:
+            due = dt.strptime(due_str, '%Y-%m-%d').date() if due_str else date.today()
+        except ValueError:
+            due = date.today()
+        installment_dates.append(due)
+
+    # ── Load and validate selected students ───────────────────────────────────
+    # School + year + building scope enforced by _active_fee_student_query.
+    valid_students = (
+        _active_fee_student_query(school, year)
+        .filter(Student.id.in_(student_id_list))
+        .all()
+    )
+    valid_ids = {s.id for s in valid_students}
+    invalid_count = len(student_id_list) - len(valid_ids)
+
+    if invalid_count:
+        flash(
+            f'تم استبعاد {invalid_count} طالب غير صالح '
+            '(لا ينتمي لهذه المدرسة أو السنة الدراسية أو غير نشط).',
+            'warning',
+        )
+
+    if not valid_students:
+        flash('لا يوجد طلاب صالحون من بين المحددين.', 'danger')
+        return render_template('fees/bulk_form.html', fee_types=fee_types, years=years), 400
+
+    # ── Detect duplicates: students who already have this fee for this year ───
+    existing_student_ids = set(
+        row.student_id for row in
+        FeeRecord.query
+        .filter(
+            FeeRecord.student_id.in_(valid_ids),
+            FeeRecord.fee_type_id == selected_fee_type_id,
+            FeeRecord.academic_year_id == selected_year_id,
+        )
+        .with_entities(FeeRecord.student_id)
+        .all()
+    )
+
+    # Preserve original selection order.
+    order_map = {sid: idx for idx, sid in enumerate(student_id_list)}
+    duplicate_students = sorted(
+        [s for s in valid_students if s.id in existing_student_ids],
+        key=lambda s: order_map.get(s.id, 9999),
+    )
+    eligible_students = sorted(
+        [s for s in valid_students if s.id not in existing_student_ids],
+        key=lambda s: order_map.get(s.id, 9999),
+    )
+
+    # ── Build passthrough fields for the confirm form ─────────────────────────
+    # Only trusted server-computed or explicitly validated values are forwarded.
+    passthrough = {
+        'academic_year_id': str(selected_year_id),
+        'fee_type_id':      str(selected_fee_type_id),
+        'total_amount':     str(total_amount),
+        'discount_type':    request.form.get('discount_type', 'fixed'),
+        'discount_value':   str(request.form.get('discount_value', '0') or '0'),
+        'num_installments': str(num_inst),
+        'notes':            request.form.get('notes', ''),
+    }
+    for i, d in enumerate(installment_dates, 1):
+        passthrough[f'due_date_{i}'] = d.isoformat()
+
+    # ── PREVIEW step ──────────────────────────────────────────────────────────
+    if action == 'preview':
+        return render_template(
+            'fees/bulk_review.html',
+            school=school,
+            year=year,
+            fee_type=fee_type,
+            eligible_students=eligible_students,
+            duplicate_students=duplicate_students,
+            total_amount=float(total_amount),
+            discount=float(discount),
+            net_amount=float(net_amount),
+            num_inst=num_inst,
+            installment_dates=installment_dates,
+            total_financial_value=float(net_amount) * len(eligible_students),
+            passthrough=passthrough,
+            eligible_ids=','.join(str(s.id) for s in eligible_students),
+        )
+
+    # ── CONFIRM step ──────────────────────────────────────────────────────────
+    if action != 'confirm':
+        flash('طلب غير صالح.', 'danger')
+        return redirect(url_for('fees.bulk_create'))
+
+    if not eligible_students:
+        flash(
+            'لا يوجد طلاب مؤهلون لإنشاء سجلات رسوم لهم '
+            '(جميع المحددين لديهم رسوم مماثلة).',
+            'warning',
+        )
+        return redirect(url_for('fees.index'))
+
+    # Capture student names before commit to avoid post-commit N+1 lazy-loads.
+    student_names = {s.id: s.full_name for s in eligible_students}
+
+    created_count = 0
+    concurrent_skip = 0
+    created_ids = []
+
+    try:
+        for student in eligible_students:
+            # Guard against race: another request may have created the fee between
+            # the preview step and this confirm step.
+            if FeeRecord.query.filter_by(
+                student_id=student.id,
+                fee_type_id=selected_fee_type_id,
+                academic_year_id=selected_year_id,
+            ).first():
+                concurrent_skip += 1
+                continue
+
+            persist_fee_record(
+                request.form,
+                school=school,
+                student_id=student.id,
+                fee_type_id=selected_fee_type_id,
+                academic_year_id=selected_year_id,
+                total_amount=total_amount,
+                discount=discount,
+            )
+            created_ids.append(student.id)
+            created_count += 1
+
+        # Single atomic commit — if any persist_fee_record flush failed earlier,
+        # the exception is caught below and the whole batch rolls back.
+        db.session.commit()
+
+    except Exception:
+        db.session.rollback()
+        _log.exception('[fees] Bulk creation failed school_id=%s fee_type_id=%s',
+                       school.id, selected_fee_type_id)
+        flash(
+            'حدث خطأ أثناء إنشاء سجلات الرسوم. '
+            'تم التراجع عن جميع التغييرات. يرجى المحاولة مرة أخرى.',
+            'danger',
+        )
+        return redirect(url_for('fees.bulk_create'))
+
+    # Post-commit: push FCM notifications to parents (best-effort — must not block result).
+    for sid in created_ids:
+        name = student_names.get(sid, '')
+        _notify_fee_parents(
+            sid,
+            'سجل رسوم جديد',
+            f'تم إضافة سجل رسوم جديد للطالب {name}.',
+            screen='fees',
+        )
+
+    skipped_total = len(duplicate_students) + concurrent_skip
+    log_action(
+        'bulk_create', 'fee_record', None,
+        details=(
+            f'bulk_fee created={created_count} skipped={skipped_total} '
+            f'school_id={school.id} fee_type_id={selected_fee_type_id} '
+            f'year_id={selected_year_id}'
+        ),
+    )
+
+    parts = []
+    if created_count:
+        parts.append(f'تم إنشاء {created_count} سجل رسوم بنجاح.')
+    if skipped_total:
+        parts.append(f'تم تخطي {skipped_total} طالب لوجود رسوم مماثلة.')
+    if not parts:
+        parts.append('لم يتم إنشاء أي سجل رسوم.')
+
+    flash(' '.join(parts), 'success' if created_count else 'warning')
+    return redirect(url_for('fees.index'))
+
+
 @fees_bp.route('/pay/<int:inst_id>', methods=['POST'])
 @login_required
 @historical_guard
