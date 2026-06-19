@@ -15,25 +15,122 @@
   {% endif %}
 </div>
 
-<div class="card mb-4">
-  <div class="card-body py-3">
-    <div class="d-flex gap-3 align-items-center">
-      <div class="flex-grow-1 position-relative">
-        <input type="text" id="emp-search-input" class="form-control"
-               placeholder="بحث بالاسم أو رقم الموظف أو المسمى الوظيفي أو القسم..."
-               value="{{ search }}" autocomplete="off" dir="auto">
-        <span id="emp-search-spinner"
-              class="position-absolute top-50 translate-middle-y d-none"
-              style="left:12px;right:auto">
-          <span class="spinner-border spinner-border-sm text-muted"></span>
-        </span>
-      </div>
-      <button id="emp-clear-btn"
-              class="btn btn-outline-secondary {{ '' if search else 'd-none' }}"
-              type="button" title="مسح البحث">
-        <i class="bi bi-x-lg"></i>
-      </button>
+<style>
+  /* ── Employee search bar ─────────────────────────── */
+  .emp-search-wrap {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xs);
+    padding: 16px 20px;
+    margin-bottom: 20px;
+  }
+  .emp-search-inner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .emp-search-field {
+    position: relative;
+    flex: 1;
+  }
+  /* magnifier icon sits on the right (RTL start) */
+  .emp-search-field .search-icon {
+    position: absolute;
+    top: 50%;
+    right: 14px;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    font-size: 15px;
+    pointer-events: none;
+    transition: color .18s;
+  }
+  /* spinner on the left (RTL end) */
+  .emp-search-field .search-spin {
+    position: absolute;
+    top: 50%;
+    left: 14px;
+    transform: translateY(-50%);
+  }
+  #emp-search-input {
+    width: 100%;
+    padding: 10px 44px 10px 44px;   /* room for icon right, spinner left */
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    font-size: 13.5px;
+    color: var(--text);
+    background: #f8fafc;
+    transition: border-color .18s, box-shadow .18s, background .18s;
+    font-family: inherit;
+  }
+  #emp-search-input::placeholder { color: #a0aec0; }
+  #emp-search-input:hover {
+    border-color: #cdd6e3;
+    background: #fff;
+  }
+  #emp-search-input:focus {
+    outline: none;
+    border-color: var(--primary);
+    background: #fff;
+    box-shadow: 0 0 0 4px rgba(26,58,92,.09);
+  }
+  #emp-search-input:focus ~ .search-icon { color: var(--primary); }
+  .emp-clear-btn {
+    flex-shrink: 0;
+    width: 38px; height: 38px;
+    border-radius: 10px;
+    border: 1.5px solid var(--border);
+    background: #f8fafc;
+    color: var(--text-muted);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all .18s;
+  }
+  .emp-clear-btn:hover {
+    border-color: var(--danger);
+    background: #fdeeee;
+    color: var(--danger);
+  }
+  /* empty-state rendered by JS */
+  .emp-empty-state {
+    padding: 52px 24px;
+    text-align: center;
+    color: var(--text-muted);
+  }
+  .emp-empty-state i {
+    font-size: 40px;
+    opacity: .25;
+    display: block;
+    margin-bottom: 12px;
+  }
+  .emp-empty-state p {
+    font-size: 14px;
+    font-weight: 500;
+    margin: 0;
+  }
+  @media (max-width: 576px) {
+    .emp-search-wrap { padding: 12px 14px; }
+    #emp-search-input { font-size: 13px; }
+  }
+</style>
+
+<div class="emp-search-wrap">
+  <div class="emp-search-inner">
+    <div class="emp-search-field">
+      <input type="text" id="emp-search-input"
+             placeholder="بحث بالاسم أو رقم الموظف أو المسمى الوظيفي أو القسم…"
+             value="{{ search }}" autocomplete="off" dir="auto">
+      <i class="bi bi-search search-icon"></i>
+      <span class="search-spin d-none" id="emp-search-spinner">
+        <span class="spinner-border spinner-border-sm" style="color:var(--primary);opacity:.6"></span>
+      </span>
     </div>
+    <button id="emp-clear-btn" type="button"
+            class="emp-clear-btn {{ '' if search else 'd-none' }}"
+            title="مسح البحث" aria-label="مسح البحث">
+      <i class="bi bi-x-lg"></i>
+    </button>
   </div>
 </div>
 
@@ -86,9 +183,11 @@
         </tr>
         {% else %}
         <tr id="emp-empty-initial">
-          <td colspan="7" class="text-center text-muted py-5">
-            <i class="bi bi-person-badge" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-            لا يوجد موظفون
+          <td colspan="7" style="padding:0;border:none">
+            <div class="emp-empty-state">
+              <i class="bi bi-person-badge"></i>
+              <p>لا يوجد موظفون مسجّلون</p>
+            </div>
           </td>
         </tr>
         {% endfor %}
@@ -144,9 +243,11 @@
   function renderRows(items) {
     if (!items.length) {
       tbody.innerHTML = `<tr>
-        <td colspan="7" class="text-center text-muted py-5">
-          <i class="bi bi-search" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-          لا توجد نتائج مطابقة
+        <td colspan="7" style="padding:0;border:none">
+          <div class="emp-empty-state">
+            <i class="bi bi-search"></i>
+            <p>لا توجد نتائج مطابقة لبحثك</p>
+          </div>
         </td>
       </tr>`;
       return;
