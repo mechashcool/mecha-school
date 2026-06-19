@@ -1,7 +1,7 @@
 """Al-Muhandis – Employees Blueprint  (Phase 6: user account, teacher assignments)"""
 import logging
 
-from flask import (Blueprint, render_template, redirect, url_for, flash, request)
+from flask import (Blueprint, render_template, redirect, url_for, flash, request, jsonify)
 from flask_login import login_required, current_user
 from datetime import datetime as dt, date
 
@@ -401,6 +401,60 @@ def index():
                  .paginate(page=page, per_page=20, error_out=False))
     return render_template('employees/index.html',
                            employees=employees, search=search)
+
+
+@employees_bp.route('/search')
+@login_required
+@permission_required('manage_employees')
+def search():
+    """Debounced AJAX live-search endpoint – returns JSON for client-side rendering."""
+    school = get_current_school()
+    if not school:
+        return jsonify({'items': [], 'total': 0, 'page': 1, 'pages': 0,
+                        'has_next': False, 'has_prev': False,
+                        'next_num': None, 'prev_num': None}), 200
+
+    q      = request.args.get('q', '').strip()
+    page   = request.args.get('page', 1, type=int)
+
+    query = Employee.query.filter_by(school_id=school.id)
+    if q:
+        like = f'%{q}%'
+        query = query.filter(db.or_(
+            Employee.full_name.ilike(like),
+            Employee.employee_id.ilike(like),
+            Employee.job_title.ilike(like),
+            Employee.department.ilike(like),
+        ))
+    paginated = query.order_by(Employee.created_at.desc()).paginate(
+        page=page, per_page=20, error_out=False)
+
+    from app.utils.helpers import resolve_photo_url as _rpu
+    items = []
+    for e in paginated.items:
+        items.append({
+            'id':          e.id,
+            'employee_id': e.employee_id,
+            'full_name':   e.full_name,
+            'job_title':   e.job_title or '',
+            'department':  e.department or '—',
+            'base_salary': e.base_salary,
+            'status':      e.status,
+            'photo_url':   _rpu(e.photo) or '',
+            'view_url':    url_for('employees.view', emp_id=e.id),
+            'edit_url':    url_for('employees.edit', emp_id=e.id),
+        })
+
+    return jsonify({
+        'items':      items,
+        'total':      paginated.total,
+        'page':       paginated.page,
+        'pages':      paginated.pages,
+        'has_next':   paginated.has_next,
+        'has_prev':   paginated.has_prev,
+        'next_num':   paginated.next_num,
+        'prev_num':   paginated.prev_num,
+    })
 
 
 @employees_bp.route('/create', methods=['GET', 'POST'])

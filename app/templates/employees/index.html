@@ -6,7 +6,7 @@
 <div class="page-header">
   <div>
     <h1 class="page-title">الموظفون</h1>
-    <p class="page-subtitle">إجمالي {{ employees.total }} موظف</p>
+    <p class="page-subtitle" id="emp-count-label">إجمالي {{ employees.total }} موظف</p>
   </div>
   {% if not is_historical_year and school_cfg.action_enabled('employees', 'create') %}
   <a href="{{ url_for('employees.create') }}" class="btn btn-primary">
@@ -17,14 +17,23 @@
 
 <div class="card mb-4">
   <div class="card-body py-3">
-    <form method="GET" class="d-flex gap-3 align-items-center">
-      <div class="flex-grow-1">
-        <input type="text" name="q" class="form-control"
-               placeholder="بحث بالاسم أو رقم الموظف..." value="{{ search }}">
+    <div class="d-flex gap-3 align-items-center">
+      <div class="flex-grow-1 position-relative">
+        <input type="text" id="emp-search-input" class="form-control"
+               placeholder="بحث بالاسم أو رقم الموظف أو المسمى الوظيفي أو القسم..."
+               value="{{ search }}" autocomplete="off" dir="auto">
+        <span id="emp-search-spinner"
+              class="position-absolute top-50 translate-middle-y d-none"
+              style="left:12px;right:auto">
+          <span class="spinner-border spinner-border-sm text-muted"></span>
+        </span>
       </div>
-      <button class="btn btn-primary"><i class="bi bi-search me-1"></i>بحث</button>
-      {% if search %}<a href="{{ url_for('employees.index') }}" class="btn btn-outline-secondary">مسح</a>{% endif %}
-    </form>
+      <button id="emp-clear-btn"
+              class="btn btn-outline-secondary {{ '' if search else 'd-none' }}"
+              type="button" title="مسح البحث">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
   </div>
 </div>
 
@@ -37,7 +46,7 @@
           <th>القسم</th><th>الراتب الأساسي</th><th>الحالة</th><th>الإجراءات</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody id="emp-table-body">
         {% for e in employees.items %}
         <tr>
           <td><code class="text-primary-custom fw-600">{{ e.employee_id }}</code></td>
@@ -76,7 +85,7 @@
           </td>
         </tr>
         {% else %}
-        <tr>
+        <tr id="emp-empty-initial">
           <td colspan="7" class="text-center text-muted py-5">
             <i class="bi bi-person-badge" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
             لا يوجد موظفون
@@ -86,23 +95,172 @@
       </tbody>
     </table>
   </div>
-  {% if employees.pages > 1 %}
-  <div class="card-footer d-flex justify-content-between align-items-center">
-    <small class="text-muted">عرض {{ employees.items|length }} من {{ employees.total }}</small>
-    <nav>
-      <ul class="pagination pagination-sm mb-0">
-        {% for p in employees.iter_pages() %}
-          {% if p %}
-          <li class="page-item {{ 'active' if p == employees.page }}">
-            <a class="page-link" href="{{ url_for('employees.index', page=p, q=search) }}">{{ p }}</a>
-          </li>
-          {% else %}
-          <li class="page-item disabled"><span class="page-link">…</span></li>
-          {% endif %}
-        {% endfor %}
-      </ul>
-    </nav>
+  <div id="emp-pagination-wrapper"
+       class="{{ '' if employees.pages > 1 else 'd-none' }} card-footer d-flex justify-content-between align-items-center">
+    <small class="text-muted" id="emp-page-info">عرض {{ employees.items|length }} من {{ employees.total }}</small>
+    <nav><ul class="pagination pagination-sm mb-0" id="emp-pagination"></ul></nav>
   </div>
-  {% endif %}
 </div>
 {% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  'use strict';
+
+  const searchInput   = document.getElementById('emp-search-input');
+  const clearBtn      = document.getElementById('emp-clear-btn');
+  const spinner       = document.getElementById('emp-search-spinner');
+  const tbody         = document.getElementById('emp-table-body');
+  const countLabel    = document.getElementById('emp-count-label');
+  const pageInfo      = document.getElementById('emp-page-info');
+  const paginationEl  = document.getElementById('emp-pagination');
+  const paginationWrap= document.getElementById('emp-pagination-wrapper');
+
+  const SEARCH_URL    = "{{ url_for('employees.search') }}";
+  const IS_HISTORICAL = {{ 'true' if is_historical_year else 'false' }};
+  const CAN_EDIT      = {{ 'false' if is_historical_year else 'true' }};
+
+  let currentPage = 1;
+  let debounceTimer = null;
+  let activeXhr = null;
+
+  function statusLabel(status) {
+    if (status === 'active') return '<span class="badge-status badge-active">فعّال</span>';
+    if (status === 'on_leave') return '<span class="badge-status badge-inactive">إجازة</span>';
+    return '<span class="badge-status badge-inactive">منتهي</span>';
+  }
+
+  function avatarHtml(item) {
+    if (item.photo_url) {
+      return `<img src="${item.photo_url}" style="width:32px;height:32px;border-radius:8px;object-fit:cover">`;
+    }
+    const initial = item.full_name ? item.full_name[0] : '?';
+    return `<div style="width:32px;height:32px;border-radius:8px;background:#1aab6d;
+            display:flex;align-items:center;justify-content:center;
+            color:#fff;font-weight:700;font-size:13px">${initial}</div>`;
+  }
+
+  function renderRows(items) {
+    if (!items.length) {
+      tbody.innerHTML = `<tr>
+        <td colspan="7" class="text-center text-muted py-5">
+          <i class="bi bi-search" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+          لا توجد نتائج مطابقة
+        </td>
+      </tr>`;
+      return;
+    }
+    tbody.innerHTML = items.map(e => `
+      <tr>
+        <td><code class="text-primary-custom fw-600">${e.employee_id}</code></td>
+        <td>
+          <div class="d-flex align-items-center gap-2">
+            ${avatarHtml(e)}
+            <span class="fw-600">${e.full_name}</span>
+          </div>
+        </td>
+        <td>${e.job_title}</td>
+        <td>${e.department}</td>
+        <td class="fw-600">${Number(e.base_salary).toLocaleString('ar-IQ', {maximumFractionDigits:0})} <small class="text-muted fw-400">د.ع</small></td>
+        <td>${statusLabel(e.status)}</td>
+        <td>
+          <div class="d-flex gap-1">
+            <a href="${e.view_url}" class="btn btn-sm btn-outline-primary" title="عرض">
+              <i class="bi bi-eye"></i>
+            </a>
+            ${CAN_EDIT ? `<a href="${e.edit_url}" class="btn btn-sm btn-outline-secondary" title="تعديل"><i class="bi bi-pencil"></i></a>` : ''}
+          </div>
+        </td>
+      </tr>`).join('');
+  }
+
+  function renderPagination(data) {
+    const q = searchInput.value.trim();
+    if (data.pages <= 1) {
+      paginationWrap.classList.add('d-none');
+      return;
+    }
+    paginationWrap.classList.remove('d-none');
+    pageInfo.textContent = `عرض ${data.items ? data.items.length : 0} من ${data.total}`;
+
+    // Build simple prev / numbered / next
+    let html = '';
+    if (data.has_prev) {
+      html += `<li class="page-item"><a class="page-link" href="#" data-page="${data.prev_num}">‹</a></li>`;
+    }
+    // Show up to 7 pages around current
+    const p = data.page, total = data.pages;
+    for (let i = 1; i <= total; i++) {
+      if (i === 1 || i === total || (i >= p - 2 && i <= p + 2)) {
+        html += `<li class="page-item ${i === p ? 'active' : ''}">
+          <a class="page-link" href="#" data-page="${i}">${i}</a></li>`;
+      } else if (i === p - 3 || i === p + 3) {
+        html += `<li class="page-item disabled"><span class="page-link">…</span></li>`;
+      }
+    }
+    if (data.has_next) {
+      html += `<li class="page-item"><a class="page-link" href="#" data-page="${data.next_num}">›</a></li>`;
+    }
+    paginationEl.innerHTML = html;
+  }
+
+  function doSearch(page) {
+    const q = searchInput.value.trim();
+    currentPage = page || 1;
+
+    // Toggle clear button
+    clearBtn.classList.toggle('d-none', !q);
+
+    if (activeXhr) { activeXhr.abort(); activeXhr = null; }
+
+    spinner.classList.remove('d-none');
+
+    const url = `${SEARCH_URL}?q=${encodeURIComponent(q)}&page=${currentPage}`;
+    activeXhr = new XMLHttpRequest();
+    activeXhr.open('GET', url, true);
+    activeXhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+    activeXhr.onload = function () {
+      spinner.classList.add('d-none');
+      if (activeXhr.status === 200) {
+        const data = JSON.parse(activeXhr.responseText);
+        countLabel.textContent = `إجمالي ${data.total} موظف`;
+        renderRows(data.items);
+        renderPagination(data);
+      }
+      activeXhr = null;
+    };
+    activeXhr.onerror = function () {
+      spinner.classList.add('d-none');
+      activeXhr = null;
+    };
+    activeXhr.send();
+  }
+
+  searchInput.addEventListener('input', function () {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => doSearch(1), 280);
+  });
+
+  clearBtn.addEventListener('click', function () {
+    searchInput.value = '';
+    clearBtn.classList.add('d-none');
+    doSearch(1);
+    searchInput.focus();
+  });
+
+  paginationEl.addEventListener('click', function (e) {
+    const link = e.target.closest('a[data-page]');
+    if (!link) return;
+    e.preventDefault();
+    doSearch(parseInt(link.dataset.page, 10));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+
+  // If page loaded with a search term (e.g. back-navigation), fire immediately
+  if (searchInput.value.trim()) {
+    clearBtn.classList.remove('d-none');
+  }
+})();
+</script>
+{% endblock extra_js %}
