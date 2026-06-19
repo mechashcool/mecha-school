@@ -29,6 +29,12 @@ SUPER_ADMIN_ROLE = 'super_admin'
 SCHOOL_ADMIN_ROLE = 'school_admin'
 LEGACY_ADMIN_ROLE = 'admin'
 
+# Roles hidden from the Create/Edit User form dropdown.
+# Existing users that already hold these roles are unaffected — the backend,
+# permission system, and APIs treat these roles normally.
+# To re-enable a role in the dropdown, remove its name from this set.
+HIDDEN_FROM_CREATE_FORM_ROLES = {'accountant', 'hr', 'reception'}
+
 COMPLAINT_TYPES = {
     'academic': '\u0623\u0643\u0627\u062f\u064a\u0645\u064a\u0629',
     'administrative': '\u0625\u062f\u0627\u0631\u064a\u0629',
@@ -80,9 +86,20 @@ def _is_role_assignable_by_current_user(role):
     return False
 
 
-def _assignable_roles():
+def _assignable_roles(existing_role_name=None):
+    """Return roles shown in the Create/Edit User form dropdown.
+
+    Roles in HIDDEN_FROM_CREATE_FORM_ROLES are suppressed unless the user
+    being edited already holds one of them, which keeps the edit form valid
+    for existing accounts without breaking their role assignment.
+    """
     roles = Role.query.order_by(Role.id).all()
-    return [role for role in roles if _is_role_assignable_by_current_user(role)]
+    return [
+        role for role in roles
+        if _is_role_assignable_by_current_user(role)
+        and (role.name not in HIDDEN_FROM_CREATE_FORM_ROLES
+             or role.name == existing_role_name)
+    ]
 
 
 def _is_super_admin_account(user):
@@ -659,7 +676,7 @@ def edit_user(user_id):
     if is_school_manager and user.id == current_user.id:
         abort(403)
 
-    roles = _assignable_roles()
+    roles = _assignable_roles(existing_role_name=user.role.name if user.role else None)
 
     # Super-admin: full permission list. School managers cannot edit extra
     # permissions from School User Management.
