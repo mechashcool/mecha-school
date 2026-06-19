@@ -2,16 +2,223 @@
 {% block title %}تقرير الحضور{% endblock %}
 {% block page_title %}تقرير الحضور والغياب{% endblock %}
 
+{# ══════════════════════════════════════════════════════════════════════════════
+   Screen + Print styles
+══════════════════════════════════════════════════════════════════════════════ #}
+{% block extra_css %}
+<style>
+/* ── Screen: student search widget ────────────────────────────────────────── */
+.filters-card, .filters-card .card-body { overflow: visible; }
+.student-search { position: relative; }
+.student-results {
+  position: absolute;
+  z-index: 1050;
+  top: calc(100% + 4px);
+  right: 0; left: 0;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(15,37,64,.18);
+  max-height: 280px;
+  overflow-y: auto;
+  min-width: 280px;
+}
+.student-result-item {
+  width: 100%; border: 0; background: transparent;
+  text-align: right; padding: 10px 14px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  cursor: pointer;
+  border-bottom: 1px solid #f0f4f8;
+}
+.student-result-item:last-child { border-bottom: 0; }
+.student-result-item:hover, .student-result-item:focus { background: #f0f4f8; outline: none; }
+.student-result-name { font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.student-result-meta { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+.selected-student {
+  border: 1px solid #cfe8dc; background: #e8f8f0; color: #155724;
+  border-radius: 8px; padding: 8px 10px;
+  display: flex; align-items: center; gap: 8px;
+}
+.selected-student span { flex: 1; font-weight: 700; }
+.selected-student small { display: block; color: #49725c; font-size: 12px; margin-top: 2px; }
+
+/* ── Print-only elements (hidden on screen) ────────────────────────────────── */
+.print-only { display: none !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   @media print
+══════════════════════════════════════════════════════════════════════════════ */
+@media print {
+  /* ── Page layout ── */
+  @page { size: A4 landscape; margin: 14mm 12mm 12mm; }
+
+  /* ── Prevent blank final page ── */
+  html, body { height: auto !important; overflow: visible !important; }
+
+  /* ── Hide all screen chrome ── */
+  #sidebar, #sidebar-overlay, #topbar,
+  #flash-container, .no-print { display: none !important; }
+
+  /* ── Reset shell ── */
+  body {
+    background: #fff !important;
+    font-family: 'Cairo', 'Tajawal', Arial, sans-serif !important;
+    direction: rtl !important;
+    color: #111 !important;
+    margin: 0 !important; padding: 0 !important;
+  }
+  #main-content {
+    margin: 0 !important; padding: 0 !important;
+    height: auto !important; overflow: visible !important;
+  }
+  * { box-shadow: none !important; }
+
+  /* ── Show print-only elements ── */
+  .print-only { display: block !important; }
+
+  /* ── Print header ── */
+  .print-header {
+    display: flex !important;
+    align-items: center;
+    gap: 16pt;
+    border-bottom: 3px double #1a3a5c;
+    padding-bottom: 10pt;
+    margin-bottom: 12pt;
+    page-break-inside: avoid;
+  }
+  .print-header-logo {
+    width: 64pt; height: 64pt;
+    object-fit: contain; flex-shrink: 0;
+  }
+  .print-header-body { flex: 1; }
+  .print-school-name {
+    font-size: 16pt; font-weight: 900; color: #1a3a5c; margin: 0 0 3pt;
+  }
+  .print-report-title {
+    font-size: 12pt; font-weight: 700; color: #333; margin: 0 0 3pt;
+  }
+  .print-header-meta {
+    display: flex; gap: 18pt; flex-wrap: wrap; font-size: 9pt; color: #555;
+  }
+  .print-header-date {
+    font-size: 9pt; color: #555; text-align: left; white-space: nowrap; align-self: flex-start;
+  }
+
+  /* ── Print summary stats ── */
+  .screen-stats { display: none !important; }
+  .print-stats {
+    display: table !important;
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 10pt;
+    page-break-inside: avoid;
+  }
+  .print-stats td {
+    border: 1px solid #ccc;
+    padding: 6pt 10pt;
+    text-align: center;
+    font-size: 10pt;
+    width: 20%;
+  }
+  .print-stats .ps-label {
+    display: block; font-size: 8pt; color: #555; margin-bottom: 2pt;
+  }
+  .print-stats .ps-value { font-size: 14pt; font-weight: 900; }
+  .ps-present .ps-value { color: #1aab6d; }
+  .ps-absent  .ps-value { color: #d63031; }
+  .ps-late    .ps-value { color: #e17055; }
+  .ps-leave   .ps-value { color: #6c5ce7; }
+  .ps-rate    .ps-value { color: #0984e3; }
+
+  /* ── Context bar ── */
+  .screen-context { display: none !important; }
+  .print-context {
+    display: flex !important;
+    align-items: center;
+    gap: 12pt;
+    background: #f0f4f8;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    border-radius: 4pt;
+    padding: 5pt 10pt;
+    margin-bottom: 8pt;
+    font-size: 9.5pt;
+    font-weight: 700;
+    color: #1a3a5c;
+    page-break-inside: avoid;
+  }
+
+  /* ── Table ── */
+  .card { border: none !important; border-radius: 0 !important; background: #fff !important; }
+  .table-wrapper { overflow: visible !important; border: none !important; }
+  .table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: 9.5pt !important;
+    table-layout: auto;
+  }
+  /* Repeating header on each page */
+  .table thead { display: table-header-group; }
+  .table thead th {
+    background: #1a3a5c !important;
+    color: #fff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    border: 1px solid #0f2440 !important;
+    padding: 5pt 7pt !important;
+    font-size: 9.5pt !important;
+    font-weight: 700 !important;
+    white-space: nowrap;
+  }
+  .table tbody td {
+    border: 1px solid #c8d0d8 !important;
+    padding: 4.5pt 7pt !important;
+    vertical-align: middle !important;
+  }
+  .table tbody tr:nth-child(even) td {
+    background: #f5f7fa !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  /* Avoid splitting a student row across pages */
+  .table tbody tr { page-break-inside: avoid; }
+
+  /* ── Always show grade/section col in print ── */
+  .print-only-col { display: table-cell !important; }
+
+  /* ── Progress bar: hide bar graphic, show text only ── */
+  .att-rate-bar { display: none !important; }
+  .att-rate-pct { min-width: auto !important; font-size: 9.5pt !important; }
+
+  /* ── Coloured text ── */
+  .text-success { color: #0a6640 !important; }
+  .text-danger  { color: #8b1a1a !important; }
+  .text-warning { color: #7a4a00 !important; }
+  .text-purple  { color: #5235a6 !important; }
+  code { background: transparent !important; border: none !important; font-size: 9pt !important; }
+}
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="page-header">
+
+{# ── Page header (hidden in print via .no-print) ─────────────────────────── #}
+<div class="page-header no-print">
   <div><h1 class="page-title">تقرير الحضور والغياب</h1></div>
-  <a href="{{ url_for('reports.index') }}" class="btn btn-outline-secondary">
-    <i class="bi bi-arrow-right me-1"></i>رجوع
-  </a>
+  <div class="d-flex gap-2 align-items-center">
+    {% if rows %}
+    <button type="button" class="btn btn-outline-secondary" onclick="window.print()">
+      <i class="bi bi-printer-fill me-1"></i>طباعة
+    </button>
+    {% endif %}
+    <a href="{{ url_for('reports.index') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>رجوع
+    </a>
+  </div>
 </div>
 
-{# ── Filters ───────────────────────────────────────────────────────────────── #}
-<div class="card filters-card mb-4">
+{# ── Filters card (hidden in print via .no-print) ─────────────────────────── #}
+<div class="card filters-card no-print mb-4">
   <div class="card-header fw-700">
     <i class="bi bi-funnel-fill text-accent me-1"></i>فلاتر التقرير
   </div>
@@ -60,7 +267,7 @@
           <input type="date" name="end" id="endDate" class="form-control" value="{{ end }}">
         </div>
 
-        {# Buttons #}
+        {# Action buttons #}
         <div class="col-6 col-md-2 d-flex gap-2">
           <button type="submit" id="submitBtn" class="btn btn-primary flex-fill" disabled>
             <i class="bi bi-search me-1"></i>عرض
@@ -102,27 +309,105 @@
   </div>
 </div>
 
-{# ── Results ───────────────────────────────────────────────────────────────── #}
+{# ════════════════════════════════════════════════════════════════════════════
+   Results block
+════════════════════════════════════════════════════════════════════════════ #}
 {% if rows %}
 
-{# Context breadcrumb #}
-<div class="mb-3 d-flex align-items-center gap-2 flex-wrap">
-  {% if selected_student_obj %}
-    <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-size:13px;font-weight:600;padding:6px 12px">
-      <i class="bi bi-person-fill me-1"></i>{{ selected_student_obj.full_name }}
-      {% if selected_student_obj.section and selected_student_obj.section.grade %}
-        — {{ selected_student_obj.section.grade.name }} / شعبة {{ selected_student_obj.section.name }}
+{# ── Jinja aggregates ── #}
+{% set total_p  = rows | sum(attribute='present') %}
+{% set total_a  = rows | sum(attribute='absent') %}
+{% set total_l  = rows | sum(attribute='late') %}
+{% set total_ol = rows | sum(attribute='on_leave') %}
+{% set grand    = total_p + total_a + total_l %}
+
+{# ── Resolve context label (used in both print header and screen breadcrumb) ── #}
+{% if selected_student_obj %}
+  {% set ctx_icon  = 'bi-person-fill' %}
+  {% set ctx_label = selected_student_obj.full_name %}
+  {% if selected_student_obj.section and selected_student_obj.section.grade %}
+    {% set ctx_label = ctx_label ~ ' — ' ~ selected_student_obj.section.grade.name ~ ' / شعبة ' ~ selected_student_obj.section.name %}
+  {% endif %}
+{% elif selected_section_obj %}
+  {% set ctx_icon  = 'bi-door-open' %}
+  {% set ctx_label = ('صف ' ~ selected_section_obj.grade.name ~ ' / ' if selected_section_obj.grade else '') ~ 'شعبة ' ~ selected_section_obj.name %}
+{% elif selected_grade_obj %}
+  {% set ctx_icon  = 'bi-building' %}
+  {% set ctx_label = 'صف ' ~ selected_grade_obj.name %}
+{% else %}
+  {% set ctx_icon  = 'bi-people-fill' %}
+  {% set ctx_label = '' %}
+{% endif %}
+
+{# ══════════════════════════════════════════════════════════════════════════
+   PRINT-ONLY HEADER (invisible on screen, rendered by browser for print)
+══════════════════════════════════════════════════════════════════════════ #}
+<div class="print-only print-header">
+  {% if logo_url %}
+  <img src="{{ logo_url }}" class="print-header-logo" alt="شعار المدرسة">
+  {% endif %}
+  <div class="print-header-body">
+    <div class="print-school-name">
+      {{ (school.school_name_ar or school.school_name) if school else '' }}
+    </div>
+    <div class="print-report-title">تقرير الحضور والغياب</div>
+    <div class="print-header-meta">
+      {% if ctx_label %}
+      <span><i class="bi bi-funnel-fill"></i> {{ ctx_label }}</span>
       {% endif %}
-    </span>
-  {% elif selected_section_obj %}
-    <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-size:13px;font-weight:600;padding:6px 12px">
-      <i class="bi bi-door-open me-1"></i>
-      {% if selected_section_obj.grade %}{{ selected_section_obj.grade.name }} / {% endif %}شعبة {{ selected_section_obj.name }}
-    </span>
-  {% elif selected_grade_obj %}
-    <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-size:13px;font-weight:600;padding:6px 12px">
-      <i class="bi bi-building me-1"></i>صف {{ selected_grade_obj.name }}
-    </span>
+      <span>الفترة: {{ start }} — {{ end }}</span>
+      <span>عدد الطلاب: {{ rows | length }}</span>
+    </div>
+  </div>
+  <div class="print-header-date">
+    تاريخ الطباعة<br>
+    <strong class="js-print-date"></strong>
+  </div>
+</div>
+
+{# ── PRINT-ONLY context bar ── #}
+<div class="print-only print-context">
+  {% if ctx_label %}<i class="bi {{ ctx_icon }}"></i> {{ ctx_label }}{% endif %}
+  &nbsp;|&nbsp; <i class="bi bi-calendar-range"></i> {{ start }} — {{ end }}
+  &nbsp;|&nbsp; {{ rows | length }} طالب
+</div>
+
+{# ══════════════════════════════════════════════════════════════════════════
+   PRINT-ONLY summary stats
+══════════════════════════════════════════════════════════════════════════ #}
+<table class="print-only print-stats">
+  <tr>
+    <td class="ps-present">
+      <span class="ps-label">إجمالي الحضور</span>
+      <span class="ps-value">{{ total_p }}</span>
+    </td>
+    <td class="ps-absent">
+      <span class="ps-label">إجمالي الغياب</span>
+      <span class="ps-value">{{ total_a }}</span>
+    </td>
+    <td class="ps-late">
+      <span class="ps-label">إجمالي التأخر</span>
+      <span class="ps-value">{{ total_l }}</span>
+    </td>
+    <td class="ps-leave">
+      <span class="ps-label">إجمالي المجاز</span>
+      <span class="ps-value">{{ total_ol }}</span>
+    </td>
+    <td class="ps-rate">
+      <span class="ps-label">متوسط الحضور</span>
+      <span class="ps-value">{{ ((total_p + total_l) / grand * 100) | round(1) if grand else 0 }}%</span>
+    </td>
+  </tr>
+</table>
+
+{# ══════════════════════════════════════════════════════════════════════════
+   SCREEN context breadcrumb (hidden in print)
+══════════════════════════════════════════════════════════════════════════ #}
+<div class="screen-context mb-3 d-flex align-items-center gap-2 flex-wrap">
+  {% if ctx_label %}
+  <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-size:13px;font-weight:600;padding:6px 12px">
+    <i class="bi {{ ctx_icon }} me-1"></i>{{ ctx_label }}
+  </span>
   {% endif %}
   <span class="text-muted" style="font-size:13px">
     <i class="bi bi-calendar-range me-1"></i>{{ start }} — {{ end }}
@@ -130,32 +415,35 @@
   <span class="badge bg-secondary" style="font-size:12px">{{ rows | length }} طالب</span>
 </div>
 
-{# Summary stats #}
-{% set total_p = rows | sum(attribute='present') %}
-{% set total_a = rows | sum(attribute='absent') %}
-{% set total_l = rows | sum(attribute='late') %}
-{% set grand   = total_p + total_a + total_l %}
-
-<div class="row g-3 mb-4">
-  <div class="col-6 col-md-3">
+{# ══════════════════════════════════════════════════════════════════════════
+   SCREEN summary stat cards (hidden in print)
+══════════════════════════════════════════════════════════════════════════ #}
+<div class="screen-stats row g-3 mb-4">
+  <div class="col-6 col-md-2 col-lg-2">
     <div class="stat-card">
       <div class="stat-icon" style="background:linear-gradient(135deg,#1aab6d,#16c879)"><i class="bi bi-check-circle-fill"></i></div>
       <div><div class="stat-value">{{ total_p }}</div><div class="stat-label">إجمالي الحضور</div></div>
     </div>
   </div>
-  <div class="col-6 col-md-3">
+  <div class="col-6 col-md-2 col-lg-2">
     <div class="stat-card">
       <div class="stat-icon" style="background:linear-gradient(135deg,#e03e3e,#f87171)"><i class="bi bi-x-circle-fill"></i></div>
       <div><div class="stat-value">{{ total_a }}</div><div class="stat-label">إجمالي الغياب</div></div>
     </div>
   </div>
-  <div class="col-6 col-md-3">
+  <div class="col-6 col-md-2 col-lg-2">
     <div class="stat-card">
       <div class="stat-icon" style="background:linear-gradient(135deg,#e8a020,#f5c25a)"><i class="bi bi-clock-fill"></i></div>
       <div><div class="stat-value">{{ total_l }}</div><div class="stat-label">إجمالي التأخر</div></div>
     </div>
   </div>
-  <div class="col-6 col-md-3">
+  <div class="col-6 col-md-2 col-lg-2">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,#6c5ce7,#a29bfe)"><i class="bi bi-calendar-check-fill"></i></div>
+      <div><div class="stat-value">{{ total_ol }}</div><div class="stat-label">إجمالي المجاز</div></div>
+    </div>
+  </div>
+  <div class="col-6 col-md-2 col-lg-2">
     <div class="stat-card">
       <div class="stat-icon" style="background:linear-gradient(135deg,#2196f3,#64b5f6)"><i class="bi bi-percent"></i></div>
       <div>
@@ -168,6 +456,9 @@
   </div>
 </div>
 
+{# ══════════════════════════════════════════════════════════════════════════
+   Attendance table (shared between screen and print)
+══════════════════════════════════════════════════════════════════════════ #}
 <div class="card">
   <div class="table-wrapper">
     <table class="table table-hover">
@@ -176,12 +467,16 @@
           <th>#</th>
           <th>الطالب</th>
           <th>الرمز</th>
-          {% if not selected_student_obj %}
+          {# Grade/section: always in print; conditionally on screen #}
+          {% if selected_student_obj %}
+          <th class="print-only-col" style="display:none">الصف / الشعبة</th>
+          {% else %}
           <th>الصف / الشعبة</th>
           {% endif %}
           <th class="text-success">حاضر</th>
           <th class="text-danger">غائب</th>
           <th class="text-warning">متأخر</th>
+          <th style="color:#6c5ce7">مجاز</th>
           <th>الإجمالي</th>
           <th>نسبة الحضور</th>
         </tr>
@@ -192,26 +487,33 @@
           <td class="text-muted">{{ loop.index }}</td>
           <td class="fw-600">{{ r.student.full_name }}</td>
           <td><code>{{ r.student.student_id }}</code></td>
-          {% if not selected_student_obj %}
+          {# Grade/section cell: always in print; conditionally on screen #}
+          {% if selected_student_obj %}
+          <td class="print-only-col text-muted" style="display:none;font-size:13px">
+            {% if r.student.section %}
+              {{ r.student.section.grade.name if r.student.section.grade else '—' }} / شعبة {{ r.student.section.name }}
+            {% else %}—{% endif %}
+          </td>
+          {% else %}
           <td class="text-muted" style="font-size:13px">
             {% if r.student.section %}
-              {{ r.student.section.grade.name if r.student.section.grade else '—' }}
-              / شعبة {{ r.student.section.name }}
+              {{ r.student.section.grade.name if r.student.section.grade else '—' }} / شعبة {{ r.student.section.name }}
             {% else %}—{% endif %}
           </td>
           {% endif %}
           <td class="fw-700 text-success">{{ r.present }}</td>
           <td class="fw-700 text-danger">{{ r.absent }}</td>
           <td class="fw-700 text-warning">{{ r.late }}</td>
+          <td class="fw-700 text-purple" style="color:#6c5ce7">{{ r.on_leave }}</td>
           <td>{{ r.total }}</td>
           <td>
             <div style="display:flex;align-items:center;gap:8px">
-              <div style="flex:1;height:8px;background:#f0f4f8;border-radius:4px;overflow:hidden">
+              <div class="att-rate-bar" style="flex:1;height:8px;background:#f0f4f8;border-radius:4px;overflow:hidden">
                 <div style="width:{{ r.rate }}%;height:100%;
                             background:{% if r.rate >= 85 %}#1aab6d{% elif r.rate >= 70 %}#e8a020{% else %}#e03e3e{% endif %};
                             border-radius:4px"></div>
               </div>
-              <span style="font-size:13px;font-weight:700;min-width:44px;
+              <span class="att-rate-pct" style="font-size:13px;font-weight:700;min-width:44px;
                 color:{% if r.rate >= 85 %}#1aab6d{% elif r.rate >= 70 %}#e8a020{% else %}#e03e3e{% endif %}">
                 {{ r.rate }}%
               </span>
@@ -225,8 +527,8 @@
 </div>
 
 {% elif has_filter %}
-{# Filters applied but no results #}
-<div class="card">
+{# ── Filters applied but no results ── #}
+<div class="card no-print">
   <div class="card-body text-center py-5">
     <i class="bi bi-search" style="font-size:40px;opacity:.25;display:block;margin-bottom:12px;color:var(--text-muted)"></i>
     <div class="fw-700 mb-1" style="font-size:15px">لا توجد بيانات حضور مطابقة</div>
@@ -237,8 +539,8 @@
 </div>
 
 {% else %}
-{# No filter selected yet #}
-<div class="card">
+{# ── No filter selected yet ── #}
+<div class="card no-print">
   <div class="card-body text-center py-5">
     <i class="bi bi-funnel" style="font-size:40px;opacity:.25;display:block;margin-bottom:12px;color:var(--text-muted)"></i>
     <div class="fw-700 mb-1" style="font-size:15px">اختر فلتراً لبدء التقرير</div>
@@ -251,44 +553,19 @@
 
 {% endblock %}
 
+{# ══════════════════════════════════════════════════════════════════════════════
+   JavaScript
+══════════════════════════════════════════════════════════════════════════════ #}
 {% block extra_js %}
-<style>
-.filters-card, .filters-card .card-body { overflow: visible; }
-.student-search { position: relative; }
-.student-results {
-  position: absolute;
-  z-index: 1050;
-  top: calc(100% + 4px);
-  right: 0; left: 0;
-  background: #fff;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 32px rgba(15,37,64,.18);
-  max-height: 280px;
-  overflow-y: auto;
-  min-width: 280px;
-}
-.student-result-item {
-  width: 100%; border: 0; background: transparent;
-  text-align: right; padding: 10px 14px;
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  cursor: pointer;
-  border-bottom: 1px solid #f0f4f8;
-}
-.student-result-item:last-child { border-bottom: 0; }
-.student-result-item:hover, .student-result-item:focus { background: #f0f4f8; outline: none; }
-.student-result-name { font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
-.student-result-meta { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
-.selected-student {
-  border: 1px solid #cfe8dc; background: #e8f8f0; color: #155724;
-  border-radius: 8px; padding: 8px 10px;
-  display: flex; align-items: center; gap: 8px;
-}
-.selected-student span { flex: 1; font-weight: 700; }
-.selected-student small { display: block; color: #49725c; font-size: 12px; margin-top: 2px; }
-</style>
-
 <script>
+/* ── Print date ── */
+document.querySelectorAll('.js-print-date').forEach(function (el) {
+  el.textContent = new Date().toLocaleDateString('ar-SA', {
+    year: 'numeric', month: 'long', day: 'numeric'
+  });
+});
+
+/* ── AJAX URL constants ── */
 const stagesUrl   = "{{ url_for('reports.attendance_api_stages') }}";
 const gradesUrl   = "{{ url_for('reports.attendance_api_grades') }}";
 const sectionsUrl = "{{ url_for('reports.attendance_api_sections') }}";
@@ -310,7 +587,7 @@ let searchTimer    = null;
 let currentGradeId = null;
 let currentSecId   = null;
 
-// ── Pre-population data from server ────────────────────────────────────────────
+/* ── Pre-population data from server ── */
 {% set pre_stage = '' %}
 {% set pre_grade_id = 'null' %}
 {% set pre_grade_name = '' %}
@@ -331,13 +608,13 @@ let currentSecId   = null;
   {% set pre_grade_name = selected_grade_obj.name %}
 {% endif %}
 
-const preStage    = "{{ pre_stage | e }}";
-const preGradeId  = {{ pre_grade_id }};
-const preGradeName= "{{ pre_grade_name | e }}";
-const preSecId    = {{ pre_sec_id }};
-const preSecName  = "{{ pre_sec_name | e }}";
+const preStage     = "{{ pre_stage | e }}";
+const preGradeId   = {{ pre_grade_id }};
+const preGradeName = "{{ pre_grade_name | e }}";
+const preSecId     = {{ pre_sec_id }};
+const preSecName   = "{{ pre_sec_name | e }}";
 
-// ── Restore selected student card on page load ─────────────────────────────────
+/* ── Restore selected student card on page load ── */
 {% if selected_student_obj %}
 showStudentCard({
   id:         {{ selected_student_obj.id }},
@@ -348,13 +625,13 @@ showStudentCard({
 });
 {% endif %}
 
-// ── Submit-button state ────────────────────────────────────────────────────────
+/* ── Submit-button state ── */
 function updateSubmit() {
   const ok = hiddenStudentPk.value || hiddenSectionId.value || hiddenGradeId.value;
   submitBtn.disabled = !ok;
 }
 
-// ── Grade reset ────────────────────────────────────────────────────────────────
+/* ── Cascade resets ── */
 function resetGrade() {
   gradeFilter.innerHTML = '<option value="">— اختر الصف —</option>';
   gradeFilter.disabled = true;
@@ -371,7 +648,7 @@ function resetSection() {
   clearStudentPick();
 }
 
-// ── Cascading events ───────────────────────────────────────────────────────────
+/* ── Cascading change events ── */
 stageFilter.addEventListener('change', function () {
   hiddenStage.value = this.value;
   resetGrade();
@@ -415,7 +692,7 @@ sectionFilter.addEventListener('change', function () {
   updateSubmit();
 });
 
-// ── Student search widget ──────────────────────────────────────────────────────
+/* ── Student search widget ── */
 function hideResults() {
   studentResults.classList.add('d-none');
   studentResults.innerHTML = '';
@@ -476,7 +753,7 @@ studentSearch.addEventListener('input', () => {
   if (q.length < 2) { hideResults(); return; }
   searchTimer = setTimeout(() => {
     let url = `${studentsUrl}?q=${encodeURIComponent(q)}`;
-    if (currentSecId)   url += `&section_id=${encodeURIComponent(currentSecId)}`;
+    if (currentSecId)        url += `&section_id=${encodeURIComponent(currentSecId)}`;
     else if (currentGradeId) url += `&grade_id=${encodeURIComponent(currentGradeId)}`;
     fetch(url, { headers: { Accept: 'application/json' } })
       .then(r => r.ok ? r.json() : { results: [] })
@@ -501,7 +778,7 @@ document.addEventListener('click', e => {
   if (!e.target.closest('.student-search')) hideResults();
 });
 
-// ── Initialise cascading dropdowns (with pre-populated values) ─────────────────
+/* ── Initialise cascading dropdowns with pre-populated values ── */
 function initFilters() {
   fetch(stagesUrl, { headers: { Accept: 'application/json' } })
     .then(r => r.ok ? r.json() : [])

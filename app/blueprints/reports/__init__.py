@@ -371,16 +371,22 @@ def attendance_report():
         if school_id:
             att_q = att_q.filter_by(school_id=school_id)
         recs = att_q.all()
-        p = sum(1 for r in recs if r.status == 'present')
-        a = sum(1 for r in recs if r.status == 'absent')
-        l = sum(1 for r in recs if r.status == 'late')
+        p  = sum(1 for r in recs if r.status == 'present')
+        a  = sum(1 for r in recs if r.status == 'absent')
+        l  = sum(1 for r in recs if r.status == 'late')
+        ol = sum(1 for r in recs if r.status == 'on_leave')
         total = p + a + l
         rows.append({'student': s, 'present': p, 'absent': a,
-                     'late': l, 'total': total,
+                     'late': l, 'on_leave': ol, 'total': total,
                      'rate': round((p + l) / total * 100 if total else 0, 1)})
     rows.sort(key=lambda x: x['rate'], reverse=True)
 
     has_filter = bool(student_pk or section_id or grade_id)
+
+    logo_url = None
+    if school and getattr(school, 'logo_path', None):
+        from app.utils.helpers import resolve_photo_url
+        logo_url = resolve_photo_url(school.logo_path)
 
     return render_template('reports/attendance.html',
                            rows=rows,
@@ -391,7 +397,9 @@ def attendance_report():
                            selected_section_obj=selected_section_obj,
                            selected_grade_obj=selected_grade_obj,
                            start=start_str, end=end_str,
-                           has_filter=has_filter)
+                           has_filter=has_filter,
+                           school=school,
+                           logo_url=logo_url)
 
 
 @reports_bp.route('/attendance/api/stages')
