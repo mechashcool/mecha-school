@@ -44,6 +44,7 @@ from app.models import (
     StudentTransport,
     parent_students,
 )
+from app.utils.helpers import save_uploaded_file, delete_uploaded_file, resolve_photo_url
 from app.utils.notification_visibility import notification_visible_to
 
 from . import mobile_api_bp
@@ -609,6 +610,65 @@ _COMPLAINT_STATUS = {
     'closed':       'مغلقة',
 }
 
+# ─── Student leave-request attachment config ──────────────────────────────────
+
+_ALLOWED_LEAVE_EXTS   = {'pdf', 'jpg', 'jpeg', 'png'}
+_MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024  # 15 MB
+_LEAVE_BUCKET         = 'uploads'
+_EXT_TO_MIME = {
+    'pdf':  'application/pdf',
+    'jpg':  'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'png':  'image/png',
+}
+
+
+def _sniff_leave_content(file_bytes: bytes, ext: str) -> bool:
+    """Return True when file_bytes actually match the declared extension.
+
+    Checks the PDF magic header for PDFs; uses Pillow to verify image
+    format for JPEG/PNG. Rejects renamed or spoofed files (e.g. .exe → .png).
+    """
+    if ext == 'pdf':
+        return file_bytes[:5] == b'%PDF-'
+    if ext in {'jpg', 'jpeg', 'png'}:
+        try:
+            import io
+            from PIL import Image
+            with Image.open(io.BytesIO(file_bytes)) as img:
+                fmt = (img.format or '').lower()
+            allowed = {'jpeg'} if ext in {'jpg', 'jpeg'} else {'png'}
+            return fmt in allowed
+        except Exception:
+            return False
+    return False
+
+
+def _validate_leave_attachment(file):
+    """Validate an uploaded attachment FileStorage.
+
+    Returns (ext, size_bytes, None) on success or (None, None, error_code)
+    on failure. Rewinds the file stream to position 0 before returning so
+    the caller can pass the FileStorage directly to save_uploaded_file().
+    """
+    filename = file.filename or ''
+    if '.' not in filename:
+        return None, None, 'invalid_attachment_type'
+    ext = filename.rsplit('.', 1)[1].lower()
+    if ext not in _ALLOWED_LEAVE_EXTS:
+        return None, None, 'invalid_attachment_type'
+
+    file_bytes = file.read()
+    if not file_bytes:
+        return None, None, 'invalid_attachment_type'
+    if len(file_bytes) > _MAX_ATTACHMENT_BYTES:
+        return None, None, 'attachment_too_large'
+    if not _sniff_leave_content(file_bytes, ext):
+        return None, None, 'invalid_attachment_type'
+
+    file.seek(0)
+    return ext, len(file_bytes), None
+
 
 def _leave_dict(r) -> dict:
     return {
@@ -626,6 +686,12 @@ def _leave_dict(r) -> dict:
         'source':           r.source or 'parent',
         'created_at':       (r.created_at.replace(tzinfo=timezone.utc).isoformat()
                              if r.created_at else None),
+        'attachment': {
+            'url':       resolve_photo_url(r.attachment_path),
+            'file_name': r.attachment_name,
+            'mime_type': r.attachment_mime,
+            'size':      r.attachment_size,
+        } if r.attachment_path else None,
     }
 
 
@@ -681,12 +747,22 @@ def parent_child_leave_requests(student_id):
 def parent_child_create_leave_request(student_id):
     s    = _assert_owns_student(student_id)
     user = g.mobile_user
-    data = request.get_json(silent=True) or {}
 
-    leave_type = (data.get('leave_type') or '').strip()
-    start_str  = (data.get('start_date') or '').strip()
-    end_str    = (data.get('end_date')   or '').strip()
-    reason     = (data.get('reason')     or '').strip() or None
+    # Support multipart/form-data (new clients, optional attachment) and
+    # application/json (existing clients, no attachment) for backward compat.
+    ct = request.content_type or ''
+    if 'multipart/form-data' in ct:
+        form       = request.form
+        leave_type = (form.get('leave_type') or '').strip()
+        start_str  = (form.get('start_date') or '').strip()
+        end_str    = (form.get('end_date')   or '').strip()
+        reason     = (form.get('reason')     or '').strip() or None
+    else:
+        data       = request.get_json(silent=True) or {}
+        leave_type = (data.get('leave_type') or '').strip()
+        start_str  = (data.get('start_date') or '').strip()
+        end_str    = (data.get('end_date')   or '').strip()
+        reason     = (data.get('reason')     or '').strip() or None
 
     if not leave_type:
         return err('required_field_missing: leave_type')
@@ -712,6 +788,31 @@ def parent_child_create_leave_request(student_id):
     if not s.academic_year_id:
         return err('no_active_academic_year_for_student')
 
+    # Optional attachment — only possible in multipart requests.
+    attachment_path = None
+    attachment_name = None
+    attachment_mime = None
+    attachment_size = None
+    if 'multipart/form-data' in ct:
+        file = request.files.get('attachment')
+        if file and file.filename:
+            ext, size, verr = _validate_leave_attachment(file)
+            if verr:
+                return err(verr)
+            subfolder = f'schools/{s.school_id}/student-leave-requests/{s.id}'
+            attachment_path = save_uploaded_file(
+                file, subfolder,
+                bucket=_LEAVE_BUCKET,
+                allowed_exts=_ALLOWED_LEAVE_EXTS,
+                max_size=_MAX_ATTACHMENT_BYTES,
+            )
+            if not attachment_path:
+                return err('attachment_upload_failed')
+            # Strip any client-supplied path components; store filename for display only.
+            attachment_name = (file.filename or '').replace('\\', '/').rsplit('/', 1)[-1][:255]
+            attachment_mime = _EXT_TO_MIME.get(ext, 'application/octet-stream')
+            attachment_size = size
+
     leave = LeaveRequest(
         parent_id=user.id,
         student_id=s.id,
@@ -721,13 +822,24 @@ def parent_child_create_leave_request(student_id):
         from_date=from_date,
         to_date=to_date,
         notes=reason,
+        attachment_path=attachment_path,
+        attachment_name=attachment_name,
+        attachment_mime=attachment_mime,
+        attachment_size=attachment_size,
         status='pending',
     )
     db.session.add(leave)
     _notify_managers_mobile(user, s.school_id,
                             'طلب إجازة جديد',
                             f'تم تقديم طلب إجازة للطالب {s.full_name}.')
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        # Orphan prevention: remove the uploaded object if the DB write failed.
+        if attachment_path:
+            delete_uploaded_file(attachment_path, bucket=_LEAVE_BUCKET)
+        return err('server_error', 500)
     return ok(message='leave_request_created', request=_leave_dict(leave)), 201
 
 
@@ -763,8 +875,12 @@ def parent_child_delete_leave_request(student_id, request_id):
         return err('leave_request_not_found', 404)
     if leave.status != 'pending':
         return err('cannot_cancel_non_pending_request')
+    attachment_path = leave.attachment_path
     db.session.delete(leave)
     db.session.commit()
+    # Best-effort storage cleanup after the DB row is confirmed gone.
+    if attachment_path:
+        delete_uploaded_file(attachment_path, bucket=_LEAVE_BUCKET)
     return ok(message='leave_request_deleted')
 
 
