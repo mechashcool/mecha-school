@@ -312,15 +312,15 @@
             <label class="form-label fw-semibold" for="fee_reminder_per_day">
               عدد مرات التذكير يومياً
             </label>
-            <div class="input-group">
-              <input type="number" id="fee_reminder_per_day"
-                     name="fee_reminder_per_day"
-                     value="{{ (_reminder_school.fee_reminder_per_day if _reminder_school and _reminder_school.fee_reminder_per_day) or 1 }}"
-                     min="1" max="6"
-                     class="form-control"
-                     placeholder="1">
-              <span class="input-group-text">مرة</span>
-            </div>
+            {% set _per_day_val = (_reminder_school.fee_reminder_per_day if _reminder_school and _reminder_school.fee_reminder_per_day) or 1 %}
+            <select id="fee_reminder_per_day" name="fee_reminder_per_day" class="form-select">
+              <option value="1" {% if _per_day_val == 1 %}selected{% endif %}>1 مرة</option>
+              <option value="2" {% if _per_day_val == 2 %}selected{% endif %}>2 مرتان</option>
+              <option value="3" {% if _per_day_val == 3 %}selected{% endif %}>3 مرات</option>
+              <option value="4" {% if _per_day_val == 4 %}selected{% endif %}>4 مرات</option>
+              <option value="5" {% if _per_day_val == 5 %}selected{% endif %}>5 مرات</option>
+              <option value="6" {% if _per_day_val == 6 %}selected{% endif %}>6 مرات</option>
+            </select>
             <div class="invalid-feedback d-block" id="reminderPerDayErr" style="display:none!important"></div>
           </div>
 
@@ -775,7 +775,10 @@
   }
 
   if (daysEl)   daysEl.addEventListener('input',  function () { validate(); updatePreview(); });
-  if (perDayEl) perDayEl.addEventListener('input', function () { validate(); updatePreview(); });
+  if (perDayEl) {
+    perDayEl.addEventListener('input',  function () { validate(); updatePreview(); });
+    perDayEl.addEventListener('change', function () { validate(); updatePreview(); });
+  }
   if (form) form.addEventListener('submit', function (e) {
     if (!validate()) { e.preventDefault(); (daysEl || perDayEl) && (daysEl || perDayEl).focus(); }
   });
