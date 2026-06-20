@@ -160,6 +160,7 @@ def aiface_live_status():
       }
     """
     from app.services.ai_face_ws import get_all_device_status
+
     school  = _school_or_abort()
     devices = (AttendanceDevice.query
                .filter_by(school_id=school.id)
@@ -172,6 +173,8 @@ def aiface_live_status():
             return v.strftime('%Y-%m-%d %H:%M:%S')
         return str(v)
 
+    _now_utc = datetime.utcnow()
+
     all_status = get_all_device_status()
     result = {}
     for d in devices:
@@ -179,10 +182,31 @@ def aiface_live_status():
         if not sn:
             continue
         st = all_status.get(sn, {})
+
+        # How long ago (seconds) the device last touched the DB.
+        # last_sync_at is updated on reg, sendlog, and each periodic getnewlog poll.
+        _db_sync = d.last_sync_at  # UTC datetime or None
+        _db_secs = None
+        if _db_sync is not None:
+            _db_secs = int((_now_utc - _db_sync).total_seconds())
+
+        # remote_bridge_likely_online: True when the in-memory ws_connected is
+        # False (different process — e.g. web UI on Render, WS bridge local) but
+        # DB last_sync_at was updated within the last 90 seconds.  90s = 1.5×
+        # the default AIFACE_POLL_INTERVAL (60s), giving one missed poll margin.
+        _mem_connected    = st.get("ws_connected", False)
+        _remote_likely    = (
+            not _mem_connected
+            and _db_secs is not None
+            and _db_secs < 90
+        )
+
         result[sn] = {
             "device_id":                 d.id,
             "device_name":               d.name,
-            "ws_connected":              st.get("ws_connected", False),
+            # In-memory status — accurate only when the web UI runs in the
+            # same process as the WS server (i.e. python run.py locally).
+            "ws_connected":              _mem_connected,
             "getnewlog_stale":           st.get("getnewlog_stale", False),
             "poll_task_running":         st.get("poll_task_running", False),
             "getnewlog_timeout_count":   st.get("getnewlog_timeout_count", 0),
@@ -190,6 +214,13 @@ def aiface_live_status():
             "last_sendlog_at":           _fmt(st.get("last_sendlog_at")),
             "last_getnewlog_success_at": _fmt(st.get("last_getnewlog_success_at")),
             "last_disconnect_at":        _fmt(st.get("last_disconnect_at")),
+            # DB-persisted fields — visible to any process reading the same DB,
+            # including the cloud web UI on Render when the WS bridge runs locally.
+            "db_last_sync_at":           _fmt(_db_sync),
+            "db_last_sync_secs_ago":     _db_secs,
+            # True when we can infer the local bridge is active from DB heartbeats
+            # even though this process does not see it in memory (cross-process).
+            "remote_bridge_likely_online": _remote_likely,
         }
     return jsonify(result)
 

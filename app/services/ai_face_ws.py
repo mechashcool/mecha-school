@@ -556,7 +556,7 @@ def _handle_getnewlog_records(sn: str, records: list) -> tuple:
     """Process a batch of records received from a getnewlog response. Runs in executor."""
     try:
         with _flask_app.app_context():
-            from app.models import AttendanceDevice, School
+            from app.models import AttendanceDevice, School, db
 
             device = (AttendanceDevice.query
                       .execution_options(bypass_tenant_scope=True)
@@ -573,6 +573,13 @@ def _handle_getnewlog_records(sn: str, records: list) -> tuple:
             if not school:
                 log.warning("[getnewlog] No school for device sn=%s", sn)
                 return 0, 0, 0, 0
+
+            # Touch heartbeat (records is non-empty when this function is called).
+            try:
+                device.last_sync_at = datetime.utcnow()
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
 
             return _process_record_list(sn, device, school, records, source_cmd="getnewlog")
 
@@ -658,6 +665,11 @@ async def _periodic_getnewlog_task(sn: str, my_entry: dict, interval: int = 60) 
             log.info("[aiface] periodic poll response sn=%s count=%d records=%d",
                      sn, count, len(records))
 
+            # Persist a heartbeat to the DB on every successful poll cycle so
+            # the cloud web UI (Render, different process) can determine that the
+            # local WS bridge is alive without seeing the in-memory _connections.
+            await loop.run_in_executor(None, _db_touch_device, sn)
+
             if records:
                 p, sk, um, er = await loop.run_in_executor(
                     None, _handle_getnewlog_records, sn, records
@@ -678,11 +690,16 @@ async def _periodic_getnewlog_task(sn: str, my_entry: dict, interval: int = 60) 
 
 # ── Command handlers (synchronous — run inside Flask app context) ──────────────
 
-def _handle_reg(payload: dict) -> str:
-    sn = payload.get("sn", "")
-    log.info("[reg] sn=%s model=%s firmware=%s",
-             sn, payload.get("modelname"), payload.get("firmware"))
-
+def _db_touch_device(sn: str) -> None:
+    """
+    Update last_sync_at for a device in the DB.
+    Called from background threads as a keep-alive heartbeat so the web UI
+    (which may run in a different process or on Render) can determine whether
+    the local WS bridge is actively connected — without relying on the
+    in-memory _connections dict that is invisible across process boundaries.
+    """
+    if not _flask_app:
+        return
     try:
         with _flask_app.app_context():
             from app.models import db, AttendanceDevice
@@ -693,14 +710,43 @@ def _handle_reg(payload: dict) -> str:
             if device:
                 device.last_sync_at = datetime.utcnow()
                 db.session.commit()
-                log.info("[reg] device id=%d school_id=%d updated last_sync_at",
-                         device.id, device.school_id)
+    except Exception:
+        log.exception("[aiface] heartbeat DB update failed sn=%s", sn)
+
+
+def _handle_reg(payload: dict, remote_ip: str = '') -> str:
+    sn = payload.get("sn", "")
+    log.info("[reg] sn=%s model=%s firmware=%s remote_ip=%s",
+             sn, payload.get("modelname"), payload.get("firmware"), remote_ip or "(unknown)")
+
+    try:
+        with _flask_app.app_context():
+            from app.models import db, AttendanceDevice
+            device = (AttendanceDevice.query
+                      .execution_options(bypass_tenant_scope=True)
+                      .filter_by(device_sn=sn)
+                      .first())
+            if device:
+                device.last_sync_at = datetime.utcnow()
+                # Update the stored IP so the web UI shows the current address.
+                # For AI Face the connection direction is device→server, so
+                # the stored ip_address is display-only; updating it here keeps
+                # the device list accurate without any manual editing.
+                if remote_ip and device.ip_address != remote_ip:
+                    log.info("[reg] device id=%d ip_address updated %s → %s",
+                             device.id, device.ip_address, remote_ip)
+                    device.ip_address = remote_ip
+                db.session.commit()
+                log.info("[reg] device id=%d school_id=%d scope=%s updated last_sync_at",
+                         device.id, device.school_id, device.device_scope)
             else:
                 log.warning(
-                    "[reg] Unknown device sn=%s — create it via "
-                    "Admin → Attendance Devices before records can be processed.", sn)
+                    "[reg] UNKNOWN device sn=%s remote_ip=%s — "
+                    "no AttendanceDevice row with this serial number. "
+                    "Create one via Admin → Attendance Devices before attendance can be saved.",
+                    sn, remote_ip)
     except Exception:
-        log.exception("[reg] DB error")
+        log.exception("[reg] DB error sn=%s", sn)
 
     return _json_reply(
         ret="reg",
@@ -731,7 +777,7 @@ def _handle_sendlog(payload: dict) -> str:
 
     try:
         with _flask_app.app_context():
-            from app.models import AttendanceDevice, School
+            from app.models import AttendanceDevice, School, db
 
             device = (AttendanceDevice.query
                       .execution_options(bypass_tenant_scope=True)
@@ -739,7 +785,7 @@ def _handle_sendlog(payload: dict) -> str:
                       .first())
             if not device:
                 log.warning(
-                    "[sendlog] Unknown device sn=%s — responding OK to clear "
+                    "[sendlog] UNKNOWN device sn=%s — responding OK to clear "
                     "the device queue. Add device via Admin → Attendance Devices.", sn)
                 return _json_reply(ret="sendlog", result=True, count=count,
                                    logindex=logindex, cloudtime=_cloudtime(), access=1)
@@ -749,16 +795,30 @@ def _handle_sendlog(payload: dict) -> str:
                       .filter_by(id=device.school_id)
                       .first())
             if not school:
-                log.warning("[sendlog] No school row for school_id=%d", device.school_id)
+                log.warning("[sendlog] No school row for school_id=%d sn=%s",
+                            device.school_id, sn)
                 return _json_reply(ret="sendlog", result=True, count=count,
                                    logindex=logindex, cloudtime=_cloudtime(), access=1)
+
+            # Touch last_sync_at now so the web UI can show "online" even when
+            # running on Render (different process, cannot see in-memory _connections).
+            # This commit is small and runs before attendance processing.
+            try:
+                device.last_sync_at = datetime.utcnow()
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                log.warning("[sendlog] heartbeat update failed for device_id=%d", device.id)
+
+            log.info("[sendlog] device id=%d school_id=%d scope=%s count=%d",
+                     device.id, device.school_id, device.device_scope, count)
 
             processed, skipped, unmatched, errors = _process_record_list(
                 sn, device, school, records, source_cmd="sendlog"
             )
 
     except Exception:
-        log.exception("[sendlog] Unexpected error")
+        log.exception("[sendlog] Unexpected error sn=%s", sn)
 
     log.info("[sendlog] result: processed=%d skipped=%d unmatched=%d errors=%d",
              processed, skipped, unmatched, errors)
@@ -974,7 +1034,7 @@ async def _ws_handler(websocket):
 
                 log.info("[aiface] WS device registered sn=%s from %s:%s path=%s",
                          sn, *remote, _req_path)
-                reply = await loop.run_in_executor(None, _handle_reg, payload)
+                reply = await loop.run_in_executor(None, _handle_reg, payload, remote[0])
                 log.debug("→ %s", reply)
                 await websocket.send(reply)
 
@@ -1088,15 +1148,21 @@ def start_ai_face_ws_server(app) -> None:
     Controlled by env var AIFACE_WS_ENABLED (default: true).
     """
     global _flask_app
-
-    _web_port   = os.environ.get("PORT", "(not set)")
-    _ws_enabled = os.environ.get("AIFACE_WS_ENABLED", "true").lower() not in ("0", "false", "no")
-    _ws_port_src = os.environ.get("AIFACE_WS_PORT")  # None means "using default 7788"
+    import os as _os
+    _pid             = _os.getpid()
+    _reloader_child  = _os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+    _web_port        = _os.environ.get("PORT", "(not set)")
+    _ws_enabled      = _os.environ.get("AIFACE_WS_ENABLED", "true").lower() not in ("0", "false", "no")
+    _ws_port_src     = _os.environ.get("AIFACE_WS_PORT")  # None means "using default 7788"
 
     # Always emit a startup diagnostic so Render logs show exactly what was in effect.
+    # The pid and reloader_child fields make it easy to identify which process owns
+    # the WS server when the Flask debug reloader spawns two processes.
     log.info(
-        "AI Face WS startup — PORT=%s  AIFACE_WS_PORT=%s (effective WS port: %d)  "
+        "AI Face WS startup — pid=%d  reloader_child=%s  "
+        "PORT=%s  AIFACE_WS_PORT=%s (effective WS port: %d)  "
         "AIFACE_WS_ENABLED=%s",
+        _pid, _reloader_child,
         _web_port,
         _ws_port_src if _ws_port_src is not None else "(not set, default=7788)",
         _WS_PORT,

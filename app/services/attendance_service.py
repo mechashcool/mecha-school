@@ -28,9 +28,16 @@ def process_attendance_punch(student, school, punch_dt, source='api', dedup_tag=
     today    = punch_dt.date()
     now_time = punch_dt.time().replace(microsecond=0)
 
-    existing = StudentAttendance.query.filter_by(
-        student_id=student.id, date=today
-    ).first()
+    # bypass_tenant_scope: this function is called from background threads
+    # (AI Face WS service, Hikvision sync) where no Flask request context
+    # exists.  Without the bypass the ORM event listener still runs safely
+    # (it returns no criteria when has_request_context() is False), but
+    # making the intent explicit prevents breakage if the scoping logic
+    # is ever changed to fail-closed.
+    existing = (StudentAttendance.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter_by(student_id=student.id, date=today)
+                .first())
 
     # Exact-punch dedup: same device/enrollid/timestamp already recorded
     if dedup_tag and existing and existing.notes and dedup_tag in existing.notes:
@@ -86,9 +93,10 @@ def process_attendance_punch(student, school, punch_dt, source='api', dedup_tag=
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
-        existing = StudentAttendance.query.filter_by(
-            student_id=student.id, date=today
-        ).first()
+        existing = (StudentAttendance.query
+                    .execution_options(bypass_tenant_scope=True)
+                    .filter_by(student_id=student.id, date=today)
+                    .first())
         return 'already_checked_in', existing
     return 'check_in', row
 
