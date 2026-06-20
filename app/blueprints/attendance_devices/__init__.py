@@ -194,11 +194,22 @@ def aiface_live_status():
         # False (different process — e.g. web UI on Render, WS bridge local) but
         # DB last_sync_at was updated within the last 90 seconds.  90s = 1.5×
         # the default AIFACE_POLL_INTERVAL (60s), giving one missed poll margin.
+        _BRIDGE_THRESHOLD = 90
         _mem_connected    = st.get("ws_connected", False)
         _remote_likely    = (
             not _mem_connected
             and _db_secs is not None
-            and _db_secs < 90
+            and _db_secs < _BRIDGE_THRESHOLD
+        )
+        _final_online = _mem_connected or _remote_likely
+
+        current_app.logger.debug(
+            '[aiface-live-status] school_id=%d device_id=%d sn=%s '
+            'ws_connected=%s db_last_sync_secs_ago=%s bridge_threshold=%ds '
+            'remote_bridge_likely_online=%s final_online=%s',
+            school.id, d.id, sn,
+            _mem_connected, _db_secs, _BRIDGE_THRESHOLD,
+            _remote_likely, _final_online,
         )
 
         result[sn] = {
@@ -478,7 +489,16 @@ def mappings(device_id):
     scope  = getattr(dev, 'device_scope', 'students')
 
     from app.services.ai_face_ws import is_device_connected
-    device_online = is_device_connected(dev.device_sn) if dev.device_sn else False
+    # Authoritative online status: directly connected in this process (local dev)
+    # OR connected via local bridge inferred from DB heartbeat (cross-process — Render).
+    # The local bridge updates last_sync_at every 60 s; threshold is 90 s (1.5× interval).
+    _BRIDGE_THRESHOLD_SECS = 90
+    device_online = False
+    if dev.device_sn:
+        device_online = is_device_connected(dev.device_sn)
+        if not device_online and dev.last_sync_at is not None:
+            _secs_ago   = int((datetime.utcnow() - dev.last_sync_at).total_seconds())
+            device_online = _secs_ago < _BRIDGE_THRESHOLD_SECS
 
     student_mappings = []
     employee_mappings = []
@@ -724,39 +744,101 @@ def copy_mappings_to(device_id):
 @login_required
 @admin_required
 def ajax_status_check(device_id):
-    """AJAX: return connection status, SN match, and last sync info for this device."""
+    """
+    AJAX: return connection status, SN match, and last sync info for this device.
+
+    Authoritative status logic (same threshold used by aiface_live_status and mappings page):
+      1. Directly connected  — device SN is in the in-memory _connections dict of this process
+                               (accurate when web UI and WS bridge run in the same process).
+      2. Via local bridge    — in-memory says offline, but DB last_sync_at was updated within
+                               the last 90 s (1.5× the 60 s default poll interval).
+                               This catches the cross-process case: WS bridge is running
+                               locally and Render reads the same PostgreSQL DB.
+      3. Offline             — in-memory offline AND heartbeat older than 90 s or absent.
+    """
     from app.services.ai_face_ws import get_connected_sns, is_device_connected
 
     school = _school_or_abort()
     dev    = _get_device_or_404(device_id, school)
 
-    connected_sns = get_connected_sns()
-    is_connected  = is_device_connected(dev.device_sn) if dev.device_sn else False
+    # Force a fresh read of last_sync_at from the DB.  The local bridge may have
+    # committed a heartbeat between this request's session opening and now.
+    try:
+        db.session.refresh(dev)
+    except Exception:
+        pass  # non-fatal — proceed with the value already loaded
 
-    if is_connected:
-        status = 'متصل'
+    now_utc       = datetime.utcnow()
+    connected_sns = get_connected_sns()
+    is_directly   = is_device_connected(dev.device_sn) if dev.device_sn else False
+
+    # Bridge detection: 90 s = 1.5 × 60 s poll interval (one missed-poll margin).
+    _BRIDGE_THRESHOLD = 90
+    db_secs_ago = None
+    via_bridge  = False
+    if not is_directly and dev.last_sync_at is not None:
+        db_secs_ago = int((now_utc - dev.last_sync_at).total_seconds())
+        via_bridge  = db_secs_ago < _BRIDGE_THRESHOLD
+
+    is_connected = is_directly or via_bridge
+
+    # Build human-readable offline reason for logging and response.
+    if is_directly:
+        _offline_reason = None
+        status = 'متصل مباشرة عبر WebSocket (نفس العملية)'
+        badge  = 'success'
+    elif via_bridge:
+        _offline_reason = None
+        status = f'متصل عبر بريدج محلي — آخر نبضة قلب قبل {db_secs_ago} ثانية'
         badge  = 'success'
     elif connected_sns:
+        _offline_reason = f'sn_mismatch: connected_sns={connected_sns} db_sn={dev.device_sn}'
         status = (f'هناك {len(connected_sns)} جهاز متصل لكن SN الجهاز الحالي '
                   f'({dev.device_sn}) غير مطابق — المتصلون: {connected_sns}')
         badge  = 'warning'
     else:
-        status = 'لا يوجد أي جهاز متصل حالياً عبر WebSocket'
+        if db_secs_ago is not None:
+            _offline_reason = (f'heartbeat_stale: db_secs_ago={db_secs_ago} '
+                               f'threshold={_BRIDGE_THRESHOLD}')
+            status = (f'غير متصل — آخر نبضة قلب قبل {db_secs_ago} ثانية '
+                      f'(تجاوز حد {_BRIDGE_THRESHOLD} ثانية)')
+        elif dev.last_sync_at is None:
+            _offline_reason = 'no_heartbeat_ever: last_sync_at=None'
+            status = 'غير متصل — لم تتم أي مزامنة بعد'
+        else:
+            _offline_reason = 'no_ws_connection: in-memory empty, heartbeat=None'
+            status = 'لا يوجد أي جهاز متصل حالياً'
         badge  = 'danger'
 
+    current_app.logger.info(
+        '[status-check] device_id=%d sn=%s school_id=%d '
+        'directly_connected=%s via_bridge=%s db_last_sync_secs_ago=%s '
+        'last_sync_at_utc=%s bridge_threshold=%ds connected_sns=%s '
+        'final_connected=%s offline_reason=%s',
+        dev.id, dev.device_sn, dev.school_id,
+        is_directly, via_bridge, db_secs_ago,
+        dev.last_sync_at, _BRIDGE_THRESHOLD, connected_sns,
+        is_connected, _offline_reason,
+    )
+
     return jsonify({
-        'ok':             True,
-        'device_id':      dev.id,
-        'device_name':    dev.name,
-        'device_sn':      dev.device_sn,
-        'device_scope':   getattr(dev, 'device_scope', 'students'),
-        'is_connected':   is_connected,
-        'connected_sns':  connected_sns,
-        'exact_sn_match': dev.device_sn in connected_sns if dev.device_sn else False,
-        'last_sync_at':   (dev.last_sync_at.strftime('%Y-%m-%d %H:%M:%S')
-                           if dev.last_sync_at else None),
-        'status':         status,
-        'badge':          badge,
+        'ok':                    True,
+        'device_id':             dev.id,
+        'device_name':           dev.name,
+        'device_sn':             dev.device_sn,
+        'device_scope':          getattr(dev, 'device_scope', 'students'),
+        'is_connected':          is_connected,
+        'is_directly_connected': is_directly,
+        'via_bridge':            via_bridge,
+        'connected_sns':         connected_sns,
+        'exact_sn_match':        dev.device_sn in connected_sns if dev.device_sn else False,
+        # last_sync_at shown with UTC label; db_last_sync_secs_ago is timezone-independent.
+        'last_sync_at':          (dev.last_sync_at.strftime('%Y-%m-%d %H:%M:%S') + ' UTC'
+                                  if dev.last_sync_at else None),
+        'db_last_sync_secs_ago': db_secs_ago,
+        'bridge_threshold_secs': _BRIDGE_THRESHOLD,
+        'status':                status,
+        'badge':                 badge,
     })
 
 

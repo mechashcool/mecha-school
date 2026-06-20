@@ -466,12 +466,33 @@
         });
         const data = await resp.json();
 
-        let cls  = data.badge === 'success' ? 'success' : (data.badge === 'warning' ? 'warning' : 'danger');
-        let html = '<strong>حالة الجهاز:</strong> ' + (data.status || '—') + '<br>'
+        let cls = data.badge === 'success' ? 'success'
+                : (data.badge === 'warning' ? 'warning' : 'danger');
+
+        // Connection type label
+        let connTypeLabel = '';
+        if (data.is_directly_connected) {
+          connTypeLabel = ' <span class="badge bg-success ms-1">WebSocket مباشر</span>';
+        } else if (data.via_bridge) {
+          connTypeLabel = ' <span class="badge bg-info text-dark ms-1">بريدج محلي</span>';
+        }
+
+        // Last sync display: show "X ثانية مضت" if available, otherwise raw UTC timestamp
+        let lastSyncDisplay;
+        if (data.db_last_sync_secs_ago != null) {
+          lastSyncDisplay = data.db_last_sync_secs_ago + ' ثانية مضت'
+            + (data.last_sync_at ? ' (' + data.last_sync_at + ')' : '');
+        } else {
+          lastSyncDisplay = data.last_sync_at || 'لم تتم بعد';
+        }
+
+        let html = '<strong>حالة الجهاز:</strong> ' + (data.status || '—') + connTypeLabel + '<br>'
                  + '<strong>SN في قاعدة البيانات:</strong> <code>' + (data.device_sn || '—') + '</code><br>'
                  + '<strong>نوع الجهاز:</strong> ' + (data.device_scope || '—') + '<br>'
-                 + '<strong>آخر مزامنة:</strong> ' + (data.last_sync_at || 'لم تتم بعد') + '<br>'
-                 + '<strong>الأجهزة المتصلة الآن:</strong> ' + (data.connected_sns && data.connected_sns.length ? data.connected_sns.join(', ') : 'لا يوجد');
+                 + '<strong>آخر نبضة قلب (DB):</strong> ' + lastSyncDisplay + '<br>'
+                 + '<strong>الأجهزة المتصلة مباشرة:</strong> '
+                 + (data.connected_sns && data.connected_sns.length ? data.connected_sns.join(', ') : 'لا يوجد');
+
         if (!data.is_connected && data.connected_sns && data.connected_sns.length) {
           html += '<br><span class="text-danger"><i class="bi bi-exclamation-triangle-fill me-1"></i>'
                + 'الرقم التسلسلي في قاعدة البيانات لا يطابق أي جهاز متصل — '

@@ -708,8 +708,19 @@ def _db_touch_device(sn: str) -> None:
                       .filter_by(device_sn=sn)
                       .first())
             if device:
-                device.last_sync_at = datetime.utcnow()
+                _old_sync = device.last_sync_at
+                _new_sync = datetime.utcnow()
+                device.last_sync_at = _new_sync
                 db.session.commit()
+                log.info(
+                    '[aiface] heartbeat committed: sn=%s device_id=%d school_id=%d '
+                    'last_sync_at: %s → %s (UTC) — commit OK',
+                    sn, device.id, device.school_id, _old_sync, _new_sync,
+                )
+            else:
+                log.warning(
+                    '[aiface] heartbeat skipped — sn=%s not found in DB '
+                    '(device not registered via Admin → Attendance Devices)', sn)
     except Exception:
         log.exception("[aiface] heartbeat DB update failed sn=%s", sn)
 
@@ -737,8 +748,12 @@ def _handle_reg(payload: dict, remote_ip: str = '') -> str:
                              device.id, device.ip_address, remote_ip)
                     device.ip_address = remote_ip
                 db.session.commit()
-                log.info("[reg] device id=%d school_id=%d scope=%s updated last_sync_at",
-                         device.id, device.school_id, device.device_scope)
+                log.info(
+                    "[reg] device id=%d school_id=%d scope=%s "
+                    "last_sync_at set to %s (UTC) — commit OK",
+                    device.id, device.school_id, device.device_scope,
+                    device.last_sync_at,
+                )
             else:
                 log.warning(
                     "[reg] UNKNOWN device sn=%s remote_ip=%s — "

@@ -355,9 +355,26 @@
         const st       = all[sn];
         const deviceId = st.device_id || '';
 
-        const connBadge    = st.ws_connected
-          ? '<span class="badge bg-success">متصل</span>'
-          : '<span class="badge bg-secondary">غير متصل</span>';
+        // Authoritative connection status:
+        //   ws_connected          → directly connected in this process (same-process local dev)
+        //   remote_bridge_likely_online → local bridge updating DB heartbeat (cross-process Render)
+        //   neither               → offline
+        let connBadge;
+        if (st.ws_connected) {
+          connBadge = '<span class="badge bg-success">متصل</span>';
+        } else if (st.remote_bridge_likely_online) {
+          const secsAgo = st.db_last_sync_secs_ago != null
+            ? ` (${st.db_last_sync_secs_ago}ث)`
+            : '';
+          connBadge = `<span class="badge bg-info text-dark"
+            title="الجهاز متصل عبر البريدج المحلي — آخر نبضة قلب: ${esc(st.db_last_sync_at || '—')} UTC">بريدج محلي${secsAgo}</span>`;
+        } else {
+          const secsAgo = st.db_last_sync_secs_ago != null
+            ? ` (آخر: ${st.db_last_sync_secs_ago}ث)`
+            : '';
+          connBadge = `<span class="badge bg-secondary">غير متصل${secsAgo}</span>`;
+        }
+
         const staleBadge   = st.getnewlog_stale
           ? '<span class="badge bg-warning text-dark ms-1">stale</span>' : '';
         const pollBadge    = st.poll_task_running
@@ -395,6 +412,7 @@
           <td class="small">${esc(st.last_reg_at) || '—'}</td>
           <td class="small">${esc(st.last_sendlog_at) || '—'}</td>
           <td class="small">${esc(st.last_getnewlog_success_at) || '—'}</td>
+          <td class="small text-primary fw-semibold">${esc(st.db_last_sync_at) || '—'}</td>
           <td class="small">${esc(st.last_disconnect_at) || '—'}</td>
           <td>${pullBtns}</td>
         </tr>`;
@@ -409,6 +427,7 @@
                 <th>آخر reg</th>
                 <th>آخر sendlog</th>
                 <th>آخر getnewlog ناجح</th>
+                <th class="text-primary">آخر نبضة DB</th>
                 <th>آخر انقطاع</th>
                 <th>سحب السجلات يدوياً</th>
               </tr>
