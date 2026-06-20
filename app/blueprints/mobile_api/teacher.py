@@ -1080,6 +1080,17 @@ def teacher_create_exam():
     db.session.add(new_exam)
     db.session.commit()
 
+    # FCM + PushNotification audit rows to parents of active students in this section.
+    # Mirrors the web route behaviour in grades/__init__.py.
+    # Best-effort: a notification failure must never fail the API response.
+    try:
+        from app.blueprints.grades import _notify_new_exam
+        _notify_new_exam(new_exam)
+    except Exception:
+        import logging as _log
+        _log.getLogger('mecha.mobile').exception(
+            '[mobile-exam] notification dispatch failed exam_id=%s', new_exam.id)
+
     return ok(
         message='exam_created',
         exam={
@@ -1203,13 +1214,16 @@ def teacher_enter_results(exam_id):
     if not isinstance(entries, list) or not entries:
         return err('results must be a non-empty array')
 
-    # Build allowed student set from the exam's section
-    allowed_ids = {
-        s.id for s in Student.query.filter_by(section_id=exam.section_id, status='active').all()
-    }
+    # Build allowed student set from the exam's section; keep objects for notification.
+    section_students = Student.query.filter_by(
+        section_id=exam.section_id, status='active'
+    ).all()
+    allowed_ids = {s.id for s in section_students}
+    student_by_id = {s.id: s for s in section_students}
 
     saved  = 0
     errors = []
+    graded_student_ids: list[int] = []
 
     for entry in entries:
         sid = entry.get('student_id')
@@ -1256,8 +1270,24 @@ def teacher_enter_results(exam_id):
             )
             db.session.add(new_result)
         saved += 1
+        graded_student_ids.append(sid)
 
     db.session.commit()
+
+    # FCM + PushNotification audit rows — one push per parent per graded student.
+    # Mirrors the web route behaviour in grades/__init__.py.
+    # Best-effort: a notification failure must never fail the API response.
+    if graded_student_ids:
+        try:
+            from app.blueprints.grades import _notify_grade_results
+            graded_students = [student_by_id[s] for s in graded_student_ids
+                               if s in student_by_id]
+            _notify_grade_results(exam, graded_students)
+        except Exception:
+            import logging as _log
+            _log.getLogger('mecha.mobile').exception(
+                '[mobile-grades] notification dispatch failed exam_id=%s', exam.id)
+
     return ok(saved=saved, errors=errors)
 
 
@@ -1522,6 +1552,17 @@ def teacher_homework_create():
     )
     db.session.add(hw)
     db.session.commit()
+
+    # FCM + in-app Notification rows to parents of students in this section.
+    # Mirrors the web route behaviour in homework/__init__.py.
+    # Best-effort: a notification failure must never fail the API response.
+    try:
+        from app.blueprints.homework import _notify_section_parents
+        _notify_section_parents(hw, emp.school_id)
+    except Exception:
+        import logging as _log
+        _log.getLogger('mecha.mobile').exception(
+            '[mobile-hw] notification dispatch failed hw_id=%s', hw.id)
 
     att_url  = _hw_attachment_url(hw)
     att_name = hw.attachment_path.rstrip('/').rsplit('/', 1)[-1] if hw.attachment_path else None

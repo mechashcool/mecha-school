@@ -228,6 +228,8 @@ def _notify_section_parents(hw: Homework, school_id: int) -> None:
         for uid, sid in fcm_targets:
             data = {
                 'type':        'homework',
+                'ntype':       'homework',
+                'route':       '/parent/homework',
                 'homework_id': str(hw.id),
                 'section_id':  str(hw.section_id),
                 'student_id':  str(sid),
