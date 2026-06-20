@@ -419,14 +419,114 @@ def toggle_device(device_id):
 @admin_required
 @action_required('attendance_devices', 'test_connection')
 def ajax_test_connection(device_id):
+    """
+    AJAX: connection test for both AI Face (WebSocket) and Hikvision (HTTP) devices.
+
+    Detection order:
+      1. Direct WebSocket connection in this process (_connections dict).
+      2. Local-bridge connection inferred from a fresh DB heartbeat (last_sync_at < 90 s).
+         This handles the cross-process case: WS bridge runs locally, web UI runs on Render.
+      3. Hikvision HTTP test (GET /ISAPI/System/deviceInfo) as a fallback for HTTP-polled
+         devices or when no WebSocket evidence exists.
+
+    502 is returned only when the device is genuinely unreachable (all three checks fail).
+    """
+    from app.services.ai_face_ws import is_device_connected
+
     school = _school_or_abort()
     dev    = _get_device_or_404(device_id, school)
+
+    # Force-refresh last_sync_at so we see any heartbeat the local bridge committed
+    # between session open and now.
+    try:
+        db.session.refresh(dev)
+    except Exception:
+        pass
+
+    now_utc           = datetime.utcnow()
+    _BRIDGE_THRESHOLD = 90  # seconds — same constant used by status-check and aiface-live-status
+
+    # ── Step 1: AI Face direct WebSocket (same process) ───────────────────────
+    is_directly = is_device_connected(dev.device_sn) if dev.device_sn else False
+    if is_directly:
+        current_app.logger.info(
+            '[test-connection] device_id=%d sn=%s school_id=%d result=direct_websocket',
+            dev.id, dev.device_sn, dev.school_id)
+        return jsonify({
+            'ok':              True,
+            'connected':       True,
+            'connection_mode': 'direct_websocket',
+            'device_id':       dev.id,
+            'device_name':     dev.name,
+            'device_sn':       dev.device_sn,
+            'message':         'متصل مباشرة عبر WebSocket في نفس العملية',
+        })
+
+    # ── Step 2: AI Face via local bridge (cross-process DB heartbeat) ─────────
+    db_secs_ago = None
+    via_bridge  = False
+    if dev.last_sync_at is not None:
+        db_secs_ago = int((now_utc - dev.last_sync_at).total_seconds())
+        via_bridge  = db_secs_ago < _BRIDGE_THRESHOLD
+
+    if via_bridge:
+        current_app.logger.info(
+            '[test-connection] device_id=%d sn=%s school_id=%d '
+            'result=local_bridge heartbeat_age=%ds',
+            dev.id, dev.device_sn, dev.school_id, db_secs_ago)
+        return jsonify({
+            'ok':                 True,
+            'connected':          True,
+            'connection_mode':    'local_bridge',
+            'device_id':          dev.id,
+            'device_name':        dev.name,
+            'device_sn':          dev.device_sn,
+            'heartbeat_age_secs': db_secs_ago,
+            'last_sync_at':       dev.last_sync_at.strftime('%Y-%m-%d %H:%M:%S') + ' UTC',
+            'message':            (f'متصل عبر الجسر المحلي — '
+                                   f'آخر نبضة قلب قبل {db_secs_ago} ثانية'),
+        })
+
+    # ── Step 3: Hikvision HTTP API fallback ───────────────────────────────────
+    # Correct for HTTP-polled Hikvision devices reachable from this server.
+    # For AI Face devices or private-LAN devices not reachable from Render,
+    # this correctly returns ok=False (device is genuinely offline/unreachable).
+    current_app.logger.info(
+        '[test-connection] device_id=%d sn=%s school_id=%d '
+        'no WS connection (directly=%s bridge=%s db_secs_ago=%s) '
+        '— trying Hikvision HTTP test',
+        dev.id, dev.device_sn, dev.school_id, is_directly, via_bridge, db_secs_ago)
+
     result = test_connection(dev)
     if result.get('ok'):
-        return jsonify({'ok': True, 'message': 'تم الاتصال بالجهاز بنجاح',
-                        'model': result.get('model'), 'serial_no': result.get('serial_no')})
-    return jsonify({'ok': False, 'message': 'تعذر الاتصال بالجهاز',
-                    'error': result.get('error')}), 502
+        current_app.logger.info(
+            '[test-connection] device_id=%d sn=%s school_id=%d result=hikvision_http ok',
+            dev.id, dev.device_sn, dev.school_id)
+        return jsonify({
+            'ok':              True,
+            'connected':       True,
+            'connection_mode': 'hikvision_http',
+            'device_id':       dev.id,
+            'device_name':     dev.name,
+            'device_sn':       dev.device_sn,
+            'message':         'تم الاتصال بالجهاز بنجاح',
+            'model':           result.get('model'),
+            'serial_no':       result.get('serial_no'),
+        })
+
+    current_app.logger.warning(
+        '[test-connection] device_id=%d sn=%s school_id=%d result=offline error=%s',
+        dev.id, dev.device_sn, dev.school_id, result.get('error'))
+    return jsonify({
+        'ok':              False,
+        'connected':       False,
+        'connection_mode': 'none',
+        'device_id':       dev.id,
+        'device_name':     dev.name,
+        'device_sn':       dev.device_sn,
+        'message':         'الجهاز غير متصل',
+        'error':           result.get('error'),
+    }), 502
 
 
 @attendance_devices_bp.route('/<int:device_id>/sync', methods=['POST'])
