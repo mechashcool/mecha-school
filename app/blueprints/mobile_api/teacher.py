@@ -37,6 +37,7 @@ Security rules
 """
 from datetime import date, timedelta, timezone
 from datetime import datetime as _dt
+from decimal import Decimal, InvalidOperation
 
 from flask import abort, g, jsonify, request
 from sqlalchemy import select
@@ -56,8 +57,11 @@ from app.models import (
     Student,
     StudentAttendance,
     Subject,
+    User,
+    parent_students,
     teacher_subjects,
 )
+from app.utils.helpers import calculate_grade_letter
 from app.utils.notification_visibility import notification_visible_to
 
 from . import mobile_api_bp
@@ -1142,7 +1146,16 @@ def teacher_exam_detail(exam_id):
                         .filter_by(section_id=exam.section_id, status='active')
                         .order_by(Student.full_name)
                         .all())
-    results = ExamResult.query.filter_by(exam_id=exam.id).all()
+    # include_all_years=True ensures results are visible even when the exam's
+    # academic_year_id differs from the current active year (e.g. after a year
+    # rollover); the exam_id filter already uniquely identifies the correct exam.
+    results = (
+        ExamResult.query
+        .execution_options(include_all_years=True)
+        .filter_by(exam_id=exam.id)
+        .order_by(ExamResult.marks.desc())
+        .all()
+    )
 
     students_map = {s.id: s for s in section_students}
     entered_ids  = {r.student_id for r in results}
@@ -1178,7 +1191,8 @@ def teacher_exam_detail(exam_id):
                 'student_id':   r.student_id,
                 'student_name': students_map[r.student_id].full_name if r.student_id in students_map else '?',
                 'marks':        float(r.marks) if r.marks is not None else None,
-                'grade':        r.grade_letter,
+                'grade_letter': r.grade_letter,   # matches POST response field name
+                'grade':        r.grade_letter,   # backward-compat alias
                 'is_pass':      r.is_pass,
                 'rank':         r.rank,
                 'notes':        r.notes,
@@ -1190,6 +1204,161 @@ def teacher_exam_detail(exam_id):
             for s in missing
         ],
     )
+
+
+# ─── Grade notification helper ───────────────────────────────────────────────
+
+def _notify_grade_results_mobile(
+    exam_id: int,
+    school_id: int,
+    subject_id: int | None,
+    exam_name: str,
+    students: list,
+) -> tuple[int, int]:
+    """Create in-app Notification row + FCM push for each parent of every graded student.
+
+    Mirrors _notify_new_exam() from grades/__init__.py.
+
+    Design:
+    - All ORM queries use bypass_tenant_scope=True + explicit school_id so the
+      function works correctly from the mobile API context.
+    - parent_students is queried with Core SELECT (not ORM) to avoid scope issues.
+    - Notification commits are per-parent so one DB error does not block others.
+    - Scalar attributes (IDs) are captured before the first commit to avoid
+      expired-object lazy-load failures on subsequent iterations.
+    - Logs at WARNING level so output appears regardless of logger config.
+    - Never raises.
+
+    Returns (fcm_sent_total, fcm_failed_total).
+    """
+    import logging as _logging
+    _log = _logging.getLogger('mecha.mobile.grade_notify')
+
+    try:
+        from app.services.fcm_service import (
+            is_enabled as _fcm_enabled,
+            send_push_to_user,
+        )
+
+        if not students:
+            return 0, 0
+
+        title = 'درجة جديدة'
+        fcm_sent_total = fcm_failed_total = 0
+
+        for student in students:
+            student_id = student.id  # PK — never expired by SQLAlchemy
+            body = f'تم رصد درجة جديدة في {exam_name}.'
+
+            # Resolve linked parent user IDs via the junction table.
+            # Core SELECT — not affected by ORM with_loader_criteria.
+            raw_rows = db.session.execute(
+                select(parent_students.c.user_id).where(
+                    parent_students.c.student_id == student_id
+                )
+            ).fetchall()
+            raw_parent_ids = [r[0] for r in raw_rows]
+
+            if not raw_parent_ids:
+                _log.warning(
+                    '[grade-notify] exam_id=%s student_id=%s — no linked parents',
+                    exam_id, student_id,
+                )
+                continue
+
+            # Only active parents who belong to this school.
+            # bypass_tenant_scope=True + explicit school_id guard — cross-school
+            # notifications are prevented by the school_id equality filter, not
+            # the ORM scope (which may be set to the teacher's school_id, matching
+            # parent school_id anyway, but we be explicit here).
+            parents = (
+                User.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter(
+                    User.id.in_(raw_parent_ids),
+                    User.school_id == school_id,
+                    User.is_active.is_(True),
+                )
+                .all()
+            )
+
+            # Capture primitive tuples before any per-parent commit expires objects.
+            parent_records = [(p.id, p.school_id) for p in parents]
+
+            _log.warning(
+                '[grade-notify] exam_id=%s student_id=%s '
+                'linked_parents=%d active_in_school=%d',
+                exam_id, student_id, len(raw_parent_ids), len(parent_records),
+            )
+
+            if not parent_records:
+                continue
+
+            fcm_data = {
+                'type':       'grade',
+                'screen':     'grades',
+                'route':      '/parent/grades',
+                'exam_id':    str(exam_id),
+                'subject_id': str(subject_id or ''),
+                'student_id': str(student_id),
+                'ntype':      'grade',
+            }
+
+            for parent_id, parent_school_id in parent_records:
+                # 1. In-app Notification row (parent notification feed)
+                try:
+                    notif = Notification(
+                        school_id      = parent_school_id,
+                        title          = title,
+                        body           = body,
+                        ntype          = 'grade',
+                        target_user_id = parent_id,
+                        created_by     = None,
+                    )
+                    db.session.add(notif)
+                    db.session.commit()
+                except Exception:
+                    _log.exception(
+                        '[grade-notify] Notification commit FAILED '
+                        'exam_id=%s parent_id=%s',
+                        exam_id, parent_id,
+                    )
+                    db.session.rollback()
+
+                # 2. FCM push to all active device tokens for this parent
+                if _fcm_enabled():
+                    try:
+                        ok_n, fail_n = send_push_to_user(
+                            parent_id, title, body, fcm_data,
+                        )
+                        fcm_sent_total   += ok_n
+                        fcm_failed_total += fail_n
+                        _log.warning(
+                            '[grade-notify] FCM exam_id=%s parent_id=%s '
+                            'sent=%d failed=%d',
+                            exam_id, parent_id, ok_n, fail_n,
+                        )
+                    except Exception:
+                        _log.exception(
+                            '[grade-notify] FCM EXCEPTION exam_id=%s parent_id=%s',
+                            exam_id, parent_id,
+                        )
+                else:
+                    _log.warning(
+                        '[grade-notify] FCM disabled — no push '
+                        'exam_id=%s parent_id=%s',
+                        exam_id, parent_id,
+                    )
+
+        return fcm_sent_total, fcm_failed_total
+
+    except Exception:
+        import logging as _fallback_log
+        _fallback_log.getLogger('mecha.mobile.grade_notify').exception(
+            '[grade-notify] UNHANDLED ERROR exam_id=%s school_id=%s',
+            exam_id, school_id,
+        )
+        return 0, 0
 
 
 # ─── Bulk upsert exam results (grade entry) ───────────────────────────────────
@@ -1204,99 +1373,391 @@ def teacher_enter_results(exam_id):
     Request body (JSON):
       {
         "results": [
-          {"student_id": 123, "marks": 88.5, "grade_letter": "A", "notes": ""},
+          {"student_id": 123, "marks": 88.5, "notes": ""},
           ...
         ]
       }
 
-    Each entry is upserted: created if it does not exist, updated if it does.
-    Returns counts of saved entries and any per-student validation errors.
+    Fields:
+      student_id   int     required — DB primary key of the Student row
+      marks        number  required — also accepted as "score" (Flutter alias)
+      notes        string  optional — also accepted as "note" (Flutter alias)
+      grade_letter string  IGNORED — always calculated server-side
+
+    Security:
+      - Teacher identity and school are resolved from the JWT via _get_employee().
+        No school_id, teacher_id, section_id, or academic_year_id is trusted
+        from the client payload.
+      - The exam's section must belong to the teacher's assigned sections.
+      - Only active students in the exam's section are accepted.
+      - Marks are validated against the exam's max_marks.
+      - grade_letter is always calculated server-side (calculate_grade_letter).
+
+    Upsert behaviour:
+      - Creates a new ExamResult when no row exists for (exam_id, student_id).
+      - Updates the existing row when one already exists.
+      - Duplicate-key conflicts are prevented by the pre-fetched existing_map
+        which uses include_all_years=True to handle exams from any year.
+      - Only entries whose marks or notes actually differ are counted as
+        "updated" and trigger parent notifications.
+
+    Notifications:
+      - After a successful commit, one in-app Notification row is written and
+        one FCM push is sent per linked active parent for every student whose
+        result was created or changed.
+      - Unchanged entries (same marks + notes) do not trigger notifications.
+      - Notification failures never fail the API response.
+
+    Ranks:
+      - After every successful commit, ranks are recalculated for all results
+        on the same exam (descending marks order, 1-based), matching the web route.
+
+    Response (200):
+      {
+        "ok": true,
+        "saved": 3,
+        "created": 2,
+        "updated": 1,
+        "unchanged": 0,
+        "errors": [],
+        "results": [
+          {
+            "student_id": 123, "student_name": "...",
+            "marks": 88.5, "grade_letter": "B+", "grade": "B+",
+            "is_pass": true, "rank": 1, "notes": null
+          }
+        ]
+      }
+
+    Error responses:
+      400  no_employee_profile         no Employee linked to this JWT user
+      400  results must be a non-empty array
+      400  no valid results to save    all submitted entries failed validation
+      403  exam belongs to a different teacher's section
+      404  exam not found or not in this school
+      500  database_error              commit or rank-update failed; rolled back
     """
-    emp  = _get_employee()
+    import logging as _log
+    _logger = _log.getLogger('mecha.mobile.grades')
+
+    emp = _get_employee()
     if not emp:
         return err('employee_profile_not_found', 404)
     exam = _assert_exam_access(emp, exam_id)
+
+    # Capture scalar attributes before any later commit expires the ORM object.
+    exam_id_val      = exam.id
+    exam_school_id   = exam.school_id
+    exam_section_id  = exam.section_id
+    exam_subject_id  = exam.subject_id
+    exam_year_id     = exam.academic_year_id
+    exam_name_val    = exam.exam_name or exam.display_name
+
+    try:
+        max_marks_dec  = Decimal(str(exam.max_marks))
+        pass_marks_dec = Decimal(str(exam.pass_marks))
+    except (InvalidOperation, TypeError):
+        _logger.error(
+            '[mobile-grades] invalid marks config exam_id=%s max=%r pass=%r',
+            exam_id_val, exam.max_marks, exam.pass_marks,
+        )
+        return err('exam_has_invalid_marks_configuration', 500)
 
     payload = request.get_json(silent=True) or {}
     entries = payload.get('results', [])
     if not isinstance(entries, list) or not entries:
         return err('results must be a non-empty array')
 
-    # Build allowed student set from the exam's section; keep objects for notification.
+    _logger.warning(
+        '[mobile-grades] START exam_id=%s school_id=%s '
+        'teacher_user_id=%s emp_id=%s submitted=%d',
+        exam_id_val, exam_school_id,
+        g.mobile_user.id, emp.id, len(entries),
+    )
+
+    # Allowed student set — active students in the exam's section, school-scoped.
+    # Student is NOT year-scoped so this query always returns current enrollment
+    # regardless of which academic year the exam belongs to.
     section_students = Student.query.filter_by(
-        section_id=exam.section_id, status='active'
+        section_id=exam_section_id, status='active'
     ).all()
-    allowed_ids = {s.id for s in section_students}
+    allowed_ids   = {s.id for s in section_students}
     student_by_id = {s.id: s for s in section_students}
 
-    saved  = 0
-    errors = []
-    graded_student_ids: list[int] = []
+    _logger.warning(
+        '[mobile-grades] exam_id=%s section_id=%s active_students_in_section=%d',
+        exam_id_val, exam_section_id, len(allowed_ids),
+    )
+
+    # Pre-fetch ALL existing results for this exam.
+    # include_all_years=True removes the year-scope filter so that results from
+    # exams whose academic_year_id differs from the current active year are still
+    # found and updated instead of triggering a duplicate-key IntegrityError.
+    existing_map: dict[int, ExamResult] = {
+        r.student_id: r
+        for r in (
+            ExamResult.query
+            .execution_options(include_all_years=True)
+            .filter_by(exam_id=exam_id_val)
+            .all()
+        )
+    }
+
+    saved     = 0   # total entries that passed validation (created + updated + unchanged)
+    created   = 0
+    updated   = 0
+    unchanged = 0
+    errors: list[dict] = []
+    graded_student_ids: list[int] = []   # students whose result actually changed
+
+    # Capture user id now — g.mobile_user.id is the PK, never expired.
+    entered_by_id = g.mobile_user.id
 
     for entry in entries:
-        sid = entry.get('student_id')
-        if sid not in allowed_ids:
-            errors.append({'student_id': sid, 'error': 'not_in_section'})
+        raw_sid = entry.get('student_id')
+
+        # Coerce student_id to int — Flutter may serialise integers as strings
+        # or as JSON numbers parsed to Dart doubles (both are safe to int()).
+        try:
+            sid = int(raw_sid) if raw_sid is not None else None
+        except (TypeError, ValueError):
+            errors.append({
+                'student_id': raw_sid,
+                'error': 'invalid_student_id_format',
+                'reason': f'expected integer, got {type(raw_sid).__name__}',
+            })
+            _logger.warning(
+                '[mobile-grades] REJECT exam_id=%s student_id=%r — invalid type',
+                exam_id_val, raw_sid,
+            )
             continue
 
-        # Accept 'score' (Flutter spec) or legacy 'marks'
+        if sid is None or sid not in allowed_ids:
+            errors.append({
+                'student_id': raw_sid,
+                'error': 'not_in_section',
+                'reason': 'student is not active in this exam\'s section or does not exist',
+            })
+            _logger.warning(
+                '[mobile-grades] REJECT exam_id=%s student_id=%r — not_in_section',
+                exam_id_val, raw_sid,
+            )
+            continue
+
+        # Accept 'score' (Flutter spec) or 'marks' (legacy)
         raw_marks = entry.get('score') if entry.get('score') is not None else entry.get('marks')
         if raw_marks is None:
             errors.append({'student_id': sid, 'error': 'marks_required'})
+            _logger.warning(
+                '[mobile-grades] REJECT exam_id=%s student_id=%s — marks_required',
+                exam_id_val, sid,
+            )
             continue
+
         try:
-            marks = float(raw_marks)
-        except (TypeError, ValueError):
-            errors.append({'student_id': sid, 'error': 'invalid_marks_value'})
-            continue
-        if marks < 0 or marks > float(exam.max_marks):
-            errors.append({'student_id': sid, 'error': f'marks must be between 0 and {exam.max_marks}'})
+            marks_dec = Decimal(str(raw_marks))
+        except (InvalidOperation, TypeError, ValueError):
+            errors.append({
+                'student_id': sid,
+                'error': 'invalid_marks_value',
+                'reason': f'cannot convert {raw_marks!r} to a number',
+            })
+            _logger.warning(
+                '[mobile-grades] REJECT exam_id=%s student_id=%s — invalid_marks %r',
+                exam_id_val, sid, raw_marks,
+            )
             continue
 
-        # Accept 'note' (Flutter spec, singular) or legacy 'notes' (plural)
+        if marks_dec < Decimal('0') or marks_dec > max_marks_dec:
+            errors.append({
+                'student_id': sid,
+                'error': 'marks_out_of_range',
+                'reason': f'must be between 0 and {max_marks_dec}',
+            })
+            _logger.warning(
+                '[mobile-grades] REJECT exam_id=%s student_id=%s — marks_out_of_range %s max=%s',
+                exam_id_val, sid, marks_dec, max_marks_dec,
+            )
+            continue
+
+        # Server-side grade calculation (never trust client-supplied grade_letter).
+        grade_letter = calculate_grade_letter(float(marks_dec), float(max_marks_dec))
+        is_pass      = marks_dec >= pass_marks_dec
+
+        # Accept 'note' (Flutter spec, singular) or 'notes' (plural)
         entry_notes = entry.get('note') if entry.get('note') is not None else entry.get('notes')
-        is_pass = marks >= float(exam.pass_marks)
 
-        existing = ExamResult.query.filter_by(exam_id=exam.id, student_id=sid).first()
+        existing = existing_map.get(sid)
         if existing:
-            existing.marks        = marks
-            existing.grade_letter = entry.get('grade_letter') or existing.grade_letter
+            old_marks = (
+                Decimal(str(existing.marks)).quantize(Decimal('0.01'))
+                if existing.marks is not None else None
+            )
+            new_marks = marks_dec.quantize(Decimal('0.01'))
+            new_notes = entry_notes if entry_notes is not None else existing.notes
+            actually_changed = (old_marks != new_marks) or (existing.notes != new_notes)
+
+            existing.marks        = marks_dec
+            existing.grade_letter = grade_letter
             existing.is_pass      = is_pass
-            existing.notes        = entry_notes if entry_notes is not None else existing.notes
-            existing.entered_by   = g.mobile_user.id
+            existing.notes        = new_notes
+            existing.entered_by   = entered_by_id
+
+            if actually_changed:
+                updated += 1
+                graded_student_ids.append(sid)
+                _logger.warning(
+                    '[mobile-grades] UPDATE exam_id=%s student_id=%s '
+                    'marks=%s→%s grade=%s',
+                    exam_id_val, sid, old_marks, new_marks, grade_letter,
+                )
+            else:
+                unchanged += 1
+                _logger.warning(
+                    '[mobile-grades] UNCHANGED exam_id=%s student_id=%s marks=%s',
+                    exam_id_val, sid, new_marks,
+                )
         else:
             new_result = ExamResult(
-                exam_id          = exam.id,
+                exam_id          = exam_id_val,
                 student_id       = sid,
-                school_id        = exam.school_id,
-                academic_year_id = exam.academic_year_id,
-                marks            = marks,
-                grade_letter     = entry.get('grade_letter'),
+                school_id        = exam_school_id,
+                academic_year_id = exam_year_id,
+                marks            = marks_dec,
+                grade_letter     = grade_letter,
                 is_pass          = is_pass,
                 notes            = entry_notes,
-                entered_by       = g.mobile_user.id,
+                entered_by       = entered_by_id,
             )
             db.session.add(new_result)
+            created += 1
+            graded_student_ids.append(sid)
+            _logger.warning(
+                '[mobile-grades] INSERT exam_id=%s student_id=%s marks=%s grade=%s',
+                exam_id_val, sid, marks_dec, grade_letter,
+            )
+
         saved += 1
-        graded_student_ids.append(sid)
 
-    db.session.commit()
+    _logger.warning(
+        '[mobile-grades] PRE-COMMIT exam_id=%s '
+        'created=%d updated=%d unchanged=%d rejected=%d',
+        exam_id_val, created, updated, unchanged, len(errors),
+    )
 
-    # FCM + PushNotification audit rows — one push per parent per graded student.
-    # Mirrors the web route behaviour in grades/__init__.py.
-    # Best-effort: a notification failure must never fail the API response.
+    # Guard: if nothing valid was submitted, don't commit and return an informative error.
+    if created == 0 and updated == 0 and unchanged == 0:
+        _logger.warning(
+            '[mobile-grades] ABORT exam_id=%s — all %d entries rejected',
+            exam_id_val, len(errors),
+        )
+        return err(
+            f'no valid results to save — all {len(errors)} entries were rejected',
+            400,
+        )
+
+    # Commit only when at least one result was created or updated.
+    if created > 0 or updated > 0:
+        try:
+            db.session.commit()
+            _logger.warning(
+                '[mobile-grades] COMMIT OK exam_id=%s created=%d updated=%d',
+                exam_id_val, created, updated,
+            )
+        except Exception:
+            db.session.rollback()
+            _logger.exception(
+                '[mobile-grades] COMMIT FAILED exam_id=%s — rolled back',
+                exam_id_val,
+            )
+            return err('database_error — changes were rolled back', 500)
+
+        # Recalculate ranks for all results of this exam (mirrors web route).
+        try:
+            all_for_rank = (
+                ExamResult.query
+                .execution_options(include_all_years=True)
+                .filter_by(exam_id=exam_id_val)
+                .order_by(ExamResult.marks.desc())
+                .all()
+            )
+            for rank_pos, res in enumerate(all_for_rank, 1):
+                res.rank = rank_pos
+            db.session.commit()
+            _logger.warning(
+                '[mobile-grades] RANKS UPDATED exam_id=%s total=%d',
+                exam_id_val, len(all_for_rank),
+            )
+        except Exception:
+            db.session.rollback()
+            _logger.exception(
+                '[mobile-grades] RANK UPDATE FAILED exam_id=%s '
+                '(non-fatal, results already saved)',
+                exam_id_val,
+            )
+
+    # Send in-app Notification + FCM for students whose results actually changed.
+    # Best-effort — a notification failure must never fail the API response.
+    fcm_sent = fcm_failed = 0
     if graded_student_ids:
         try:
-            from app.blueprints.grades import _notify_grade_results
-            graded_students = [student_by_id[s] for s in graded_student_ids
-                               if s in student_by_id]
-            _notify_grade_results(exam, graded_students)
+            graded_students = [
+                student_by_id[s] for s in graded_student_ids if s in student_by_id
+            ]
+            fcm_sent, fcm_failed = _notify_grade_results_mobile(
+                exam_id_val,
+                exam_school_id,
+                exam_subject_id,
+                exam_name_val,
+                graded_students,
+            )
         except Exception:
-            import logging as _log
-            _log.getLogger('mecha.mobile').exception(
-                '[mobile-grades] notification dispatch failed exam_id=%s', exam.id)
+            _logger.exception(
+                '[mobile-grades] NOTIFICATION DISPATCH FAILED exam_id=%s',
+                exam_id_val,
+            )
 
-    return ok(saved=saved, errors=errors)
+    _logger.warning(
+        '[mobile-grades] DONE exam_id=%s '
+        'created=%d updated=%d unchanged=%d rejected=%d '
+        'notified_students=%d fcm_sent=%d fcm_failed=%d',
+        exam_id_val,
+        created, updated, unchanged, len(errors),
+        len(graded_student_ids), fcm_sent, fcm_failed,
+    )
+
+    # Return the full current results list so Flutter can refresh immediately
+    # without a second GET request.  include_all_years=True ensures visibility
+    # for exams from non-current years (same flag used by existing_map above).
+    all_results_now = (
+        ExamResult.query
+        .execution_options(include_all_years=True)
+        .filter_by(exam_id=exam_id_val)
+        .order_by(ExamResult.marks.desc())
+        .all()
+    )
+
+    def _result_row(r: ExamResult) -> dict:
+        s = student_by_id.get(r.student_id)
+        return {
+            'student_id':   r.student_id,
+            'student_name': s.full_name if s else '?',
+            'marks':        float(r.marks) if r.marks is not None else None,
+            'grade_letter': r.grade_letter,
+            'grade':        r.grade_letter,   # alias for Flutter compatibility
+            'is_pass':      r.is_pass,
+            'rank':         r.rank,
+            'notes':        r.notes,
+        }
+
+    return ok(
+        saved     = saved,
+        created   = created,
+        updated   = updated,
+        unchanged = unchanged,
+        errors    = errors,
+        results   = [_result_row(r) for r in all_results_now],
+    )
 
 
 # ─── Teacher notifications ────────────────────────────────────────────────────
