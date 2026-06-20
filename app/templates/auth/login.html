@@ -18,90 +18,120 @@
       font-family: 'Cairo', sans-serif;
     }
 
-    /* ── Full-page background ─────────────────────────────────────────── */
+    /*
+     * Full-viewport page — background image covers the whole screen.
+     * overflow: hidden prevents any page-level scroll; the card scrolls
+     * internally if the viewport is very short.
+     * background-color is the fallback that shows while the image loads,
+     * and behind transparent edges — it does NOT replace the image.
+     */
     .login-page {
-      min-height: 100vh;
+      width: 100%;
+      height: 100dvh;
+      min-height: 100dvh;
+      overflow: hidden;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: clamp(12px, 3vw, 32px);
-      background-image: url("{{ url_for('static', filename='images/core-school-login.png') }}");
-      background-size: cover;
-      background-position: center center;
-      background-repeat: no-repeat;
+      /* ── background image ────────────────────────────────────────────
+         url_for() emits the correct /static/... path at render time.
+         background-color is the fallback only; background-image takes
+         precedence whenever the image loads successfully.
+      ──────────────────────────────────────────────────────────────── */
       background-color: #061a35;
+      background-image: url("{{ url_for('static', filename='images/core-school-login.png') }}");
+      background-repeat: no-repeat;
+      background-position: center center;
+      background-size: cover;
     }
 
-    /* ── Glass card ───────────────────────────────────────────────────── */
+    /* ── Glass card ───────────────────────────────────────────────────
+       Width: responsive between 320 px and 470 px.
+       Max-height: leaves 24 px breathing room top+bottom on any screen.
+       overflow-y: auto lets the card scroll internally on very short
+         viewports (e.g. 500 px height) without the page itself scrolling.
+    ──────────────────────────────────────────────────────────────── */
     .login-card {
-      width: min(94vw, 500px);
-      background: rgba(255, 255, 255, 0.88);
-      backdrop-filter: blur(18px);
-      -webkit-backdrop-filter: blur(18px);
+      width: min(92vw, 470px);
+      max-height: calc(100dvh - 24px);
+      overflow-y: auto;
+      overflow-x: hidden;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(26,122,255,0.25) transparent;
+
+      background: rgba(255, 255, 255, 0.86);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
       border-radius: 20px;
-      border: 1px solid rgba(255, 255, 255, 0.65);
+      border: 1px solid rgba(255, 255, 255, 0.70);
       box-shadow:
-        0 32px 80px rgba(0, 10, 40, 0.45),
-        0 0 0 1px rgba(180, 210, 255, 0.18);
-      padding: clamp(28px, 5vw, 52px) clamp(24px, 5vw, 48px);
+        0 30px 80px rgba(0, 10, 45, 0.50),
+        0 0 0 1px rgba(160, 200, 255, 0.16);
+
+      /* vertical padding shrinks on short viewports via clamp */
+      padding: clamp(20px, 3.5vh, 40px) clamp(22px, 4vw, 42px);
       direction: rtl;
     }
 
-    /* ── Brand block ──────────────────────────────────────────────────── */
+    /* ── Brand block ──────────────────────────────────────────────────
+       Logo max shrinks on short viewports: clamp(80px, 12vh, 145px)
+    ──────────────────────────────────────────────────────────────── */
     .brand-block {
       text-align: center;
-      margin-bottom: clamp(14px, 2.5vh, 24px);
+      margin-bottom: clamp(8px, 1.5vh, 18px);
     }
 
     .login-logo {
       display: block;
-      margin: 0 auto 10px;
-      max-width: clamp(130px, 16vw, 185px);
+      margin: 0 auto 8px;
+      width: auto;
+      max-width: clamp(90px, 12vh, 150px);
       height: auto;
       object-fit: contain;
     }
 
     .brand-tagline {
-      font-size: 12px;
+      font-size: clamp(10px, 1.2vh, 12px);
       color: #4a6a8a;
       font-weight: 500;
-      line-height: 1.6;
+      line-height: 1.5;
     }
 
     .brand-divider {
       display: block;
-      width: 52px;
+      width: 48px;
       height: 2px;
       background: linear-gradient(90deg, transparent, #c9a227, transparent);
       border-radius: 2px;
-      margin: 10px auto 0;
+      margin: clamp(6px, 1vh, 10px) auto 0;
     }
 
-    /* ── Heading ──────────────────────────────────────────────────────── */
+    /* ── Heading ──────────────────────────────────────────────────────*/
     .form-heading {
       text-align: center;
-      margin-bottom: clamp(16px, 2.5vh, 24px);
+      margin-bottom: clamp(10px, 1.8vh, 20px);
     }
 
     .form-heading h2 {
-      font-size: clamp(20px, 2.2vw, 26px);
+      font-size: clamp(18px, 2.6vh, 26px);
       font-weight: 900;
       color: #0c1e38;
+      line-height: 1.2;
     }
 
-    /* ── Error / flash banners ────────────────────────────────────────── */
+    /* ── Error / flash banners ────────────────────────────────────────*/
     .error-banner,
     .flash-banner {
       border-radius: 9px;
-      padding: 9px 13px;
-      font-size: 13px;
+      padding: 8px 12px;
+      font-size: 12.5px;
       font-weight: 600;
       display: flex;
       align-items: center;
-      gap: 8px;
-      margin-bottom: 14px;
+      gap: 7px;
+      margin-bottom: 10px;
       direction: rtl;
-      line-height: 1.5;
+      line-height: 1.45;
     }
 
     .error-banner,
@@ -124,34 +154,36 @@
       color: #b45309;
     }
 
-    /* ── Field groups ─────────────────────────────────────────────────── */
-    .field-group { margin-bottom: clamp(12px, 1.8vh, 16px); }
+    /* ── Field groups ─────────────────────────────────────────────────*/
+    .field-group {
+      margin-bottom: clamp(8px, 1.4vh, 14px);
+    }
 
     .field-label {
       display: block;
-      font-size: 12.5px;
+      font-size: clamp(11px, 1.3vh, 13px);
       font-weight: 700;
       color: #1a3358;
-      margin-bottom: 6px;
+      margin-bottom: 5px;
     }
 
     .field-wrap { position: relative; }
 
     .field-input {
       width: 100%;
-      padding: 11px 42px 11px 14px;
-      background: rgba(255, 255, 255, 0.82);
+      padding: clamp(8px, 1.2vh, 11px) 40px clamp(8px, 1.2vh, 11px) 14px;
+      background: rgba(255, 255, 255, 0.80);
       border: 1.5px solid #c0d4ec;
       border-radius: 10px;
       font-family: 'Cairo', sans-serif;
-      font-size: 13.5px;
+      font-size: clamp(12px, 1.4vh, 14px);
       font-weight: 500;
       color: #0c1e38;
       direction: rtl;
       text-align: right;
       transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
       outline: none;
-      box-shadow: 0 1px 4px rgba(0, 30, 80, 0.07);
+      box-shadow: 0 1px 4px rgba(0, 30, 80, 0.06);
     }
 
     .field-input::placeholder {
@@ -165,17 +197,18 @@
       box-shadow: 0 0 0 3px rgba(26, 122, 255, 0.13);
     }
 
+    /* Lock / person icon on the right (RTL start) */
     .field-icon {
       position: absolute;
       right: 13px;
       top: 50%;
       transform: translateY(-50%);
       color: #8aaccc;
-      font-size: 15px;
+      font-size: 14px;
       pointer-events: none;
     }
 
-    /* Password toggle sits on the left side (start) */
+    /* Eye toggle on the left (RTL end) */
     .toggle-pw {
       position: absolute;
       left: 12px;
@@ -184,7 +217,7 @@
       background: none;
       border: none;
       color: #8aaccc;
-      font-size: 15px;
+      font-size: 14px;
       cursor: pointer;
       padding: 0;
       line-height: 1;
@@ -194,86 +227,102 @@
 
     .toggle-pw:hover { color: #1a7aff; }
 
-    /* ── Remember row ─────────────────────────────────────────────────── */
+    /* ── Remember row ─────────────────────────────────────────────────*/
     .remember-row {
       display: flex;
       align-items: center;
+      justify-content: flex-end;
       gap: 8px;
       direction: rtl;
-      margin-bottom: clamp(16px, 2.2vh, 22px);
+      margin-bottom: clamp(12px, 1.8vh, 20px);
     }
 
     .remember-row input[type="checkbox"] {
-      width: 16px;
-      height: 16px;
+      width: 15px;
+      height: 15px;
       accent-color: #1a7aff;
       cursor: pointer;
       flex-shrink: 0;
     }
 
     .remember-row label {
-      font-size: 13px;
+      font-size: clamp(11px, 1.3vh, 13px);
       font-weight: 600;
       color: #3a5878;
       cursor: pointer;
       user-select: none;
     }
 
-    /* ── Submit button ────────────────────────────────────────────────── */
+    /* ── Submit button ────────────────────────────────────────────────*/
     .submit-btn {
       width: 100%;
-      padding: 13px;
+      padding: clamp(10px, 1.5vh, 13px);
       background: linear-gradient(135deg, #0f2d7a 0%, #1a7aff 100%);
       border: none;
       border-radius: 10px;
       font-family: 'Cairo', sans-serif;
-      font-size: 15px;
+      font-size: clamp(13px, 1.6vh, 15px);
       font-weight: 800;
       color: #fff;
       cursor: pointer;
       transition: opacity 0.18s, transform 0.1s, box-shadow 0.18s;
-      box-shadow: 0 6px 20px rgba(26, 122, 255, 0.42);
-      letter-spacing: 0.4px;
+      box-shadow: 0 5px 18px rgba(26, 122, 255, 0.42);
+      letter-spacing: 0.3px;
     }
 
     .submit-btn:hover {
       opacity: 0.92;
-      box-shadow: 0 8px 26px rgba(26, 122, 255, 0.55);
+      box-shadow: 0 7px 24px rgba(26, 122, 255, 0.55);
     }
 
     .submit-btn:active { transform: scale(0.99); }
 
-    /* ── Card footer ──────────────────────────────────────────────────── */
+    /* ── Card footer ──────────────────────────────────────────────────*/
     .card-footer {
-      margin-top: clamp(14px, 2.2vh, 22px);
-      padding-top: 14px;
+      margin-top: clamp(10px, 1.5vh, 18px);
+      padding-top: clamp(8px, 1.2vh, 14px);
       border-top: 1px solid rgba(180, 200, 225, 0.55);
       text-align: center;
     }
 
     .support-note {
-      font-size: 12px;
+      font-size: clamp(10px, 1.2vh, 12px);
       color: #5a7890;
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 6px;
-      margin-bottom: 6px;
+      gap: 5px;
     }
 
     .support-note i { color: #b8921e; font-size: 13px; }
 
-    .copy-note {
-      font-size: 10.5px;
-      color: #8aaac4;
-      font-weight: 500;
+    /* ── Mobile ───────────────────────────────────────────────────────
+       On phones the page is taller than the viewport so allow full
+       natural scrolling; overflow: hidden would trap the card.
+    ──────────────────────────────────────────────────────────────── */
+    @media (max-width: 480px) {
+      .login-page {
+        height: auto;
+        min-height: 100dvh;
+        overflow: visible;
+        align-items: flex-start;
+        padding: 20px 12px 28px;
+      }
+
+      .login-card {
+        max-height: none;
+        overflow-y: visible;
+        width: 100%;
+      }
     }
 
-    /* ── Responsive ───────────────────────────────────────────────────── */
-    @media (max-width: 480px) {
-      .login-card {
-        padding: 28px 18px 24px;
-      }
+    /* ── Very short desktop screens (height ≤ 650 px) ─────────────────
+       Increase density further so the card fits without scrolling.
+    ──────────────────────────────────────────────────────────────── */
+    @media (max-height: 650px) and (min-width: 481px) {
+      .login-logo { max-width: 80px; }
+      .brand-tagline { font-size: 10px; }
+      .brand-divider { margin-top: 4px; }
     }
   </style>
 </head>
@@ -312,7 +361,7 @@
         {% endfor %}
       {% endwith %}
 
-      <!-- Form -->
+      <!-- Form — no authentication logic changed -->
       <form method="POST" action="{{ url_for('auth.login') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
@@ -358,8 +407,8 @@
 
         <!-- Remember me -->
         <div class="remember-row">
-          <input type="checkbox" id="rememberMe" name="remember">
           <label for="rememberMe">تذكرني</label>
+          <input type="checkbox" id="rememberMe" name="remember">
         </div>
 
         <!-- Submit -->
@@ -373,7 +422,6 @@
           <i class="bi bi-headset"></i>
           للدعم والمساعدة، تواصل معنا مباشرة
         </div>
-        <div class="copy-note">© النواة الذكية للأنظمة والحلول التقنية. جميع الحقوق محفوظة.</div>
       </div>
 
     </div>
