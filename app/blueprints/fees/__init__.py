@@ -1323,40 +1323,32 @@ def reminder_settings():
         flash('المدرسة غير موجودة.', 'warning')
         return redirect(url_for('fees.index'))
 
-    # Checkbox: sends '1' when checked, absent when unchecked
     enabled = request.form.get('fee_reminder_enabled') == '1'
 
-    raw_val = request.form.get('fee_reminder_before_value', '3').strip()
     try:
-        parsed_val = int(raw_val)
+        days_before = max(1, min(int(request.form.get('fee_reminder_days_before', '3').strip()), 30))
     except (ValueError, TypeError):
-        parsed_val = 3
+        days_before = 3
 
-    fee_unit = request.form.get('fee_reminder_before_unit', 'days')
-    if fee_unit not in ('days', 'hours', 'minutes'):
-        fee_unit = 'days'
+    try:
+        per_day = max(1, min(int(request.form.get('fee_reminder_per_day', '1').strip()), 6))
+    except (ValueError, TypeError):
+        per_day = 1
 
-    if fee_unit == 'minutes':
-        parsed_val = max(5, min(parsed_val, 1440))
-    elif fee_unit == 'hours':
-        parsed_val = max(1, min(parsed_val, 72))
-    else:
-        parsed_val = max(1, min(parsed_val, 30))
-
-    school.fee_reminder_enabled      = enabled
-    school.fee_reminder_before_value = parsed_val
-    school.fee_reminder_before_unit  = fee_unit
+    school.fee_reminder_enabled     = enabled
+    school.fee_reminder_days_before = days_before
+    school.fee_reminder_per_day     = per_day
 
     _log.warning(
-        '[fees-reminder-settings] saving school_id=%s enabled=%s value=%s unit=%s',
-        school.id, enabled, parsed_val, fee_unit,
+        '[fees-reminder-settings] saving school_id=%s enabled=%s days_before=%s per_day=%s',
+        school.id, enabled, days_before, per_day,
     )
 
     db.session.commit()
 
     _log.warning(
-        '[fees-reminder-settings] saved school_id=%s enabled=%s value=%s unit=%s',
-        school.id, enabled, parsed_val, fee_unit,
+        '[fees-reminder-settings] saved school_id=%s enabled=%s days_before=%s per_day=%s',
+        school.id, enabled, days_before, per_day,
     )
 
     log_action('edit', 'school', school.id, details='fee reminder settings updated')

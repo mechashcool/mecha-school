@@ -62,15 +62,14 @@
 
       {% if _reminder_school %}
       <div class="alert alert-light border mb-3 py-2" style="font-size:13px">
-        <strong>الحالة المحفوظة حالياً:</strong>
+        <strong>الحالة المحفوظة:</strong>
         {% if _reminder_school.fee_reminder_enabled %}
           <span class="text-success fw-semibold">مفعّل</span> —
-          إرسال التذكير قبل
-          <strong>{{ _reminder_school.fee_reminder_before_value or 3 }}</strong>
-          {% if _reminder_school.fee_reminder_before_unit == 'hours' %}ساعات
-          {% elif _reminder_school.fee_reminder_before_unit == 'minutes' %}دقائق
-          {% else %}أيام{% endif %}
-          من موعد القسط
+          بدء التذكير قبل
+          <strong>{{ _reminder_school.fee_reminder_days_before or 3 }}</strong>
+          يوم من الاستحقاق،
+          <strong>{{ _reminder_school.fee_reminder_per_day or 1 }}</strong>
+          مرة في اليوم
           <span class="text-muted">(school_id={{ _reminder_school.id }})</span>
         {% else %}
           <span class="text-secondary">غير مفعّل</span>
@@ -97,49 +96,50 @@
               </label>
             </div>
             <small class="text-muted">
-              عند التفعيل، يُرسل النظام تلقائياً إشعاراً لأولياء الأمور قبل موعد القسط.
+              عند التفعيل، يُرسل النظام إشعارات تلقائية لأولياء الأمور قبل موعد القسط وبعده حتى اكتمال السداد.
             </small>
           </div>
 
           <div class="col-md-3">
-            <label class="form-label" for="fee_reminder_before_value">إرسال التذكير قبل</label>
-            <input type="number" id="fee_reminder_before_value"
-                   name="fee_reminder_before_value"
-                   value="{{ (_reminder_school.fee_reminder_before_value if _reminder_school and _reminder_school.fee_reminder_before_value) or 3 }}"
-                   min="1"
-                   class="form-control"
-                   placeholder="3">
-            <div class="invalid-feedback" id="reminderValErr"></div>
+            <label class="form-label fw-semibold" for="fee_reminder_days_before">
+              بدء التذكير قبل موعد القسط بـ
+            </label>
+            <div class="input-group">
+              <input type="number" id="fee_reminder_days_before"
+                     name="fee_reminder_days_before"
+                     value="{{ (_reminder_school.fee_reminder_days_before if _reminder_school and _reminder_school.fee_reminder_days_before) or 3 }}"
+                     min="1" max="30"
+                     class="form-control"
+                     placeholder="3">
+              <span class="input-group-text">يوم</span>
+            </div>
+            <div class="invalid-feedback d-block" id="reminderDaysErr" style="display:none!important"></div>
           </div>
 
           <div class="col-md-3">
-            <label class="form-label" for="fee_reminder_before_unit">نوع الفترة</label>
-            <select id="fee_reminder_before_unit" name="fee_reminder_before_unit"
-                    class="form-select">
-              <option value="days"
-                {% if not (_reminder_school and _reminder_school.fee_reminder_before_unit) or (_reminder_school and _reminder_school.fee_reminder_before_unit == 'days') %}selected{% endif %}>
-                أيام
-              </option>
-              <option value="hours"
-                {% if _reminder_school and _reminder_school.fee_reminder_before_unit == 'hours' %}selected{% endif %}>
-                ساعات
-              </option>
-              <option value="minutes"
-                {% if _reminder_school and _reminder_school.fee_reminder_before_unit == 'minutes' %}selected{% endif %}>
-                دقائق
-              </option>
-            </select>
+            <label class="form-label fw-semibold" for="fee_reminder_per_day">
+              عدد مرات التذكير يومياً
+            </label>
+            <div class="input-group">
+              <input type="number" id="fee_reminder_per_day"
+                     name="fee_reminder_per_day"
+                     value="{{ (_reminder_school.fee_reminder_per_day if _reminder_school and _reminder_school.fee_reminder_per_day) or 1 }}"
+                     min="1" max="6"
+                     class="form-control"
+                     placeholder="1">
+              <span class="input-group-text">مرة</span>
+            </div>
+            <div class="invalid-feedback d-block" id="reminderPerDayErr" style="display:none!important"></div>
           </div>
 
-          <div class="col-md-3 d-flex align-items-end">
-            <div class="text-muted" style="font-size:13px;padding-bottom:6px" id="reminderExample">
-              مثال: إرسال التذكير قبل 3 أيام من موعد القسط.
+          <div class="col-md-4">
+            <div class="alert alert-info mb-0 py-2 px-3" style="font-size:12px" id="reminderScheduleInfo">
             </div>
           </div>
 
-          <div class="col-md-3 d-flex align-items-end">
+          <div class="col-md-2 d-flex align-items-end">
             <button type="submit" class="btn btn-primary w-100">
-              <i class="bi bi-check-circle-fill me-1"></i>حفظ الإعدادات
+              <i class="bi bi-check-circle-fill me-1"></i>حفظ
             </button>
           </div>
 
@@ -489,56 +489,74 @@
   }
 })();
 
-// ── Fee reminder validation ───────────────────────────────────────────────────
+// ── Fee reminder settings — live preview + validation ─────────────────────────
 (function () {
-  var valEl  = document.getElementById('fee_reminder_before_value');
-  var unitEl = document.getElementById('fee_reminder_before_unit');
-  var errEl  = document.getElementById('reminderValErr');
-  var exEl   = document.getElementById('reminderExample');
-  var form   = document.getElementById('feeReminderForm');
+  var daysEl      = document.getElementById('fee_reminder_days_before');
+  var perDayEl    = document.getElementById('fee_reminder_per_day');
+  var daysErrEl   = document.getElementById('reminderDaysErr');
+  var perDayErrEl = document.getElementById('reminderPerDayErr');
+  var infoEl      = document.getElementById('reminderScheduleInfo');
+  var form        = document.getElementById('feeReminderForm');
 
-  var limits = { days: [1, 30], hours: [1, 72], minutes: [5, 1440] };
-  var labels = { days: 'أيام', hours: 'ساعات', minutes: 'دقائق' };
-  var msgTpl = { days: 'مثال: إرسال التذكير قبل {v} أيام من موعد القسط.',
-                 hours: 'مثال: إرسال التذكير قبل {v} ساعة من موعد القسط.',
-                 minutes: 'مثال: إرسال التذكير قبل {v} دقيقة من موعد القسط.' };
+  // Mirrors _SLOT_TIMES in fee_reminder.py
+  var SLOTS = {
+    1: ['09:00'],
+    2: ['09:00', '17:00'],
+    3: ['09:00', '13:00', '18:00'],
+    4: ['08:00', '11:00', '14:00', '17:00'],
+    5: ['08:00', '10:30', '13:00', '15:30', '18:00'],
+    6: ['08:00', '10:00', '12:00', '14:00', '16:00', '18:00'],
+  };
 
-  function updateExample() {
-    if (!exEl || !valEl || !unitEl) return;
-    var u = unitEl.value, v = valEl.value || '3';
-    exEl.textContent = (msgTpl[u] || '').replace('{v}', v);
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(v, hi)); }
+
+  function updatePreview() {
+    if (!infoEl) return;
+    var d = clamp(parseInt((daysEl && daysEl.value) || '3', 10) || 3, 1, 30);
+    var p = clamp(parseInt((perDayEl && perDayEl.value) || '1', 10) || 1, 1, 6);
+    var slots = (SLOTS[p] || SLOTS[1]).join('،  ');
+    infoEl.innerHTML =
+      '<i class="bi bi-info-circle me-1"></i>' +
+      'سيبدأ النظام إرسال التذكير <strong>قبل ' + d + ' يوم</strong> من تاريخ استحقاق القسط، ' +
+      'ويُرسل <strong>' + p + ' مرة يومياً</strong>' +
+      (p > 1 ? ' في الأوقات: <strong dir="ltr">' + slots + '</strong>' : ' في الساعة <strong>09:00</strong>') +
+      '.<br><span class="text-muted">يتوقف التذكير تلقائياً عند اكتمال السداد.</span>';
   }
 
   function validate() {
-    if (!valEl || !unitEl) return true;
-    var u = unitEl.value;
-    var v = parseInt(valEl.value, 10);
-    var range = limits[u] || [1, 30];
-    if (isNaN(v) || v < range[0] || v > range[1]) {
-      valEl.classList.add('is-invalid');
-      if (errEl) errEl.textContent =
-        'يجب أن تكون القيمة بين ' + range[0] + ' و ' + range[1] + ' ' + (labels[u] || '') + '.';
-      return false;
+    var ok = true;
+    if (daysEl) {
+      var d = parseInt(daysEl.value, 10);
+      if (isNaN(d) || d < 1 || d > 30) {
+        daysEl.classList.add('is-invalid');
+        if (daysErrEl) { daysErrEl.textContent = 'القيمة يجب أن تكون بين 1 و 30 يوم.'; daysErrEl.style.display = ''; }
+        ok = false;
+      } else {
+        daysEl.classList.remove('is-invalid');
+        if (daysErrEl) daysErrEl.style.display = 'none';
+      }
     }
-    valEl.classList.remove('is-invalid');
-    if (errEl) errEl.textContent = '';
-    return true;
+    if (perDayEl) {
+      var p = parseInt(perDayEl.value, 10);
+      if (isNaN(p) || p < 1 || p > 6) {
+        perDayEl.classList.add('is-invalid');
+        if (perDayErrEl) { perDayErrEl.textContent = 'القيمة يجب أن تكون بين 1 و 6.'; perDayErrEl.style.display = ''; }
+        ok = false;
+      } else {
+        perDayEl.classList.remove('is-invalid');
+        if (perDayErrEl) perDayErrEl.style.display = 'none';
+      }
+    }
+    return ok;
   }
 
-  if (unitEl) {
-    unitEl.addEventListener('change', function () {
-      var range = limits[this.value] || [1, 30];
-      valEl.min = range[0];
-      valEl.max = range[1];
-      validate();
-      updateExample();
-    });
-  }
-  if (valEl) valEl.addEventListener('input', function () { validate(); updateExample(); });
+  if (daysEl)   daysEl.addEventListener('input',  function () { validate(); updatePreview(); });
+  if (perDayEl) perDayEl.addEventListener('input', function () { validate(); updatePreview(); });
   if (form) form.addEventListener('submit', function (e) {
-    if (!validate()) { e.preventDefault(); valEl && valEl.focus(); }
+    if (!validate()) { e.preventDefault(); (daysEl || perDayEl) && (daysEl || perDayEl).focus(); }
   });
-  updateExample();
+
+  updatePreview();
 })();
 </script>
 {% endblock %}

@@ -83,8 +83,10 @@ class School(db.Model):
 
     # Fee installment reminder notifications
     fee_reminder_enabled      = db.Column(db.Boolean,    default=False)
-    fee_reminder_before_value = db.Column(db.Integer,    default=3)
-    fee_reminder_before_unit  = db.Column(db.String(10), default='days')  # 'days' | 'hours'
+    fee_reminder_before_value = db.Column(db.Integer,    default=3)    # legacy, kept for DB compat
+    fee_reminder_before_unit  = db.Column(db.String(10), default='days')  # legacy, kept for DB compat
+    fee_reminder_days_before  = db.Column(db.Integer,    default=3)    # days before due date to start
+    fee_reminder_per_day      = db.Column(db.Integer,    default=1)    # reminder slots per day (1–6)
 
     # Optional per-school feature: building-based data access (multiple
     # branches/buildings inside one school account).  Default OFF so existing
@@ -1109,9 +1111,15 @@ class FeeInstallment(db.Model):
 
 class FeeReminderLog(db.Model):
     """
-    Tracks which reminders have already been sent to prevent duplicates.
-    Unique on (installment_id, parent_user_id, reminder_value, reminder_unit)
-    — one reminder per parent per installment per configured window.
+    Tracks sent installment reminders for duplicate prevention.
+
+    Each row represents one delivered reminder slot.  Unique on
+    (installment_id, parent_user_id, reminder_date, slot_index) — one
+    send per parent per installment per calendar date per daily slot.
+
+    Legacy rows from before the v2 redesign may have reminder_date=NULL
+    and slot_index=NULL; those do not participate in the v2 constraint
+    (NULL != NULL in PostgreSQL unique indexes).
     """
     __tablename__ = 'fee_reminder_logs'
 
@@ -1126,15 +1134,16 @@ class FeeReminderLog(db.Model):
                                  nullable=False, index=True)
     parent_user_id   = db.Column(db.Integer, db.ForeignKey('users.id'),
                                  nullable=False)
-    reminder_value   = db.Column(db.Integer,    nullable=False)
-    reminder_unit    = db.Column(db.String(10), nullable=False)
-    due_date         = db.Column(db.Date,       nullable=False)
-    sent_at          = db.Column(db.DateTime,   default=datetime.utcnow)
+    # v2 slot tracking — NULL on legacy rows
+    reminder_date    = db.Column(db.Date,     nullable=True)
+    slot_index       = db.Column(db.Integer,  nullable=True)
+    due_date         = db.Column(db.Date,     nullable=False)
+    sent_at          = db.Column(db.DateTime, default=datetime.utcnow)
 
     __table_args__ = (
         db.UniqueConstraint(
-            'installment_id', 'parent_user_id', 'reminder_value', 'reminder_unit',
-            name='uq_fee_reminder_log',
+            'installment_id', 'parent_user_id', 'reminder_date', 'slot_index',
+            name='uq_fee_reminder_log_v2',
         ),
     )
 
