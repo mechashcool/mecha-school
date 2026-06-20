@@ -20,3 +20,4 @@ PyJWT>=2.8.0
 requests>=2.31.0
 websockets>=12.0
 tzdata==2026.2
+tzdata==2026.2
