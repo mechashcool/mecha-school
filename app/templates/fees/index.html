@@ -3,38 +3,232 @@
 {% block title %}الرسوم الدراسية{% endblock %}
 {% block page_title %}إدارة الرسوم الدراسية{% endblock %}
 
+{% block extra_css %}
+<style>
+/* ── Fees action bar container ───────────────────────────────────────────── */
+.fees-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  background: #ffffff;
+  border: 1px solid #e4eaf3;
+  border-radius: 14px;
+  box-shadow: 0 2px 10px rgba(15, 37, 64, .07);
+  direction: rtl;
+}
+
+/* ── Base button ─────────────────────────────────────────────────────────── */
+.fees-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  border-radius: 10px;
+  border: 1.5px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background .18s, border-color .18s, color .18s, box-shadow .18s;
+  font-family: inherit;
+}
+.fees-btn i { font-size: 15px; }
+
+/* Outlined variant */
+.fees-btn-outline {
+  background: #ffffff;
+  border-color: #cdd8ea;
+  color: #1a3a5c;
+}
+.fees-btn-outline:hover,
+.fees-btn-outline:focus-visible {
+  background: #f0f5fc;
+  border-color: #8fafd4;
+  color: #0f2540;
+  box-shadow: 0 0 0 3px rgba(26, 58, 92, .10);
+  outline: none;
+}
+.fees-btn-outline:active {
+  background: #e4edf9;
+  border-color: #7099c4;
+}
+
+/* Primary variant */
+.fees-btn-primary {
+  background: #0f2540;
+  border-color: #0f2540;
+  color: #ffffff;
+}
+.fees-btn-primary:hover,
+.fees-btn-primary:focus-visible {
+  background: #1a3a5c;
+  border-color: #1a3a5c;
+  color: #ffffff;
+  box-shadow: 0 0 0 3px rgba(15, 37, 64, .22);
+  outline: none;
+}
+.fees-btn-primary:active {
+  background: #0a1c30;
+  border-color: #0a1c30;
+}
+
+/* ── Dropdown wrapper ────────────────────────────────────────────────────── */
+.fees-dropdown-wrap {
+  position: relative;
+}
+
+/* Toggle chevron animation */
+.fees-chevron {
+  font-size: 12px !important;
+  margin-right: 2px;
+  transition: transform .2s;
+}
+.fees-dropdown-wrap.open .fees-chevron {
+  transform: rotate(180deg);
+}
+
+/* Dropdown panel */
+.fees-dropdown-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  min-width: 200px;
+  background: #ffffff;
+  border: 1px solid #e4eaf3;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(15, 37, 64, .13);
+  overflow: hidden;
+  z-index: 1060;
+  padding: 6px 0;
+  direction: rtl;
+}
+.fees-dropdown-wrap.open .fees-dropdown-menu {
+  display: block;
+}
+
+/* Dropdown items */
+.fees-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #1a3a5c;
+  text-decoration: none;
+  background: transparent;
+  border: none;
+  width: 100%;
+  cursor: pointer;
+  text-align: right;
+  transition: background .15s, color .15s;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.fees-dropdown-item i { font-size: 15px; flex-shrink: 0; }
+.fees-dropdown-item:hover,
+.fees-dropdown-item:focus-visible {
+  background: #f0f5fc;
+  color: #0f2540;
+  outline: none;
+}
+.fees-dropdown-item:active {
+  background: #e4edf9;
+}
+
+/* Excel item accent */
+.fees-dropdown-item--excel i { color: #1d7a44; }
+.fees-dropdown-item--excel:hover i { color: #155e34; }
+
+/* Divider between items (optional subtle separator) */
+.fees-dropdown-item + .fees-dropdown-item {
+  border-top: 1px solid #f3f6fa;
+}
+
+/* ── Responsive ─────────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .fees-action-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .fees-btn,
+  .fees-dropdown-wrap,
+  .fees-dropdown-wrap .fees-btn {
+    width: 100%;
+    justify-content: center;
+  }
+  .fees-dropdown-menu {
+    left: 0;
+    right: 0;
+    min-width: unset;
+  }
+}
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page-header">
   <div>
     <h1 class="page-title">الرسوم الدراسية</h1>
     <p class="page-subtitle">متابعة وإدارة رسوم الطلاب والأقساط</p>
   </div>
-  <div class="d-flex gap-2 flex-wrap">
-    <a href="{{ url_for('fees.fee_types') }}" class="btn btn-outline-secondary">
-      <i class="bi bi-tags-fill me-1"></i>أنواع الرسوم
+  <!-- ── Action bar ────────────────────────────────────────────────────── -->
+  <div class="fees-action-bar">
+
+    <!-- "أنواع الرسوم" outlined -->
+    <a href="{{ url_for('fees.fee_types') }}" class="fees-btn fees-btn-outline">
+      <i class="bi bi-tags-fill"></i>
+      <span>أنواع الرسوم</span>
     </a>
-    {% if current_user.has_permission('manage_fees') %}
-    <button type="button" class="btn btn-outline-secondary"
-            data-bs-toggle="modal" data-bs-target="#stmtModal">
-      <i class="bi bi-file-earmark-text-fill me-1"></i>كشف مالي للطالب
-    </button>
-    {% endif %}
-    <a href="{{ url_for('fees.print_list', **request.args.to_dict()) }}"
-       class="btn btn-outline-secondary"
-       target="_blank">
-      <i class="bi bi-printer-fill me-1"></i>طباعة
-    </a>
-    <a href="{{ url_for('fees.export_excel', **request.args.to_dict()) }}" class="btn btn-outline-success">
-      <i class="bi bi-file-earmark-excel-fill me-1"></i>تصدير Excel
-    </a>
+
+    <!-- "التقارير والتصدير" dropdown -->
+    <div class="fees-dropdown-wrap">
+      <button type="button" class="fees-btn fees-btn-outline fees-dropdown-toggle"
+              id="feesReportsBtn" aria-haspopup="true" aria-expanded="false">
+        <i class="bi bi-graph-up-arrow"></i>
+        <span>التقارير والتصدير</span>
+        <i class="bi bi-chevron-down fees-chevron"></i>
+      </button>
+      <div class="fees-dropdown-menu" id="feesReportsMenu" role="menu" aria-labelledby="feesReportsBtn">
+        {% if current_user.has_permission('manage_fees') %}
+        <button type="button" class="fees-dropdown-item"
+                data-bs-toggle="modal" data-bs-target="#stmtModal" role="menuitem">
+          <i class="bi bi-file-earmark-text-fill"></i>
+          <span>كشف مالي الطالب</span>
+        </button>
+        {% endif %}
+        <a href="{{ url_for('fees.print_list', **request.args.to_dict()) }}"
+           class="fees-dropdown-item" target="_blank" role="menuitem">
+          <i class="bi bi-printer-fill"></i>
+          <span>طباعة</span>
+        </a>
+        <a href="{{ url_for('fees.export_excel', **request.args.to_dict()) }}"
+           class="fees-dropdown-item fees-dropdown-item--excel" role="menuitem">
+          <i class="bi bi-file-earmark-excel-fill"></i>
+          <span>تصدير Excel</span>
+        </a>
+      </div>
+    </div>
+
     {% if current_user.has_permission('manage_fees') and not is_historical_year %}
-    <a href="{{ url_for('fees.bulk_create') }}" class="btn btn-outline-primary">
-      <i class="bi bi-people-fill me-2"></i>رسوم جماعية
+    <!-- "رسوم جماعية" outlined -->
+    <a href="{{ url_for('fees.bulk_create') }}" class="fees-btn fees-btn-outline">
+      <i class="bi bi-people-fill"></i>
+      <span>رسوم جماعية</span>
     </a>
-    <a href="{{ url_for('fees.create') }}" class="btn btn-primary">
-      <i class="bi bi-plus-circle-fill me-2"></i>إضافة سجل رسوم
+
+    <!-- "إضافة سجل رسوم" primary -->
+    <a href="{{ url_for('fees.create') }}" class="fees-btn fees-btn-primary">
+      <i class="bi bi-plus-lg"></i>
+      <span>إضافة سجل رسوم</span>
     </a>
     {% endif %}
+
   </div>
 </div>
 
@@ -468,6 +662,38 @@
   modalEl.addEventListener('hidden.bs.modal', resetToSearch);
 
   if (changeBtn) changeBtn.addEventListener('click', resetToSearch);
+})();
+
+// ── Fees action-bar dropdown ─────────────────────────────────────────────────
+(function () {
+  var wrap   = document.querySelector('.fees-dropdown-wrap');
+  var toggle = document.getElementById('feesReportsBtn');
+  var menu   = document.getElementById('feesReportsMenu');
+  if (!wrap || !toggle || !menu) return;
+
+  function open()  { wrap.classList.add('open');    toggle.setAttribute('aria-expanded', 'true'); }
+  function close() { wrap.classList.remove('open'); toggle.setAttribute('aria-expanded', 'false'); }
+  function isOpen(){ return wrap.classList.contains('open'); }
+
+  toggle.addEventListener('click', function (e) {
+    e.stopPropagation();
+    isOpen() ? close() : open();
+  });
+
+  // Close when a menu item is clicked (modal items close automatically via BS)
+  menu.querySelectorAll('.fees-dropdown-item').forEach(function (item) {
+    item.addEventListener('click', function () { close(); });
+  });
+
+  // Close on outside click
+  document.addEventListener('click', function (e) {
+    if (!wrap.contains(e.target)) close();
+  });
+
+  // Keyboard: Escape closes the menu
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && isOpen()) { close(); toggle.focus(); }
+  });
 })();
 
 // ── Auto-expand reminder card on save success ─────────────────────────────────
