@@ -472,9 +472,9 @@ def teacher_schedule():
         employee are never included (branches 2 and 3 require teacher_id IS NULL).
       • The query is explicitly scoped to school_id and academic_year_id so that
         no other school's or year's data can be returned. The ORM global tenant
-        scope is inert on mobile (JWT login happens inside the view, after
-        before_request has already cached g.tenant_scope_school_id = None) —
-        explicit column filters are mandatory.
+        scope is now active for authenticated mobile requests (set_mobile_request_scope
+        is called by jwt_required after token validation); the explicit column
+        filters here are defence-in-depth.
       • Both section-based (section_id set, grade_id NULL) and grade-based
         (grade_id set, section_id NULL) schedule rows are returned.
     """
@@ -622,9 +622,9 @@ def teacher_my_attendance():
         or body — any such client value is ignored.
       • The query is explicitly scoped to the employee's own school_id,
         employee_id, AND the school's current academic_year_id, so it cannot
-        return another teacher's or another school's rows even though the ORM
-        global tenant scope is inert on mobile (JWT login happens after the
-        before_request scope is cached).
+        return another teacher's or another school's rows. The explicit filters
+        are defence-in-depth alongside the ORM tenant scope that is now active
+        for authenticated mobile requests.
 
     Response (200):
       {
@@ -911,9 +911,9 @@ def teacher_check_exam_day():
     if not year:
         return err('no_active_academic_year', 400)
 
-    # Explicit school + year + section + date scope — never relies on global
-    # ORM tenant filter, which is inert for mobile (JWT login happens inside
-    # the view, after before_request has already cached the scope).
+    # Explicit school + year + section + date scope. The ORM tenant scope is
+    # now active for authenticated mobile requests; these explicit filters
+    # are defence-in-depth.
     exams = (Exam.query
              .filter(
                  Exam.school_id        == emp.school_id,
@@ -1080,16 +1080,24 @@ def teacher_create_exam():
     db.session.add(new_exam)
     db.session.commit()
 
-    # FCM + PushNotification audit rows to parents of active students in this section.
-    # Mirrors the web route behaviour in grades/__init__.py.
+    # In-app Notification + FCM push to parents of active students in this section.
+    # Delegates to _notify_new_exam() which is fully context-independent:
+    # it uses bypass_tenant_scope=True + explicit school_id so it works correctly
+    # from the mobile API where g.tenant_scope_school_id is None at request time.
     # Best-effort: a notification failure must never fail the API response.
+    _exam_id_for_log = new_exam.id  # PK retained after commit — safe to read
     try:
         from app.blueprints.grades import _notify_new_exam
         _notify_new_exam(new_exam)
     except Exception:
-        import logging as _log
-        _log.getLogger('mecha.mobile').exception(
-            '[mobile-exam] notification dispatch failed exam_id=%s', new_exam.id)
+        import logging as _mlog
+        _mlog.getLogger('mecha.mobile').exception(
+            '[mobile-exam] _notify_new_exam import or invocation error '
+            'exam_id=%s school_id=%s section_id=%s',
+            _exam_id_for_log,
+            getattr(new_exam, 'school_id', None),
+            getattr(new_exam, 'section_id', None),
+        )
 
     return ok(
         message='exam_created',
@@ -1305,8 +1313,14 @@ def teacher_notifications():
     limit  = min(int(request.args.get('limit', 50)), 100)
     offset = max(int(request.args.get('offset', 0)), 0)
 
+    # Explicit school_id guard: notification_visible_to() filters by user/role
+    # but has no school filter. Without this, role-broadcast notifications from
+    # other schools could appear in the feed.
     q     = (Notification.query
-             .filter(notification_visible_to(user))
+             .filter(
+                 Notification.school_id == user.school_id,
+                 notification_visible_to(user),
+             )
              .order_by(Notification.created_at.desc()))
     total = q.count()
     rows  = q.offset(offset).limit(limit).all()

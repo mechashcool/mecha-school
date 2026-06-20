@@ -54,7 +54,10 @@ def jwt_required(token_type: str = 'access'):
     Validate the Bearer token in the Authorization header.
     On success:
       - Sets g.mobile_user  (the User ORM object)
-      - Calls login_user(user) so current_user and ORM scoping work normally
+      - Calls login_user(user) so current_user is populated
+      - Calls set_mobile_request_scope(user) so ORM school/year filtering
+        is applied for the rest of the request (school_id is taken from the
+        server-side User row, never from client-supplied token claims)
     """
     def decorator(f):
         @wraps(f)
@@ -78,9 +81,15 @@ def jwt_required(token_type: str = 'access'):
             if not user or not user.is_active:
                 return jsonify({'ok': False, 'error': 'user_inactive'}), 401
 
-            # Set current_user for ORM scoping (no session cookie interaction
-            # when remember=False and no prior login context)
             login_user(user, remember=False)
+
+            # Set school/year scope from the authenticated User so all subsequent
+            # ORM queries in this request receive the correct tenant filters.
+            # _set_request_scope() (before_request) skips mobile paths and caches
+            # nothing; we set it here after auth so the scope is non-None.
+            from app.utils.scoping import set_mobile_request_scope
+            set_mobile_request_scope(user)
+
             g.mobile_user    = user
             g.mobile_payload = payload
             return f(*args, **kwargs)

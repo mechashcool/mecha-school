@@ -204,6 +204,14 @@ def _set_request_scope():
     if request.path.startswith('/static/'):
         return
 
+    # Mobile API requests are authenticated via JWT. The jwt_required decorator
+    # calls set_mobile_request_scope() after token validation so the scope is
+    # derived from the authenticated User object, not from the anonymous
+    # before_request state. Returning here prevents a None scope from being
+    # cached and blocking ORM school/year filtering for the entire request.
+    if request.path.startswith('/api/mobile/v1/'):
+        return
+
     try:
         g.tenant_scope_role_name = _current_role_name()
     except Exception:
@@ -268,6 +276,47 @@ def set_hardware_scope(device):
         )
         g.tenant_scope_academic_year_id = year_id
         g.tenant_scope_view_year_id = year_id  # hardware always uses the current active year
+
+
+def set_mobile_request_scope(user) -> None:
+    """Set the ORM tenant scope for an authenticated mobile API request.
+
+    Called from the jwt_required decorator in mobile_api/utils.py immediately
+    after the JWT is validated and the User ORM object is loaded. Mirrors
+    _set_request_scope() but derives the school/year from the already-
+    authenticated User object rather than from current_user (which is not yet
+    set when before_request fires).
+
+    School ID is always taken from the server-side User row — never from
+    client-supplied JWT claims or request fields.
+    """
+    if not has_request_context() or not user:
+        return
+
+    try:
+        g.tenant_scope_role_name = (
+            user.role.name if hasattr(user, 'role') and user.role else None
+        )
+    except Exception:
+        g.tenant_scope_role_name = None
+
+    sid = user.school_id  # authoritative server-side value from the authenticated User
+    g.tenant_scope_school_id = sid
+    g.tenant_scope_academic_year_id = None
+    g.tenant_scope_view_year_id = None
+
+    if sid and sid > 0:
+        from app.models import AcademicYear
+
+        active_year_id = (
+            AcademicYear.query
+            .execution_options(bypass_tenant_scope=True)
+            .with_entities(AcademicYear.id)
+            .filter_by(school_id=sid, is_current=True)
+            .scalar()
+        )
+        g.tenant_scope_academic_year_id = active_year_id
+        g.tenant_scope_view_year_id = active_year_id  # mobile always uses the current active year
 
 
 def _inherit_scope(session_, obj):

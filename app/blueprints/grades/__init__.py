@@ -97,35 +97,201 @@ def _notify_grade_results(exam, students):
 
 
 def _notify_new_exam(exam):
-    """FCM push announcing a newly scheduled exam to the section's parents.
+    """In-app Notification + FCM push for a newly scheduled exam.
 
-    The exam is section-scoped, so recipients are the linked parents of the
-    active students in that section, resolved server-side. Never raises.
+    Creates one Notification row (parent feed) and sends an FCM push for each
+    parent linked to an active student in the exam's section.
+
+    Design guarantees:
+    - Context-independent: works from a web request, mobile API, or background
+      task because all ORM queries use bypass_tenant_scope=True with an explicit
+      school_id equality filter.  The ORM tenant-scope event would otherwise add
+      no filter in the mobile API context (where g.tenant_scope_school_id is None
+      because _set_request_scope() runs before JWT auth sets current_user).
+    - In-app + FCM: both a Notification row (visible in the parent notification
+      feed) and an FCM push (device tray notification) are produced.
+    - Parent primitive capture: parent id and school_id are stored as plain Python
+      integers before any db.session.commit() so later commits cannot expire ORM
+      objects and cause implicit lazy-load failures.
+    - Per-parent isolation: each Notification commit is wrapped individually so
+      a DB error for one parent does not block the others.
+    - Logging at WARNING level so output appears regardless of logger config.
+    - Never raises.
     """
+    import logging as _logging
+    _log = _logging.getLogger('mecha.exam.notify')
+
     try:
-        from app.services.notifications import NotificationService
-        section_students = (Student.query
-                            .filter_by(section_id=exam.section_id, status='active')
-                            .all())
-        for student in section_students:
-            NotificationService.send_to_parents_of_student(
-                student.id,
-                'اختبار جديد',
-                f'تم جدولة اختبار جديد: {exam.exam_name}.',
-                ntype='exam',
-                data={
-                    'type':       'exam',
-                    'screen':     'exams',
-                    'route':      '/parent/exams',
-                    'exam_id':    str(exam.id),
-                    'subject_id': str(exam.subject_id),
-                    'student_id': str(student.id),
-                },
+        from sqlalchemy import select as _sa_select
+        from app.models import db as _db, Notification, User, parent_students
+        from app.services.fcm_service import (
+            is_enabled as _fcm_enabled,
+            send_push_to_user,
+        )
+
+        # Capture all exam scalars immediately — PK (id) is retained by
+        # SQLAlchemy after commit; other columns trigger a single lazy reload
+        # here rather than inside the loop where commits expire objects.
+        exam_id    = exam.id
+        school_id  = exam.school_id
+        section_id = exam.section_id
+        subject_id = exam.subject_id
+        exam_name  = exam.exam_name or ''
+
+        _log.warning(
+            '[exam-notify] START exam_id=%s school_id=%s section_id=%s '
+            'subject_id=%s name=%r',
+            exam_id, school_id, section_id, subject_id, exam_name,
+        )
+
+        if not section_id or not school_id:
+            _log.warning(
+                '[exam-notify] SKIP exam_id=%s — section_id=%s or '
+                'school_id=%s is falsy',
+                exam_id, section_id, school_id,
             )
+            return
+
+        # Active students — bypass_tenant_scope=True + explicit school_id so
+        # this query is correct regardless of the ORM scope active at call time.
+        section_students = (
+            Student.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter(
+                Student.section_id == section_id,
+                Student.school_id  == school_id,
+                Student.status     == 'active',
+            )
+            .all()
+        )
+
+        _log.warning(
+            '[exam-notify] exam_id=%s school_id=%s section_id=%s '
+            '— active_students=%d',
+            exam_id, school_id, section_id, len(section_students),
+        )
+
+        if not section_students:
+            return
+
+        title = 'اختبار جديد'
+        body  = f'تم جدولة اختبار جديد: {exam_name}.'
+        parent_total = fcm_ok_total = fcm_fail_total = 0
+
+        for student in section_students:
+            student_id = student.id  # PK — safe across commits
+
+            # Parent user IDs linked to this student via the junction table.
+            # This is a Core SELECT on a Table object — not subject to ORM
+            # tenant criteria — so it works correctly in all calling contexts.
+            raw_rows = _db.session.execute(
+                _sa_select(parent_students.c.user_id).where(
+                    parent_students.c.student_id == student_id
+                )
+            ).fetchall()
+            raw_parent_ids = [r[0] for r in raw_rows]
+
+            if not raw_parent_ids:
+                _log.warning(
+                    '[exam-notify] exam_id=%s student_id=%s — no linked parents',
+                    exam_id, student_id,
+                )
+                continue
+
+            # Fetch only active parents belonging to this school.
+            # Explicit school_id guard prevents any cross-school notification.
+            parents = (
+                User.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter(
+                    User.id.in_(raw_parent_ids),
+                    User.school_id == school_id,
+                    User.is_active.is_(True),
+                )
+                .all()
+            )
+
+            # Capture primitive tuples — ORM objects are expired by per-parent
+            # commits below.
+            parent_records = [(p.id, p.school_id) for p in parents]
+            parent_total  += len(parent_records)
+
+            _log.warning(
+                '[exam-notify] exam_id=%s student_id=%s '
+                '— linked_parent_ids=%d active_in_school=%d',
+                exam_id, student_id,
+                len(raw_parent_ids), len(parent_records),
+            )
+
+            fcm_data = {
+                'type':       'exam',
+                'screen':     'exams',
+                'route':      '/parent/exams',
+                'exam_id':    str(exam_id),
+                'subject_id': str(subject_id or ''),
+                'student_id': str(student_id),
+                'ntype':      'exam',
+            }
+
+            for parent_id, parent_school_id in parent_records:
+                # ── 1. In-app Notification row (parent notification feed) ──────
+                try:
+                    notif = Notification(
+                        school_id      = parent_school_id,
+                        title          = title,
+                        body           = body,
+                        ntype          = 'exam',
+                        target_user_id = parent_id,
+                        created_by     = None,
+                    )
+                    _db.session.add(notif)
+                    _db.session.commit()
+                except Exception:
+                    _log.exception(
+                        '[exam-notify] Notification commit FAILED '
+                        'exam_id=%s parent_id=%s',
+                        exam_id, parent_id,
+                    )
+                    _db.session.rollback()
+
+                # ── 2. FCM push to all active device tokens for this parent ──
+                if _fcm_enabled():
+                    try:
+                        ok_n, fail_n = send_push_to_user(
+                            parent_id, title, body, fcm_data,
+                        )
+                        fcm_ok_total   += ok_n
+                        fcm_fail_total += fail_n
+                        _log.warning(
+                            '[exam-notify] FCM exam_id=%s parent_id=%s '
+                            'sent=%d failed=%d',
+                            exam_id, parent_id, ok_n, fail_n,
+                        )
+                    except Exception:
+                        _log.exception(
+                            '[exam-notify] FCM EXCEPTION exam_id=%s parent_id=%s',
+                            exam_id, parent_id,
+                        )
+                else:
+                    _log.warning(
+                        '[exam-notify] FCM disabled — no push for '
+                        'exam_id=%s parent_id=%s',
+                        exam_id, parent_id,
+                    )
+
+        _log.warning(
+            '[exam-notify] DONE exam_id=%s school_id=%s '
+            'parents_notified=%d fcm_sent=%d fcm_failed=%d',
+            exam_id, school_id, parent_total, fcm_ok_total, fcm_fail_total,
+        )
+
     except Exception:
-        import logging
-        logging.getLogger('mecha.grades').exception(
-            '[grades] FCM push failed for new exam_id=%s', getattr(exam, 'id', None))
+        _logging.getLogger('mecha.exam.notify').exception(
+            '[exam-notify] UNHANDLED ERROR exam_id=%s school_id=%s section_id=%s',
+            getattr(exam, 'id', None),
+            getattr(exam, 'school_id', None),
+            getattr(exam, 'section_id', None),
+        )
 
 
 @grades_bp.route('/')

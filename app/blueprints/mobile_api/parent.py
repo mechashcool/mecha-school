@@ -462,8 +462,15 @@ def parent_notifications():
     limit  = min(int(request.args.get('limit', 50)),  100)
     offset = max(int(request.args.get('offset', 0)),  0)
 
+    # Explicit school_id guard: notification_visible_to() filters by user/role
+    # but has no school filter. Without this, role-broadcast notifications from
+    # other schools could appear in the feed (the ORM scope is now set correctly
+    # for mobile, but the explicit guard is defence-in-depth).
     q     = (Notification.query
-             .filter(notification_visible_to(user))
+             .filter(
+                 Notification.school_id == user.school_id,
+                 notification_visible_to(user),
+             )
              .order_by(Notification.created_at.desc()))
     total = q.count()
     rows  = q.offset(offset).limit(limit).all()
@@ -514,8 +521,8 @@ def parent_child_homework(student_id):
     if not s.section_id:
         return ok(student_id=s.id, count=0, homework=[])
 
-    # Resolve the school's active academic year (bypass ORM scoping — mobile
-    # requests run before jwt_required sets current_user, so tenant scope is None)
+    # Resolve the school's active academic year. bypass_tenant_scope=True + explicit
+    # school_id guard so this lookup is deterministic regardless of ORM scope state.
     year = (AcademicYear.query
             .execution_options(bypass_tenant_scope=True)
             .filter_by(school_id=user.school_id, is_current=True)
