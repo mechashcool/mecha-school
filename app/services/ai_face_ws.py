@@ -95,9 +95,11 @@ Device status API
 """
 
 import asyncio
+import errno as _errno
 import json
 import logging
 import os
+import socket as _socket
 import threading
 from datetime import datetime
 
@@ -899,17 +901,26 @@ async def _post_reg_task(sn: str, entry: dict) -> None:
 
 async def _ws_handler(websocket):
     remote = websocket.remote_address
-    log.info("WS connected from %s:%s", *remote)
+    log.info("[aiface] WS connection accepted from %s:%s", *remote)
+
+    # Log the HTTP upgrade path (websockets 14+: websocket.request is set after handshake)
+    try:
+        _req_path = getattr(getattr(websocket, 'request', None), 'path', '?') or '?'
+    except Exception:
+        _req_path = '?'
+    log.info("[aiface] WS handshake complete from %s:%s path=%s", *remote, _req_path)
 
     sn: str | None     = None
     entry: dict | None = None
 
     try:
         async for raw_msg in websocket:
-            # Always log incoming raw messages at INFO for protocol diagnosis
+            # Diagnostic: always log raw message length and a safe preview
             _pending_keys = list(entry["pending"].keys()) if entry else []
-            log.info("← sn=%s pending=%s raw=%s",
-                     sn or "?", _pending_keys or "none", str(raw_msg)[:800])
+            _msg_len = len(raw_msg) if isinstance(raw_msg, (bytes, str)) else -1
+            _preview = (raw_msg if isinstance(raw_msg, str) else raw_msg.decode('utf-8', errors='replace'))[:300]
+            log.info("[aiface] ← sn=%s len=%d pending=%s raw_preview=%s",
+                     sn or "?", _msg_len, _pending_keys or "none", _preview)
 
             try:
                 payload = json.loads(raw_msg)
@@ -961,7 +972,8 @@ async def _ws_handler(websocket):
                     log.info("[aiface] sn=%s reconnected — stale cleared, "
                              "periodic poll will resume after log pull", sn)
 
-                log.info("WS registered sn=%s from %s:%s", sn, *remote)
+                log.info("[aiface] WS device registered sn=%s from %s:%s path=%s",
+                         sn, *remote, _req_path)
                 reply = await loop.run_in_executor(None, _handle_reg, payload)
                 log.debug("→ %s", reply)
                 await websocket.send(reply)
@@ -991,17 +1003,25 @@ async def _ws_handler(websocket):
     except Exception as exc:
         import websockets.exceptions as _wse
         if isinstance(exc, _wse.ConnectionClosed):
-            log.info("WS disconnected: sn=%s %s:%s code=%s reason=%r",
-                     sn or "?", *remote, exc.code, getattr(exc, 'reason', ''))
+            _code   = getattr(exc, 'code', None) or getattr(exc, 'rcvd', None) and getattr(exc.rcvd, 'code', None)
+            _reason = getattr(exc, 'reason', '') or (getattr(exc, 'rcvd', None) and getattr(exc.rcvd, 'reason', ''))
+            log.info("[aiface] WS disconnected (exception): sn=%s %s:%s close_code=%s reason=%r",
+                     sn or "?", *remote, _code, _reason)
         else:
-            log.exception("WS error from %s:%s sn=%s", *remote, sn or "?")
+            log.exception("[aiface] WS unexpected error from %s:%s sn=%s", *remote, sn or "?")
     finally:
+        # Log close code and reason regardless of how the connection ended
+        _close_code   = getattr(websocket, 'close_code', None)
+        _close_reason = getattr(websocket, 'close_reason', None)
+        log.info("[aiface] WS session ended: sn=%s %s:%s close_code=%s close_reason=%r",
+                 sn or "?", *remote, _close_code, _close_reason)
+
         if sn:
             _device_status.setdefault(sn, {})["last_disconnect_at"] = datetime.now()
 
         if sn and _connections.get(sn) is entry:
             del _connections[sn]
-            log.info("WS unregistered sn=%s", sn)
+            log.info("[aiface] WS device unregistered sn=%s", sn)
 
         if entry:
             # Cancel the periodic poll task bound to THIS entry
@@ -1037,23 +1057,28 @@ async def _serve():
 
 
 def _run_server_thread():
-    import errno as _errno
     try:
         asyncio.run(_serve())
     except OSError as e:
         if e.errno == _errno.EADDRINUSE:
-            # Happens when a second Gunicorn worker (preload_app=False) tries to bind
-            # the same WS port that the first worker already holds.  One worker owning
-            # the WS server is intentional; the others simply skip it.
-            log.warning(
-                "AI Face WS port %d already in use — "
-                "another worker owns the WS server; this worker will skip it.",
-                _WS_PORT,
+            # In production (Gunicorn multi-worker): a second worker tries to bind
+            # the same WS port that the first worker already holds — expected and safe.
+            # In development: most likely Flask is running with --port=7788 which
+            # conflicts with the AI Face WS server.  Fix: use python run.py (port 5000).
+            log.error(
+                "[aiface] AI Face WS port %d is already in use — WS server will NOT start.\n"
+                "  PRODUCTION (Gunicorn multi-worker): another worker already owns this port — "
+                "this worker will skip it (expected).\n"
+                "  DEVELOPMENT: Flask web server is likely running on the same port.\n"
+                "    WRONG command: flask run --port=%d  or  flask run --host=0.0.0.0 --port=%d\n"
+                "    CORRECT command: python run.py        (Flask on port 5000, WS on port 7788)\n"
+                "    The AI Face device CANNOT connect until Flask is started on a different port.",
+                _WS_PORT, _WS_PORT, _WS_PORT,
             )
         else:
-            log.exception("AI Face WS server thread crashed (OSError)")
+            log.exception("[aiface] AI Face WS server thread crashed (OSError)")
     except Exception:
-        log.exception("AI Face WS server thread crashed unexpectedly")
+        log.exception("[aiface] AI Face WS server thread crashed unexpectedly")
 
 
 def start_ai_face_ws_server(app) -> None:
@@ -1095,7 +1120,33 @@ def start_ai_face_ws_server(app) -> None:
         )
         return
 
+    # Pre-bind probe: detect port conflict immediately (e.g., Flask running on wrong port)
+    # before starting the background thread, so the error is clear and synchronous.
+    _probe = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    try:
+        _probe.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        _probe.bind(("0.0.0.0", _WS_PORT))
+    except OSError as _probe_err:
+        _probe.close()
+        if _probe_err.errno == _errno.EADDRINUSE:
+            log.error(
+                "[aiface] PORT CONFLICT: AI Face WS port %d is already occupied before "
+                "the WS thread starts. The Flask web server is almost certainly running "
+                "on this port (e.g., 'flask run --port=%d').\n"
+                "  Fix: stop the current server and restart with:\n"
+                "    python run.py        →  Flask on port 5000, WS server on port 7788\n"
+                "  Do NOT use: flask run --port=%d\n"
+                "  The AI Face device at %s will keep reconnecting until this is fixed.",
+                _WS_PORT, _WS_PORT, _WS_PORT,
+                os.environ.get("AIFACE_DEVICE_IP", "<device-ip>"),
+            )
+            return
+        log.warning("[aiface] WS port probe failed unexpectedly (%s) — starting WS thread anyway",
+                    _probe_err)
+    else:
+        _probe.close()  # port is free; the WS server thread will bind it properly
+
     _flask_app = app
     t = threading.Thread(target=_run_server_thread, name="aiface-ws", daemon=True)
     t.start()
-    log.info("AI Face WS server thread started on port %d", _WS_PORT)
+    log.info("[aiface] AI Face WS server thread started on port %d", _WS_PORT)
