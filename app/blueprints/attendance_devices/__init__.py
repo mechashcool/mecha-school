@@ -33,7 +33,8 @@ POST  /attendance-devices/<id>/aiface-sync-all          — AJAX: push all (scop
 POST  /attendance-devices/<id>/aiface-delete-from-device — AJAX: deleteuser + remove mapping
 """
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 from flask import (Blueprint, abort, current_app, flash, jsonify, redirect,
                    render_template, request, url_for)
@@ -49,7 +50,9 @@ from app.utils.decorators import (admin_required, get_active_year, get_current_s
 
 attendance_devices_bp = Blueprint('attendance_devices', __name__)
 
-_VALID_SCOPES = ('students', 'employees', 'mixed')
+_VALID_SCOPES       = ('students', 'employees', 'mixed')
+_BRIDGE_THRESHOLD   = 90          # seconds — 1.5× the 60 s poll interval, one missed-poll margin
+_BAGHDAD_TZ         = ZoneInfo('Asia/Baghdad')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -70,6 +73,36 @@ def _get_device_or_404(device_id: int, school) -> AttendanceDevice:
     return AttendanceDevice.query.filter_by(
         id=device_id, school_id=school.id
     ).first_or_404()
+
+
+def _heartbeat_age_secs(last_sync_at) -> int | None:
+    """
+    Return integer seconds since last_sync_at (always stored as UTC by _db_touch_device).
+    Handles both naive UTC datetimes (datetime.utcnow()) and timezone-aware datetimes
+    that psycopg2 may return for TIMESTAMPTZ columns.
+    Returns None when last_sync_at is None.
+    """
+    if last_sync_at is None:
+        return None
+    now = datetime.now(timezone.utc)
+    if last_sync_at.tzinfo is None:
+        last_sync_at = last_sync_at.replace(tzinfo=timezone.utc)
+    else:
+        last_sync_at = last_sync_at.astimezone(timezone.utc)
+    return int((now - last_sync_at).total_seconds())
+
+
+def _format_heartbeat_display(last_sync_at) -> str | None:
+    """
+    Format last_sync_at for human display in Asia/Baghdad local time (+3).
+    Iraq does not observe DST, so the offset is always UTC+3.
+    Returns None when last_sync_at is None.
+    """
+    if last_sync_at is None:
+        return None
+    if last_sync_at.tzinfo is None:
+        last_sync_at = last_sync_at.replace(tzinfo=timezone.utc)
+    return last_sync_at.astimezone(_BAGHDAD_TZ).strftime('%Y-%m-%d %H:%M:%S') + ' (+3)'
 
 
 def _form_to_device(dev: AttendanceDevice):
@@ -173,8 +206,6 @@ def aiface_live_status():
             return v.strftime('%Y-%m-%d %H:%M:%S')
         return str(v)
 
-    _now_utc = datetime.utcnow()
-
     all_status = get_all_device_status()
     result = {}
     for d in devices:
@@ -183,20 +214,11 @@ def aiface_live_status():
             continue
         st = all_status.get(sn, {})
 
-        # How long ago (seconds) the device last touched the DB.
-        # last_sync_at is updated on reg, sendlog, and each periodic getnewlog poll.
-        _db_sync = d.last_sync_at  # UTC datetime or None
-        _db_secs = None
-        if _db_sync is not None:
-            _db_secs = int((_now_utc - _db_sync).total_seconds())
-
-        # remote_bridge_likely_online: True when the in-memory ws_connected is
-        # False (different process — e.g. web UI on Render, WS bridge local) but
-        # DB last_sync_at was updated within the last 90 seconds.  90s = 1.5×
-        # the default AIFACE_POLL_INTERVAL (60s), giving one missed poll margin.
-        _BRIDGE_THRESHOLD = 90
-        _mem_connected    = st.get("ws_connected", False)
-        _remote_likely    = (
+        # Heartbeat age: uses the shared helper that normalises both naive UTC
+        # and timezone-aware datetimes returned by psycopg2 for TIMESTAMPTZ columns.
+        _db_secs       = _heartbeat_age_secs(d.last_sync_at)
+        _mem_connected = st.get("ws_connected", False)
+        _remote_likely = (
             not _mem_connected
             and _db_secs is not None
             and _db_secs < _BRIDGE_THRESHOLD
@@ -227,7 +249,8 @@ def aiface_live_status():
             "last_disconnect_at":        _fmt(st.get("last_disconnect_at")),
             # DB-persisted fields — visible to any process reading the same DB,
             # including the cloud web UI on Render when the WS bridge runs locally.
-            "db_last_sync_at":           _fmt(_db_sync),
+            # Displayed in Asia/Baghdad (+3) local time for the school operator.
+            "db_last_sync_at":           _format_heartbeat_display(d.last_sync_at),
             "db_last_sync_secs_ago":     _db_secs,
             # True when we can infer the local bridge is active from DB heartbeats
             # even though this process does not see it in memory (cross-process).
@@ -443,9 +466,6 @@ def ajax_test_connection(device_id):
     except Exception:
         pass
 
-    now_utc           = datetime.utcnow()
-    _BRIDGE_THRESHOLD = 90  # seconds — same constant used by status-check and aiface-live-status
-
     # ── Step 1: AI Face direct WebSocket (same process) ───────────────────────
     is_directly = is_device_connected(dev.device_sn) if dev.device_sn else False
     if is_directly:
@@ -463,11 +483,9 @@ def ajax_test_connection(device_id):
         })
 
     # ── Step 2: AI Face via local bridge (cross-process DB heartbeat) ─────────
-    db_secs_ago = None
-    via_bridge  = False
-    if dev.last_sync_at is not None:
-        db_secs_ago = int((now_utc - dev.last_sync_at).total_seconds())
-        via_bridge  = db_secs_ago < _BRIDGE_THRESHOLD
+    # Uses shared helper that normalises naive UTC and tz-aware datetimes uniformly.
+    db_secs_ago = _heartbeat_age_secs(dev.last_sync_at)
+    via_bridge  = db_secs_ago is not None and db_secs_ago < _BRIDGE_THRESHOLD
 
     if via_bridge:
         current_app.logger.info(
@@ -482,7 +500,7 @@ def ajax_test_connection(device_id):
             'device_name':        dev.name,
             'device_sn':          dev.device_sn,
             'heartbeat_age_secs': db_secs_ago,
-            'last_sync_at':       dev.last_sync_at.strftime('%Y-%m-%d %H:%M:%S') + ' UTC',
+            'last_sync_at':       _format_heartbeat_display(dev.last_sync_at),
             'message':            (f'متصل عبر الجسر المحلي — '
                                    f'آخر نبضة قلب قبل {db_secs_ago} ثانية'),
         })
@@ -493,9 +511,10 @@ def ajax_test_connection(device_id):
     # this correctly returns ok=False (device is genuinely offline/unreachable).
     current_app.logger.info(
         '[test-connection] device_id=%d sn=%s school_id=%d '
-        'no WS connection (directly=%s bridge=%s db_secs_ago=%s) '
+        'no WS connection (directly=%s bridge=%s db_secs_ago=%s threshold=%ds) '
         '— trying Hikvision HTTP test',
-        dev.id, dev.device_sn, dev.school_id, is_directly, via_bridge, db_secs_ago)
+        dev.id, dev.device_sn, dev.school_id, is_directly, via_bridge,
+        db_secs_ago, _BRIDGE_THRESHOLD)
 
     result = test_connection(dev)
     if result.get('ok'):
@@ -588,17 +607,20 @@ def mappings(device_id):
     dev    = _get_device_or_404(device_id, school)
     scope  = getattr(dev, 'device_scope', 'students')
 
+    # Refresh last_sync_at so the bridge heartbeat written since session open is visible.
+    try:
+        db.session.refresh(dev)
+    except Exception:
+        pass
+
     from app.services.ai_face_ws import is_device_connected
-    # Authoritative online status: directly connected in this process (local dev)
-    # OR connected via local bridge inferred from DB heartbeat (cross-process — Render).
-    # The local bridge updates last_sync_at every 60 s; threshold is 90 s (1.5× interval).
-    _BRIDGE_THRESHOLD_SECS = 90
     device_online = False
     if dev.device_sn:
         device_online = is_device_connected(dev.device_sn)
-        if not device_online and dev.last_sync_at is not None:
-            _secs_ago   = int((datetime.utcnow() - dev.last_sync_at).total_seconds())
-            device_online = _secs_ago < _BRIDGE_THRESHOLD_SECS
+        if not device_online:
+            _secs_ago = _heartbeat_age_secs(dev.last_sync_at)
+            if _secs_ago is not None:
+                device_online = _secs_ago < _BRIDGE_THRESHOLD
 
     student_mappings = []
     employee_mappings = []
@@ -868,17 +890,16 @@ def ajax_status_check(device_id):
     except Exception:
         pass  # non-fatal — proceed with the value already loaded
 
-    now_utc       = datetime.utcnow()
     connected_sns = get_connected_sns()
     is_directly   = is_device_connected(dev.device_sn) if dev.device_sn else False
 
-    # Bridge detection: 90 s = 1.5 × 60 s poll interval (one missed-poll margin).
-    _BRIDGE_THRESHOLD = 90
+    # Bridge detection: uses shared helper that handles naive UTC and tz-aware datetimes.
     db_secs_ago = None
     via_bridge  = False
-    if not is_directly and dev.last_sync_at is not None:
-        db_secs_ago = int((now_utc - dev.last_sync_at).total_seconds())
-        via_bridge  = db_secs_ago < _BRIDGE_THRESHOLD
+    if not is_directly:
+        db_secs_ago = _heartbeat_age_secs(dev.last_sync_at)
+        if db_secs_ago is not None:
+            via_bridge = db_secs_ago < _BRIDGE_THRESHOLD
 
     is_connected = is_directly or via_bridge
 
@@ -932,9 +953,7 @@ def ajax_status_check(device_id):
         'via_bridge':            via_bridge,
         'connected_sns':         connected_sns,
         'exact_sn_match':        dev.device_sn in connected_sns if dev.device_sn else False,
-        # last_sync_at shown with UTC label; db_last_sync_secs_ago is timezone-independent.
-        'last_sync_at':          (dev.last_sync_at.strftime('%Y-%m-%d %H:%M:%S') + ' UTC'
-                                  if dev.last_sync_at else None),
+        'last_sync_at':          _format_heartbeat_display(dev.last_sync_at),
         'db_last_sync_secs_ago': db_secs_ago,
         'bridge_threshold_secs': _BRIDGE_THRESHOLD,
         'status':                status,
