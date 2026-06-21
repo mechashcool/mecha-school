@@ -44,6 +44,11 @@ from app.utils.features import is_feature_enabled
 from . import mobile_api_bp
 from .utils import jwt_required, role_required, ok, err, photo_url
 
+# Mobile chat is restricted to parent and teacher roles, matching the login
+# restriction.  The individual endpoints also call _check_chat_access() for
+# module-level feature gating, but role enforcement must happen first.
+_CHAT_ROLES = ('parent', 'teacher')
+
 _log = logging.getLogger('mecha.chat_api')
 
 # ─── Module guard ─────────────────────────────────────────────────────────────
@@ -195,6 +200,7 @@ def _push_new_message(room: ChatRoom, msg: ChatMessage, sender_name: str) -> Non
 
 @mobile_api_bp.route('/chat/rooms', methods=['GET'])
 @jwt_required()
+@role_required(*_CHAT_ROLES)
 def chat_rooms():
     guard = _check_chat_access()
     if guard:
@@ -256,6 +262,7 @@ def chat_rooms():
 
 @mobile_api_bp.route('/chat/rooms/<int:room_id>', methods=['GET'])
 @jwt_required()
+@role_required(*_CHAT_ROLES)
 def chat_room_detail(room_id):
     guard = _check_chat_access()
     if guard:
@@ -327,6 +334,7 @@ def chat_room_detail(room_id):
 
 @mobile_api_bp.route('/chat/rooms/<int:room_id>/messages', methods=['GET'])
 @jwt_required()
+@role_required(*_CHAT_ROLES)
 def chat_room_messages(room_id):
     guard = _check_chat_access()
     if guard:
@@ -369,6 +377,7 @@ def chat_room_messages(room_id):
 
 @mobile_api_bp.route('/chat/rooms/<int:room_id>/messages', methods=['POST'])
 @jwt_required()
+@role_required(*_CHAT_ROLES)
 def chat_send_message(room_id):
     guard = _check_chat_access()
     if guard:
@@ -437,6 +446,7 @@ def chat_send_message(room_id):
 
 @mobile_api_bp.route('/chat/rooms/<int:room_id>/read', methods=['POST'])
 @jwt_required()
+@role_required(*_CHAT_ROLES)
 def chat_mark_read(room_id):
     guard = _check_chat_access()
     if guard:
@@ -477,6 +487,7 @@ def chat_mark_read(room_id):
 
 @mobile_api_bp.route('/chat/contacts', methods=['GET'])
 @jwt_required()
+@role_required(*_CHAT_ROLES)
 def chat_contacts():
     guard = _check_chat_access()
     if guard:

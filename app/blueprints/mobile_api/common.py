@@ -10,7 +10,7 @@ from flask import g, request
 
 from app.models import db, MobileDeviceToken
 from app.utils.helpers import resolve_photo_url
-from .utils import jwt_required, ok, err
+from .utils import jwt_required, role_required, ok, err
 from . import mobile_api_bp
 
 log = logging.getLogger('mecha.mobile.common')
@@ -18,6 +18,7 @@ log = logging.getLogger('mecha.mobile.common')
 
 @mobile_api_bp.route('/me', methods=['GET'])
 @jwt_required()
+@role_required('parent', 'teacher')
 def me():
     """Return the authenticated user's full profile and school details."""
     user      = g.mobile_user
@@ -74,6 +75,7 @@ def me():
 
 @mobile_api_bp.route('/me/device-token', methods=['POST'])
 @jwt_required()
+@role_required('parent', 'teacher')
 def update_device_token():
     """
     Save or update the FCM push notification token for this device.

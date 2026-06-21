@@ -308,9 +308,9 @@ def ajax_aiface_pull_logs(device_id):
                      'قد لا يدعم هذا الأمر، أو يحتاج إعادة تشغيل. '
                      'جرب الأمر الآخر (getnewlog ↔ getalllog).'),
         }), 504
-    except Exception as exc:
+    except Exception:
         current_app.logger.exception('[aiface] manual pull error device_id=%d', dev.id)
-        return jsonify({'ok': False, 'error': str(exc)}), 500
+        return jsonify({'ok': False, 'error': 'internal_error'}), 500
 
     count   = raw_response.get('count', 0)
     records = raw_response.get('record') or []
@@ -1192,10 +1192,10 @@ def ajax_aiface_delete_from_device(device_id):
         current_app.logger.warning('[aiface] deleteuser timeout enrollid=%d: %s', enrollid, exc)
         return jsonify({'ok': False, 'error_type': 'timeout',
                         'message': f'انتهت مهلة الاتصال بالجهاز: {exc}'}), 504
-    except Exception as exc:
+    except Exception:
         current_app.logger.exception('[aiface] unexpected error on deleteuser enrollid=%d', enrollid)
         return jsonify({'ok': False, 'error_type': 'internal_error',
-                        'message': str(exc)}), 500
+                        'message': 'حدث خطأ داخلي غير متوقع — تحقق من سجلات الخادم'}), 500
 
     if result.get('result'):
         mapping_id_log = mapping.id
