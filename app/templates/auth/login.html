@@ -59,24 +59,20 @@
       scrollbar-width: thin;
       scrollbar-color: rgba(26,122,255,0.25) transparent;
 
-      /* True glassmorphism: low-opacity cool-blue tint so the background
-         artwork is visible through the card. Blur + saturate ensure the
-         blurred background reads as a smooth, even tone rather than noise. */
-      background: linear-gradient(
-        145deg,
-        rgba(255, 255, 255, 0.28) 0%,
-        rgba(200, 225, 255, 0.18) 100%
-      );
-      backdrop-filter: blur(30px) saturate(180%);
-      -webkit-backdrop-filter: blur(30px) saturate(180%);
+      /* 50% white glass: the background artwork is clearly visible while the
+         card stays light enough for dark text to remain readable. Saturate is
+         kept low so the blue background tints the glass gently rather than
+         overpowering the white fill and creating a purple/dark panel. */
+      background: rgba(255, 255, 255, 0.50);
+      backdrop-filter: blur(20px) saturate(130%);
+      -webkit-backdrop-filter: blur(20px) saturate(130%);
       border-radius: 22px;
-      border: 1px solid rgba(255, 255, 255, 0.38);
+      border: 1px solid rgba(255, 255, 255, 0.55);
       box-shadow:
-        0 28px 72px rgba(0, 4, 22, 0.65),
-        0 10px 28px rgba(0, 4, 22, 0.35),
-        inset 0 1.5px 0 rgba(255, 255, 255, 0.75),
-        inset 0 -1px 0 rgba(255, 255, 255, 0.06),
-        0 0 0 1px rgba(80, 160, 255, 0.22);
+        0 24px 64px rgba(0, 5, 28, 0.55),
+        0 8px 22px rgba(0, 5, 28, 0.28),
+        inset 0 1.5px 0 rgba(255, 255, 255, 0.85),
+        0 0 0 1px rgba(100, 170, 255, 0.18);
 
       /* vertical padding shrinks on short viewports via clamp */
       padding: clamp(20px, 3.5vh, 40px) clamp(22px, 4vw, 42px);
@@ -98,11 +94,14 @@
       max-width: clamp(130px, 17vh, 200px);
       height: auto;
       object-fit: contain;
+      /* white halo makes logo colours readable on any glass shade */
+      filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.80))
+              drop-shadow(0 2px 6px rgba(0, 15, 60, 0.25));
     }
 
     .brand-tagline {
       font-size: clamp(10px, 1.2vh, 12px);
-      color: #d0e8ff;
+      color: #2e5080;
       font-weight: 500;
       line-height: 1.5;
     }
@@ -125,9 +124,8 @@
     .form-heading h2 {
       font-size: clamp(18px, 2.6vh, 26px);
       font-weight: 900;
-      color: #ffffff;
+      color: #07152a;
       line-height: 1.2;
-      text-shadow: 0 1px 6px rgba(0, 10, 40, 0.45);
     }
 
     /* ── Error / flash banners ────────────────────────────────────────*/
@@ -148,21 +146,21 @@
     .error-banner,
     .flash-banner.danger,
     .flash-banner.error {
-      background: rgba(220, 30, 30, 0.18);
-      border: 1px solid rgba(255, 100, 100, 0.45);
-      color: #ffd0d0;
+      background: rgba(185, 28, 28, 0.09);
+      border: 1px solid rgba(220, 80, 80, 0.32);
+      color: #b91c1c;
     }
 
     .flash-banner.success {
-      background: rgba(16, 140, 60, 0.18);
-      border: 1px solid rgba(60, 220, 120, 0.40);
-      color: #b0ffd0;
+      background: rgba(22, 163, 74, 0.09);
+      border: 1px solid rgba(22, 163, 74, 0.32);
+      color: #15803d;
     }
 
     .flash-banner.warning {
-      background: rgba(180, 110, 0, 0.18);
-      border: 1px solid rgba(250, 180, 20, 0.40);
-      color: #ffe8a0;
+      background: rgba(202, 138, 4, 0.09);
+      border: 1px solid rgba(202, 138, 4, 0.32);
+      color: #b45309;
     }
 
     /* ── Field groups ─────────────────────────────────────────────────*/
@@ -174,7 +172,7 @@
       display: block;
       font-size: clamp(11px, 1.3vh, 13px);
       font-weight: 700;
-      color: #cce0ff;
+      color: #1a3358;
       margin-bottom: 5px;
     }
 
@@ -259,7 +257,7 @@
     .remember-row label {
       font-size: clamp(11px, 1.3vh, 13px);
       font-weight: 600;
-      color: #cce0ff;
+      color: #2e5080;
       cursor: pointer;
       user-select: none;
     }
@@ -292,20 +290,20 @@
     .card-footer {
       margin-top: clamp(10px, 1.5vh, 18px);
       padding-top: clamp(8px, 1.2vh, 14px);
-      border-top: 1px solid rgba(255, 255, 255, 0.18);
+      border-top: 1px solid rgba(160, 200, 230, 0.45);
       text-align: center;
     }
 
     .support-note {
       font-size: clamp(10px, 1.2vh, 12px);
-      color: #a8c8e8;
+      color: #3a5a7a;
       display: flex;
       align-items: center;
       justify-content: center;
       gap: 5px;
     }
 
-    .support-note i { color: #e8b840; font-size: 13px; }
+    .support-note i { color: #b8921e; font-size: 13px; }
 
     /* ── Mobile ───────────────────────────────────────────────────────
        On phones the page is taller than the viewport so allow full
