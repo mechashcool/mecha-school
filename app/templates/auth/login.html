@@ -59,27 +59,24 @@
       scrollbar-width: thin;
       scrollbar-color: rgba(26,122,255,0.25) transparent;
 
-      /*
-       * Glassmorphism: linear-gradient gives a subtle directional tint so the
-       * top-left corner reads cooler/lighter than the bottom-right, adding
-       * depth without a heavy solid fill. 0.58/0.48 opacity lets the blurred
-       * blue background show through clearly while keeping text readable.
-       */
+      /* True glassmorphism: low-opacity cool-blue tint so the background
+         artwork is visible through the card. Blur + saturate ensure the
+         blurred background reads as a smooth, even tone rather than noise. */
       background: linear-gradient(
         145deg,
-        rgba(255, 255, 255, 0.62) 0%,
-        rgba(220, 238, 255, 0.50) 100%
+        rgba(255, 255, 255, 0.28) 0%,
+        rgba(200, 225, 255, 0.18) 100%
       );
-      backdrop-filter: blur(22px) saturate(160%);
-      -webkit-backdrop-filter: blur(22px) saturate(160%);
+      backdrop-filter: blur(30px) saturate(180%);
+      -webkit-backdrop-filter: blur(30px) saturate(180%);
       border-radius: 22px;
-      /* outer border + inner top-edge highlight line */
-      border: 1px solid rgba(255, 255, 255, 0.60);
+      border: 1px solid rgba(255, 255, 255, 0.38);
       box-shadow:
-        0 24px 64px rgba(0, 8, 42, 0.48),
-        0 8px 24px rgba(0, 8, 42, 0.22),
-        inset 0 1px 0 rgba(255, 255, 255, 0.90),
-        0 0 0 1px rgba(110, 175, 255, 0.14);
+        0 28px 72px rgba(0, 4, 22, 0.65),
+        0 10px 28px rgba(0, 4, 22, 0.35),
+        inset 0 1.5px 0 rgba(255, 255, 255, 0.75),
+        inset 0 -1px 0 rgba(255, 255, 255, 0.06),
+        0 0 0 1px rgba(80, 160, 255, 0.22);
 
       /* vertical padding shrinks on short viewports via clamp */
       padding: clamp(20px, 3.5vh, 40px) clamp(22px, 4vw, 42px);
@@ -105,7 +102,7 @@
 
     .brand-tagline {
       font-size: clamp(10px, 1.2vh, 12px);
-      color: #4a6a8a;
+      color: #d0e8ff;
       font-weight: 500;
       line-height: 1.5;
     }
@@ -128,8 +125,9 @@
     .form-heading h2 {
       font-size: clamp(18px, 2.6vh, 26px);
       font-weight: 900;
-      color: #0c1e38;
+      color: #ffffff;
       line-height: 1.2;
+      text-shadow: 0 1px 6px rgba(0, 10, 40, 0.45);
     }
 
     /* ── Error / flash banners ────────────────────────────────────────*/
@@ -150,21 +148,21 @@
     .error-banner,
     .flash-banner.danger,
     .flash-banner.error {
-      background: rgba(185, 28, 28, 0.07);
-      border: 1px solid rgba(220, 80, 80, 0.28);
-      color: #b91c1c;
+      background: rgba(220, 30, 30, 0.18);
+      border: 1px solid rgba(255, 100, 100, 0.45);
+      color: #ffd0d0;
     }
 
     .flash-banner.success {
-      background: rgba(22, 163, 74, 0.08);
-      border: 1px solid rgba(22, 163, 74, 0.30);
-      color: #15803d;
+      background: rgba(16, 140, 60, 0.18);
+      border: 1px solid rgba(60, 220, 120, 0.40);
+      color: #b0ffd0;
     }
 
     .flash-banner.warning {
-      background: rgba(202, 138, 4, 0.08);
-      border: 1px solid rgba(202, 138, 4, 0.30);
-      color: #b45309;
+      background: rgba(180, 110, 0, 0.18);
+      border: 1px solid rgba(250, 180, 20, 0.40);
+      color: #ffe8a0;
     }
 
     /* ── Field groups ─────────────────────────────────────────────────*/
@@ -176,7 +174,7 @@
       display: block;
       font-size: clamp(11px, 1.3vh, 13px);
       font-weight: 700;
-      color: #1a3358;
+      color: #cce0ff;
       margin-bottom: 5px;
     }
 
@@ -185,29 +183,29 @@
     .field-input {
       width: 100%;
       padding: clamp(8px, 1.2vh, 11px) 40px clamp(8px, 1.2vh, 11px) 14px;
-      background: rgba(255, 255, 255, 0.80);
-      border: 1.5px solid #c0d4ec;
+      background: rgba(240, 248, 255, 0.88);
+      border: 1.5px solid rgba(180, 215, 255, 0.60);
       border-radius: 10px;
       font-family: 'Cairo', sans-serif;
       font-size: clamp(12px, 1.4vh, 14px);
       font-weight: 500;
-      color: #0c1e38;
+      color: #07172e;
       direction: rtl;
       text-align: right;
       transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
       outline: none;
-      box-shadow: 0 1px 4px rgba(0, 30, 80, 0.06);
+      box-shadow: 0 2px 8px rgba(0, 20, 60, 0.18);
     }
 
     .field-input::placeholder {
-      color: #9ab8d4;
+      color: #7a9ec0;
       font-weight: 400;
     }
 
     .field-input:focus {
-      border-color: #1a7aff;
-      background: #f2f7ff;
-      box-shadow: 0 0 0 3px rgba(26, 122, 255, 0.13);
+      border-color: #4da3ff;
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: 0 0 0 3px rgba(26, 122, 255, 0.22);
     }
 
     /* Lock / person icon on the right (RTL start) */
@@ -261,7 +259,7 @@
     .remember-row label {
       font-size: clamp(11px, 1.3vh, 13px);
       font-weight: 600;
-      color: #3a5878;
+      color: #cce0ff;
       cursor: pointer;
       user-select: none;
     }
@@ -294,20 +292,20 @@
     .card-footer {
       margin-top: clamp(10px, 1.5vh, 18px);
       padding-top: clamp(8px, 1.2vh, 14px);
-      border-top: 1px solid rgba(180, 200, 225, 0.55);
+      border-top: 1px solid rgba(255, 255, 255, 0.18);
       text-align: center;
     }
 
     .support-note {
       font-size: clamp(10px, 1.2vh, 12px);
-      color: #5a7890;
+      color: #a8c8e8;
       display: flex;
       align-items: center;
       justify-content: center;
       gap: 5px;
     }
 
-    .support-note i { color: #b8921e; font-size: 13px; }
+    .support-note i { color: #e8b840; font-size: 13px; }
 
     /* ── Mobile ───────────────────────────────────────────────────────
        On phones the page is taller than the viewport so allow full
