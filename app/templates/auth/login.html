@@ -92,40 +92,22 @@
       margin-bottom: clamp(8px, 1.5vh, 18px);
     }
 
-    /* Soft glass plaque — horizontal rounded rectangle that matches the
-       logo's own landscape proportions. Brighter than the card glass
-       (30 → 16% white gradient) so the logo colours read cleanly while
-       still feeling nested inside the same glass system. */
-    .logo-wrap {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: clamp(14px, 2vh, 20px) clamp(26px, 5.5vw, 38px);
-      background: linear-gradient(
-        145deg,
-        rgba(255, 255, 255, 0.30) 0%,
-        rgba(255, 255, 255, 0.16) 100%
-      );
-      backdrop-filter: blur(14px) saturate(160%);
-      -webkit-backdrop-filter: blur(14px) saturate(160%);
-      border-radius: 16px;
-      border: 1px solid rgba(255, 255, 255, 0.36);
-      box-shadow:
-        0 4px 24px rgba(0, 12, 55, 0.24),
-        inset 0 1.5px 0 rgba(255, 255, 255, 0.72),
-        inset 0 -1px 0 rgba(80, 130, 220, 0.08),
-        0 0 0 1px rgba(110, 175, 255, 0.10);
-      margin: 0 auto clamp(10px, 1.4vh, 16px);
-    }
-
+    /* brightness(0) collapses every colour channel to black while
+       keeping alpha intact; invert(1) then flips black → white.
+       The two drop-shadows provide a soft blue-white glow so the
+       white logo stays clearly visible against the glass card. */
     .login-logo {
       display: block;
+      margin: 0 auto clamp(10px, 1.4vh, 16px);
       width: auto;
       height: auto;
-      max-width: clamp(170px, 42vw, 242px);
-      max-height: clamp(72px, 10vh, 102px);
+      max-width: clamp(190px, 48vw, 268px);
+      max-height: clamp(78px, 11vh, 110px);
       object-fit: contain;
-      filter: drop-shadow(0 2px 6px rgba(0, 15, 60, 0.18));
+      filter:
+        brightness(0) invert(1)
+        drop-shadow(0 0 14px rgba(160, 210, 255, 0.52))
+        drop-shadow(0 2px 8px rgba(0, 10, 60, 0.34));
     }
 
     .brand-tagline {
@@ -381,13 +363,9 @@
        Increase density further so the card fits without scrolling.
     ──────────────────────────────────────────────────────────────── */
     @media (max-height: 650px) and (min-width: 481px) {
-      .logo-wrap {
-        padding: 10px 20px;
-        border-radius: 13px;
-      }
       .login-logo {
-        max-width: clamp(130px, 34vw, 190px);
-        max-height: 66px;
+        max-width: clamp(140px, 36vw, 200px);
+        max-height: 68px;
       }
       .brand-tagline { font-size: 10px; }
       .brand-divider { margin-top: 4px; }
@@ -401,11 +379,9 @@
 
       <!-- Brand -->
       <div class="brand-block">
-        <div class="logo-wrap">
-          <img src="{{ url_for('static', filename='images/Logo-Core-School-clean.png') }}"
-               alt="Core School"
-               class="login-logo">
-        </div>
+        <img src="{{ url_for('static', filename='images/Logo-Core-School-clean.png') }}"
+             alt="Core School"
+             class="login-logo">
         <div class="brand-tagline">النواة الذكية للأنظمة والحلول التقنية</div>
         <span class="brand-divider"></span>
       </div>
