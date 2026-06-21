@@ -50,6 +50,11 @@
        Max-height: leaves 24 px breathing room top+bottom on any screen.
        overflow-y: auto lets the card scroll internally on very short
          viewports (e.g. 500 px height) without the page itself scrolling.
+
+       Glassmorphism strategy: keep white fill very low (≈13–18%) so the
+       blue background breathes through. High blur (30 px) and saturation
+       (195%) create the frosted tint naturally. A bright inset top edge
+       simulates light hitting the glass from above.
     ──────────────────────────────────────────────────────────────── */
     .login-card {
       width: min(92vw, 470px);
@@ -57,60 +62,77 @@
       overflow-y: auto;
       overflow-x: hidden;
       scrollbar-width: thin;
-      scrollbar-color: rgba(26,122,255,0.25) transparent;
+      scrollbar-color: rgba(80, 160, 255, 0.30) transparent;
 
-      /* 50% white glass: the background artwork is clearly visible while the
-         card stays light enough for dark text to remain readable. Saturate is
-         kept low so the blue background tints the glass gently rather than
-         overpowering the white fill and creating a purple/dark panel. */
-      background: rgba(255, 255, 255, 0.50);
-      backdrop-filter: blur(20px) saturate(130%);
-      -webkit-backdrop-filter: blur(20px) saturate(130%);
-      border-radius: 22px;
-      border: 1px solid rgba(255, 255, 255, 0.55);
+      background: linear-gradient(
+        150deg,
+        rgba(255, 255, 255, 0.18) 0%,
+        rgba(255, 255, 255, 0.10) 60%,
+        rgba(180, 210, 255, 0.09) 100%
+      );
+      backdrop-filter: blur(30px) saturate(195%) brightness(1.08);
+      -webkit-backdrop-filter: blur(30px) saturate(195%) brightness(1.08);
+
+      border-radius: 26px;
+      border: 1px solid rgba(255, 255, 255, 0.22);
       box-shadow:
-        0 24px 64px rgba(0, 5, 28, 0.55),
-        0 8px 22px rgba(0, 5, 28, 0.28),
-        inset 0 1.5px 0 rgba(255, 255, 255, 0.85),
-        0 0 0 1px rgba(100, 170, 255, 0.18);
+        0 30px 80px rgba(0, 5, 32, 0.65),
+        0 10px 30px rgba(0, 5, 32, 0.30),
+        inset 0 2px 0 rgba(255, 255, 255, 0.72),
+        inset 0 -1px 0 rgba(80, 130, 230, 0.10),
+        0 0 0 1px rgba(130, 190, 255, 0.12);
 
-      /* vertical padding shrinks on short viewports via clamp */
       padding: clamp(20px, 3.5vh, 40px) clamp(22px, 4vw, 42px);
       direction: rtl;
     }
 
-    /* ── Brand block ──────────────────────────────────────────────────
-       Logo max shrinks on short viewports: clamp(80px, 12vh, 145px)
-    ──────────────────────────────────────────────────────────────── */
+    /* ── Brand block ──────────────────────────────────────────────────*/
     .brand-block {
       text-align: center;
       margin-bottom: clamp(8px, 1.5vh, 18px);
     }
 
+    /* Circular frosted-white disc that lifts the logo off the glass card
+       and provides clean contrast for the logo's own colours. */
+    .logo-wrap {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: clamp(108px, 15vh, 162px);
+      height: clamp(108px, 15vh, 162px);
+      background: rgba(255, 255, 255, 0.88);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      border-radius: 50%;
+      margin: 0 auto clamp(10px, 1.4vh, 16px);
+      box-shadow:
+        0 0 0 5px rgba(255, 255, 255, 0.20),
+        0 0 0 10px rgba(255, 255, 255, 0.08),
+        0 8px 30px rgba(0, 20, 80, 0.28),
+        0 0 55px rgba(90, 165, 255, 0.22);
+    }
+
     .login-logo {
       display: block;
-      margin: 0 auto 12px;
-      width: auto;
-      max-width: clamp(130px, 17vh, 200px);
-      height: auto;
+      width: 68%;
+      height: 68%;
       object-fit: contain;
-      /* white halo makes logo colours readable on any glass shade */
-      filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.80))
-              drop-shadow(0 2px 6px rgba(0, 15, 60, 0.25));
+      filter: drop-shadow(0 2px 8px rgba(0, 20, 80, 0.22));
     }
 
     .brand-tagline {
       font-size: clamp(10px, 1.2vh, 12px);
-      color: #2e5080;
-      font-weight: 500;
+      color: rgba(255, 255, 255, 0.82);
+      font-weight: 600;
       line-height: 1.5;
+      text-shadow: 0 1px 4px rgba(0, 10, 50, 0.55);
     }
 
     .brand-divider {
       display: block;
-      width: 48px;
+      width: 52px;
       height: 2px;
-      background: linear-gradient(90deg, transparent, #c9a227, transparent);
+      background: linear-gradient(90deg, transparent, rgba(201, 162, 39, 0.90), transparent);
       border-radius: 2px;
       margin: clamp(6px, 1vh, 10px) auto 0;
     }
@@ -124,7 +146,10 @@
     .form-heading h2 {
       font-size: clamp(18px, 2.6vh, 26px);
       font-weight: 900;
-      color: #07152a;
+      color: #ffffff;
+      text-shadow:
+        0 1px 8px rgba(0, 20, 80, 0.50),
+        0 2px 4px rgba(0, 10, 50, 0.35);
       line-height: 1.2;
     }
 
@@ -146,21 +171,24 @@
     .error-banner,
     .flash-banner.danger,
     .flash-banner.error {
-      background: rgba(185, 28, 28, 0.09);
-      border: 1px solid rgba(220, 80, 80, 0.32);
-      color: #b91c1c;
+      background: rgba(185, 28, 28, 0.22);
+      border: 1px solid rgba(255, 100, 100, 0.42);
+      color: #ffcdd2;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.30);
     }
 
     .flash-banner.success {
-      background: rgba(22, 163, 74, 0.09);
-      border: 1px solid rgba(22, 163, 74, 0.32);
-      color: #15803d;
+      background: rgba(20, 140, 70, 0.22);
+      border: 1px solid rgba(80, 200, 120, 0.42);
+      color: #b7f5d0;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.30);
     }
 
     .flash-banner.warning {
-      background: rgba(202, 138, 4, 0.09);
-      border: 1px solid rgba(202, 138, 4, 0.32);
-      color: #b45309;
+      background: rgba(180, 110, 0, 0.22);
+      border: 1px solid rgba(250, 180, 50, 0.42);
+      color: #fde8a0;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.30);
     }
 
     /* ── Field groups ─────────────────────────────────────────────────*/
@@ -172,7 +200,8 @@
       display: block;
       font-size: clamp(11px, 1.3vh, 13px);
       font-weight: 700;
-      color: #1a3358;
+      color: rgba(255, 255, 255, 0.90);
+      text-shadow: 0 1px 3px rgba(0, 10, 50, 0.45);
       margin-bottom: 5px;
     }
 
@@ -181,9 +210,11 @@
     .field-input {
       width: 100%;
       padding: clamp(8px, 1.2vh, 11px) 40px clamp(8px, 1.2vh, 11px) 14px;
-      background: rgba(240, 248, 255, 0.88);
-      border: 1.5px solid rgba(180, 215, 255, 0.60);
-      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.55);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      border: 1.5px solid rgba(255, 255, 255, 0.45);
+      border-radius: 11px;
       font-family: 'Cairo', sans-serif;
       font-size: clamp(12px, 1.4vh, 14px);
       font-weight: 500;
@@ -192,18 +223,22 @@
       text-align: right;
       transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
       outline: none;
-      box-shadow: 0 2px 8px rgba(0, 20, 60, 0.18);
+      box-shadow:
+        0 2px 8px rgba(0, 20, 60, 0.14),
+        inset 0 1px 0 rgba(255, 255, 255, 0.65);
     }
 
     .field-input::placeholder {
-      color: #7a9ec0;
+      color: #6a90b8;
       font-weight: 400;
     }
 
     .field-input:focus {
-      border-color: #4da3ff;
-      background: rgba(255, 255, 255, 0.96);
-      box-shadow: 0 0 0 3px rgba(26, 122, 255, 0.22);
+      border-color: rgba(100, 180, 255, 0.75);
+      background: rgba(255, 255, 255, 0.72);
+      box-shadow:
+        0 0 0 3.5px rgba(26, 122, 255, 0.28),
+        inset 0 1px 0 rgba(255, 255, 255, 0.80);
     }
 
     /* Lock / person icon on the right (RTL start) */
@@ -212,7 +247,7 @@
       right: 13px;
       top: 50%;
       transform: translateY(-50%);
-      color: #8aaccc;
+      color: #5a8ab5;
       font-size: 14px;
       pointer-events: none;
     }
@@ -225,7 +260,7 @@
       transform: translateY(-50%);
       background: none;
       border: none;
-      color: #8aaccc;
+      color: #5a8ab5;
       font-size: 14px;
       cursor: pointer;
       padding: 0;
@@ -249,7 +284,7 @@
     .remember-row input[type="checkbox"] {
       width: 15px;
       height: 15px;
-      accent-color: #1a7aff;
+      accent-color: #4da3ff;
       cursor: pointer;
       flex-shrink: 0;
     }
@@ -257,7 +292,8 @@
     .remember-row label {
       font-size: clamp(11px, 1.3vh, 13px);
       font-weight: 600;
-      color: #2e5080;
+      color: rgba(255, 255, 255, 0.80);
+      text-shadow: 0 1px 3px rgba(0, 10, 50, 0.35);
       cursor: pointer;
       user-select: none;
     }
@@ -266,22 +302,29 @@
     .submit-btn {
       width: 100%;
       padding: clamp(10px, 1.5vh, 13px);
-      background: linear-gradient(135deg, #0f2d7a 0%, #1a7aff 100%);
+      background: linear-gradient(135deg, #0f2d7a 0%, #1a7aff 60%, #4da3ff 100%);
       border: none;
-      border-radius: 10px;
+      border-radius: 11px;
       font-family: 'Cairo', sans-serif;
       font-size: clamp(13px, 1.6vh, 15px);
       font-weight: 800;
       color: #fff;
       cursor: pointer;
       transition: opacity 0.18s, transform 0.1s, box-shadow 0.18s;
-      box-shadow: 0 5px 18px rgba(26, 122, 255, 0.42);
-      letter-spacing: 0.3px;
+      box-shadow:
+        0 5px 22px rgba(26, 122, 255, 0.52),
+        0 2px 8px rgba(10, 40, 140, 0.28),
+        inset 0 1px 0 rgba(255, 255, 255, 0.18);
+      letter-spacing: 0.4px;
+      text-shadow: 0 1px 3px rgba(0, 15, 70, 0.30);
     }
 
     .submit-btn:hover {
-      opacity: 0.92;
-      box-shadow: 0 7px 24px rgba(26, 122, 255, 0.55);
+      opacity: 0.93;
+      box-shadow:
+        0 8px 30px rgba(26, 122, 255, 0.62),
+        0 3px 10px rgba(10, 40, 140, 0.28),
+        inset 0 1px 0 rgba(255, 255, 255, 0.18);
     }
 
     .submit-btn:active { transform: scale(0.99); }
@@ -290,20 +333,21 @@
     .card-footer {
       margin-top: clamp(10px, 1.5vh, 18px);
       padding-top: clamp(8px, 1.2vh, 14px);
-      border-top: 1px solid rgba(160, 200, 230, 0.45);
+      border-top: 1px solid rgba(255, 255, 255, 0.16);
       text-align: center;
     }
 
     .support-note {
       font-size: clamp(10px, 1.2vh, 12px);
-      color: #3a5a7a;
+      color: rgba(255, 255, 255, 0.68);
+      text-shadow: 0 1px 3px rgba(0, 10, 50, 0.35);
       display: flex;
       align-items: center;
       justify-content: center;
       gap: 5px;
     }
 
-    .support-note i { color: #b8921e; font-size: 13px; }
+    .support-note i { color: #f0c842; font-size: 13px; }
 
     /* ── Mobile ───────────────────────────────────────────────────────
        On phones the page is taller than the viewport so allow full
@@ -329,7 +373,10 @@
        Increase density further so the card fits without scrolling.
     ──────────────────────────────────────────────────────────────── */
     @media (max-height: 650px) and (min-width: 481px) {
-      .login-logo { max-width: 110px; }
+      .logo-wrap {
+        width: clamp(80px, 12vh, 110px);
+        height: clamp(80px, 12vh, 110px);
+      }
       .brand-tagline { font-size: 10px; }
       .brand-divider { margin-top: 4px; }
     }
@@ -342,9 +389,11 @@
 
       <!-- Brand -->
       <div class="brand-block">
-        <img src="{{ url_for('static', filename='images/Logo-Core-School-clean.png') }}"
-             alt="Core School"
-             class="login-logo">
+        <div class="logo-wrap">
+          <img src="{{ url_for('static', filename='images/Logo-Core-School-clean.png') }}"
+               alt="Core School"
+               class="login-logo">
+        </div>
         <div class="brand-tagline">النواة الذكية للأنظمة والحلول التقنية</div>
         <span class="brand-divider"></span>
       </div>
