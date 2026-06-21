@@ -600,33 +600,58 @@ async def _periodic_getnewlog_task(sn: str, my_entry: dict, interval: int = 60) 
 
     Uses stn=false so each poll only retrieves logs since the previous getnewlog.
     Dedup protection (via notes) prevents double-processing.
-    Timeout: 20 s per poll. When stale, backs off to max(interval, 300s) between polls
-    instead of stopping — keeps the task alive so it resumes if device recovers.
+    Timeout: 20 s per poll.
+
+    HEARTBEAT DECOUPLING (critical for the cross-process "online" signal):
+      The DB heartbeat (last_sync_at) is committed at the top of EVERY cycle,
+      before — and independently of — the getnewlog attempt, for as long as the
+      WebSocket connection is alive (entry unchanged).  last_sync_at therefore
+      means "the bridge currently has this device connected", which is exactly
+      what the cloud web UI (Render, a different process) needs.  Without this,
+      a device that stays TCP-connected (cloud icon on) but only pushes realtime
+      sendlog — or whose firmware never answers getnewlog — would stop updating
+      last_sync_at and be shown offline/stale within the 90 s bridge threshold
+      even though it is genuinely connected.
+
+      When the device stops answering getnewlog it is marked stale; the heartbeat
+      keeps being committed and getnewlog is retried only every ~5 minutes so the
+      task can self-heal without spamming 20 s timeouts each cycle.
     """
     loop = asyncio.get_running_loop()
     _device_status.setdefault(sn, {})["poll_task_running"] = True
     log.info("[aiface] periodic getnewlog task started sn=%s interval=%ds", sn, interval)
+    _stale_cycles = 0  # consecutive cycles skipped while stale (for retry backoff)
     try:
         while _connections.get(sn) is my_entry:
-            # Use longer sleep when stale — back off instead of stopping permanently
-            _st_pre    = _device_status.get(sn, {})
-            _sleep_for = max(interval, 300) if _st_pre.get("getnewlog_stale") else interval
-            await asyncio.sleep(_sleep_for)
+            # Fixed cadence — never backed off, so the heartbeat below stays well
+            # inside the bridge online threshold even when getnewlog is stale.
+            await asyncio.sleep(interval)
 
             # Exit if our connection was replaced (device reconnected)
             if _connections.get(sn) is not my_entry:
                 log.info("[aiface] periodic poll: sn=%s entry replaced — stopping old task", sn)
                 break
 
-            # When stale: skip this cycle (already backed off above), keep task alive.
-            # The stale flag clears automatically on next cmd=reg (reconnect).
+            # ── Heartbeat FIRST, unconditionally ───────────────────────────────
+            # The connection entry is still ours, so the device IS connected to
+            # this bridge right now.  Commit last_sync_at every cycle regardless
+            # of getnewlog so the cloud UI reports the device online.
+            await loop.run_in_executor(None, _db_touch_device, sn)
+
             _st = _device_status.get(sn, {})
             if _st.get("getnewlog_stale", False):
-                log.warning(
-                    "[aiface] periodic poll: sn=%s stale (%d consecutive timeouts) — "
-                    "skipping cycle, backing off to %ds. Task stays alive.",
-                    sn, _st.get("getnewlog_timeout_count", 0), _sleep_for)
-                continue
+                # Keep heart-beating (done above); retry getnewlog only every ~5 min.
+                _stale_cycles += 1
+                _retry_every = max(1, 300 // max(interval, 1))
+                if _stale_cycles < _retry_every:
+                    log.warning(
+                        "[aiface] periodic poll: sn=%s getnewlog stale (%d timeouts) — "
+                        "heartbeat committed; getnewlog retry in %d cycle(s)",
+                        sn, _st.get("getnewlog_timeout_count", 0),
+                        _retry_every - _stale_cycles)
+                    continue
+                _stale_cycles = 0
+                log.info("[aiface] periodic poll: sn=%s retrying getnewlog after stale backoff", sn)
 
             log.info("[aiface] periodic getnewlog poll sn=%s "
                      "last_success=%s timeout_count=%d",
@@ -647,9 +672,10 @@ async def _periodic_getnewlog_task(sn: str, my_entry: dict, interval: int = 60) 
                 _is_stale = _tc >= _GETNEWLOG_STALE_THRESHOLD
                 _st2["getnewlog_stale"] = _is_stale
                 log.warning(
-                    "[aiface] periodic poll: getnewlog timeout sn=%s consecutive_timeouts=%d%s",
+                    "[aiface] periodic poll: getnewlog timeout sn=%s consecutive_timeouts=%d%s "
+                    "(heartbeat unaffected — device still connected)",
                     sn, _tc,
-                    " — DEVICE MARKED STALE, stopping poll task" if _is_stale else " — will retry")
+                    " — MARKED STALE, getnewlog retried periodically" if _is_stale else " — will retry")
                 continue
             except Exception:
                 log.exception("[aiface] periodic poll: unexpected error sn=%s", sn)
@@ -662,13 +688,9 @@ async def _periodic_getnewlog_task(sn: str, my_entry: dict, interval: int = 60) 
                 "getnewlog_timeout_count": 0,
                 "getnewlog_stale": False,
             })
+            _stale_cycles = 0
             log.info("[aiface] periodic poll response sn=%s count=%d records=%d",
                      sn, count, len(records))
-
-            # Persist a heartbeat to the DB on every successful poll cycle so
-            # the cloud web UI (Render, different process) can determine that the
-            # local WS bridge is alive without seeing the in-memory _connections.
-            await loop.run_in_executor(None, _db_touch_device, sn)
 
             if records:
                 p, sk, um, er = await loop.run_in_executor(
