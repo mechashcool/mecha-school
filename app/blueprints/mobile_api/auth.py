@@ -7,10 +7,11 @@ POST /api/mobile/v1/auth/logout   client-side only; server-side no-op
 """
 import datetime
 
-from flask import g, request
+from flask import g, jsonify, request
 
 from app.models import db, User, Employee, MobileDeviceToken
 from app.utils.helpers import resolve_photo_url
+from app.utils.login_throttle import check_lockout, record_failed_attempt, reset_attempts
 from app.utils.ratelimit import limiter, LOGIN_RATE_LIMIT
 from .utils import encode_token, jwt_required, ok, err, photo_url
 
@@ -74,19 +75,35 @@ def login():
         "employee": { ... }    # teacher only
       }
     """
-    payload = request.get_json(silent=True) or {}
+    payload    = request.get_json(silent=True) or {}
     identifier = (payload.get('username') or '').strip()
     password   = (payload.get('password') or '').strip()
 
     if not identifier or not password:
         return err('username and password are required')
 
+    ip = request.remote_addr or '0.0.0.0'
+
+    # Progressive lockout — evaluated before any DB query so locked-out
+    # requests cost nothing and cannot be used to time-attack username existence.
+    locked, wait_seconds = check_lockout(ip, identifier)
+    if locked:
+        return jsonify({'ok': False, 'error': 'too_many_attempts',
+                        'wait_seconds': wait_seconds}), 429
+
     user = User.query.filter(
         (User.username == identifier) | (User.email == identifier)
     ).first()
 
     if not user or not user.check_password(password):
+        # Record against (IP, identifier) regardless of whether the username
+        # exists — same counter, same error, prevents username enumeration.
+        record_failed_attempt(ip, identifier)
         return err('invalid_credentials', 401)
+
+    # Credentials are valid — clear the throttle counter before any further
+    # business-logic checks so a disabled or wrong-role user is not re-penalised.
+    reset_attempts(ip, identifier)
 
     if not user.is_active:
         return err('account_disabled', 401)
