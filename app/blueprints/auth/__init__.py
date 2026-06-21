@@ -9,6 +9,7 @@ from flask_login import login_user, logout_user, login_required, current_user
 from app.models import db, User
 from app.utils.audit import log_action
 from app.utils.ratelimit import limiter, LOGIN_RATE_LIMIT
+from app.utils.login_throttle import check_lockout, record_failed_attempt, reset_attempts
 from datetime import datetime
 
 auth_bp = Blueprint('auth', __name__, template_folder='../../templates/auth')
@@ -35,22 +36,48 @@ def login():
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
         remember = bool(request.form.get('remember'))
+        ip = request.remote_addr or '0.0.0.0'
+
+        # ── Progressive lockout check ─────────────────────────────────────────
+        # Evaluated before any DB query so locked-out requests cost nothing.
+        # The lockout key encodes both IP and a hash of the username, so the
+        # wait-time message cannot be used to confirm whether a username exists
+        # (the attacker already knows what they submitted).
+        locked, wait_seconds = check_lockout(ip, username)
+        if locked:
+            mins = max(1, (wait_seconds + 59) // 60)
+            error = (
+                f'تم تجاوز الحد المسموح من المحاولات. '
+                f'يرجى المحاولة مرة أخرى بعد {mins} دقيقة.'
+            )
+            return render_template('auth/login.html', error=error)
 
         user = User.query.filter(
             (User.username == username) | (User.email == username)
         ).first()
 
         if user and user.check_password(password) and user.is_active:
+            # ── Session fixation prevention ───────────────────────────────────
+            # Clear any pre-login session data before establishing the
+            # authenticated session. CSRF has already been validated by
+            # Flask-WTF at this point, so clearing is safe. Flask-Login will
+            # immediately repopulate the session with the new user context.
+            session.clear()
             login_user(user, remember=remember)
+            reset_attempts(ip, username)
             user.last_login = datetime.utcnow()
             db.session.commit()
-            log_action('login', 'user', user.id, f'Login from {request.remote_addr}')
+            log_action('login', 'user', user.id, f'Login from {ip}')
             flash('تم تسجيل الدخول بنجاح.', 'success')
             next_page = request.args.get('next')
             if next_page and _is_safe_redirect_target(next_page):
                 return redirect(next_page)
             return redirect(_role_redirect_url(user))
         else:
+            # Record failure regardless of whether the username exists, so the
+            # error message and throttle behaviour are identical for a wrong
+            # username and a wrong password.
+            record_failed_attempt(ip, username)
             error = 'اسم المستخدم أو كلمة المرور غير صحيحة.'
 
     return render_template('auth/login.html', error=error)
@@ -60,6 +87,8 @@ def login():
 @login_required
 def logout():
     log_action('logout', 'user', current_user.id)
+    # logout_user() clears the Flask-Login session data and deletes the
+    # remember-me cookie (sets it to empty with a past expiry date).
     logout_user()
     flash('تم تسجيل الخروج بنجاح.', 'success')
     return redirect(url_for('auth.login'))

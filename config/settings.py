@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -24,11 +25,15 @@ class Config:
     ITEMS_PER_PAGE = 20
 
     # Session / cookie hardening (applies to all environments).
-    PERMANENT_SESSION_LIFETIME = 3600  # 1 hour
+    PERMANENT_SESSION_LIFETIME = timedelta(hours=1)   # normal session timeout
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'
     REMEMBER_COOKIE_HTTPONLY = True
     REMEMBER_COOKIE_SAMESITE = 'Lax'
+    # Duration of the Flask-Login "remember me" persistent cookie.
+    # The session cookie is separate and still expires on browser close when
+    # remember=False; this value controls the long-lived token cookie only.
+    REMEMBER_COOKIE_DURATION = timedelta(days=30)
     # CSRF tokens stay valid for the life of the session rather than expiring
     # mid-form (avoids spurious 400s on long-open pages).
     WTF_CSRF_TIME_LIMIT = None
