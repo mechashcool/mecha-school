@@ -21,6 +21,29 @@ from . import mobile_api_bp
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
+def _format_wait_ar(seconds: int) -> str:
+    """Return a human-readable Arabic wait-time phrase for login throttle messages."""
+    if seconds < 60:
+        return 'بعد أقل من دقيقة'
+    minutes = (seconds + 59) // 60   # round up to nearest minute
+    if minutes < 60:
+        if minutes == 1:
+            return 'بعد دقيقة'
+        if minutes == 2:
+            return 'بعد دقيقتين'
+        if minutes <= 10:
+            return f'بعد {minutes} دقائق'
+        return f'بعد {minutes} دقيقة'
+    hours = (minutes + 59) // 60     # round up to nearest hour
+    if hours == 1:
+        return 'بعد ساعة'
+    if hours == 2:
+        return 'بعد ساعتين'
+    if hours <= 10:
+        return f'بعد {hours} ساعات'
+    return f'بعد {hours} ساعة'
+
+
 def _school_payload(school) -> dict | None:
     if not school:
         return None
@@ -88,8 +111,12 @@ def login():
     # requests cost nothing and cannot be used to time-attack username existence.
     locked, wait_seconds = check_lockout(ip, identifier)
     if locked:
-        return jsonify({'ok': False, 'error': 'too_many_attempts',
-                        'wait_seconds': wait_seconds}), 429
+        return jsonify({
+            'ok':          False,
+            'error':       'too_many_attempts',
+            'wait_seconds': wait_seconds,
+            'message':     f'محاولات تسجيل دخول كثيرة. يرجى المحاولة مرة أخرى {_format_wait_ar(wait_seconds)}.',
+        }), 429
 
     user = User.query.filter(
         (User.username == identifier) | (User.email == identifier)
