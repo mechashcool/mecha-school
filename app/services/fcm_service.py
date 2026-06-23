@@ -5,8 +5,21 @@ Initialization priority:
 1. FIREBASE_SERVICE_ACCOUNT_JSON — env var holding the full service-account JSON string
    (Render secret files / environment variables)
 2. GOOGLE_APPLICATION_CREDENTIALS — file path to the service-account JSON
-   (standard Google auth convention, local dev)
+   (standard Google auth convention, local dev / VPS)
 3. Neither → FCM disabled; all sends are silent no-ops, the app never crashes.
+
+VPS deployment note
+───────────────────
+If GOOGLE_APPLICATION_CREDENTIALS=/root/firebase-key.json and Gunicorn runs as a
+non-root user, the file will NOT be readable (root's home dir is mode 700).
+Symptoms: "[FCM] file exists but is NOT readable" in logs, all pushes are no-ops.
+Fix (choose one):
+  a) chmod 640 /root/firebase-key.json && chgrp <gunicorn-group> /root/firebase-key.json
+  b) cp /root/firebase-key.json /etc/mecha-school/firebase-key.json
+     chmod 640 /etc/mecha-school/firebase-key.json
+     update GOOGLE_APPLICATION_CREDENTIALS= in systemd service
+  c) Set FIREBASE_SERVICE_ACCOUNT_JSON="$(cat /root/firebase-key.json)" in the
+     systemd EnvironmentFile — the JSON string is passed directly, no file needed.
 
 Public API:
     is_enabled() -> bool
@@ -34,8 +47,8 @@ def _init_firebase() -> None:
         log.warning(
             '[FCM] DISABLED — push notifications will NOT be sent. '
             'To enable, set one of: '
-            'FIREBASE_SERVICE_ACCOUNT_JSON (full JSON string, recommended for Render) '
-            'or GOOGLE_APPLICATION_CREDENTIALS (file path, for local dev).'
+            'FIREBASE_SERVICE_ACCOUNT_JSON (full JSON string, recommended for VPS/Render) '
+            'or GOOGLE_APPLICATION_CREDENTIALS (file path to service-account JSON).'
         )
         return
 
@@ -77,11 +90,39 @@ def _init_firebase() -> None:
                 if os.path.isfile(candidate):
                     resolved_path = candidate
                 else:
-                    log.error('[FCM] GOOGLE_APPLICATION_CREDENTIALS is set to %r '
-                              'but the file was not found (cwd=%r, project_root=%r) '
-                              '— push notifications disabled.',
-                              file_path, os.getcwd(), project_root)
+                    # File truly missing — check if it exists at all (permission issue
+                    # on the parent directory can make isfile() return False even when
+                    # the file physically exists, e.g. /root/ is mode 700 on VPS).
+                    _uid = getattr(os, 'getuid', lambda: 'N/A')()
+                    _gid = getattr(os, 'getgid', lambda: 'N/A')()
+                    log.error(
+                        '[FCM] GOOGLE_APPLICATION_CREDENTIALS=%r — file not found. '
+                        'Process uid=%s gid=%s cwd=%r project_root=%r. '
+                        'On VPS: if the file is in /root/ and Gunicorn runs as a '
+                        'non-root user, /root/ is not traversable (mode 700). '
+                        'Fix: copy the key to /etc/mecha-school/firebase-key.json '
+                        'and update GOOGLE_APPLICATION_CREDENTIALS, OR set '
+                        'FIREBASE_SERVICE_ACCOUNT_JSON with the full JSON content.',
+                        file_path, _uid, _gid, os.getcwd(), project_root,
+                    )
                     return
+
+            # File path resolves — now check read permission separately.
+            # os.path.isfile() can return True while os.access(R_OK) returns False
+            # when the file exists but belongs to another user (e.g. root) and
+            # the process has no read permission.
+            if not os.access(resolved_path, os.R_OK):
+                _uid = getattr(os, 'getuid', lambda: 'N/A')()
+                _gid = getattr(os, 'getgid', lambda: 'N/A')()
+                log.error(
+                    '[FCM] GOOGLE_APPLICATION_CREDENTIALS=%r exists at %r '
+                    'but is NOT readable by this process (uid=%s gid=%s). '
+                    'Fix: chmod 640 %s  OR  set FIREBASE_SERVICE_ACCOUNT_JSON '
+                    'with the full JSON content in the systemd EnvironmentFile.',
+                    file_path, resolved_path, _uid, _gid, resolved_path,
+                )
+                return
+
             cred   = credentials.Certificate(resolved_path)
             source = f'GOOGLE_APPLICATION_CREDENTIALS ({resolved_path})'
 
@@ -90,7 +131,8 @@ def _init_firebase() -> None:
         _fcm_enabled = True
         log.warning('[FCM] ENABLED — initialized from %s', source)
     except Exception as exc:
-        log.error('[FCM] initialization failed (%s): %s', type(exc).__name__, exc)
+        log.error('[FCM] initialization failed (%s): %s — push notifications disabled',
+                  type(exc).__name__, exc)
 
 
 _init_firebase()
@@ -137,7 +179,7 @@ def _send_one(token: str, title: str, body: str,
         log.info('[FCM] ✓ sent  token=%.16s…  msg_id=%s  title=%r', token, msg_id, title)
         return True, msg_id, None
     except Exception as exc:
-        log.warning('[FCM] ✗ send failed  token=%.16s…  error=%s', token, exc)
+        log.error('[FCM] ✗ send failed  token=%.16s…  error=%s', token, exc)
         return False, None, str(exc)
 
 
@@ -175,7 +217,9 @@ def send_push_to_user(user_id: int, title: str, body: str,
         return 0, 0
 
     if not tokens:
-        log.debug('[FCM] no active device tokens for user_id=%s — push skipped', user_id)
+        log.warning('[FCM] no active device tokens for user_id=%s — push skipped '
+                    '(parent may need to log in to the mobile app and re-register)',
+                    user_id)
         return 0, 0
 
     log.info('[FCM] pushing to user_id=%s — %d active token(s)', user_id, len(tokens))

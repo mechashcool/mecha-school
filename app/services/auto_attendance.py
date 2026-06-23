@@ -226,10 +226,33 @@ def _check_school_shifts(school, school_name: str, local_now, local_date) -> Non
             local_now.strftime('%H:%M:%S'), passed,
         )
         if passed:
-            _run_auto_absent_for_shift(school, year, shift, local_date)
+            try:
+                _run_auto_absent_for_shift(school, year, shift, local_date)
+            except Exception:
+                _log.exception(
+                    '[attendance-shift] school_id=%s shift_id=%s "%s" failed — '
+                    'continuing with remaining shifts',
+                    school.id, shift.id, shift.name,
+                )
+                try:
+                    from app.models import db
+                    db.session.rollback()
+                except Exception:
+                    pass
 
     # Case 4 — students with no shift fall back to the school default cutoff.
-    _run_auto_absent_shiftless(school, year, school, local_date, now_time=now_time)
+    try:
+        _run_auto_absent_shiftless(school, year, school, local_date, now_time=now_time)
+    except Exception:
+        _log.exception(
+            '[attendance-shift-fallback] school_id=%s shiftless fallback failed',
+            school.id,
+        )
+        try:
+            from app.models import db
+            db.session.rollback()
+        except Exception:
+            pass
 
     _catchup_previous_day_shifts(school, school_name, local_now, local_date)
 
@@ -363,6 +386,8 @@ def _run_auto_absent_for_shift(school, year, shift, target_date) -> dict:
         return {'count': 0}
 
     # ── 5. Create absent records ───────────────────────────────────────────────
+    from sqlalchemy.exc import IntegrityError
+
     for student in unmarked:
         db.session.add(StudentAttendance(
             student_id       = student.id,
@@ -374,7 +399,23 @@ def _run_auto_absent_for_shift(school, year, shift, target_date) -> dict:
             shift_id         = shift.id,
         ))
 
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # Another worker (or a concurrent web request) committed attendance for
+        # one or more of these students between our query and our commit.
+        # The UniqueConstraint on (student_id, date) protected the DB from
+        # duplicates. Roll back, log, and skip notifications for this tick —
+        # the records already exist, parents were already notified.
+        db.session.rollback()
+        _log.warning(
+            '[attendance-shift] shift_id=%s "%s" date=%s — commit conflict '
+            '(concurrent insert from another worker or request). '
+            'Records already exist; skipping notifications for this tick.',
+            shift.id, shift.name, target_date,
+        )
+        return {'count': 0}
+
     _log.info(
         '[attendance-shift] shift_id=%s "%s" date=%s absent_created=%d',
         shift.id, shift.name, target_date, len(unmarked),
@@ -536,6 +577,8 @@ def _run_auto_absent_shiftless(school, year, settings, target_date,
     if not unmarked:
         return {'count': 0}
 
+    from sqlalchemy.exc import IntegrityError
+
     for student in unmarked:
         db.session.add(StudentAttendance(
             student_id       = student.id,
@@ -546,7 +589,17 @@ def _run_auto_absent_shiftless(school, year, settings, target_date,
             source           = 'automatic',
             shift_id         = None,
         ))
-    db.session.commit()
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        _log.warning(
+            '[attendance-shift-fallback] school_id=%s date=%s — commit conflict '
+            '(concurrent insert). Records already exist; skipping notifications.',
+            school_id, target_date,
+        )
+        return {'count': 0}
 
     _log.info(
         '[attendance-shift-fallback] school_id=%s date=%s inserted_absences=%d',

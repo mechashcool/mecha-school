@@ -197,9 +197,22 @@ def _run_auto_absent(school, year, settings, recorded_by_id=None, target_date=No
             recorded_by      = recorded_by_id,
         ))
     if unmarked:
-        db.session.commit()
-        _log.info('[attendance] school_id=%s — committed %d absent records',
-                  school_id, len(unmarked))
+        try:
+            from sqlalchemy.exc import IntegrityError
+            db.session.commit()
+            _log.info('[attendance] school_id=%s — committed %d absent records',
+                      school_id, len(unmarked))
+        except IntegrityError:
+            # A concurrent worker or web request created attendance for one or more
+            # of these students between our query and our commit.
+            # UniqueConstraint on (student_id, date) prevented duplicates.
+            db.session.rollback()
+            _log.warning(
+                '[attendance] school_id=%s date=%s — commit conflict (concurrent insert). '
+                'Records already exist; skipping notifications for this tick.',
+                school_id, today,
+            )
+            return {'too_early': False, 'holiday': False, 'count': 0, 'students': []}
 
     notified = 0
     for student in unmarked:
