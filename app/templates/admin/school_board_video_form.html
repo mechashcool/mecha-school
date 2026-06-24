@@ -61,21 +61,22 @@
 
       {# ── Current media preview (edit only) ─────────────────────────── #}
       {% if is_edit and video.video_url %}
+      {% set _board_media_url = resolve_photo_url(video.video_url) or video.video_url %}
       <div class="mb-3" id="current-media-wrap">
         <label class="form-label">الوسائط الحالية</label>
         {% if video.media_type == 'image' %}
         <div>
-          <img src="{{ video.video_url }}" alt="{{ video.title }}"
+          <img src="{{ _board_media_url }}" alt="{{ video.title }}"
                style="max-height:160px;max-width:100%;border-radius:6px;border:1px solid #dee2e6">
         </div>
         {% else %}
         <div>
-          <video src="{{ video.video_url }}" controls
+          <video src="{{ _board_media_url }}" controls
                  style="max-height:160px;max-width:100%;border-radius:6px"></video>
         </div>
         {% endif %}
         <div class="form-text mt-1">
-          <a href="{{ video.video_url }}" target="_blank" rel="noopener">فتح في تبويب جديد</a>
+          <a href="{{ _board_media_url }}" target="_blank" rel="noopener">فتح في تبويب جديد</a>
         </div>
       </div>
       {% endif %}

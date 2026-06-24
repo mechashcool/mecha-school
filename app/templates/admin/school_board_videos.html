@@ -51,7 +51,8 @@
           <td style="width:72px">
             {% set mt = video.media_type or 'video' %}
             {% if mt == 'image' and video.video_url %}
-              <img src="{{ video.video_url }}" alt=""
+              {% set _board_thumb = resolve_photo_url(video.video_url) or video.video_url %}
+              <img src="{{ _board_thumb }}" alt=""
                    style="width:60px;height:44px;object-fit:cover;border-radius:4px;border:1px solid #dee2e6">
             {% else %}
               <span class="text-muted" style="font-size:1.6rem">
