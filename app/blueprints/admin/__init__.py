@@ -2714,8 +2714,6 @@ def school_board_video_create():
             final_url = fallback_url
 
         errors = []
-        if not title:
-            errors.append('العنوان مطلوب.')
         if not final_url:
             errors.append('يرجى رفع ملف أو إدخال رابط خارجي.')
         if audience not in BOARD_AUDIENCES:
@@ -2831,8 +2829,6 @@ def school_board_video_edit(video_id):
             final_url = fallback_url
 
         errors = []
-        if not title:
-            errors.append('العنوان مطلوب.')
         if not final_url:
             errors.append('يرجى رفع ملف أو إدخال رابط خارجي.')
         if audience not in BOARD_AUDIENCES:

@@ -2709,7 +2709,7 @@ class SchoolVideo(db.Model):
 
     id            = db.Column(db.Integer, primary_key=True)
     school_id     = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False, index=True)
-    title         = db.Column(db.String(200), nullable=False)
+    title         = db.Column(db.String(200), nullable=True)
     description   = db.Column(db.Text, nullable=True)
     media_type    = db.Column(db.String(20),  nullable=False, default='video')
     video_url     = db.Column(db.String(500), nullable=False)
