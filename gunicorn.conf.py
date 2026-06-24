@@ -88,6 +88,20 @@ logconfig_dict = {
             'handlers': ['console'],
             'propagate': False,
         },
+        # Attendance scheduler and blueprint — must be INFO so per-tick diagnostics
+        # (cutoff passed/skipped, absent count, holiday, no-cutoff) are visible on the VPS.
+        # Without these entries both loggers fall through to root at WARNING and all
+        # INFO-level scheduler messages are silently dropped.
+        'app.services.auto_attendance': {
+            'level': 'INFO',
+            'handlers': ['console'],
+            'propagate': False,
+        },
+        'app.blueprints.attendance': {
+            'level': 'INFO',
+            'handlers': ['console'],
+            'propagate': False,
+        },
         # Suppress "opening handshake failed / unsupported HTTP method HEAD"
         # spam from health-checker probes hitting the AI Face WebSocket port.
         'websockets': {

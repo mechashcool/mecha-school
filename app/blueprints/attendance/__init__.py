@@ -135,19 +135,21 @@ def _run_auto_absent(school, year, settings, recorded_by_id=None, target_date=No
         year.id if year else None,
     )
 
-    # Skip too_early check for explicit target_date (catch-up path — cutoff already passed)
+    # Skip too_early check when target_date is supplied explicitly — caller already
+    # verified the cutoff passed.  When target_date is None (web-triggered call),
+    # still guard so the manual button cannot run before the configured time.
     if target_date is None and cutoff and now_time < cutoff:
         _log.info('[attendance] school_id=%s — absence time not yet reached '
                   '(now=%s < cutoff=%s) — skipped', school_id, now_time, cutoff)
         return {'too_early': True, 'holiday': False, 'count': 0, 'students': []}
 
     if school and is_holiday_date(today, school_id, school):
-        _log.info('[attendance] school_id=%s date=%s — holiday detected — absent skipped',
-                  school_id, today)
+        _log.warning('[attendance] school_id=%s "%s" date=%s — holiday detected — absent skipped',
+                     school_id, school_name, today)
         return {'too_early': False, 'holiday': True, 'count': 0, 'students': []}
 
-    _log.info('[attendance] school_id=%s date=%s — normal school day, querying students',
-              school_id, today)
+    _log.info('[attendance] school_id=%s "%s" date=%s — normal school day, querying students',
+              school_id, school_name, today)
 
     # Use bypass_tenant_scope so queries work correctly from background threads
     # (no Flask request context → current_school_id() returns None → no auto-filter).
@@ -163,11 +165,12 @@ def _run_auto_absent(school, year, settings, recorded_by_id=None, target_date=No
     all_students = all_students_q.all()
     student_ids  = [s.id for s in all_students]
 
-    _log.info('[attendance] school_id=%s active_students=%d year_id=%s',
-              school_id, len(student_ids), year.id if year else None)
+    _log.info('[attendance] school_id=%s "%s" active_students=%d year_id=%s',
+              school_id, school_name, len(student_ids), year.id if year else None)
 
     if not student_ids:
-        _log.info('[attendance] school_id=%s — no active students found, skip', school_id)
+        _log.warning('[attendance] school_id=%s "%s" — no active students found, skip',
+                     school_id, school_name)
         return {'too_early': False, 'holiday': False, 'count': 0, 'students': []}
 
     already_ids = {
@@ -182,8 +185,8 @@ def _run_auto_absent(school, year, settings, recorded_by_id=None, target_date=No
     unmarked = [s for s in all_students if s.id not in already_ids]
 
     _log.info(
-        '[attendance] school_id=%s date=%s existing_attendance=%d missing_attendance=%d',
-        school_id, today, len(already_ids), len(unmarked),
+        '[attendance] school_id=%s "%s" date=%s existing_attendance=%d missing_attendance=%d',
+        school_id, school_name, today, len(already_ids), len(unmarked),
     )
 
     for student in unmarked:
@@ -222,10 +225,17 @@ def _run_auto_absent(school, year, settings, recorded_by_id=None, target_date=No
         except Exception:
             _log.exception('[attendance-notify] notification failed student_id=%s', student.id)
 
-    _log.info(
-        '[attendance] school_id=%s date=%s — absent_created=%d notifications_sent=%d',
-        school_id, today, len(unmarked), notified,
-    )
+    if len(unmarked) > 0:
+        _log.warning(
+            '[attendance] school_id=%s "%s" date=%s — absent_created=%d notifications_sent=%d',
+            school_id, school_name, today, len(unmarked), notified,
+        )
+    else:
+        _log.info(
+            '[attendance] school_id=%s "%s" date=%s — absent_created=0 '
+            '(all students already have attendance records)',
+            school_id, school_name, today,
+        )
     return {'too_early': False, 'holiday': False, 'count': len(unmarked), 'students': unmarked}
 
 

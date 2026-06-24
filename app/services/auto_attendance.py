@@ -40,7 +40,7 @@ def start_auto_attendance_scheduler(app) -> None:
     Called once from create_app(). Safe to call multiple times.
     """
     if os.environ.get('ATTENDANCE_SCHEDULER_DISABLED', '').lower() == 'true':
-        app.logger.info('[attendance] auto-attendance scheduler disabled via env var')
+        _log.warning('[attendance] auto-attendance scheduler disabled via ATTENDANCE_SCHEDULER_DISABLED env var')
         return
     global _scheduler_thread
     if _scheduler_thread and _scheduler_thread.is_alive():
@@ -53,7 +53,7 @@ def start_auto_attendance_scheduler(app) -> None:
         name='auto-attendance-scheduler',
     )
     _scheduler_thread.start()
-    app.logger.info('[attendance] auto-attendance scheduler started (interval=%ds)', interval)
+    _log.warning('[attendance] auto-attendance scheduler started (interval=%ds)', interval)
 
 
 def _scheduler_loop(app, interval: int) -> None:
@@ -86,15 +86,18 @@ def _run_check() -> None:
     """Called every tick. Iterates all active schools and fires per-school logic."""
     from app.models import School
 
-    _log.info('[attendance] scheduled auto absent check — scanning active schools')
-
     schools = (
         School.query
         .execution_options(bypass_tenant_scope=True)
         .filter_by(is_active=True)
         .all()
     )
-    _log.info('[attendance] found %d active school(s) to check', len(schools))
+
+    if not schools:
+        _log.warning('[attendance] tick: no active schools found — nothing to process')
+        return
+
+    _log.info('[attendance] tick: checking %d active school(s)', len(schools))
 
     for school in schools:
         try:
@@ -122,15 +125,20 @@ def _check_school(school) -> None:
         _check_school_shifts(school, school_name, local_now, local_date)
         return
 
-    # ── Standard single-cutoff mode (existing behaviour, unchanged) ──────────
+    # ── Standard single-cutoff mode ──────────────────────────────────────────
     from app.utils.decorators import get_active_year
     from app.blueprints.attendance import _run_auto_absent
 
     cutoff = getattr(school, 'att_absence_threshold', None)
 
+    # Python's datetime.time(0, 0, 0) is falsy — treat midnight (00:00) the same
+    # as None (unconfigured) so a mis-saved form value doesn't silently skip absence.
     if not cutoff:
-        _log.info('[attendance] school_id=%s "%s" — no absence cutoff configured, skip',
-                  school.id, school_name)
+        _log.warning(
+            '[attendance] school_id=%s "%s" — no absence cutoff configured '
+            '(att_absence_threshold is NULL or 00:00), skip',
+            school.id, school_name,
+        )
         return
 
     now_time = local_now.time()
@@ -142,7 +150,9 @@ def _check_school(school) -> None:
     )
 
     if not passed:
-        _log.info('[attendance] school_id=%s — absence time not yet reached, skip', school.id)
+        _log.info('[attendance] school_id=%s "%s" — absence cutoff not yet reached '
+                  '(now=%s < cutoff=%s), skip',
+                  school.id, school_name, now_time, cutoff)
         _catchup_previous_day(school, school_name, local_now, local_date)
         return
 
@@ -152,26 +162,30 @@ def _check_school(school) -> None:
                      school.id, school_name)
         return
 
-    _log.info('[attendance] school_id=%s "%s" year_id=%s — calling _run_auto_absent',
-              school.id, school_name, year.id)
+    _log.info('[attendance] school_id=%s "%s" year_id=%s date=%s — running auto-absent',
+              school.id, school_name, year.id, local_date)
 
-    result = _run_auto_absent(school, year, school)
-
-    if result.get('too_early'):
-        _log.info('[attendance] school_id=%s — _run_auto_absent says too_early '
-                  '(clock skew?), will retry next tick', school.id)
-        return
+    # Pass target_date=local_date explicitly so _run_auto_absent skips its own
+    # redundant clock check (we already verified cutoff passed above).
+    result = _run_auto_absent(school, year, school, target_date=local_date)
 
     if result.get('holiday'):
-        _log.info('[attendance] school_id=%s "%s" date=%s — holiday, absent skipped',
-                  school.id, school_name, local_date)
+        _log.warning('[attendance] school_id=%s "%s" date=%s — holiday, absent skipped',
+                     school.id, school_name, local_date)
         return
 
     count = result.get('count', 0)
-    _log.info(
-        '[attendance] school_id=%s "%s" date=%s — absent created=%d',
-        school.id, school_name, local_date, count,
-    )
+    if count > 0:
+        _log.warning(
+            '[attendance] school_id=%s "%s" date=%s — absent_created=%d',
+            school.id, school_name, local_date, count,
+        )
+    else:
+        _log.info(
+            '[attendance] school_id=%s "%s" date=%s — absent_created=0 '
+            '(all students already have records or no active students)',
+            school.id, school_name, local_date,
+        )
 
     _catchup_previous_day(school, school_name, local_now, local_date)
 
@@ -189,15 +203,15 @@ def _check_school_shifts(school, school_name: str, local_now, local_date) -> Non
     now_time = local_now.time()
 
     if is_holiday_date(local_date, school.id, school):
-        _log.info('[attendance-shift] school_id=%s date=%s — holiday, skip all shifts',
-                  school.id, local_date)
+        _log.warning('[attendance-shift] school_id=%s "%s" date=%s — holiday, skip all shifts',
+                     school.id, school_name, local_date)
         _catchup_previous_day_shifts(school, school_name, local_now, local_date)
         return
 
     year = get_active_year(school.id)
     if not year:
-        _log.info('[attendance-shift] school_id=%s — no active academic year, skip',
-                  school.id)
+        _log.warning('[attendance-shift] school_id=%s "%s" — no active academic year, skip',
+                     school.id, school_name)
         return
 
     active_shifts = (
@@ -208,13 +222,13 @@ def _check_school_shifts(school, school_name: str, local_now, local_date) -> Non
     )
 
     _log.info(
-        '[attendance-shift] school_id=%s shifts_enabled=True active_shifts=%d',
-        school.id, len(active_shifts),
+        '[attendance-shift] school_id=%s "%s" shifts_enabled=True active_shifts=%d local_now=%s',
+        school.id, school_name, len(active_shifts), local_now.strftime('%H:%M:%S'),
     )
 
     if not active_shifts:
-        _log.info('[attendance-shift] school_id=%s "%s" — no active shifts configured, skip',
-                  school.id, school_name)
+        _log.warning('[attendance-shift] school_id=%s "%s" — no active shifts configured, skip',
+                     school.id, school_name)
         return
 
     for shift in active_shifts:
@@ -227,7 +241,19 @@ def _check_school_shifts(school, school_name: str, local_now, local_date) -> Non
         )
         if passed:
             try:
-                _run_auto_absent_for_shift(school, year, shift, local_date)
+                result = _run_auto_absent_for_shift(school, year, shift, local_date)
+                count = result.get('count', 0)
+                if count > 0:
+                    _log.warning(
+                        '[attendance-shift] school_id=%s shift_id=%s "%s" date=%s — absent_created=%d',
+                        school.id, shift.id, shift.name, local_date, count,
+                    )
+                else:
+                    _log.info(
+                        '[attendance-shift] school_id=%s shift_id=%s "%s" date=%s — '
+                        'absent_created=0 (all students already have records or no students)',
+                        school.id, shift.id, shift.name, local_date,
+                    )
             except Exception:
                 _log.exception(
                     '[attendance-shift] school_id=%s shift_id=%s "%s" failed — '
@@ -242,7 +268,20 @@ def _check_school_shifts(school, school_name: str, local_now, local_date) -> Non
 
     # Case 4 — students with no shift fall back to the school default cutoff.
     try:
-        _run_auto_absent_shiftless(school, year, school, local_date, now_time=now_time)
+        fb = _run_auto_absent_shiftless(school, year, school, local_date, now_time=now_time)
+        fb_count = fb.get('count', 0)
+        if fb_count > 0:
+            _log.warning(
+                '[attendance-shift-fallback] school_id=%s "%s" date=%s — absent_created=%d '
+                '(shiftless students)',
+                school.id, school_name, local_date, fb_count,
+            )
+        else:
+            _log.info(
+                '[attendance-shift-fallback] school_id=%s "%s" date=%s — absent_created=0 '
+                '(no shiftless students, cutoff not reached, or all already have records)',
+                school.id, school_name, local_date,
+            )
     except Exception:
         _log.exception(
             '[attendance-shift-fallback] school_id=%s shiftless fallback failed',
@@ -515,10 +554,10 @@ def _run_auto_absent_shiftless(school, year, settings, target_date,
     school_id = school.id
     cutoff = getattr(settings, 'att_absence_threshold', None)
 
-    if cutoff is None:
-        _log.info(
+    if not cutoff:
+        _log.warning(
             '[attendance-shift-fallback] school_id=%s date=%s — no default cutoff '
-            'configured, shiftless students skipped',
+            'configured (att_absence_threshold is NULL or 00:00), shiftless students skipped',
             school_id, target_date,
         )
         return {'count': 0}
