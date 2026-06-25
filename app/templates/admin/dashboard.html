@@ -4,33 +4,62 @@
 
 {% block extra_css %}
 <style>
-/* ── Dashboard-specific overrides ─────────────────────────── */
+/* ═══════════════════════════════════════════════════════
+   Dashboard-scoped styles (prefix: .dash-)
+   Page is dir="rtl" — RTL flex: first child = rightmost.
+   ═══════════════════════════════════════════════════════ */
+
+/* ── Page header
+   direction:ltr forces: brand LEFT, controls RIGHT
+   regardless of page RTL direction.                     */
 .dash-header {
+  direction: ltr;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 28px;
   flex-wrap: wrap;
-  gap: 14px;
+  gap: 12px;
+  margin-bottom: 28px;
 }
-.dash-header-titles h1 {
-  font-size: 24px;
+.dash-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.dash-brand-icon {
+  width: 46px; height: 46px;
+  background: linear-gradient(135deg, #1a3a5c 0%, #2d63a8 100%);
+  border-radius: 13px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 21px; color: #fff;
+  flex-shrink: 0;
+  box-shadow: 0 4px 14px rgba(26,58,92,.22);
+}
+.dash-brand-text {
+  direction: rtl;
+}
+.dash-brand-text h1 {
+  font-size: 21px;
   font-weight: 800;
   color: var(--text);
   margin: 0;
-  letter-spacing: -.3px;
+  line-height: 1.2;
 }
-.dash-header-titles p {
-  font-size: 13px;
+.dash-brand-text p {
+  font-size: 12.5px;
   color: var(--text-muted);
-  margin: 3px 0 0;
+  margin: 2px 0 0;
 }
-.dash-header-actions {
+.dash-controls {
   display: flex;
   align-items: center;
   gap: 10px;
 }
-.dash-date-badge {
+.dash-date-pill {
+  direction: rtl;
+  display: flex;
+  align-items: center;
+  gap: 7px;
   background: #fff;
   border: 1.5px solid var(--border);
   border-radius: 10px;
@@ -38,11 +67,17 @@
   font-size: 13px;
   font-weight: 600;
   color: var(--text-muted);
-  display: flex;
+  white-space: nowrap;
+}
+.dash-date-pill .bi-chevron-down {
+  font-size: 10px;
+  opacity: .55;
+}
+.dash-refresh {
+  direction: rtl;
+  display: inline-flex;
   align-items: center;
   gap: 7px;
-}
-.dash-refresh-btn {
   background: var(--primary);
   color: #fff;
   border: none;
@@ -50,48 +85,46 @@
   padding: 8px 18px;
   font-size: 13px;
   font-weight: 700;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 7px;
   font-family: inherit;
-  transition: background .18s var(--ease), box-shadow .18s var(--ease);
-  box-shadow: 0 2px 10px rgba(26,58,92,.22);
+  cursor: pointer;
   text-decoration: none;
+  transition: background .18s, box-shadow .18s;
+  box-shadow: 0 2px 10px rgba(26,58,92,.25);
+  white-space: nowrap;
 }
-.dash-refresh-btn:hover {
+.dash-refresh:hover {
   background: var(--primary-light);
-  box-shadow: 0 4px 16px rgba(26,58,92,.30);
+  box-shadow: 0 4px 16px rgba(26,58,92,.32);
   color: #fff;
 }
 
-/* ── KPI cards ─────────────────────────────────────────────── */
+/* ── KPI Cards ───────────────────────────────────────── */
 .kpi-card {
   background: #fff;
   border: 1px solid var(--border);
-  border-radius: 18px;
-  padding: 22px 20px;
+  border-radius: 16px;
+  padding: 20px 18px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  box-shadow: 0 1px 3px rgba(16,36,68,.05), 0 4px 18px rgba(16,36,68,.06);
+  gap: 14px;
+  box-shadow: 0 1px 3px rgba(16,36,68,.05), 0 4px 20px rgba(16,36,68,.06);
   transition: transform .2s var(--ease), box-shadow .2s var(--ease);
+  min-height: 100px;
   height: 100%;
 }
 .kpi-card:hover {
   transform: translateY(-3px);
-  box-shadow: 0 4px 8px rgba(16,36,68,.08), 0 16px 40px rgba(16,36,68,.10);
+  box-shadow: 0 4px 8px rgba(16,36,68,.08), 0 18px 44px rgba(16,36,68,.10);
 }
-.kpi-info {
-  flex: 1;
-  min-width: 0;
-}
+/* kpi-info is first in DOM → renders RIGHT in RTL (text side) */
+.kpi-info { flex: 1; min-width: 0; }
 .kpi-value {
-  font-size: 28px;
+  font-size: 27px;
   font-weight: 800;
   color: var(--text);
   line-height: 1.1;
-  margin-bottom: 4px;
+  margin-bottom: 5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -102,137 +135,154 @@
   font-weight: 500;
   line-height: 1.4;
 }
-.kpi-icon-wrap {
-  width: 56px;
-  height: 56px;
+/* kpi-icon is second in DOM → renders LEFT in RTL (icon side) */
+.kpi-icon {
+  width: 56px; height: 56px;
   border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 24px;
-  color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px; color: #fff;
   flex-shrink: 0;
-  margin-right: 16px;
 }
 
-/* ── Chart cards ───────────────────────────────────────────── */
-.dash-chart-card {
+/* ── Chart card shell ────────────────────────────────── */
+.dash-card {
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 18px;
-  box-shadow: 0 1px 3px rgba(16,36,68,.05), 0 4px 18px rgba(16,36,68,.06);
+  box-shadow: 0 1px 3px rgba(16,36,68,.05), 0 4px 20px rgba(16,36,68,.06);
   overflow: hidden;
-  height: 100%;
   display: flex;
   flex-direction: column;
+  height: 100%;
 }
-.dash-chart-header {
-  padding: 18px 22px 16px;
+.dash-card-header {
+  padding: 16px 20px 14px;
   border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
 }
-.dash-chart-header-title {
-  font-size: 14.5px;
-  font-weight: 700;
-  color: var(--text);
+.dash-card-title {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.dash-chart-body {
-  padding: 20px 22px;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-.dash-chart-footer {
-  border-top: 1px solid var(--border);
-  padding: 16px 22px;
-  display: flex;
-  gap: 0;
-}
-.dash-chart-stat {
-  flex: 1;
-  text-align: center;
-  padding: 0 12px;
-  border-left: 1px solid var(--border);
-}
-.dash-chart-stat:last-child { border-left: none; }
-.dash-chart-stat .cs-value {
-  font-size: 15px;
-  font-weight: 800;
+  font-size: 14px;
+  font-weight: 700;
   color: var(--text);
-  line-height: 1.2;
-  direction: ltr;
-  display: block;
 }
-.dash-chart-stat .cs-label {
-  font-size: 11.5px;
-  color: var(--text-muted);
-  margin-top: 2px;
-  display: block;
-}
-.cs-revenue { color: #16a06a !important; }
-.cs-expense  { color: #de3d3d !important; }
-.cs-balance-pos { color: #1a3a5c !important; }
-.cs-balance-neg { color: #de3d3d !important; }
-
-/* ── Attendance panel ──────────────────────────────────────── */
-.att-legend {
+.dash-card-body {
+  flex: 1;
+  padding: 18px 20px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  margin-top: 18px;
 }
-.att-legend-item {
+
+/* ── Finance chart header row ────────────────────────── */
+.fin-header-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #f8fafc;
-  border-radius: 12px;
-  padding: 12px 16px;
+  direction: rtl;
+  margin-bottom: 10px;
 }
-.att-legend-item.att-present { background: #edf9f4; }
-.att-legend-item.att-absent  { background: #fdf0f0; }
-.att-legend-dot {
-  width: 10px; height: 10px;
-  border-radius: 50%;
-  margin-left: 8px;
-  flex-shrink: 0;
-}
-.att-legend-left {
-  display: flex;
-  align-items: center;
-}
-.att-legend-lbl {
-  font-size: 13.5px;
-  font-weight: 600;
-}
-.att-present .att-legend-lbl { color: #15734d; }
-.att-absent  .att-legend-lbl { color: #b83232; }
-.att-legend-count {
-  text-align: left;
-}
-.att-legend-num {
-  font-size: 20px;
-  font-weight: 800;
-  display: block;
-  line-height: 1;
-}
-.att-present .att-legend-num { color: #16a06a; }
-.att-absent  .att-legend-num { color: #de3d3d; }
-.att-legend-pct {
-  font-size: 11.5px;
+.fin-period {
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-muted);
+  background: #f4f6fa;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 11px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.fin-legend {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  direction: ltr;  /* legend reads left-to-right */
+}
+.fin-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  direction: rtl;
+}
+.legend-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.legend-dash {
+  width: 18px; height: 3px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  position: relative;
+}
+.legend-dash::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%,-50%);
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: inherit;
+}
+
+/* ── Finance summary footer ──────────────────────────── */
+.fin-footer {
+  border-top: 1px solid var(--border);
+  display: flex;
+  direction: ltr;   /* left→right: Revenues | Expenses | Net */
+}
+.fin-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 14px 10px;
+  border-right: 1px solid var(--border);
+}
+.fin-stat:last-child { border-right: none; }
+.fin-stat-val {
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1;
+  direction: ltr;
+}
+.fin-stat-lbl {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  direction: rtl;
+}
+
+/* ── Attendance card ─────────────────────────────────── */
+/* att-card-body uses direction:ltr so donut is LEFT, boxes are RIGHT */
+.att-card-body {
+  flex: 1;
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  direction: ltr;
 }
 .att-donut-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   position: relative;
-  max-width: 200px;
-  margin: 0 auto;
+  min-width: 0;
+}
+.att-donut-inner {
+  position: relative;
+  width: 100%;
+  max-width: 210px;
 }
 .att-donut-center {
   position: absolute;
@@ -242,7 +292,7 @@
   pointer-events: none;
 }
 .att-center-pct {
-  font-size: 22px;
+  font-size: 21px;
   font-weight: 800;
   color: var(--text);
   display: block;
@@ -253,118 +303,195 @@
   color: var(--text-muted);
   display: block;
   margin-top: 2px;
+  direction: rtl;
+  white-space: nowrap;
+}
+.att-boxes {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 140px;
+  flex-shrink: 0;
+}
+.att-box {
+  border-radius: 14px;
+  padding: 14px 15px;
+  direction: rtl;
+}
+.att-box-present { background: #edf9f4; }
+.att-box-absent  { background: #fdf0f0; }
+.att-box-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+.att-box-icon {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.att-box-present .att-box-icon { background: #1aab6d; color: #fff; }
+.att-box-absent  .att-box-icon { background: #e03e3e; color: #fff; }
+.att-box-lbl {
+  font-size: 13px;
+  font-weight: 700;
+}
+.att-box-present .att-box-lbl { color: #0f5c39; }
+.att-box-absent  .att-box-lbl { color: #962020; }
+.att-box-num {
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1;
+  display: block;
+}
+.att-box-present .att-box-num { color: #1aab6d; }
+.att-box-absent  .att-box-num { color: #e03e3e; }
+.att-box-pct {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  display: block;
+  margin-top: 2px;
 }
 
-/* ── Bottom cards ──────────────────────────────────────────── */
+/* ── Bottom section cards ────────────────────────────── */
 .dash-bottom-card {
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 18px;
-  box-shadow: 0 1px 3px rgba(16,36,68,.05), 0 4px 18px rgba(16,36,68,.06);
+  box-shadow: 0 1px 3px rgba(16,36,68,.05), 0 4px 20px rgba(16,36,68,.06);
   overflow: hidden;
-  height: 100%;
 }
 .dash-bottom-header {
-  padding: 16px 22px;
+  padding: 14px 20px;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 14.5px;
+  gap: 8px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--text);
 }
-
-/* ── Notif items ───────────────────────────────────────────── */
-.notif-item {
+.notif-row {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 14px 22px;
+  padding: 13px 20px;
   border-bottom: 1px solid var(--border);
   transition: background .15s;
 }
-.notif-item:last-child { border-bottom: none; }
-.notif-item:hover { background: #f8fafc; }
+.notif-row:last-child { border-bottom: none; }
+.notif-row:hover { background: #f8fafc; }
 .notif-icon {
-  width: 38px; height: 38px;
+  width: 36px; height: 36px;
   border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px;
   flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
   margin-top: 1px;
 }
-.notif-title  { font-size: 13.5px; font-weight: 600; color: var(--text); }
-.notif-body   { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
-.notif-time   { font-size: 11px; color: #9aabb8; margin-top: 4px; }
+.notif-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.notif-body  { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.notif-time  { font-size: 11px; color: #9aabb8; margin-top: 4px; }
 
+/* ── Responsive ──────────────────────────────────────── */
+@media (max-width: 1199px) {
+  /* attendance card: stack donut above boxes */
+  .att-card-body {
+    flex-direction: column;
+    direction: rtl;
+    align-items: stretch;
+  }
+  .att-boxes {
+    flex-direction: row;
+    width: 100%;
+  }
+  .att-box { flex: 1; }
+  .att-donut-inner { max-width: 180px; }
+}
 @media (max-width: 991px) {
   .kpi-value { font-size: 22px; }
-  .kpi-icon-wrap { width: 48px; height: 48px; font-size: 20px; }
-  .dash-header-titles h1 { font-size: 20px; }
+  .kpi-icon  { width: 48px; height: 48px; font-size: 20px; }
 }
-@media (max-width: 575px) {
-  .kpi-card { padding: 16px 14px; }
-  .kpi-value { font-size: 19px; }
-  .kpi-icon-wrap { width: 42px; height: 42px; font-size: 18px; margin-right: 12px; }
-  .dash-chart-footer { flex-wrap: wrap; gap: 8px; }
-  .dash-chart-stat { border-left: none; border-bottom: 1px solid var(--border); padding: 8px 0; }
-  .dash-chart-stat:last-child { border-bottom: none; }
+@media (max-width: 767px) {
+  .dash-header { direction: rtl; }
+  .dash-brand { flex-direction: row; }
+  .kpi-value { font-size: 20px; }
+  .fin-footer { direction: rtl; }
+  .fin-stat   { border-right: none; border-bottom: 1px solid var(--border); }
+  .fin-stat:last-child { border-bottom: none; }
+  .att-boxes { flex-direction: column; }
 }
 </style>
 {% endblock %}
 
 {% block content %}
 
-<!-- ── Dashboard Header ── -->
+{# ───────────────────────────────────────────────────────────
+   HEADER
+   direction:ltr on .dash-header → brand on LEFT, controls RIGHT
+   ─────────────────────────────────────────────────────────── #}
 <div class="dash-header">
-  <div class="dash-header-titles">
-    <h1>لوحة التحكم</h1>
-    <p>نظرة عامة على أداء النظام &mdash; {{ school.name }}</p>
-  </div>
-  <div class="dash-header-actions">
-    <div class="dash-date-badge">
-      <i class="bi bi-calendar3"></i>
-      {{ today.strftime('%A، %d %B %Y') }}
+  <div class="dash-brand">
+    <div class="dash-brand-icon">
+      <i class="bi bi-bar-chart-line-fill"></i>
     </div>
-    <a href="{{ request.url }}" class="dash-refresh-btn">
+    <div class="dash-brand-text">
+      <h1>لوحة التحكم</h1>
+      <p>نظرة عامة على أداء النظام</p>
+    </div>
+  </div>
+  <div class="dash-controls">
+    <div class="dash-date-pill">
+      <i class="bi bi-calendar3"></i>
+      {{ today.strftime('%B %Y') }}
+      <i class="bi bi-chevron-down"></i>
+    </div>
+    <a href="{{ request.url }}" class="dash-refresh">
       <i class="bi bi-arrow-clockwise"></i>
       تحديث
     </a>
   </div>
 </div>
 
-<!-- ── KPI Row 1 ── -->
+{# ───────────────────────────────────────────────────────────
+   KPI ROW 1 — 4 cards
+   RTL DOM order: first=rightmost visual position
+   Reference visual (R→L): طلاب | موظفين | محصّل اليوم | أقساط
+   So DOM order (rightmost first): طلاب, موظفين, محصّل, أقساط
+   ─────────────────────────────────────────────────────────── #}
 <div class="row g-3 mb-3">
-  <!-- Total Students -->
+
+  {# 1st in DOM → rightmost visual — إجمالي الطلاب #}
   <div class="col-xl-3 col-md-6">
     <div class="kpi-card">
       <div class="kpi-info">
         <div class="kpi-value">{{ stats.total_students | default(0) }}</div>
         <div class="kpi-label">إجمالي الطلاب الفعّالين</div>
       </div>
-      <div class="kpi-icon-wrap" style="background:linear-gradient(135deg,#1a3a5c,#2d63a8)">
+      <div class="kpi-icon" style="background:linear-gradient(135deg,#1a3a5c,#2d63a8)">
         <i class="bi bi-people-fill"></i>
       </div>
     </div>
   </div>
 
-  <!-- Total Employees -->
+  {# 2nd → إجمالي الموظفين #}
   <div class="col-xl-3 col-md-6">
     <div class="kpi-card">
       <div class="kpi-info">
         <div class="kpi-value">{{ stats.total_employees | default(0) }}</div>
         <div class="kpi-label">إجمالي الموظفين الفعّالين</div>
       </div>
-      <div class="kpi-icon-wrap" style="background:linear-gradient(135deg,#1aab6d,#12d678)">
+      <div class="kpi-icon" style="background:linear-gradient(135deg,#1aab6d,#12d678)">
         <i class="bi bi-person-badge-fill"></i>
       </div>
     </div>
   </div>
 
-  <!-- Fees Collected Today -->
+  {# 3rd → مبلغ محصّل اليوم #}
   <div class="col-xl-3 col-md-6">
     <div class="kpi-card">
       <div class="kpi-info">
@@ -372,188 +499,221 @@
         <div class="kpi-label">
           مبلغ محصّل اليوم (د.ع)
           {% if stats.fees_collected_today == 0 %}
-          <br><span style="font-size:11px;color:#9aabb8;">لا توجد تحصيلات اليوم</span>
+          <br><span style="font-size:11px;color:#9aabb8">لا توجد تحصيلات اليوم</span>
           {% endif %}
         </div>
       </div>
-      <div class="kpi-icon-wrap" style="background:linear-gradient(135deg,#e8a020,#f5c25a)">
+      <div class="kpi-icon" style="background:linear-gradient(135deg,#e8a020,#f5c25a)">
         <i class="bi bi-cash-coin"></i>
       </div>
     </div>
   </div>
 
-  <!-- Overdue Installments -->
+  {# 4th → leftmost visual — أقساط متأخرة #}
   <div class="col-xl-3 col-md-6">
     <div class="kpi-card">
       <div class="kpi-info">
         <div class="kpi-value">{{ stats.overdue_installments | default(0) }}</div>
         <div class="kpi-label">أقساط متأخرة</div>
       </div>
-      <div class="kpi-icon-wrap" style="background:linear-gradient(135deg,#e03e3e,#f87171)">
+      <div class="kpi-icon" style="background:linear-gradient(135deg,#e03e3e,#f87171)">
         <i class="bi bi-exclamation-triangle-fill"></i>
       </div>
     </div>
   </div>
+
 </div>
 
-<!-- ── KPI Row 2 ── -->
+{# ───────────────────────────────────────────────────────────
+   KPI ROW 2 — 4 cards
+   Reference visual (R→L): حضور اليوم | غياب اليوم | إيرادات | صافي
+   DOM order (rightmost first): حضور, غياب, إيرادات, صافي
+   ─────────────────────────────────────────────────────────── #}
 <div class="row g-3 mb-4">
-  <!-- Monthly Revenue -->
-  <div class="col-xl-3 col-md-6">
-    <div class="kpi-card">
-      <div class="kpi-info">
-        <div class="kpi-value">{{ '{:,.0f}'.format(stats.monthly_revenue) }}</div>
-        <div class="kpi-label">إيرادات الشهر (د.ع)</div>
-      </div>
-      <div class="kpi-icon-wrap" style="background:linear-gradient(135deg,#2196f3,#64b5f6)">
-        <i class="bi bi-graph-up-arrow"></i>
-      </div>
-    </div>
-  </div>
 
-  <!-- Monthly Balance -->
-  <div class="col-xl-3 col-md-6">
-    <div class="kpi-card">
-      <div class="kpi-info">
-        <div class="kpi-value">{{ '{:,.0f}'.format(stats.monthly_balance) }}</div>
-        <div class="kpi-label">صافي الشهر (د.ع)</div>
-      </div>
-      <div class="kpi-icon-wrap"
-           style="background:{{ 'linear-gradient(135deg,#1aab6d,#12d678)' if stats.monthly_balance >= 0 else 'linear-gradient(135deg,#e03e3e,#f87171)' }}">
-        <i class="bi bi-wallet2"></i>
-      </div>
-    </div>
-  </div>
-
-  <!-- Absent Today -->
-  <div class="col-xl-3 col-md-6">
-    <div class="kpi-card">
-      <div class="kpi-info">
-        <div class="kpi-value">{{ stats.absent_today | default(0) }}</div>
-        <div class="kpi-label">غياب اليوم</div>
-      </div>
-      <div class="kpi-icon-wrap" style="background:linear-gradient(135deg,#e03e3e,#f87171)">
-        <i class="bi bi-x-circle-fill"></i>
-      </div>
-    </div>
-  </div>
-
-  <!-- Present Today -->
+  {# 1st → rightmost — حضور اليوم #}
   <div class="col-xl-3 col-md-6">
     <div class="kpi-card">
       <div class="kpi-info">
         <div class="kpi-value">{{ stats.present_today | default(0) }}</div>
         <div class="kpi-label">حضور اليوم</div>
       </div>
-      <div class="kpi-icon-wrap" style="background:linear-gradient(135deg,#1aab6d,#12d678)">
+      <div class="kpi-icon" style="background:linear-gradient(135deg,#1aab6d,#12d678)">
         <i class="bi bi-check-circle-fill"></i>
       </div>
     </div>
   </div>
-</div>
 
-<!-- ── Charts Row ── -->
-<div class="row g-4 mb-4">
-
-  <!-- Finance Chart -->
-  <div class="col-xl-7">
-    <div class="dash-chart-card">
-      <div class="dash-chart-header">
-        <div class="dash-chart-header-title">
-          <i class="bi bi-bar-chart-fill" style="color:var(--primary)"></i>
-          الإيرادات والمصروفات – هذا الشهر
-        </div>
+  {# 2nd → غياب اليوم #}
+  <div class="col-xl-3 col-md-6">
+    <div class="kpi-card">
+      <div class="kpi-info">
+        <div class="kpi-value">{{ stats.absent_today | default(0) }}</div>
+        <div class="kpi-label">غياب اليوم</div>
       </div>
-      <div class="dash-chart-body">
-        <canvas id="financeChart" style="max-height:240px"></canvas>
-      </div>
-      <div class="dash-chart-footer">
-        <div class="dash-chart-stat">
-          <span class="cs-value cs-revenue">{{ '{:,.0f}'.format(stats.monthly_revenue) }}</span>
-          <span class="cs-label">
-            <i class="bi bi-circle-fill" style="font-size:8px;color:#1aab6d;margin-left:4px"></i>
-            إجمالي الإيرادات
-          </span>
-        </div>
-        <div class="dash-chart-stat">
-          <span class="cs-value cs-expense">{{ '{:,.0f}'.format(stats.monthly_expense) }}</span>
-          <span class="cs-label">
-            <i class="bi bi-circle-fill" style="font-size:8px;color:#e03e3e;margin-left:4px"></i>
-            إجمالي المصروفات
-          </span>
-        </div>
-        <div class="dash-chart-stat">
-          <span class="cs-value {{ 'cs-balance-pos' if stats.monthly_balance >= 0 else 'cs-balance-neg' }}">
-            {{ '{:,.0f}'.format(stats.monthly_balance) }}
-          </span>
-          <span class="cs-label">
-            <i class="bi bi-circle-fill" style="font-size:8px;color:#1a3a5c;margin-left:4px"></i>
-            صافي الشهر
-          </span>
-        </div>
+      <div class="kpi-icon" style="background:linear-gradient(135deg,#e03e3e,#f87171)">
+        <i class="bi bi-x-circle-fill"></i>
       </div>
     </div>
   </div>
 
-  <!-- Attendance Chart -->
+  {# 3rd → إيرادات الشهر #}
+  <div class="col-xl-3 col-md-6">
+    <div class="kpi-card">
+      <div class="kpi-info">
+        <div class="kpi-value">{{ '{:,.0f}'.format(stats.monthly_revenue) }}</div>
+        <div class="kpi-label">إيرادات الشهر (د.ع)</div>
+      </div>
+      <div class="kpi-icon" style="background:linear-gradient(135deg,#2196f3,#64b5f6)">
+        <i class="bi bi-graph-up-arrow"></i>
+      </div>
+    </div>
+  </div>
+
+  {# 4th → leftmost — صافي الشهر #}
+  <div class="col-xl-3 col-md-6">
+    <div class="kpi-card">
+      <div class="kpi-info">
+        <div class="kpi-value">{{ '{:,.0f}'.format(stats.monthly_balance) }}</div>
+        <div class="kpi-label">صافي الشهر (د.ع)</div>
+      </div>
+      <div class="kpi-icon"
+           style="background:{{ 'linear-gradient(135deg,#1aab6d,#12d678)' if stats.monthly_balance >= 0 else 'linear-gradient(135deg,#e03e3e,#f87171)' }}">
+        <i class="bi bi-wallet2"></i>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+{# ───────────────────────────────────────────────────────────
+   CHARTS ROW
+   RTL DOM order: first=RIGHT, second=LEFT
+   Reference: Finance LEFT, Attendance RIGHT
+   → Attendance FIRST in DOM (→ right), Finance SECOND (→ left)
+   ─────────────────────────────────────────────────────────── #}
+<div class="row g-4 mb-4">
+
+  {# ── ATTENDANCE — FIRST in DOM → visually RIGHT ── #}
   <div class="col-xl-5">
-    <div class="dash-chart-card">
-      <div class="dash-chart-header">
-        <div class="dash-chart-header-title">
+    <div class="dash-card">
+      <div class="dash-card-header">
+        <div class="dash-card-title" style="direction:rtl">
           <i class="bi bi-pie-chart-fill" style="color:var(--primary)"></i>
           حضور اليوم
         </div>
       </div>
-      <div class="dash-chart-body justify-content-center">
+
+      <div class="att-card-body">
         {% set total_att = stats.present_today + stats.absent_today %}
         {% if total_att > 0 %}
           {% set pct_present = ((stats.present_today / total_att) * 100) | round(1) %}
           {% set pct_absent  = ((stats.absent_today  / total_att) * 100) | round(1) %}
+
+          {# direction:ltr on parent → donut LEFT, boxes RIGHT #}
           <div class="att-donut-wrap">
-            <canvas id="attendanceChart"></canvas>
-            <div class="att-donut-center">
-              <span class="att-center-pct">{{ pct_present }}%</span>
-              <span class="att-center-lbl">نسبة الحضور</span>
-            </div>
-          </div>
-          <div class="att-legend">
-            <div class="att-legend-item att-present">
-              <div class="att-legend-left">
-                <div class="att-legend-dot" style="background:#1aab6d"></div>
-                <span class="att-legend-lbl">حاضر</span>
-              </div>
-              <div class="att-legend-count">
-                <span class="att-legend-num">{{ stats.present_today }}</span>
-                <span class="att-legend-pct">{{ pct_present }}%</span>
-              </div>
-            </div>
-            <div class="att-legend-item att-absent">
-              <div class="att-legend-left">
-                <div class="att-legend-dot" style="background:#e03e3e"></div>
-                <span class="att-legend-lbl">غائب</span>
-              </div>
-              <div class="att-legend-count">
-                <span class="att-legend-num">{{ stats.absent_today }}</span>
-                <span class="att-legend-pct">{{ pct_absent }}%</span>
+            <div class="att-donut-inner">
+              <canvas id="attendanceChart"></canvas>
+              <div class="att-donut-center">
+                <span class="att-center-pct">{{ pct_present }}%</span>
+                <span class="att-center-lbl">نسبة الحضور</span>
               </div>
             </div>
           </div>
+
+          <div class="att-boxes">
+            <div class="att-box att-box-present">
+              <div class="att-box-top">
+                <div class="att-box-icon"><i class="bi bi-check-lg"></i></div>
+                <span class="att-box-lbl">حاضر</span>
+              </div>
+              <span class="att-box-num">{{ stats.present_today }}</span>
+              <span class="att-box-pct">{{ pct_present }}%</span>
+            </div>
+            <div class="att-box att-box-absent">
+              <div class="att-box-top">
+                <div class="att-box-icon"><i class="bi bi-x-lg"></i></div>
+                <span class="att-box-lbl">غائب</span>
+              </div>
+              <span class="att-box-num">{{ stats.absent_today }}</span>
+              <span class="att-box-pct">{{ pct_absent }}%</span>
+            </div>
+          </div>
+
         {% else %}
-          <div class="text-center text-muted py-5">
-            <i class="bi bi-calendar-x" style="font-size:40px;opacity:.3"></i>
-            <p class="mt-3 mb-0">لم يُسجَّل حضور اليوم بعد</p>
+          <div class="w-100 text-center text-muted py-5" style="direction:rtl">
+            <i class="bi bi-calendar-x" style="font-size:42px;opacity:.25"></i>
+            <p class="mt-3 mb-0 small">لم يُسجَّل حضور اليوم بعد</p>
           </div>
         {% endif %}
       </div>
     </div>
   </div>
 
+  {# ── FINANCE — SECOND in DOM → visually LEFT ── #}
+  <div class="col-xl-7">
+    <div class="dash-card">
+      <div class="dash-card-header">
+        <div class="fin-header-top">
+          <div class="dash-card-title" style="direction:rtl">
+            <i class="bi bi-bar-chart-fill" style="color:var(--primary)"></i>
+            الإيرادات والمصروفات – هذا الشهر
+          </div>
+          <span class="fin-period">شهري <i class="bi bi-chevron-down" style="font-size:9px;opacity:.6"></i></span>
+        </div>
+        <div class="fin-legend">
+          <span class="fin-legend-item">
+            <span class="legend-dot" style="background:#1aab6d"></span>إيرادات
+          </span>
+          <span class="fin-legend-item">
+            <span class="legend-dot" style="background:#e03e3e"></span>مصروفات
+          </span>
+          <span class="fin-legend-item">
+            <span class="legend-dash" style="background:#1a3a5c"></span>صافي
+          </span>
+        </div>
+      </div>
+
+      <div class="dash-card-body">
+        <canvas id="financeChart" style="max-height:230px"></canvas>
+      </div>
+
+      <div class="fin-footer">
+        <div class="fin-stat">
+          <span class="fin-stat-val" style="color:#1aab6d">{{ '{:,.0f}'.format(stats.monthly_revenue) }}</span>
+          <span class="fin-stat-lbl">
+            <i class="bi bi-bar-chart-fill" style="color:#1aab6d"></i>
+            إجمالي الإيرادات
+          </span>
+        </div>
+        <div class="fin-stat">
+          <span class="fin-stat-val" style="color:#e03e3e">{{ '{:,.0f}'.format(stats.monthly_expense) }}</span>
+          <span class="fin-stat-lbl">
+            <i class="bi bi-pie-chart-fill" style="color:#e03e3e"></i>
+            إجمالي المصروفات
+          </span>
+        </div>
+        <div class="fin-stat">
+          <span class="fin-stat-val"
+                style="color:{{ '#1a3a5c' if stats.monthly_balance >= 0 else '#e03e3e' }}">
+            {{ '{:,.0f}'.format(stats.monthly_balance) }}
+          </span>
+          <span class="fin-stat-lbl">
+            <i class="bi bi-graph-up-arrow" style="color:#1a3a5c"></i>
+            صافي هذا الشهر
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
-<!-- ── Recent Students + Notifications ── -->
+{# ───────────────────────────────────────────────────────────
+   BOTTOM ROW — Recent Students + Notifications
+   ─────────────────────────────────────────────────────────── #}
 <div class="row g-4">
 
-  <!-- Recent Students -->
   <div class="col-xl-7">
     <div class="dash-bottom-card">
       <div class="dash-bottom-header">
@@ -561,9 +721,9 @@
         آخر الطلاب المضافين
         <a href="{{ url_for('students.index') }}"
            class="btn btn-sm btn-outline-secondary me-auto"
-           style="font-size:12px;padding:4px 12px;border-radius:8px;">عرض الكل</a>
+           style="font-size:12px;padding:4px 12px;border-radius:8px">عرض الكل</a>
       </div>
-      <div class="table-wrapper" style="border:none;border-radius:0;">
+      <div class="table-wrapper" style="border:none;border-radius:0">
         <table class="table table-hover mb-0">
           <thead>
             <tr>
@@ -610,7 +770,6 @@
     </div>
   </div>
 
-  <!-- Notifications -->
   <div class="col-xl-5">
     <div class="dash-bottom-card">
       <div class="dash-bottom-header">
@@ -618,11 +777,11 @@
         آخر الإشعارات
         <a href="{{ url_for('notifications.index') }}"
            class="btn btn-sm btn-outline-secondary me-auto"
-           style="font-size:12px;padding:4px 12px;border-radius:8px;">عرض الكل</a>
+           style="font-size:12px;padding:4px 12px;border-radius:8px">عرض الكل</a>
       </div>
       <div>
         {% for n in recent_notifications %}
-        <div class="notif-item">
+        <div class="notif-row">
           <div class="notif-icon"
                style="{% if n.ntype == 'absence' %}background:#fef0f0;color:#e03e3e;
                       {% elif n.ntype == 'payment' %}background:#e8f8f0;color:#1aab6d;
@@ -630,16 +789,16 @@
                       {% else %}background:#fff8ec;color:#e8a020;{% endif %}">
             <i class="bi bi-{% if n.ntype == 'absence' %}person-x{% elif n.ntype == 'payment' %}cash{% elif n.ntype == 'grade' %}patch-check{% else %}megaphone{% endif %}-fill"></i>
           </div>
-          <div style="flex:1;min-width:0;">
+          <div style="flex:1;min-width:0">
             <div class="notif-title">{{ n.title }}</div>
             <div class="notif-body">{{ n.body[:80] }}{% if n.body|length > 80 %}…{% endif %}</div>
             <div class="notif-time">{{ n.created_at.strftime('%Y-%m-%d %H:%M') }}</div>
           </div>
         </div>
         {% else %}
-        <div class="text-center text-muted py-5">
-          <i class="bi bi-bell-slash" style="font-size:32px;opacity:.3"></i>
-          <p class="mt-2 mb-0">لا توجد إشعارات</p>
+        <div class="text-center text-muted py-5" style="direction:rtl">
+          <i class="bi bi-bell-slash" style="font-size:34px;opacity:.25"></i>
+          <p class="mt-2 mb-0 small">لا توجد إشعارات</p>
         </div>
         {% endfor %}
       </div>
@@ -652,7 +811,7 @@
 
 {% block extra_js %}
 <script>
-// ── Attendance Donut ────────────────────────────────────────
+// ── Attendance Donut ─────────────────────────────────────────
 {% if stats.present_today + stats.absent_today > 0 %}
 new Chart(document.getElementById('attendanceChart'), {
   type: 'doughnut',
@@ -671,10 +830,11 @@ new Chart(document.getElementById('attendanceChart'), {
     plugins: {
       legend: { display: false },
       tooltip: {
+        rtl: true,
         callbacks: {
           label: function(ctx) {
             var total = ctx.dataset.data.reduce(function(a,b){return a+b;},0);
-            var pct = total > 0 ? ((ctx.parsed / total) * 100).toFixed(1) : 0;
+            var pct   = total > 0 ? ((ctx.parsed / total) * 100).toFixed(1) : 0;
             return ' ' + ctx.label + ': ' + ctx.parsed + ' (' + pct + '%)';
           }
         }
@@ -684,7 +844,7 @@ new Chart(document.getElementById('attendanceChart'), {
 });
 {% endif %}
 
-// ── Finance Bar ─────────────────────────────────────────────
+// ── Finance Bar Chart ────────────────────────────────────────
 new Chart(document.getElementById('financeChart'), {
   type: 'bar',
   data: {
@@ -697,9 +857,9 @@ new Chart(document.getElementById('financeChart'), {
         {{ stats.monthly_balance }}
       ],
       backgroundColor: [
-        'rgba(26,171,109,.85)',
-        'rgba(224,62,62,.85)',
-        '{{ "rgba(26,58,92,.85)" if stats.monthly_balance >= 0 else "rgba(224,62,62,.85)" }}'
+        'rgba(26,171,109,.82)',
+        'rgba(224,62,62,.82)',
+        '{{ "rgba(26,58,92,.82)" if stats.monthly_balance >= 0 else "rgba(224,62,62,.82)" }}'
       ],
       borderRadius: 10,
       borderSkipped: false,
@@ -711,21 +871,24 @@ new Chart(document.getElementById('financeChart'), {
     plugins: {
       legend: { display: false },
       tooltip: {
+        rtl: true,
         callbacks: {
           label: function(ctx) {
-            return ' ' + ctx.dataset.label + ': ' + ctx.parsed.y.toLocaleString('ar-IQ') + ' د.ع';
+            return ' ' + ctx.dataset.label + ': ' +
+              ctx.parsed.y.toLocaleString() + ' د.ع';
           }
         }
       }
     },
     scales: {
       y: {
+        beginAtZero: true,
         ticks: {
           font: { family: 'Cairo', size: 12 },
           color: '#64748b',
           callback: function(v) {
-            if (Math.abs(v) >= 1000000) return (v/1000000).toFixed(1) + 'م';
-            if (Math.abs(v) >= 1000) return (v/1000).toFixed(0) + 'ك';
+            if (Math.abs(v) >= 1000000) return (v / 1000000).toFixed(1) + 'م';
+            if (Math.abs(v) >= 1000)    return (v / 1000).toFixed(0) + 'ك';
             return v;
           }
         },
