@@ -117,15 +117,19 @@ def role_required(*roles: str):
 
 def photo_url(photo: str | None) -> str | None:
     """
-    Return an absolute URL for a stored photo value, safe to embed in JSON.
+    Return an absolute URL for a stored photo / media value, safe for JSON.
 
-    - Supabase / CDN URLs (http/https) → returned as-is.
-    - Legacy relative paths → absolute HTTPS URL built via url_for('static'),
-      only when the file exists on disk (avoids dead links after server restarts).
-      url_for respects PREFERRED_URL_SCHEME='https' from ProductionConfig, so
-      the URL is always HTTPS even when Flask sits behind Nginx/Cloudflare that
-      terminates SSL and forwards plain HTTP internally.
+    - Supabase / CDN URLs (http/https) → returned as-is (external pass-through).
+    - Locally-stored uploads ('uploads/...') → absolute URL served by the Flask
+      `media` blueprint (/media/uploads/...), only when the file exists on disk.
+      The media route is reachable through the reverse proxy regardless of how
+      the proxy maps the /static/ location, so newly uploaded files load even
+      when nginx's /static/ alias does not point at app/static/uploads/.
     - None / empty / missing file → None (mobile client shows local placeholder).
+
+    The scheme is taken from PREFERRED_URL_SCHEME (config) — 'https' in
+    production, 'http' in local dev — so the URL is HTTPS behind the VPS proxy
+    even though Flask itself receives plain HTTP from nginx.
     """
     if not photo:
         return None
@@ -133,10 +137,23 @@ def photo_url(photo: str | None) -> str | None:
         return photo
     import os
     try:
-        full_path = os.path.join(current_app.root_path, 'static', photo)
+        # Normalize: drop any leading slash and an optional 'static/' prefix so
+        # `rel` is always a path relative to the Flask static folder.
+        rel = photo.lstrip('/')
+        if rel.startswith('static/'):
+            rel = rel[len('static/'):]
+
+        full_path = os.path.join(current_app.root_path, 'static', rel)
         if not os.path.isfile(full_path):
             return None
-        return url_for('static', filename=photo, _external=True)
+
+        scheme = current_app.config.get('PREFERRED_URL_SCHEME', 'https')
+
+        # Uploaded media → served by the media blueprint (proxy-independent).
+        if rel.startswith('uploads/'):
+            return url_for('media.serve', stored=rel, _external=True, _scheme=scheme)
+        # Any other static asset (rare in mobile payloads) keeps the /static URL.
+        return url_for('static', filename=rel, _external=True, _scheme=scheme)
     except Exception:
         return None
 

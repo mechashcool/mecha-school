@@ -106,6 +106,8 @@ def create_app(config_name=None):
     from app.blueprints.shifts            import shifts_bp
     # Live badge polling — lightweight JSON for in-page badge sync
     from app.blueprints.live              import live_bp
+    # Media — serves locally-stored uploads independently of the nginx /static alias
+    from app.blueprints.media             import media_bp
 
     app.register_blueprint(auth_bp,          url_prefix='/auth')
     app.register_blueprint(admin_bp,         url_prefix='/admin')
@@ -140,6 +142,7 @@ def create_app(config_name=None):
     app.register_blueprint(buildings_bp,           url_prefix='/buildings')
     app.register_blueprint(shifts_bp,              url_prefix='/attendance-shifts')
     app.register_blueprint(live_bp,                url_prefix='/live')
+    app.register_blueprint(media_bp)   # route already includes the /media prefix
 
     # ── CSRF exemptions ───────────────────────────────────────────────────────
     # These blueprints authenticate via request headers (JWT bearer token or a

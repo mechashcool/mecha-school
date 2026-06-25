@@ -2710,6 +2710,9 @@ def school_board_video_create():
                                        video=None, audience_labels=BOARD_AUDIENCES,
                                        media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
             final_url = result
+            # Diagnostics: record what was stored so a local path vs external/
+            # Supabase URL is obvious in the logs (no secrets, no file contents).
+            _sb_log.info('school_board_video_create stored media path=%s', final_url)
         elif fallback_url and fallback_url.startswith(('http://', 'https://')):
             final_url = fallback_url
 
@@ -2825,6 +2828,7 @@ def school_board_video_edit(video_id):
                                        video=video, audience_labels=BOARD_AUDIENCES,
                                        media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
             final_url = result
+            _sb_log.info('school_board_video_edit stored media path=%s', final_url)
         elif fallback_url and fallback_url.startswith(('http://', 'https://')):
             final_url = fallback_url
 

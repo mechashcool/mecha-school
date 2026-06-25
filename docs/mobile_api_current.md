@@ -66,12 +66,31 @@ All responses are JSON with an `ok` boolean field.
 |---|---|
 | Supabase public URL (`https://…supabase.co/…`) | Passed through unchanged ✅ |
 | External video URL (YouTube, etc.) | Passed through unchanged ✅ |
-| Local relative path + file on disk | `https://school.smartcoreiq.cloud/static/<path>` ✅ |
+| Local relative path + file on disk | `https://school.smartcoreiq.cloud/media/<path>` ✅ |
 | Local relative path + file NOT on disk | `null` ⚠️ (old Render uploads lost during migration) |
 
 **Important for Flutter:** Always treat media/photo/attachment fields as nullable. Show a local placeholder when the value is `null`.
 
-**New uploads** (homework attachments, leave-request attachments, student photos, etc.) always go to Supabase Storage when `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` are set on the VPS, and return absolute Supabase URLs. This is the expected production path.
+### Local media is served via `/media/uploads/...` (not `/static/uploads/...`)
+
+As of 2026-06-25, locally-stored uploads (School Board images/videos, photos,
+homework/leave attachments) are returned as
+`https://school.smartcoreiq.cloud/media/uploads/<path>` and served by the Flask
+`media` blueprint. This guarantees the file loads regardless of how the VPS
+nginx maps its `/static/` location.
+
+- **Why not `/static/uploads/...`?** Uploads are written to the Flask package's
+  `app/static/uploads/` folder. On the VPS the nginx `/static/` location did not
+  serve that directory (it served the repo-root `static/` folder, which has no
+  `uploads/`), so newly uploaded files returned **404**. The `/media/...` route
+  is forwarded to Gunicorn and serves the file from the exact directory it was
+  written to. Both URLs are HTTPS and open directly in a browser.
+- Supabase/external URLs are still passed through **unchanged**.
+- The route supports HTTP Range requests, so video seeking works.
+
+**New uploads** go to Supabase Storage when `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`
+are set on the VPS (returning absolute Supabase URLs). When Supabase is not
+configured, uploads are stored locally and returned as `/media/uploads/...` URLs.
 
 ---
 
@@ -1608,11 +1627,16 @@ curl -s https://school.smartcoreiq.cloud/api/mobile/v1/school/board \
 # Verify: video.media_url and announcement.media_url are absolute HTTPS URLs or null
 ```
 
-### Verify static file URL format
+### Verify media file URL format
 ```bash
-# Pick any photo URL from the /me or /parent/children response and verify it returns 200
-curl -I "https://school.smartcoreiq.cloud/static/uploads/students/example.jpg"
-# Expected: HTTP/2 200 with Cache-Control header (Nginx direct serve)
+# Pick any photo/media URL from /me, /parent/children, or /school/board and verify 200.
+# Local uploads are served by the Flask media blueprint at /media/uploads/...
+curl -I "https://school.smartcoreiq.cloud/media/uploads/students/example.jpg"
+# Expected: HTTP/2 200 with Cache-Control header
+
+# School Board video example (Range support — video seeking)
+curl -I "https://school.smartcoreiq.cloud/media/uploads/schools/3/board/media/<uuid>.mp4"
+# Expected: HTTP/2 200, Accept-Ranges: bytes
 ```
 
 ### Check Nginx logs for mobile requests on VPS
@@ -1643,6 +1667,7 @@ docker logs <web_container_name> --tail 200 | grep -E "ERROR|mecha.mobile"
 |---|---|
 | **Old media paths** | Student/employee photos uploaded before migration that used local `uploads/…` paths will return `null` in the API. Files are not on the new VPS disk. |
 | **Supabase requirement** | Set `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, and `SUPABASE_BUCKET` on VPS. Without these, uploads fall back to the VPS container's local disk and will be lost on container restart. |
-| **HTTPS URLs for static files** | Fixed (2026-06-25): `photo_url()` now uses `url_for('static', _external=True)` which respects `PREFERRED_URL_SCHEME='https'` from `ProductionConfig`. Previously returned `http://` scheme behind Nginx/Cloudflare. |
+| **HTTPS URLs for media files** | Fixed (2026-06-25): `photo_url()` forces the `PREFERRED_URL_SCHEME` ('https' in production) on generated URLs, so media URLs are HTTPS even though Flask receives plain HTTP from nginx. |
+| **School Board local media 404** | Fixed (2026-06-25): newly uploaded School Board images/videos returned `/static/uploads/...` URLs that the VPS nginx did not serve (uploads live in `app/static/uploads/`, but nginx `/static/` served the repo-root `static/` folder). Local uploads are now served by the Flask `media` blueprint at `/media/uploads/...`, which is proxy-independent. Supabase/external URLs pass through unchanged. |
 | **Teacher leave JSON** | Fixed (2026-06-25): `POST /teacher/leave-requests` now accepts both `application/json` and `multipart/form-data`, consistent with the parent leave endpoint. |
-| **Nginx SSL** | Nginx config listens on port 80 only. HTTPS is terminated by an upstream proxy (Cloudflare or load balancer). No change needed in `nginx.conf`. |
+| **Nginx SSL** | HTTPS is terminated by the upstream proxy. The `/media/...` route is served by Gunicorn (no nginx static alias required). Optional optimization: add an nginx `location /media/uploads/ { alias /var/www/mecha-school/app/static/uploads/; }` to offload media serving from Gunicorn. |
