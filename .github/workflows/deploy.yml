@@ -8,21 +8,10 @@ on:
 
 jobs:
   deploy:
-    name: Deploy to VPS
-    runs-on: ubuntu-latest
+    name: Deploy on VPS
+    runs-on: self-hosted
 
     steps:
-      - name: Configure SSH
+      - name: Run deploy script locally on VPS
         run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/vps_key
-          chmod 600 ~/.ssh/vps_key
-          ssh-keyscan -p 22 -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts || true
-
-      - name: Test SSH connection
-        run: |
-          ssh -i ~/.ssh/vps_key -o StrictHostKeyChecking=no "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" "echo VPS_OK"
-
-      - name: Run deploy script on VPS
-        run: |
-          ssh -i ~/.ssh/vps_key -o StrictHostKeyChecking=no "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" "bash /root/deploy-mecha.sh"
+          bash /root/deploy-mecha.sh
