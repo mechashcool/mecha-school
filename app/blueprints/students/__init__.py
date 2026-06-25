@@ -2,7 +2,7 @@
 from decimal import Decimal, InvalidOperation
 
 from flask import (Blueprint, render_template, redirect, url_for,
-                   flash, request, abort)
+                   flash, request, abort, jsonify)
 from flask_login import login_required, current_user
 from sqlalchemy.orm import joinedload
 from app.models import (db, Student, Section, Grade, AcademicYear, StudentDocument,
@@ -138,6 +138,106 @@ def index():
                            buildings_enabled=buildings_on,
                            buildings_list=buildings_list,
                            building_id=building_id)
+
+
+@students_bp.route('/search')
+@login_required
+@permission_required('view_students')
+def search():
+    """Debounced AJAX live-search endpoint — returns JSON for client-side rendering."""
+    school = get_current_school()
+    if not school:
+        return jsonify({'items': [], 'total': 0, 'page': 1, 'pages': 0,
+                        'has_next': False, 'has_prev': False,
+                        'next_num': None, 'prev_num': None}), 200
+
+    q           = request.args.get('q', '').strip()
+    page        = request.args.get('page', 1, type=int)
+    status      = request.args.get('status', '')
+    grade_id    = request.args.get('grade_id', type=int)
+    section_id  = request.args.get('section_id', type=int)
+    building_id = request.args.get('building_id', type=int)
+
+    buildings_on         = school_buildings_enabled(school)
+    allowed_building_ids = user_allowed_building_ids(current_user, school)
+
+    query = Student.query.filter_by(school_id=school.id)
+    query = apply_building_scope_to_students(query, current_user, school)
+
+    if _is_teacher():
+        teacher_sids = get_teacher_section_ids(current_user)
+        if teacher_sids:
+            query = query.filter(Student.section_id.in_(teacher_sids))
+        else:
+            query = query.filter(Student.id == -1)
+
+    if q:
+        query = query.filter(
+            Student.full_name.ilike(f'%{q}%') |
+            Student.student_id.ilike(f'%{q}%')
+        )
+
+    if status == 'archived':
+        query = query.filter_by(status='archived')
+    elif status:
+        query = query.filter_by(status=status)
+    else:
+        query = query.filter(Student.status != 'archived')
+
+    if buildings_on and building_id:
+        if allowed_building_ids is None or building_id in allowed_building_ids:
+            query = query.filter(Student.building_id == building_id)
+
+    if section_id:
+        query = query.filter_by(section_id=section_id)
+    elif grade_id:
+        _sids = [s.id for s in Section.query.filter_by(grade_id=grade_id).all()]
+        if _sids:
+            query = query.filter(Student.section_id.in_(_sids))
+        else:
+            query = query.filter(Student.id == -1)
+
+    paginated = (query
+                 .options(joinedload(Student.section).joinedload(Section.grade))
+                 .execution_options(include_all_years=True)
+                 .order_by(Student.created_at.desc())
+                 .paginate(page=page, per_page=20, error_out=False))
+
+    from app.utils.helpers import resolve_photo_url as _rpu
+    items = []
+    for s in paginated.items:
+        section_label = ''
+        if s.section:
+            section_label = f'{s.section.grade.name} / {s.section.name}'
+        items.append({
+            'id':             s.id,
+            'student_id':     s.student_id,
+            'full_name':      s.full_name,
+            'gender':         s.gender,
+            'section_label':  section_label,
+            'building_name':  (s.building.name if buildings_on and s.building else ''),
+            'guardian_name':  s.guardian_name or '',
+            'guardian_phone': s.guardian_phone or '',
+            'status':         s.status,
+            'enrollment_date': (s.enrollment_date.strftime('%Y-%m-%d')
+                                if s.enrollment_date else ''),
+            'photo_url':      _rpu(s.photo) or '',
+            'view_url':       url_for('students.view',    student_id=s.id),
+            'edit_url':       url_for('students.edit',    student_id=s.id),
+            'archive_url':    url_for('students.archive', student_id=s.id),
+        })
+
+    return jsonify({
+        'items':        items,
+        'total':        paginated.total,
+        'page':         paginated.page,
+        'pages':        paginated.pages,
+        'has_next':     paginated.has_next,
+        'has_prev':     paginated.has_prev,
+        'next_num':     paginated.next_num,
+        'prev_num':     paginated.prev_num,
+        'buildings_on': buildings_on,
+    })
 
 
 @students_bp.route('/create', methods=['GET', 'POST'])

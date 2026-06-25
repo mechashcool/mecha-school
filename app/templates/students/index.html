@@ -6,7 +6,7 @@
 <div class="page-header">
   <div>
     <h1 class="page-title">الطلاب</h1>
-    <p class="page-subtitle">إجمالي {{ students.total }} طالب</p>
+    <p class="page-subtitle" id="stu-total-label">إجمالي {{ students.total }} طالب</p>
   </div>
   {% if current_user.has_permission('add_student') and not is_historical_year and 'students.create' in enabled_features %}
   <a href="{{ url_for('students.create') }}" class="btn btn-primary">
@@ -27,9 +27,9 @@
     <form method="GET" class="row g-2 align-items-end" id="studentFilterForm">
       <div class="col-md-3">
         <label class="form-label mb-1" style="font-size:12px">بحث</label>
-        <input type="text" name="q" class="form-control"
+        <input type="text" name="q" id="stu-search-input" class="form-control"
                placeholder="بحث بالاسم أو رقم الطالب..."
-               value="{{ search }}">
+               value="{{ search }}" autocomplete="off">
       </div>
       <div class="col-md-2">
         <label class="form-label mb-1" style="font-size:12px">الحالة</label>
@@ -104,7 +104,7 @@
           <th>الإجراءات</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody id="stu-tbody">
         {% for s in students.items %}
         <tr>
           <td><code class="text-primary-custom fw-600">{{ s.student_id }}</code></td>
@@ -217,11 +217,11 @@
     </table>
   </div>
 
-  {% if students.pages > 1 %}
-  <div class="card-footer d-flex justify-content-between align-items-center">
-    <small class="text-muted">عرض {{ students.items|length }} من {{ students.total }}</small>
+  <div id="stu-pagination-wrap"
+       class="{{ '' if students.pages > 1 else 'd-none' }} card-footer d-flex justify-content-between align-items-center">
+    <small class="text-muted" id="stu-page-info">عرض {{ students.items|length }} من {{ students.total }}</small>
     <nav>
-      <ul class="pagination pagination-sm mb-0">
+      <ul class="pagination pagination-sm mb-0" id="stu-pagination">
         {% for p in students.iter_pages() %}
           {% if p %}
           <li class="page-item {{ 'active' if p == students.page }}">
@@ -234,10 +234,198 @@
       </ul>
     </nav>
   </div>
-  {% endif %}
 </div>
 
 {# ── Hard-delete confirmation modal (super_admin only) ─────────────────────── #}
+{% block extra_js %}
+<script>
+(function () {
+  'use strict';
+
+  const searchInput    = document.getElementById('stu-search-input');
+  const tbody          = document.getElementById('stu-tbody');
+  const totalLabel     = document.getElementById('stu-total-label');
+  const pageInfo       = document.getElementById('stu-page-info');
+  const paginationEl   = document.getElementById('stu-pagination');
+  const paginationWrap = document.getElementById('stu-pagination-wrap');
+
+  const SEARCH_URL       = "{{ url_for('students.search') }}";
+  const BUILDINGS_ON     = {{ 'true' if buildings_enabled else 'false' }};
+  const IS_HISTORICAL    = {{ 'true' if is_historical_year else 'false' }};
+  const CAN_EDIT         = {{ 'true' if (current_user.has_permission('edit_student') and not is_historical_year and 'students.edit' in enabled_features) else 'false' }};
+  const CAN_DELETE       = {{ 'true' if (current_user.has_permission('delete_student') and not is_historical_year and 'students.delete' in enabled_features) else 'false' }};
+  const IS_SUPER_ADMIN   = {{ 'true' if current_user.is_super_admin else 'false' }};
+  const COL_COUNT        = BUILDINGS_ON ? 9 : 8;
+
+  let debounceTimer = null;
+  let activeXhr     = null;
+
+  function getFilterParams() {
+    const form = document.getElementById('studentFilterForm');
+    const params = new URLSearchParams();
+    params.set('q', searchInput.value.trim());
+    ['status', 'grade_id', 'section_id', 'building_id'].forEach(name => {
+      const el = form ? form.elements[name] : null;
+      if (el && el.value) params.set(name, el.value);
+    });
+    return params;
+  }
+
+  function statusBadge(status) {
+    if (status === 'active')      return '<span class="badge-status badge-active">فعّال</span>';
+    if (status === 'transferred') return '<span class="badge-status badge-pending">منقول</span>';
+    if (status === 'withdrawn')   return '<span class="badge-status badge-inactive">مسحوب</span>';
+    if (status === 'graduated')   return '<span class="badge-status badge-pending">متخرج</span>';
+    if (status === 'archived')    return '<span class="badge-status" style="background:#f0f4f8;color:#6b7a8d;border:1px solid #d1dbe6">مؤرشف</span>';
+    return `<span class="badge-status badge-inactive">${status}</span>`;
+  }
+
+  function avatarHtml(s) {
+    if (s.photo_url) {
+      return `<img src="${s.photo_url}" style="width:32px;height:32px;border-radius:8px;object-fit:cover">`;
+    }
+    const initial = s.full_name ? s.full_name[0] : '?';
+    return `<div style="width:32px;height:32px;border-radius:8px;background:#1a3a5c;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:13px">${initial}</div>`;
+  }
+
+  function actionsHtml(s) {
+    let html = `<div class="d-flex gap-1">
+      <a href="${s.view_url}" class="btn btn-sm btn-outline-primary" title="عرض"><i class="bi bi-eye"></i></a>`;
+    if (CAN_EDIT) {
+      html += `<a href="${s.edit_url}" class="btn btn-sm btn-outline-secondary" title="تعديل"><i class="bi bi-pencil"></i></a>`;
+    }
+    if (CAN_DELETE) {
+      if (s.status !== 'archived') {
+        html += `<form method="POST" action="${s.archive_url}" class="d-inline">
+          <input type="hidden" name="status" value="archived">
+          <button class="btn btn-sm btn-outline-secondary" title="أرشفة الطالب"
+                  data-confirm="أرشفة الطالب ${escHtml(s.full_name)}؟ ستختفي من القوائم النشطة لكن بياناته ستبقى محفوظة.">
+            <i class="bi bi-archive"></i></button></form>`;
+      } else {
+        html += `<form method="POST" action="${s.archive_url}" class="d-inline">
+          <input type="hidden" name="status" value="active">
+          <button class="btn btn-sm btn-outline-success" title="إعادة تفعيل"
+                  data-confirm="إعادة تفعيل الطالب ${escHtml(s.full_name)}؟">
+            <i class="bi bi-person-check"></i></button></form>`;
+      }
+    }
+    if (IS_SUPER_ADMIN && !IS_HISTORICAL) {
+      html += `<button class="btn btn-sm btn-danger" title="حذف نهائي (مسؤول النظام)"
+                       onclick="openHardDeleteModal(${s.id}, ${JSON.stringify(s.full_name)})">
+        <i class="bi bi-trash-fill"></i></button>`;
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function escHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+  }
+
+  function renderRows(items) {
+    if (!items.length) {
+      tbody.innerHTML = `<tr><td colspan="${COL_COUNT}" class="text-center text-muted py-5">
+        <i class="bi bi-search" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+        لا توجد نتائج مطابقة لبحثك</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = items.map(s => {
+      const genderLabel = s.gender === 'male' ? 'ذكر' : 'أنثى';
+      const sectionCell = s.section_label
+        ? `<span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">${escHtml(s.section_label)}</span>`
+        : '<span class="text-muted">—</span>';
+      const buildingCell = BUILDINGS_ON
+        ? `<td>${s.building_name
+            ? `<span class="badge" style="background:#eef6ee;color:#2e6b3e;font-weight:600"><i class="bi bi-building me-1"></i>${escHtml(s.building_name)}</span>`
+            : '<span class="text-muted">—</span>'}</td>`
+        : '';
+      return `<tr>
+        <td><code class="text-primary-custom fw-600">${escHtml(s.student_id)}</code></td>
+        <td><div class="d-flex align-items-center gap-2">${avatarHtml(s)}<span class="fw-600">${escHtml(s.full_name)}</span></div></td>
+        <td>${genderLabel}</td>
+        <td>${sectionCell}</td>
+        ${buildingCell}
+        <td><div style="font-size:13px">${escHtml(s.guardian_name) || '—'}</div>
+            <div style="font-size:11.5px;color:#9aabb8">${escHtml(s.guardian_phone)}</div></td>
+        <td>${statusBadge(s.status)}</td>
+        <td style="font-size:12.5px;color:#6b7a8d">${s.enrollment_date}</td>
+        <td>${actionsHtml(s)}</td>
+      </tr>`;
+    }).join('');
+
+    // Re-attach data-confirm handlers for the newly injected forms
+    tbody.querySelectorAll('[data-confirm]').forEach(btn => {
+      btn.addEventListener('click', function (e) {
+        if (!confirm(this.getAttribute('data-confirm'))) e.preventDefault();
+      });
+    });
+  }
+
+  function renderPagination(data) {
+    if (data.pages <= 1) {
+      paginationWrap.classList.add('d-none');
+      return;
+    }
+    paginationWrap.classList.remove('d-none');
+    pageInfo.textContent = `عرض ${data.items ? data.items.length : 0} من ${data.total}`;
+    const p = data.page, total = data.pages;
+    let html = '';
+    if (data.has_prev) {
+      html += `<li class="page-item"><a class="page-link" href="#" data-page="${data.prev_num}">‹</a></li>`;
+    }
+    for (let i = 1; i <= total; i++) {
+      if (i === 1 || i === total || (i >= p - 2 && i <= p + 2)) {
+        html += `<li class="page-item ${i === p ? 'active' : ''}"><a class="page-link" href="#" data-page="${i}">${i}</a></li>`;
+      } else if (i === p - 3 || i === p + 3) {
+        html += `<li class="page-item disabled"><span class="page-link">…</span></li>`;
+      }
+    }
+    if (data.has_next) {
+      html += `<li class="page-item"><a class="page-link" href="#" data-page="${data.next_num}">›</a></li>`;
+    }
+    paginationEl.innerHTML = html;
+  }
+
+  function doSearch(page) {
+    if (activeXhr) { activeXhr.abort(); activeXhr = null; }
+    const params = getFilterParams();
+    params.set('page', page || 1);
+
+    const url = `${SEARCH_URL}?${params.toString()}`;
+    activeXhr = new XMLHttpRequest();
+    activeXhr.open('GET', url, true);
+    activeXhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+    activeXhr.onload = function () {
+      if (activeXhr && activeXhr.status === 200) {
+        const data = JSON.parse(activeXhr.responseText);
+        totalLabel.textContent = `إجمالي ${data.total} طالب`;
+        renderRows(data.items);
+        renderPagination(data);
+      }
+      activeXhr = null;
+    };
+    activeXhr.onerror = function () { activeXhr = null; };
+    activeXhr.send();
+  }
+
+  searchInput.addEventListener('input', function () {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => doSearch(1), 280);
+  });
+
+  paginationEl.addEventListener('click', function (e) {
+    const link = e.target.closest('a[data-page]');
+    if (!link) return;
+    e.preventDefault();
+    doSearch(parseInt(link.dataset.page, 10));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+</script>
+{% endblock extra_js %}
+
 {% if current_user.is_super_admin %}
 <div class="modal fade" id="hardDeleteModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">
