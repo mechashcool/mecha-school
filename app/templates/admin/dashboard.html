@@ -2,162 +2,569 @@
 {% block title %}لوحة التحكم{% endblock %}
 {% block page_title %}لوحة التحكم{% endblock %}
 
+{% block extra_css %}
+<style>
+/* ── Dashboard-specific overrides ─────────────────────────── */
+.dash-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 28px;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+.dash-header-titles h1 {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--text);
+  margin: 0;
+  letter-spacing: -.3px;
+}
+.dash-header-titles p {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 3px 0 0;
+}
+.dash-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.dash-date-badge {
+  background: #fff;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.dash-refresh-btn {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: inherit;
+  transition: background .18s var(--ease), box-shadow .18s var(--ease);
+  box-shadow: 0 2px 10px rgba(26,58,92,.22);
+  text-decoration: none;
+}
+.dash-refresh-btn:hover {
+  background: var(--primary-light);
+  box-shadow: 0 4px 16px rgba(26,58,92,.30);
+  color: #fff;
+}
+
+/* ── KPI cards ─────────────────────────────────────────────── */
+.kpi-card {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 22px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: 0 1px 3px rgba(16,36,68,.05), 0 4px 18px rgba(16,36,68,.06);
+  transition: transform .2s var(--ease), box-shadow .2s var(--ease);
+  height: 100%;
+}
+.kpi-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 4px 8px rgba(16,36,68,.08), 0 16px 40px rgba(16,36,68,.10);
+}
+.kpi-info {
+  flex: 1;
+  min-width: 0;
+}
+.kpi-value {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1.1;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kpi-label {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  font-weight: 500;
+  line-height: 1.4;
+}
+.kpi-icon-wrap {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  color: #fff;
+  flex-shrink: 0;
+  margin-right: 16px;
+}
+
+/* ── Chart cards ───────────────────────────────────────────── */
+.dash-chart-card {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: 0 1px 3px rgba(16,36,68,.05), 0 4px 18px rgba(16,36,68,.06);
+  overflow: hidden;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.dash-chart-header {
+  padding: 18px 22px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.dash-chart-header-title {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dash-chart-body {
+  padding: 20px 22px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.dash-chart-footer {
+  border-top: 1px solid var(--border);
+  padding: 16px 22px;
+  display: flex;
+  gap: 0;
+}
+.dash-chart-stat {
+  flex: 1;
+  text-align: center;
+  padding: 0 12px;
+  border-left: 1px solid var(--border);
+}
+.dash-chart-stat:last-child { border-left: none; }
+.dash-chart-stat .cs-value {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1.2;
+  direction: ltr;
+  display: block;
+}
+.dash-chart-stat .cs-label {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  display: block;
+}
+.cs-revenue { color: #16a06a !important; }
+.cs-expense  { color: #de3d3d !important; }
+.cs-balance-pos { color: #1a3a5c !important; }
+.cs-balance-neg { color: #de3d3d !important; }
+
+/* ── Attendance panel ──────────────────────────────────────── */
+.att-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 18px;
+}
+.att-legend-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #f8fafc;
+  border-radius: 12px;
+  padding: 12px 16px;
+}
+.att-legend-item.att-present { background: #edf9f4; }
+.att-legend-item.att-absent  { background: #fdf0f0; }
+.att-legend-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+.att-legend-left {
+  display: flex;
+  align-items: center;
+}
+.att-legend-lbl {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.att-present .att-legend-lbl { color: #15734d; }
+.att-absent  .att-legend-lbl { color: #b83232; }
+.att-legend-count {
+  text-align: left;
+}
+.att-legend-num {
+  font-size: 20px;
+  font-weight: 800;
+  display: block;
+  line-height: 1;
+}
+.att-present .att-legend-num { color: #16a06a; }
+.att-absent  .att-legend-num { color: #de3d3d; }
+.att-legend-pct {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.att-donut-wrap {
+  position: relative;
+  max-width: 200px;
+  margin: 0 auto;
+}
+.att-donut-center {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
+}
+.att-center-pct {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--text);
+  display: block;
+  line-height: 1.1;
+}
+.att-center-lbl {
+  font-size: 11px;
+  color: var(--text-muted);
+  display: block;
+  margin-top: 2px;
+}
+
+/* ── Bottom cards ──────────────────────────────────────────── */
+.dash-bottom-card {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: 0 1px 3px rgba(16,36,68,.05), 0 4px 18px rgba(16,36,68,.06);
+  overflow: hidden;
+  height: 100%;
+}
+.dash-bottom-header {
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* ── Notif items ───────────────────────────────────────────── */
+.notif-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--border);
+  transition: background .15s;
+}
+.notif-item:last-child { border-bottom: none; }
+.notif-item:hover { background: #f8fafc; }
+.notif-icon {
+  width: 38px; height: 38px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  margin-top: 1px;
+}
+.notif-title  { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.notif-body   { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.notif-time   { font-size: 11px; color: #9aabb8; margin-top: 4px; }
+
+@media (max-width: 991px) {
+  .kpi-value { font-size: 22px; }
+  .kpi-icon-wrap { width: 48px; height: 48px; font-size: 20px; }
+  .dash-header-titles h1 { font-size: 20px; }
+}
+@media (max-width: 575px) {
+  .kpi-card { padding: 16px 14px; }
+  .kpi-value { font-size: 19px; }
+  .kpi-icon-wrap { width: 42px; height: 42px; font-size: 18px; margin-right: 12px; }
+  .dash-chart-footer { flex-wrap: wrap; gap: 8px; }
+  .dash-chart-stat { border-left: none; border-bottom: 1px solid var(--border); padding: 8px 0; }
+  .dash-chart-stat:last-child { border-bottom: none; }
+}
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="page-header">
-  <div>
-    <h1 class="page-title">لوحة التحكم</h1>
-    <p class="page-subtitle">مرحباً {{ current_user.full_name }} — {{ today.strftime('%A, %d %B %Y') }}</p>
+
+<!-- ── Dashboard Header ── -->
+<div class="dash-header">
+  <div class="dash-header-titles">
+    <h1>لوحة التحكم</h1>
+    <p>نظرة عامة على أداء النظام &mdash; {{ school.name }}</p>
+  </div>
+  <div class="dash-header-actions">
+    <div class="dash-date-badge">
+      <i class="bi bi-calendar3"></i>
+      {{ today.strftime('%A، %d %B %Y') }}
+    </div>
+    <a href="{{ request.url }}" class="dash-refresh-btn">
+      <i class="bi bi-arrow-clockwise"></i>
+      تحديث
+    </a>
   </div>
 </div>
 
-<!-- ── KPI Row ── -->
-<div class="row g-3 mb-4">
+<!-- ── KPI Row 1 ── -->
+<div class="row g-3 mb-3">
+  <!-- Total Students -->
   <div class="col-xl-3 col-md-6">
-    <div class="stat-card">
-      <div class="stat-icon" style="background:linear-gradient(135deg,#1a3a5c,#22508a)">
+    <div class="kpi-card">
+      <div class="kpi-info">
+        <div class="kpi-value">{{ stats.total_students | default(0) }}</div>
+        <div class="kpi-label">إجمالي الطلاب الفعّالين</div>
+      </div>
+      <div class="kpi-icon-wrap" style="background:linear-gradient(135deg,#1a3a5c,#2d63a8)">
         <i class="bi bi-people-fill"></i>
       </div>
-      <div>
-        <div class="stat-value">{{ stats.total_students | default(0) }}</div>
-        <div class="stat-label">إجمالي الطلاب الفعّالين</div>
-      </div>
     </div>
   </div>
+
+  <!-- Total Employees -->
   <div class="col-xl-3 col-md-6">
-    <div class="stat-card">
-      <div class="stat-icon" style="background:linear-gradient(135deg,#1aab6d,#16c879)">
+    <div class="kpi-card">
+      <div class="kpi-info">
+        <div class="kpi-value">{{ stats.total_employees | default(0) }}</div>
+        <div class="kpi-label">إجمالي الموظفين الفعّالين</div>
+      </div>
+      <div class="kpi-icon-wrap" style="background:linear-gradient(135deg,#1aab6d,#12d678)">
         <i class="bi bi-person-badge-fill"></i>
       </div>
-      <div>
-        <div class="stat-value">{{ stats.total_employees | default(0) }}</div>
-        <div class="stat-label">إجمالي الموظفين الفعّالين</div>
-      </div>
     </div>
   </div>
+
+  <!-- Fees Collected Today -->
   <div class="col-xl-3 col-md-6">
-    <div class="stat-card">
-      <div class="stat-icon" style="background:linear-gradient(135deg,#e8a020,#f5c25a)">
+    <div class="kpi-card">
+      <div class="kpi-info">
+        <div class="kpi-value">{{ '{:,.0f}'.format(stats.fees_collected_today) }}</div>
+        <div class="kpi-label">
+          مبلغ محصّل اليوم (د.ع)
+          {% if stats.fees_collected_today == 0 %}
+          <br><span style="font-size:11px;color:#9aabb8;">لا توجد تحصيلات اليوم</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="kpi-icon-wrap" style="background:linear-gradient(135deg,#e8a020,#f5c25a)">
         <i class="bi bi-cash-coin"></i>
       </div>
-      <div>
-        <div class="stat-value">{{ '{:,.0f}'.format(stats.fees_collected_today) }}</div>
-        <div class="stat-label">مبلغ محصّل اليوم (د.ع)</div>
-      </div>
     </div>
   </div>
+
+  <!-- Overdue Installments -->
   <div class="col-xl-3 col-md-6">
-    <div class="stat-card">
-      <div class="stat-icon" style="background:linear-gradient(135deg,#e03e3e,#f87171)">
+    <div class="kpi-card">
+      <div class="kpi-info">
+        <div class="kpi-value">{{ stats.overdue_installments | default(0) }}</div>
+        <div class="kpi-label">أقساط متأخرة</div>
+      </div>
+      <div class="kpi-icon-wrap" style="background:linear-gradient(135deg,#e03e3e,#f87171)">
         <i class="bi bi-exclamation-triangle-fill"></i>
       </div>
-      <div>
-        <div class="stat-value">{{ stats.overdue_installments | default(0) }}</div>
-        <div class="stat-label">أقساط متأخرة</div>
-      </div>
     </div>
   </div>
 </div>
 
-<!-- ── Second row ── -->
+<!-- ── KPI Row 2 ── -->
 <div class="row g-3 mb-4">
+  <!-- Monthly Revenue -->
   <div class="col-xl-3 col-md-6">
-    <div class="stat-card">
-      <div class="stat-icon" style="background:linear-gradient(135deg,#1aab6d,#16c879)">
-        <i class="bi bi-check-circle-fill"></i>
+    <div class="kpi-card">
+      <div class="kpi-info">
+        <div class="kpi-value">{{ '{:,.0f}'.format(stats.monthly_revenue) }}</div>
+        <div class="kpi-label">إيرادات الشهر (د.ع)</div>
       </div>
-      <div>
-        <div class="stat-value">{{ stats.present_today | default(0) }}</div>
-        <div class="stat-label">حضور اليوم</div>
-      </div>
-    </div>
-  </div>
-  <div class="col-xl-3 col-md-6">
-    <div class="stat-card">
-      <div class="stat-icon" style="background:linear-gradient(135deg,#e03e3e,#f87171)">
-        <i class="bi bi-x-circle-fill"></i>
-      </div>
-      <div>
-        <div class="stat-value">{{ stats.absent_today | default(0) }}</div>
-        <div class="stat-label">غياب اليوم</div>
-      </div>
-    </div>
-  </div>
-  <div class="col-xl-3 col-md-6">
-    <div class="stat-card">
-      <div class="stat-icon" style="background:linear-gradient(135deg,#2196f3,#64b5f6)">
+      <div class="kpi-icon-wrap" style="background:linear-gradient(135deg,#2196f3,#64b5f6)">
         <i class="bi bi-graph-up-arrow"></i>
       </div>
-      <div>
-        <div class="stat-value">{{ '{:,.0f}'.format(stats.monthly_revenue) }}</div>
-        <div class="stat-label">إيرادات الشهر (د.ع)</div>
+    </div>
+  </div>
+
+  <!-- Monthly Balance -->
+  <div class="col-xl-3 col-md-6">
+    <div class="kpi-card">
+      <div class="kpi-info">
+        <div class="kpi-value">{{ '{:,.0f}'.format(stats.monthly_balance) }}</div>
+        <div class="kpi-label">صافي الشهر (د.ع)</div>
+      </div>
+      <div class="kpi-icon-wrap"
+           style="background:{{ 'linear-gradient(135deg,#1aab6d,#12d678)' if stats.monthly_balance >= 0 else 'linear-gradient(135deg,#e03e3e,#f87171)' }}">
+        <i class="bi bi-wallet2"></i>
       </div>
     </div>
   </div>
+
+  <!-- Absent Today -->
   <div class="col-xl-3 col-md-6">
-    <div class="stat-card">
-      <div class="stat-icon"
-           style="background:{{ 'linear-gradient(135deg,#1aab6d,#16c879)' if stats.monthly_balance >= 0 else 'linear-gradient(135deg,#e03e3e,#f87171)' }}">
-        <i class="bi bi-wallet2"></i>
+    <div class="kpi-card">
+      <div class="kpi-info">
+        <div class="kpi-value">{{ stats.absent_today | default(0) }}</div>
+        <div class="kpi-label">غياب اليوم</div>
       </div>
-      <div>
-        <div class="stat-value">{{ '{:,.0f}'.format(stats.monthly_balance) }}</div>
-        <div class="stat-label">صافي الشهر (د.ع)</div>
+      <div class="kpi-icon-wrap" style="background:linear-gradient(135deg,#e03e3e,#f87171)">
+        <i class="bi bi-x-circle-fill"></i>
+      </div>
+    </div>
+  </div>
+
+  <!-- Present Today -->
+  <div class="col-xl-3 col-md-6">
+    <div class="kpi-card">
+      <div class="kpi-info">
+        <div class="kpi-value">{{ stats.present_today | default(0) }}</div>
+        <div class="kpi-label">حضور اليوم</div>
+      </div>
+      <div class="kpi-icon-wrap" style="background:linear-gradient(135deg,#1aab6d,#12d678)">
+        <i class="bi bi-check-circle-fill"></i>
       </div>
     </div>
   </div>
 </div>
 
-<!-- ── Charts + Tables Row ── -->
+<!-- ── Charts Row ── -->
 <div class="row g-4 mb-4">
+
+  <!-- Finance Chart -->
+  <div class="col-xl-7">
+    <div class="dash-chart-card">
+      <div class="dash-chart-header">
+        <div class="dash-chart-header-title">
+          <i class="bi bi-bar-chart-fill" style="color:var(--primary)"></i>
+          الإيرادات والمصروفات – هذا الشهر
+        </div>
+      </div>
+      <div class="dash-chart-body">
+        <canvas id="financeChart" style="max-height:240px"></canvas>
+      </div>
+      <div class="dash-chart-footer">
+        <div class="dash-chart-stat">
+          <span class="cs-value cs-revenue">{{ '{:,.0f}'.format(stats.monthly_revenue) }}</span>
+          <span class="cs-label">
+            <i class="bi bi-circle-fill" style="font-size:8px;color:#1aab6d;margin-left:4px"></i>
+            إجمالي الإيرادات
+          </span>
+        </div>
+        <div class="dash-chart-stat">
+          <span class="cs-value cs-expense">{{ '{:,.0f}'.format(stats.monthly_expense) }}</span>
+          <span class="cs-label">
+            <i class="bi bi-circle-fill" style="font-size:8px;color:#e03e3e;margin-left:4px"></i>
+            إجمالي المصروفات
+          </span>
+        </div>
+        <div class="dash-chart-stat">
+          <span class="cs-value {{ 'cs-balance-pos' if stats.monthly_balance >= 0 else 'cs-balance-neg' }}">
+            {{ '{:,.0f}'.format(stats.monthly_balance) }}
+          </span>
+          <span class="cs-label">
+            <i class="bi bi-circle-fill" style="font-size:8px;color:#1a3a5c;margin-left:4px"></i>
+            صافي الشهر
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Attendance Chart -->
   <div class="col-xl-5">
-    <div class="card h-100">
-      <div class="card-header">
-        <i class="bi bi-pie-chart-fill text-accent"></i>
-        حضور اليوم
+    <div class="dash-chart-card">
+      <div class="dash-chart-header">
+        <div class="dash-chart-header-title">
+          <i class="bi bi-pie-chart-fill" style="color:var(--primary)"></i>
+          حضور اليوم
+        </div>
       </div>
-      <div class="card-body d-flex align-items-center justify-content-center">
+      <div class="dash-chart-body justify-content-center">
         {% set total_att = stats.present_today + stats.absent_today %}
         {% if total_att > 0 %}
-        <div style="max-width:260px;width:100%">
-          <canvas id="attendanceChart"></canvas>
-        </div>
+          {% set pct_present = ((stats.present_today / total_att) * 100) | round(1) %}
+          {% set pct_absent  = ((stats.absent_today  / total_att) * 100) | round(1) %}
+          <div class="att-donut-wrap">
+            <canvas id="attendanceChart"></canvas>
+            <div class="att-donut-center">
+              <span class="att-center-pct">{{ pct_present }}%</span>
+              <span class="att-center-lbl">نسبة الحضور</span>
+            </div>
+          </div>
+          <div class="att-legend">
+            <div class="att-legend-item att-present">
+              <div class="att-legend-left">
+                <div class="att-legend-dot" style="background:#1aab6d"></div>
+                <span class="att-legend-lbl">حاضر</span>
+              </div>
+              <div class="att-legend-count">
+                <span class="att-legend-num">{{ stats.present_today }}</span>
+                <span class="att-legend-pct">{{ pct_present }}%</span>
+              </div>
+            </div>
+            <div class="att-legend-item att-absent">
+              <div class="att-legend-left">
+                <div class="att-legend-dot" style="background:#e03e3e"></div>
+                <span class="att-legend-lbl">غائب</span>
+              </div>
+              <div class="att-legend-count">
+                <span class="att-legend-num">{{ stats.absent_today }}</span>
+                <span class="att-legend-pct">{{ pct_absent }}%</span>
+              </div>
+            </div>
+          </div>
         {% else %}
-        <div class="text-center text-muted py-4">
-          <i class="bi bi-calendar-x" style="font-size:40px;opacity:.3"></i>
-          <p class="mt-2 mb-0">لم يُسجَّل حضور اليوم بعد</p>
-        </div>
+          <div class="text-center text-muted py-5">
+            <i class="bi bi-calendar-x" style="font-size:40px;opacity:.3"></i>
+            <p class="mt-3 mb-0">لم يُسجَّل حضور اليوم بعد</p>
+          </div>
         {% endif %}
       </div>
     </div>
   </div>
 
-  <!-- Finance Chart -->
-  <div class="col-xl-7">
-    <div class="card h-100">
-      <div class="card-header">
-        <i class="bi bi-bar-chart-fill text-accent"></i>
-        الإيرادات والمصروفات – هذا الشهر
-      </div>
-      <div class="card-body">
-        <canvas id="financeChart" style="max-height:220px"></canvas>
-      </div>
-    </div>
-  </div>
 </div>
 
 <!-- ── Recent Students + Notifications ── -->
 <div class="row g-4">
+
   <!-- Recent Students -->
   <div class="col-xl-7">
-    <div class="card">
-      <div class="card-header">
-        <i class="bi bi-people text-accent"></i>
+    <div class="dash-bottom-card">
+      <div class="dash-bottom-header">
+        <i class="bi bi-people" style="color:var(--primary)"></i>
         آخر الطلاب المضافين
-        <a href="{{ url_for('students.index') }}" class="btn btn-sm btn-outline-secondary ms-auto">عرض الكل</a>
+        <a href="{{ url_for('students.index') }}"
+           class="btn btn-sm btn-outline-secondary me-auto"
+           style="font-size:12px;padding:4px 12px;border-radius:8px;">عرض الكل</a>
       </div>
-      <div class="table-wrapper">
-        <table class="table table-hover">
+      <div class="table-wrapper" style="border:none;border-radius:0;">
+        <table class="table table-hover mb-0">
           <thead>
             <tr>
               <th>رقم الطالب</th>
@@ -205,48 +612,47 @@
 
   <!-- Notifications -->
   <div class="col-xl-5">
-    <div class="card">
-      <div class="card-header">
-        <i class="bi bi-bell-fill text-accent"></i>
+    <div class="dash-bottom-card">
+      <div class="dash-bottom-header">
+        <i class="bi bi-bell-fill" style="color:var(--primary)"></i>
         آخر الإشعارات
-        <a href="{{ url_for('notifications.index') }}" class="btn btn-sm btn-outline-secondary ms-auto">عرض الكل</a>
+        <a href="{{ url_for('notifications.index') }}"
+           class="btn btn-sm btn-outline-secondary me-auto"
+           style="font-size:12px;padding:4px 12px;border-radius:8px;">عرض الكل</a>
       </div>
-      <div class="card-body p-0">
+      <div>
         {% for n in recent_notifications %}
-        <div class="d-flex align-items-start gap-3 px-4 py-3 border-bottom">
-          <div class="mt-1" style="
-            width:36px;height:36px;border-radius:10px;flex-shrink:0;
-            display:flex;align-items:center;justify-content:center;font-size:16px;
-            {% if n.ntype == 'absence' %}background:#fef0f0;color:#e03e3e;
-            {% elif n.ntype == 'payment' %}background:#e8f8f0;color:#1aab6d;
-            {% elif n.ntype == 'grade' %}background:#e8f4fd;color:#2196f3;
-            {% else %}background:#fff8ec;color:#e8a020;{% endif %}
-          ">
+        <div class="notif-item">
+          <div class="notif-icon"
+               style="{% if n.ntype == 'absence' %}background:#fef0f0;color:#e03e3e;
+                      {% elif n.ntype == 'payment' %}background:#e8f8f0;color:#1aab6d;
+                      {% elif n.ntype == 'grade' %}background:#e8f4fd;color:#2196f3;
+                      {% else %}background:#fff8ec;color:#e8a020;{% endif %}">
             <i class="bi bi-{% if n.ntype == 'absence' %}person-x{% elif n.ntype == 'payment' %}cash{% elif n.ntype == 'grade' %}patch-check{% else %}megaphone{% endif %}-fill"></i>
           </div>
-          <div>
-            <div style="font-size:13.5px;font-weight:600;color:#1e2b3a">{{ n.title }}</div>
-            <div style="font-size:12px;color:#6b7a8d;margin-top:2px">
-              {{ n.body[:80] }}{% if n.body|length > 80 %}…{% endif %}
-            </div>
-            <div style="font-size:11px;color:#9aabb8;margin-top:4px">
-              {{ n.created_at.strftime('%Y-%m-%d %H:%M') }}
-            </div>
+          <div style="flex:1;min-width:0;">
+            <div class="notif-title">{{ n.title }}</div>
+            <div class="notif-body">{{ n.body[:80] }}{% if n.body|length > 80 %}…{% endif %}</div>
+            <div class="notif-time">{{ n.created_at.strftime('%Y-%m-%d %H:%M') }}</div>
           </div>
         </div>
         {% else %}
-        <div class="text-center text-muted py-4">لا توجد إشعارات</div>
+        <div class="text-center text-muted py-5">
+          <i class="bi bi-bell-slash" style="font-size:32px;opacity:.3"></i>
+          <p class="mt-2 mb-0">لا توجد إشعارات</p>
+        </div>
         {% endfor %}
       </div>
     </div>
   </div>
+
 </div>
 
 {% endblock %}
 
 {% block extra_js %}
 <script>
-// Attendance Donut
+// ── Attendance Donut ────────────────────────────────────────
 {% if stats.present_today + stats.absent_today > 0 %}
 new Chart(document.getElementById('attendanceChart'), {
   type: 'doughnut',
@@ -261,18 +667,24 @@ new Chart(document.getElementById('attendanceChart'), {
   },
   options: {
     responsive: true,
-    cutout: '70%',
+    cutout: '72%',
     plugins: {
-      legend: {
-        position: 'bottom',
-        labels: { font: { family: 'Cairo', size: 13 }, padding: 16 }
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: function(ctx) {
+            var total = ctx.dataset.data.reduce(function(a,b){return a+b;},0);
+            var pct = total > 0 ? ((ctx.parsed / total) * 100).toFixed(1) : 0;
+            return ' ' + ctx.label + ': ' + ctx.parsed + ' (' + pct + '%)';
+          }
+        }
       }
     }
   }
 });
 {% endif %}
 
-// Finance Bar
+// ── Finance Bar ─────────────────────────────────────────────
 new Chart(document.getElementById('financeChart'), {
   type: 'bar',
   data: {
@@ -284,20 +696,46 @@ new Chart(document.getElementById('financeChart'), {
         {{ stats.monthly_expense }},
         {{ stats.monthly_balance }}
       ],
-      backgroundColor: ['#1aab6d', '#e03e3e', '{{ "#1a3a5c" if stats.monthly_balance >= 0 else "#e03e3e" }}'],
-      borderRadius: 8,
+      backgroundColor: [
+        'rgba(26,171,109,.85)',
+        'rgba(224,62,62,.85)',
+        '{{ "rgba(26,58,92,.85)" if stats.monthly_balance >= 0 else "rgba(224,62,62,.85)" }}'
+      ],
+      borderRadius: 10,
       borderSkipped: false,
     }]
   },
   options: {
     responsive: true,
-    plugins: { legend: { display: false } },
+    maintainAspectRatio: true,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: function(ctx) {
+            return ' ' + ctx.dataset.label + ': ' + ctx.parsed.y.toLocaleString('ar-IQ') + ' د.ع';
+          }
+        }
+      }
+    },
     scales: {
       y: {
-        ticks: { font: { family: 'Cairo' } },
-        grid: { color: '#f0f4f8' }
+        ticks: {
+          font: { family: 'Cairo', size: 12 },
+          color: '#64748b',
+          callback: function(v) {
+            if (Math.abs(v) >= 1000000) return (v/1000000).toFixed(1) + 'م';
+            if (Math.abs(v) >= 1000) return (v/1000).toFixed(0) + 'ك';
+            return v;
+          }
+        },
+        grid: { color: '#f0f4f8' },
+        border: { dash: [4, 4] }
       },
-      x: { ticks: { font: { family: 'Cairo', size: 13 } } }
+      x: {
+        ticks: { font: { family: 'Cairo', size: 13 }, color: '#64748b' },
+        grid: { display: false }
+      }
     }
   }
 });
