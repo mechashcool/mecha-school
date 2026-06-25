@@ -101,3 +101,6 @@ service-account*.json
 tools/captures/
 tools/captures_ws/
 *.bin
+
+github_actions_mecha
+github_actions_mecha.pub
