@@ -481,6 +481,9 @@ function buildSectionGrid() {
     sectionGrid.appendChild(label);
 
     visibleSecs.forEach(function (sec) {
+      /* Store name so summary can display it even when the section is off-screen */
+      _sectionNames[String(sec.id)] = sec.name;
+
       var item = document.createElement('label');
       item.className = 'cr-section-item';
       item.dataset.secId = sec.id;
@@ -528,6 +531,8 @@ function buildSectionGrid() {
 
 /* Track selected section IDs across grid rebuilds */
 var _selectedSections = new Set();
+/* Maps section id (string) → name — populated in buildSectionGrid() */
+var _sectionNames = {};
 
 function selectAllSections(checked) {
   sectionGrid.querySelectorAll('input[type=checkbox]').forEach(function (cb) {
@@ -548,19 +553,18 @@ function updateSelectedSummary() {
   var list  = document.getElementById('selectedSectionsList');
   if (!card || !list) return;
 
-  /* Collect checked items directly from the grid */
-  var checked = sectionGrid.querySelectorAll('input[type=checkbox]:checked');
-  if (checked.length === 0) {
+  /* Show ALL selected sections including those hidden by current filter */
+  if (_selectedSections.size === 0) {
     card.style.display = 'none';
     return;
   }
   card.style.display = '';
   list.innerHTML = '';
-  checked.forEach(function (cb) {
+  _selectedSections.forEach(function (secId) {
+    var name = _sectionNames[secId] || ('شعبة #' + secId);
     var li = document.createElement('li');
     li.className = 'list-group-item py-2';
-    li.innerHTML = '<i class="bi bi-check-circle-fill text-success me-2"></i>' +
-                   cb.closest('label').querySelector('span').textContent;
+    li.innerHTML = '<i class="bi bi-check-circle-fill text-success me-2"></i>' + name;
     list.appendChild(li);
   });
 }
@@ -657,6 +661,27 @@ function fetchPreview() {
   })
   .catch(function () {
     if (loading) loading.style.display = 'none';
+  });
+}
+
+/* ── Form submit: inject hidden inputs for cross-filter selections ── */
+var _createRoomForm = document.getElementById('createRoomForm');
+if (_createRoomForm) {
+  _createRoomForm.addEventListener('submit', function () {
+    /* For each selected section not currently visible as a checked checkbox,
+       add a hidden input so the server receives the full selection. */
+    _selectedSections.forEach(function (secId) {
+      var existingCb = sectionGrid.querySelector(
+        'input[type=checkbox][value="' + secId + '"]:checked'
+      );
+      if (!existingCb) {
+        var h = document.createElement('input');
+        h.type  = 'hidden';
+        h.name  = 'section_ids';
+        h.value = secId;
+        _createRoomForm.appendChild(h);
+      }
+    });
   });
 }
 

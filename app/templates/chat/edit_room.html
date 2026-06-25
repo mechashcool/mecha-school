@@ -111,6 +111,7 @@ var SECTIONS_PREVIEW_URL = "{{ url_for('chat.sections_preview') }}";
           <div class="mb-2 d-flex align-items-center justify-content-between">
             <span class="small fw-semibold text-muted">
               <i class="bi bi-grid-3x3-gap me-1"></i>الشعب المتاحة
+              <span id="editSelCount" class="badge bg-success ms-2" style="display:none"></span>
             </span>
             <div class="d-flex gap-2">
               <button type="button" class="btn btn-xs btn-outline-secondary"
@@ -319,12 +320,27 @@ var esGradeEl  = document.getElementById('esGrade');
 var esSearchEl = document.getElementById('esSearch');
 var editGrid   = document.getElementById('editSectionGrid');
 
+/* Tracks selected section IDs across filter/grid rebuilds */
 var _editSelected = new Set();
+/* Maps section id (string) → name — populated in buildEditGrid() */
+var _editSectionNames = {};
+
+function _updateEditSelCount() {
+  var el = document.getElementById('editSelCount');
+  if (!el) return;
+  var n = _editSelected.size;
+  if (n > 0) {
+    el.textContent = n + ' شعبة مختارة';
+    el.style.display = '';
+  } else {
+    el.style.display = 'none';
+  }
+}
 
 function buildEditGrid() {
   var stageF  = esStageEl  ? esStageEl.value  : '';
   var gradeF  = esGradeEl  ? esGradeEl.value  : '';
-  var searchF = esSearchEl ? esSearchEl.value.toLowerCase() : '';
+  var searchF = esSearchEl ? esSearchEl.value.trim().toLowerCase() : '';
 
   if (esGradeEl) {
     Array.from(esGradeEl.options).forEach(function (opt, i) {
@@ -359,6 +375,9 @@ function buildEditGrid() {
     editGrid.appendChild(label);
 
     visibleSecs.forEach(function (sec) {
+      /* Store name so the counter can display it even when off-screen */
+      _editSectionNames[String(sec.id)] = sec.name;
+
       var item = document.createElement('label');
       item.className = 'er-section-item';
       item.dataset.secId = sec.id;
@@ -382,6 +401,7 @@ function buildEditGrid() {
           _editSelected.delete(String(sec.id));
           item.classList.remove('selected');
         }
+        _updateEditSelCount();
         scheduleEditPreview();
       });
 
@@ -400,6 +420,8 @@ function buildEditGrid() {
     empty.innerHTML = '<i class="bi bi-inbox me-1"></i>لا توجد شعب تطابق الفلتر الحالي.';
     editGrid.appendChild(empty);
   }
+
+  _updateEditSelCount();
 }
 
 function editSelectAll(checked) {
@@ -409,10 +431,11 @@ function editSelectAll(checked) {
     else         _editSelected.delete(String(cb.value));
     cb.closest('label').classList.toggle('selected', checked);
   });
+  _updateEditSelCount();
   scheduleEditPreview();
 }
 
-/* ── AJAX preview ────────────────────────── */
+/* ── AJAX preview — uses ALL selected IDs (not just visible) ── */
 var _editPreviewTimer = null;
 function scheduleEditPreview() {
   clearTimeout(_editPreviewTimer);
@@ -420,10 +443,8 @@ function scheduleEditPreview() {
 }
 
 function fetchEditPreview() {
-  var ids = [];
-  editGrid.querySelectorAll('input[type=checkbox]:checked').forEach(function (cb) {
-    ids.push(cb.value);
-  });
+  /* Collect IDs from the full _editSelected set, not just DOM checkboxes */
+  var ids = Array.from(_editSelected);
 
   var panel   = document.getElementById('editPreviewPanel');
   var loading = document.getElementById('editPreviewLoading');
@@ -497,6 +518,27 @@ function fetchEditPreview() {
   })
   .catch(function () {
     if (loading) loading.style.display = 'none';
+  });
+}
+
+/* ── Form submit: inject hidden inputs for cross-filter selections ── */
+var _addBySectionsForm = document.getElementById('addBySectionsForm');
+if (_addBySectionsForm) {
+  _addBySectionsForm.addEventListener('submit', function () {
+    /* For each selected section ID that is NOT a visible checked checkbox,
+       add a hidden input so it is still submitted with the form. */
+    _editSelected.forEach(function (secId) {
+      var existingCb = editGrid.querySelector(
+        'input[type=checkbox][value="' + secId + '"]:checked'
+      );
+      if (!existingCb) {
+        var h = document.createElement('input');
+        h.type  = 'hidden';
+        h.name  = 'add_section_ids';
+        h.value = secId;
+        _addBySectionsForm.appendChild(h);
+      }
+    });
   });
 }
 

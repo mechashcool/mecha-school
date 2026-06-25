@@ -629,14 +629,20 @@ def create_room():
         abort(404)
     year = get_active_year(school.id)
 
-    grades   = (Grade.query
-                .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
-                .filter_by(school_id=school.id)
-                .order_by(Grade.name).all())
-    sections = (Section.query
-                .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
-                .filter_by(school_id=school.id)
-                .order_by(Section.name).all())
+    # Restrict to the active year so duplicate grade names from older years
+    # don't appear in the cascade picker (older grades have no live sections).
+    if year:
+        grades   = (Grade.query
+                    .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+                    .filter_by(school_id=school.id, academic_year_id=year.id)
+                    .order_by(Grade.name).all())
+        sections = (Section.query
+                    .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+                    .filter_by(school_id=school.id, academic_year_id=year.id)
+                    .order_by(Section.name).all())
+    else:
+        grades   = []
+        sections = []
     subjects = (Subject.query
                 .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
                 .filter_by(school_id=school.id)
@@ -1024,15 +1030,21 @@ def edit_room(room_id):
                .filter_by(room_id=room.id)
                .order_by(ChatRoomMember.role).all())
 
-    # Grades/sections/stages for academic filter panel
-    edit_grades   = (Grade.query
-                     .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
-                     .filter_by(school_id=school.id)
-                     .order_by(Grade.name).all())
-    edit_sections = (Section.query
-                     .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
-                     .filter_by(school_id=school.id)
-                     .order_by(Section.name).all())
+    # Grades/sections/stages for academic filter panel — restrict to the active
+    # year so that older years' grades (which have no live sections) are excluded.
+    year = get_active_year(school.id)
+    if year:
+        edit_grades   = (Grade.query
+                         .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+                         .filter_by(school_id=school.id, academic_year_id=year.id)
+                         .order_by(Grade.name).all())
+        edit_sections = (Section.query
+                         .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+                         .filter_by(school_id=school.id, academic_year_id=year.id)
+                         .order_by(Section.name).all())
+    else:
+        edit_grades   = []
+        edit_sections = []
     edit_stages   = sorted(set(g.stage for g in edit_grades if g.stage))
 
     # Build grades→sections tree
