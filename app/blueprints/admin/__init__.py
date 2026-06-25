@@ -384,6 +384,91 @@ def dashboard():
     stats['monthly_expense'] = float(monthly_expense)
     stats['monthly_balance'] = float(monthly_revenue) - float(monthly_expense)
 
+    # ── Helper: safe percentage change ──────────────────────────────────────────
+    def _pct(cur, prev):
+        try:
+            if prev is None or float(prev) == 0:
+                return None
+            return round((float(cur) - float(prev)) / abs(float(prev)) * 100, 1)
+        except Exception:
+            return None
+
+    # ── Previous month revenue/expense (for KPI trend %) ────────────────────────
+    prev_mo    = today.month - 1 if today.month > 1 else 12
+    prev_yr    = today.year     if today.month > 1 else today.year - 1
+    prev_first = date(prev_yr, prev_mo, 1)
+    prev_last  = first_of_month - timedelta(days=1)
+    _prq = (db.session.query(func.sum(Revenue.amount))
+            .execution_options(include_all_years=True)
+            .filter(Revenue.date >= prev_first, Revenue.date <= prev_last))
+    _peq = (db.session.query(func.sum(Expense.amount))
+            .execution_options(include_all_years=True)
+            .filter(Expense.date >= prev_first, Expense.date <= prev_last))
+    if school_id:
+        _prq = _prq.filter(Revenue.school_id == school_id)
+        _peq = _peq.filter(Expense.school_id == school_id)
+    prev_rev = float(_prq.scalar() or 0)
+    prev_exp = float(_peq.scalar() or 0)
+
+    # ── Yesterday attendance counts (for KPI trend %) ────────────────────────────
+    yesterday    = today - timedelta(days=1)
+    _att_yday    = StudentAttendance.query.filter_by(date=yesterday)
+    if school_id:
+        _att_yday = _att_yday.filter_by(school_id=school_id)
+    present_yday = _att_yday.filter(StudentAttendance.status.in_(['present', 'late'])).count()
+    absent_yday  = _att_yday.filter_by(status='absent').count()
+
+    # ── Yesterday fees collected (for KPI trend %) ───────────────────────────────
+    from app.models import FeeRecord
+    _fyq = (db.session.query(func.sum(FeeInstallment.amount))
+            .join(FeeInstallment.fee_record)
+            .filter(FeeInstallment.status == 'paid', FeeInstallment.paid_date == yesterday))
+    if school_id:
+        _fyq = _fyq.filter(FeeRecord.school_id == school_id)
+    fees_yday = float(_fyq.scalar() or 0)
+
+    # ── KPI change percentages ────────────────────────────────────────────────────
+    prev_balance = prev_rev - prev_exp
+    stats['revenue_change_pct']    = _pct(monthly_revenue,          prev_rev)
+    stats['expense_change_pct']    = _pct(monthly_expense,          prev_exp)
+    stats['net_change_pct']        = _pct(stats['monthly_balance'],  prev_balance)
+    stats['present_change_pct']    = _pct(stats['present_today'],   present_yday) if present_yday else None
+    stats['absent_change_pct']     = _pct(stats['absent_today'],    absent_yday)  if absent_yday  else None
+    stats['fees_today_change_pct'] = _pct(paid_today,               fees_yday)    if fees_yday    else None
+
+    # ── Last 6-month finance series (for multi-month chart) ──────────────────────
+    _AR = ['يناير','فبراير','مارس','أبريل','مايو','يونيو',
+           'يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر']
+    m_labels, m_rev, m_exp, m_net = [], [], [], []
+    for _d in range(5, -1, -1):
+        _mo = today.month - _d
+        _yr = today.year
+        while _mo <= 0:
+            _mo += 12
+            _yr -= 1
+        _ms = date(_yr, _mo, 1)
+        _me = (date(_yr, _mo + 1, 1) - timedelta(days=1)
+               if _mo < 12 else date(_yr + 1, 1, 1) - timedelta(days=1))
+        _rq = (db.session.query(func.sum(Revenue.amount))
+               .execution_options(include_all_years=True)
+               .filter(Revenue.date >= _ms, Revenue.date <= _me))
+        _eq = (db.session.query(func.sum(Expense.amount))
+               .execution_options(include_all_years=True)
+               .filter(Expense.date >= _ms, Expense.date <= _me))
+        if school_id:
+            _rq = _rq.filter(Revenue.school_id == school_id)
+            _eq = _eq.filter(Expense.school_id == school_id)
+        _rv = float(_rq.scalar() or 0)
+        _ev = float(_eq.scalar() or 0)
+        m_labels.append(_AR[_mo - 1])
+        m_rev.append(_rv)
+        m_exp.append(_ev)
+        m_net.append(_rv - _ev)
+    stats['monthly_labels']         = m_labels
+    stats['monthly_revenue_series'] = m_rev
+    stats['monthly_expense_series'] = m_exp
+    stats['monthly_net_series']     = m_net
+
     # Last 5 notifications — school-scoped
     notif_q = Notification.query
     if school_id:

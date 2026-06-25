@@ -103,14 +103,14 @@
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 16px;
-  padding: 20px 18px;
+  padding: 15px 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 12px;
   box-shadow: 0 1px 3px rgba(16,36,68,.05), 0 4px 20px rgba(16,36,68,.06);
   transition: transform .2s var(--ease), box-shadow .2s var(--ease);
-  min-height: 100px;
+  min-height: 90px;
   height: 100%;
 }
 .kpi-card:hover {
@@ -137,12 +137,25 @@
 }
 /* kpi-icon is second in DOM → renders LEFT in RTL (icon side) */
 .kpi-icon {
-  width: 56px; height: 56px;
+  width: 52px; height: 52px;
   border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-size: 24px; color: #fff;
+  font-size: 22px; color: #fff;
   flex-shrink: 0;
 }
+/* KPI trend badge row */
+.kpi-trend-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  flex-wrap: wrap;
+}
+.kpi-t-up   { color: #1aab6d; font-weight: 700; }
+.kpi-t-down { color: #e03e3e; font-weight: 700; }
+.kpi-trend-lbl { color: var(--text-muted); }
+.kpi-trend-na  { color: #c5cdd8; font-size: 11px; letter-spacing: .01em; }
 
 /* ── Chart card shell ────────────────────────────────── */
 .dash-card {
@@ -430,6 +443,21 @@
 
 {% block content %}
 
+{# ── Macro: KPI trend badge (real comparison only, no fake values) ── #}
+{% macro kpi_trend(pct, period) %}
+<div class="kpi-trend-row">
+  {% if pct is not none %}
+    <span class="{{ 'kpi-t-up' if pct >= 0 else 'kpi-t-down' }}">
+      <i class="bi bi-arrow-{{ 'up' if pct >= 0 else 'down' }}-short"></i>
+      {{ pct | abs }}%
+    </span>
+    <span class="kpi-trend-lbl">عن {{ period }}</span>
+  {% else %}
+    <span class="kpi-trend-na">لا مقارنة متاحة</span>
+  {% endif %}
+</div>
+{% endmacro %}
+
 {# ───────────────────────────────────────────────────────────
    HEADER
    direction:ltr on .dash-header → brand on LEFT, controls RIGHT
@@ -502,6 +530,7 @@
           <br><span style="font-size:11px;color:#9aabb8">لا توجد تحصيلات اليوم</span>
           {% endif %}
         </div>
+        {{ kpi_trend(stats.fees_today_change_pct, 'الأمس') }}
       </div>
       <div class="kpi-icon" style="background:linear-gradient(135deg,#e8a020,#f5c25a)">
         <i class="bi bi-cash-coin"></i>
@@ -537,6 +566,7 @@
       <div class="kpi-info">
         <div class="kpi-value">{{ stats.present_today | default(0) }}</div>
         <div class="kpi-label">حضور اليوم</div>
+        {{ kpi_trend(stats.present_change_pct, 'الأمس') }}
       </div>
       <div class="kpi-icon" style="background:linear-gradient(135deg,#1aab6d,#12d678)">
         <i class="bi bi-check-circle-fill"></i>
@@ -550,6 +580,7 @@
       <div class="kpi-info">
         <div class="kpi-value">{{ stats.absent_today | default(0) }}</div>
         <div class="kpi-label">غياب اليوم</div>
+        {{ kpi_trend(stats.absent_change_pct, 'الأمس') }}
       </div>
       <div class="kpi-icon" style="background:linear-gradient(135deg,#e03e3e,#f87171)">
         <i class="bi bi-x-circle-fill"></i>
@@ -563,6 +594,7 @@
       <div class="kpi-info">
         <div class="kpi-value">{{ '{:,.0f}'.format(stats.monthly_revenue) }}</div>
         <div class="kpi-label">إيرادات الشهر (د.ع)</div>
+        {{ kpi_trend(stats.revenue_change_pct, 'الشهر الماضي') }}
       </div>
       <div class="kpi-icon" style="background:linear-gradient(135deg,#2196f3,#64b5f6)">
         <i class="bi bi-graph-up-arrow"></i>
@@ -576,6 +608,7 @@
       <div class="kpi-info">
         <div class="kpi-value">{{ '{:,.0f}'.format(stats.monthly_balance) }}</div>
         <div class="kpi-label">صافي الشهر (د.ع)</div>
+        {{ kpi_trend(stats.net_change_pct, 'الشهر الماضي') }}
       </div>
       <div class="kpi-icon"
            style="background:{{ 'linear-gradient(135deg,#1aab6d,#12d678)' if stats.monthly_balance >= 0 else 'linear-gradient(135deg,#e03e3e,#f87171)' }}">
@@ -657,7 +690,7 @@
         <div class="fin-header-top">
           <div class="dash-card-title" style="direction:rtl">
             <i class="bi bi-bar-chart-fill" style="color:var(--primary)"></i>
-            الإيرادات والمصروفات – هذا الشهر
+            الإيرادات والمصروفات – آخر 6 أشهر
           </div>
           <span class="fin-period">شهري <i class="bi bi-chevron-down" style="font-size:9px;opacity:.6"></i></span>
         </div>
@@ -844,63 +877,106 @@ new Chart(document.getElementById('attendanceChart'), {
 });
 {% endif %}
 
-// ── Finance Bar Chart ────────────────────────────────────────
-new Chart(document.getElementById('financeChart'), {
-  type: 'bar',
-  data: {
-    labels: ['إيرادات الشهر', 'مصروفات الشهر', 'الصافي'],
-    datasets: [{
-      label: 'المبلغ (د.ع)',
-      data: [
-        {{ stats.monthly_revenue }},
-        {{ stats.monthly_expense }},
-        {{ stats.monthly_balance }}
-      ],
-      backgroundColor: [
-        'rgba(26,171,109,.82)',
-        'rgba(224,62,62,.82)',
-        '{{ "rgba(26,58,92,.82)" if stats.monthly_balance >= 0 else "rgba(224,62,62,.82)" }}'
-      ],
-      borderRadius: 10,
-      borderSkipped: false,
-    }]
-  },
-  options: {
-    responsive: true,
-    maintainAspectRatio: true,
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        rtl: true,
-        callbacks: {
-          label: function(ctx) {
-            return ' ' + ctx.dataset.label + ': ' +
-              ctx.parsed.y.toLocaleString() + ' د.ع';
+// ── Finance Multi-Month Chart (last 6 months, bars + net line) ──────────────
+(function () {
+  var labels  = {{ stats.monthly_labels         | tojson }};
+  var revData = {{ stats.monthly_revenue_series  | tojson }};
+  var expData = {{ stats.monthly_expense_series  | tojson }};
+  var netData = {{ stats.monthly_net_series      | tojson }};
+  var cur     = labels.length - 1;  // index of current month (last in series)
+
+  function abbrev(v) {
+    if (Math.abs(v) >= 1000000) return (v / 1000000).toFixed(1) + 'م';
+    if (Math.abs(v) >= 1000)    return (v / 1000).toFixed(0) + 'ك';
+    return v.toLocaleString();
+  }
+
+  new Chart(document.getElementById('financeChart'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: 'إيرادات',
+          type: 'bar',
+          data: revData,
+          backgroundColor: revData.map(function (_, i) {
+            return i === cur ? 'rgba(26,171,109,.92)' : 'rgba(26,171,109,.55)';
+          }),
+          borderRadius: 8,
+          borderSkipped: false,
+          order: 2,
+        },
+        {
+          label: 'مصروفات',
+          type: 'bar',
+          data: expData,
+          backgroundColor: expData.map(function (_, i) {
+            return i === cur ? 'rgba(224,62,62,.92)' : 'rgba(224,62,62,.55)';
+          }),
+          borderRadius: 8,
+          borderSkipped: false,
+          order: 3,
+        },
+        {
+          label: 'صافي',
+          type: 'line',
+          data: netData,
+          borderColor: '#1a3a5c',
+          backgroundColor: 'rgba(26,58,92,.07)',
+          borderWidth: 2.5,
+          pointRadius: netData.map(function (_, i) { return i === cur ? 7 : 5; }),
+          pointBackgroundColor: netData.map(function (_, i) {
+            return i === cur ? '#e8a020' : '#1a3a5c';
+          }),
+          pointBorderColor: '#fff',
+          pointBorderWidth: 2,
+          tension: 0.35,
+          fill: false,
+          order: 1,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          rtl: true,
+          callbacks: {
+            label: function (ctx) {
+              return ' ' + ctx.dataset.label + ': ' + abbrev(ctx.parsed.y) + ' د.ع';
+            }
           }
         }
-      }
-    },
-    scales: {
-      y: {
-        beginAtZero: true,
-        ticks: {
-          font: { family: 'Cairo', size: 12 },
-          color: '#64748b',
-          callback: function(v) {
-            if (Math.abs(v) >= 1000000) return (v / 1000000).toFixed(1) + 'م';
-            if (Math.abs(v) >= 1000)    return (v / 1000).toFixed(0) + 'ك';
-            return v;
-          }
-        },
-        grid: { color: '#f0f4f8' },
-        border: { dash: [4, 4] }
       },
-      x: {
-        ticks: { font: { family: 'Cairo', size: 13 }, color: '#64748b' },
-        grid: { display: false }
+      scales: {
+        y: {
+          beginAtZero: true,
+          ticks: {
+            font: { family: 'Cairo', size: 11 },
+            color: '#64748b',
+            callback: function (v) { return abbrev(v); }
+          },
+          grid: { color: '#f0f4f8' },
+          border: { dash: [4, 4] }
+        },
+        x: {
+          ticks: {
+            font: function (ctx) {
+              return { family: 'Cairo', size: 12,
+                       weight: ctx.index === cur ? 'bold' : 'normal' };
+            },
+            color: function (ctx) {
+              return ctx.index === cur ? '#1a3a5c' : '#64748b';
+            }
+          },
+          grid: { display: false }
+        }
       }
     }
-  }
-});
+  });
+})();
 </script>
 {% endblock %}
