@@ -26,11 +26,11 @@ from datetime import timezone
 from flask import g, request
 
 from app.models import db, EmployeeLeaveRequest, Notification
-from app.utils.helpers import save_uploaded_file, delete_uploaded_file, resolve_photo_url
+from app.utils.helpers import save_uploaded_file, delete_uploaded_file
 from app.utils.scoping import current_academic_year_id
 
 from . import mobile_api_bp
-from .utils import jwt_required, role_required, ok, err
+from .utils import jwt_required, role_required, ok, err, photo_url
 from .teacher import _get_employee
 from .parent import _LEAVE_TYPES
 
@@ -106,7 +106,7 @@ def _leave_dict(r: EmployeeLeaveRequest) -> dict:
                              if r.reviewed_at else None),
         'created_at':       (r.created_at.replace(tzinfo=timezone.utc).isoformat()
                              if r.created_at else None),
-        'attachment_url':   resolve_photo_url(r.attachment_path),
+        'attachment_url':   photo_url(r.attachment_path),
         'can_delete':       r.status == 'pending',
     }
 
@@ -153,12 +153,23 @@ def teacher_create_leave_request():
     if not emp:
         return err('employee_profile_not_found', 404)
 
-    form       = request.form
-    leave_type = (form.get('leave_type') or '').strip()
-    start_str  = (form.get('start_date') or '').strip()
-    end_str    = (form.get('end_date') or '').strip()
-    reason     = (form.get('reason') or '').strip()
-    details    = (form.get('details') or '').strip() or None
+    # Support both multipart/form-data (with optional attachment) and
+    # application/json (no attachment) so Flutter can use either content-type.
+    ct = request.content_type or ''
+    if 'multipart/form-data' in ct:
+        form       = request.form
+        leave_type = (form.get('leave_type') or '').strip()
+        start_str  = (form.get('start_date') or '').strip()
+        end_str    = (form.get('end_date')   or '').strip()
+        reason     = (form.get('reason')     or '').strip()
+        details    = (form.get('details')    or '').strip() or None
+    else:
+        data       = request.get_json(silent=True) or {}
+        leave_type = (data.get('leave_type') or '').strip()
+        start_str  = (data.get('start_date') or '').strip()
+        end_str    = (data.get('end_date')   or '').strip()
+        reason     = (data.get('reason')     or '').strip()
+        details    = (data.get('details')    or '').strip() or None
 
     if not leave_type:
         return err('required_field_missing: leave_type')

@@ -15,7 +15,7 @@ import datetime
 from functools import wraps
 
 import jwt as pyjwt
-from flask import current_app, g, jsonify, request
+from flask import current_app, g, jsonify, request, url_for
 from flask_login import login_user
 
 from app.models import User, db
@@ -120,8 +120,11 @@ def photo_url(photo: str | None) -> str | None:
     Return an absolute URL for a stored photo value, safe to embed in JSON.
 
     - Supabase / CDN URLs (http/https) → returned as-is.
-    - Legacy relative paths → absolute URL built from the current request host,
-      only when the file exists on disk (avoids dead links after Render redeploys).
+    - Legacy relative paths → absolute HTTPS URL built via url_for('static'),
+      only when the file exists on disk (avoids dead links after server restarts).
+      url_for respects PREFERRED_URL_SCHEME='https' from ProductionConfig, so
+      the URL is always HTTPS even when Flask sits behind Nginx/Cloudflare that
+      terminates SSL and forwards plain HTTP internally.
     - None / empty / missing file → None (mobile client shows local placeholder).
     """
     if not photo:
@@ -133,7 +136,7 @@ def photo_url(photo: str | None) -> str | None:
         full_path = os.path.join(current_app.root_path, 'static', photo)
         if not os.path.isfile(full_path):
             return None
-        return request.host_url.rstrip('/') + '/static/' + photo
+        return url_for('static', filename=photo, _external=True)
     except Exception:
         return None
 
