@@ -760,15 +760,61 @@ def report():
     school = get_current_school()
     year   = get_view_year(school.id) if school else None
 
-    # student_id is the only param that drives the results table.
-    # stage / grade_id / section_id are JS-only cascade state echoed back so
-    # the dropdowns restore correctly after a page load.
-    selected_student_id = request.args.get('student_id', type=int)
+    mode = request.args.get('mode', 'student')
+    if mode not in ('student', 'section'):
+        mode = 'student'
 
-    results = []
+    selected_student_id  = request.args.get('student_id',  type=int)
+    selected_section_id  = request.args.get('section_id',  type=int)
+
+    results              = []
     selected_student_obj = None
+    selected_section_obj = None
+    section_grade        = None
+    section_stage        = ''
 
-    if selected_student_id and school and year:
+    if mode == 'section' and selected_section_id and school and year:
+        section = Section.query.filter_by(
+            id=selected_section_id,
+            school_id=school.id,
+            academic_year_id=year.id,
+        ).first()
+
+        if section and _is_teacher():
+            allowed = get_teacher_section_ids(current_user)
+            if section.id not in (allowed or []):
+                section = None
+
+        if section:
+            selected_section_obj = section
+            section_grade = section.grade
+            section_stage = section.grade.stage if section.grade else ''
+
+            students = (Student.query
+                        .filter_by(section_id=section.id,
+                                   school_id=school.id,
+                                   status='active')
+                        .order_by(Student.full_name)
+                        .all())
+
+            for student in students:
+                s_results = (ExamResult.query
+                             .filter_by(student_id=student.id,
+                                        school_id=school.id,
+                                        academic_year_id=year.id)
+                             .all())
+                avg = None
+                if s_results:
+                    avg = round(
+                        sum(float(r.marks) for r in s_results) / len(s_results), 2
+                    )
+                results.append({
+                    'student': student,
+                    'avg':     avg,
+                    'count':   len(s_results),
+                })
+
+    elif mode == 'student' and selected_student_id and school and year:
         student = Student.query.filter_by(
             id=selected_student_id,
             school_id=school.id,
@@ -776,12 +822,10 @@ def report():
             status='active',
         ).first()
 
-        if student:
-            # Teacher scope: teacher may only view students in their sections
-            if _is_teacher():
-                allowed = get_teacher_section_ids(current_user)
-                if student.section_id not in (allowed or []):
-                    student = None
+        if student and _is_teacher():
+            allowed = get_teacher_section_ids(current_user)
+            if student.section_id not in (allowed or []):
+                student = None
 
         if student:
             selected_student_obj = student
@@ -798,8 +842,13 @@ def report():
 
     return render_template('grades/report.html',
                            results=results,
+                           mode=mode,
                            selected_student_id=selected_student_id,
-                           selected_student_obj=selected_student_obj)
+                           selected_student_obj=selected_student_obj,
+                           selected_section_id=selected_section_id,
+                           selected_section_obj=selected_section_obj,
+                           section_grade=section_grade,
+                           section_stage=section_stage)
 
 
 # ── Grades report — cascade + student search JSON APIs ───────────────────────

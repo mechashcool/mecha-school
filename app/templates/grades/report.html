@@ -95,12 +95,21 @@
 <div class="print-header" style="display:none">
   <div class="print-school-name">{{ school.school_name_ar or school.school_name if school else '' }}</div>
   <div class="print-report-title">
-    تقرير الدرجات
-    {% if selected_student_obj %} — {{ selected_student_obj.full_name }}{% endif %}
+    {% if mode == 'section' and selected_section_obj %}
+      تقرير شعبة: {{ selected_section_obj.name }}
+      {% if section_grade %} — {{ section_grade.name }}{% endif %}
+    {% elif selected_student_obj %}
+      تقرير الدرجات — {{ selected_student_obj.full_name }}
+    {% else %}
+      تقرير الدرجات
+    {% endif %}
   </div>
   <div class="print-meta">
-    {% if selected_student_obj and selected_student_obj.section %}
-    <span>الصف: {{ selected_student_obj.section.grade.name }} / شعبة {{ selected_student_obj.section.name }}</span>
+    {% if mode == 'section' and selected_section_obj %}
+      {% if section_grade %}<span>الصف: {{ section_grade.name }}</span>{% endif %}
+      <span>الشعبة: {{ selected_section_obj.name }}</span>
+    {% elif selected_student_obj and selected_student_obj.section %}
+      <span>الصف: {{ selected_student_obj.section.grade.name }} / شعبة {{ selected_student_obj.section.name }}</span>
     {% endif %}
     {% if active_year %}<span>العام الدراسي: {{ active_year.name }}</span>{% endif %}
     <span>تاريخ الطباعة: <span class="js-print-date"></span></span>
@@ -111,10 +120,11 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
   el.textContent = new Date().toLocaleDateString('ar-SA', {year:'numeric',month:'long',day:'numeric'});
 });
 </script>
+
 <div class="page-header">
   <div><h1 class="page-title">تقرير الدرجات</h1></div>
   <div class="d-flex gap-2">
-    {% if selected_student_id %}
+    {% if (mode == 'student' and selected_student_id) or (mode == 'section' and selected_section_id) %}
     <button type="button" class="btn btn-outline-secondary" onclick="window.print()">
       <i class="bi bi-printer-fill me-1"></i>طباعة
     </button>
@@ -125,140 +135,280 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
   </div>
 </div>
 
+{# ── Filter card ── #}
 <div class="card filters-card mb-4">
   <div class="card-body py-3">
-    <div class="row g-2 align-items-end">
 
-      {# ── Stage ──────────────────────────────────────────────────────────── #}
-      <div class="col-md-2">
-        <label class="form-label mb-1" style="font-size:12px">المرحلة</label>
-        <select id="stageFilter" class="form-select">
-          <option value="">— كل المراحل —</option>
-        </select>
+    {# ── Mode toggle ── #}
+    <div class="mode-toggle-wrap mb-3">
+      <div class="mode-toggle" role="group">
+        <button type="button" id="modeSection" class="mode-btn{% if mode == 'section' %} active{% endif %}">
+          <i class="bi bi-people-fill me-1"></i>تقرير شعبة
+        </button>
+        <button type="button" id="modeStudent" class="mode-btn{% if mode == 'student' %} active{% endif %}">
+          <i class="bi bi-person-fill me-1"></i>تقرير طالب
+        </button>
       </div>
+    </div>
 
-      {# ── Grade ──────────────────────────────────────────────────────────── #}
-      <div class="col-md-2">
-        <label class="form-label mb-1" style="font-size:12px">الصف</label>
-        <select id="gradeFilter" class="form-select" disabled>
-          <option value="">— اختر الصف —</option>
-        </select>
-      </div>
+    {# ── Form wraps both panels ── #}
+    <form method="GET" id="reportForm">
+      <input type="hidden" name="mode"       id="hiddenMode"       value="{{ mode }}">
+      <input type="hidden" name="section_id" id="hiddenSectionId"  value="{{ selected_section_id or '' }}">
+      <input type="hidden" name="student_id" id="hiddenStudentId"  value="{{ selected_student_id or '' }}">
 
-      {# ── Section ─────────────────────────────────────────────────────────── #}
-      <div class="col-md-2">
-        <label class="form-label mb-1" style="font-size:12px">الشعبة</label>
-        <select id="sectionFilter" class="form-select" disabled>
-          <option value="">— اختر الشعبة —</option>
-        </select>
-      </div>
+      {# ═══ Section mode panel ════════════════════════════════════════════════ #}
+      <div id="sectionModePanel" class="{% if mode != 'section' %}d-none{% endif %}">
+        <div class="row g-2 align-items-end">
 
-      {# ── Student search widget ───────────────────────────────────────────── #}
-      <div class="col-md-4">
-        <label class="form-label mb-1" style="font-size:12px">الطالب</label>
-        <div class="student-search">
-          {# Search input (always visible) #}
-          <div id="searchMode">
-            <div class="input-group">
-              <span class="input-group-text"><i class="bi bi-search"></i></span>
-              <input type="search" id="studentSearch" class="form-control"
-                     placeholder="ابحث عن الطالب بالاسم أو الرمز..."
-                     autocomplete="off">
-            </div>
-            <div id="studentResults" class="student-results d-none"></div>
-          </div>
-          {# Dropdown (shown when a section is selected) #}
-          <div id="dropdownMode" class="d-none">
-            <select id="studentDropdown" class="form-select" disabled>
-              <option value="">— اختر الطالب —</option>
+          <div class="col-md-3">
+            <label class="form-label mb-1" style="font-size:12px">المرحلة</label>
+            <select id="stageFilterSec" class="form-select">
+              <option value="">— كل المراحل —</option>
             </select>
           </div>
-          {# Confirmation chip for chosen student #}
-          <div id="selectedStudentCard" class="selected-student d-none"></div>
+
+          <div class="col-md-3">
+            <label class="form-label mb-1" style="font-size:12px">الصف</label>
+            <select id="gradeFilterSec" class="form-select" disabled>
+              <option value="">— اختر الصف —</option>
+            </select>
+          </div>
+
+          <div class="col-md-3">
+            <label class="form-label mb-1" style="font-size:12px">الشعبة</label>
+            <select id="sectionFilterSec" class="form-select" disabled>
+              <option value="">— اختر الشعبة —</option>
+            </select>
+          </div>
+
+          <div class="col-md-3">
+            <div class="d-flex gap-2">
+              <button type="submit" id="submitBtnSec" class="btn btn-primary flex-fill"
+                      {% if not selected_section_id or mode != 'section' %}disabled{% endif %}>
+                <i class="bi bi-people-fill me-1"></i>عرض الشعبة
+              </button>
+              {% if mode == 'section' and selected_section_id %}
+              <a href="{{ url_for('grades.report', mode='section') }}"
+                 class="btn btn-outline-secondary" title="مسح">
+                <i class="bi bi-x-lg"></i>
+              </a>
+              {% endif %}
+            </div>
+          </div>
+
         </div>
       </div>
 
-      {# ── Submit / clear ─────────────────────────────────────────────────── #}
-      <div class="col-md-2">
-        <form method="GET" id="reportForm">
-          <input type="hidden" name="student_id" id="hiddenStudentId"
-                 value="{{ selected_student_id or '' }}">
-          <div class="d-flex gap-2">
-            <button type="submit" id="submitBtn" class="btn btn-primary flex-fill"
-                    {% if not selected_student_id %}disabled{% endif %}>
-              <i class="bi bi-bar-chart-fill me-1"></i>عرض
-            </button>
-            {% if selected_student_id %}
-            <a href="{{ url_for('grades.report') }}"
-               class="btn btn-outline-secondary" title="مسح">
-              <i class="bi bi-x-lg"></i>
-            </a>
-            {% endif %}
+      {# ═══ Student mode panel ════════════════════════════════════════════════ #}
+      <div id="studentModePanel" class="{% if mode != 'student' %}d-none{% endif %}">
+        <div class="row g-2 align-items-end">
+
+          {# Optional narrowing: stage → grade → section #}
+          <div class="col-md-2">
+            <label class="form-label mb-1" style="font-size:12px">المرحلة <small class="text-muted">(اختياري)</small></label>
+            <select id="stageFilterStu" class="form-select">
+              <option value="">— كل المراحل —</option>
+            </select>
           </div>
-        </form>
+
+          <div class="col-md-2">
+            <label class="form-label mb-1" style="font-size:12px">الصف <small class="text-muted">(اختياري)</small></label>
+            <select id="gradeFilterStu" class="form-select" disabled>
+              <option value="">— اختر الصف —</option>
+            </select>
+          </div>
+
+          <div class="col-md-2">
+            <label class="form-label mb-1" style="font-size:12px">الشعبة <small class="text-muted">(اختياري)</small></label>
+            <select id="sectionFilterStu" class="form-select" disabled>
+              <option value="">— اختر الشعبة —</option>
+            </select>
+          </div>
+
+          {# Student search widget #}
+          <div class="col-md-4">
+            <label class="form-label mb-1" style="font-size:12px">الطالب</label>
+            <div class="student-search">
+              <div id="searchMode">
+                <div class="input-group">
+                  <span class="input-group-text"><i class="bi bi-search"></i></span>
+                  <input type="search" id="studentSearch" class="form-control"
+                         placeholder="ابحث عن الطالب بالاسم أو الرمز..."
+                         autocomplete="off">
+                </div>
+                <div id="studentResults" class="student-results d-none"></div>
+              </div>
+              <div id="dropdownMode" class="d-none">
+                <select id="studentDropdown" class="form-select" disabled>
+                  <option value="">— اختر الطالب —</option>
+                </select>
+              </div>
+              <div id="selectedStudentCard" class="selected-student d-none"></div>
+            </div>
+          </div>
+
+          <div class="col-md-2">
+            <div class="d-flex gap-2">
+              <button type="submit" id="submitBtnStu" class="btn btn-primary flex-fill"
+                      {% if not selected_student_id or mode != 'student' %}disabled{% endif %}>
+                <i class="bi bi-bar-chart-fill me-1"></i>عرض
+              </button>
+              {% if mode == 'student' and selected_student_id %}
+              <a href="{{ url_for('grades.report', mode='student') }}"
+                 class="btn btn-outline-secondary" title="مسح">
+                <i class="bi bi-x-lg"></i>
+              </a>
+              {% endif %}
+            </div>
+          </div>
+
+        </div>
       </div>
 
-    </div>
+    </form>
   </div>
 </div>
 
-{# ── Results ──────────────────────────────────────────────────────────────── #}
+{# ── Results ── #}
 {% if results %}
+
+  {% if mode == 'section' and selected_section_obj %}
+  {# Section report results #}
+  <div class="card">
+    <div class="card-header d-flex align-items-center gap-2">
+      <i class="bi bi-people-fill text-accent"></i>
+      <span>
+        تقرير شعبة:
+        <strong>{{ selected_section_obj.name }}</strong>
+        {% if section_grade %}
+        <span class="badge ms-2" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
+          {{ section_grade.name }}
+        </span>
+        {% endif %}
+      </span>
+      <span class="badge ms-auto" style="background:rgba(255,255,255,.15);color:#fff">
+        {{ results | length }} طالب
+      </span>
+    </div>
+    <div class="table-wrapper">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>الاسم</th>
+            <th>رقم الطالب</th>
+            <th>عدد الاختبارات</th>
+            <th>المتوسط</th>
+            <th>التقدير</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in results %}
+          <tr>
+            <td class="text-muted">{{ loop.index }}</td>
+            <td class="fw-600">{{ r.student.full_name }}</td>
+            <td><code>{{ r.student.student_id }}</code></td>
+            <td>{{ r.count }}</td>
+            <td>
+              {% if r.avg is not none %}
+              <span class="fw-700" style="font-size:15px;
+                color:{% if r.avg >= 85 %}#1aab6d{% elif r.avg >= 60 %}#e8a020{% else %}#e03e3e{% endif %}">
+                {{ r.avg }}%
+              </span>
+              {% else %}
+              <span class="text-muted" style="font-size:13px">—</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if r.avg is not none %}
+              <span class="badge" style="
+                background:{% if r.avg >= 85 %}#e8f8f0{% elif r.avg >= 60 %}#fff8ec{% else %}#fef0f0{% endif %};
+                color:{% if r.avg >= 85 %}#1aab6d{% elif r.avg >= 60 %}#e8a020{% else %}#e03e3e{% endif %};
+                font-weight:700">
+                {% if r.avg >= 95 %}A+{% elif r.avg >= 90 %}A{% elif r.avg >= 85 %}B+
+                {% elif r.avg >= 80 %}B{% elif r.avg >= 75 %}C+{% elif r.avg >= 70 %}C
+                {% elif r.avg >= 60 %}D{% else %}F{% endif %}
+              </span>
+              {% else %}
+              <span class="text-muted">—</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% else %}
+  {# Student report results #}
+  <div class="card">
+    <div class="card-header">
+      <i class="bi bi-bar-chart-fill text-accent"></i>
+      نتيجة الطالب: <strong>{{ selected_student_obj.full_name }}</strong>
+      {% if selected_student_obj.section %}
+      <span class="badge ms-2" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
+        {{ selected_student_obj.section.grade.name }} / شعبة {{ selected_student_obj.section.name }}
+      </span>
+      {% endif %}
+    </div>
+    <div class="table-wrapper">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>الاسم</th><th>رقم الطالب</th>
+            <th>عدد الاختبارات</th><th>المتوسط</th><th>التقدير</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in results %}
+          <tr>
+            <td class="fw-600">{{ r.student.full_name }}</td>
+            <td><code>{{ r.student.student_id }}</code></td>
+            <td>{{ r.count }}</td>
+            <td>
+              <span class="fw-700" style="font-size:15px;
+                color:{% if r.avg >= 85 %}#1aab6d{% elif r.avg >= 60 %}#e8a020{% else %}#e03e3e{% endif %}">
+                {{ r.avg }}%
+              </span>
+            </td>
+            <td>
+              <span class="badge" style="
+                background:{% if r.avg >= 85 %}#e8f8f0{% elif r.avg >= 60 %}#fff8ec{% else %}#fef0f0{% endif %};
+                color:{% if r.avg >= 85 %}#1aab6d{% elif r.avg >= 60 %}#e8a020{% else %}#e03e3e{% endif %};
+                font-weight:700">
+                {% if r.avg >= 95 %}A+{% elif r.avg >= 90 %}A{% elif r.avg >= 85 %}B+
+                {% elif r.avg >= 80 %}B{% elif r.avg >= 75 %}C+{% elif r.avg >= 70 %}C
+                {% elif r.avg >= 60 %}D{% else %}F{% endif %}
+              </span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+{% elif mode == 'section' and selected_section_id %}
 <div class="card">
-  <div class="card-header">
-    <i class="bi bi-bar-chart-fill text-accent"></i>
-    نتيجة الطالب: <strong>{{ selected_student_obj.full_name }}</strong>
-    {% if selected_student_obj.section %}
-    <span class="badge ms-2" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
-      {{ selected_student_obj.section.grade.name }} / شعبة {{ selected_student_obj.section.name }}
-    </span>
-    {% endif %}
-  </div>
-  <div class="table-wrapper">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>الاسم</th><th>رقم الطالب</th>
-          <th>عدد الاختبارات</th><th>المتوسط</th><th>التقدير</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in results %}
-        <tr>
-          <td class="fw-600">{{ r.student.full_name }}</td>
-          <td><code>{{ r.student.student_id }}</code></td>
-          <td>{{ r.count }}</td>
-          <td>
-            <span class="fw-700" style="font-size:15px;
-              color:{% if r.avg >= 85 %}#1aab6d{% elif r.avg >= 60 %}#e8a020{% else %}#e03e3e{% endif %}">
-              {{ r.avg }}%
-            </span>
-          </td>
-          <td>
-            <span class="badge" style="
-              background:{% if r.avg >= 85 %}#e8f8f0{% elif r.avg >= 60 %}#fff8ec{% else %}#fef0f0{% endif %};
-              color:{% if r.avg >= 85 %}#1aab6d{% elif r.avg >= 60 %}#e8a020{% else %}#e03e3e{% endif %};
-              font-weight:700">
-              {% if r.avg >= 95 %}A+{% elif r.avg >= 90 %}A{% elif r.avg >= 85 %}B+
-              {% elif r.avg >= 80 %}B{% elif r.avg >= 75 %}C+{% elif r.avg >= 70 %}C
-              {% elif r.avg >= 60 %}D{% else %}F{% endif %}
-            </span>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+  <div class="card-body text-center text-muted py-5">لا يوجد طلاب أو نتائج مسجلة لهذه الشعبة بعد</div>
 </div>
-{% elif selected_student_id %}
+{% elif mode == 'student' and selected_student_id %}
 <div class="card">
   <div class="card-body text-center text-muted py-5">لا توجد نتائج مسجلة لهذا الطالب بعد</div>
 </div>
 {% else %}
 <div class="card">
   <div class="card-body text-center text-muted py-5">
+    {% if mode == 'section' %}
+    <i class="bi bi-people" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+    اختر المرحلة والصف والشعبة ثم اضغط عرض الشعبة
+    {% else %}
     <i class="bi bi-person-search" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-    ابحث عن طالب أو اختر المرحلة والصف والشعبة لتضييق النتائج
+    ابحث عن طالب واختره لعرض تقريره
+    {% endif %}
   </div>
 </div>
 {% endif %}
@@ -266,12 +416,37 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
 
 {% block extra_js %}
 <style>
-/* The base .card rule sets overflow:hidden which clips the absolutely-positioned
-   search results dropdown. Override it only on this page's filters card. */
 .filters-card { overflow: visible; }
-/* card-body also inherits the clip context; make it transparent too */
 .filters-card .card-body { overflow: visible; }
 
+/* ── Mode toggle ── */
+.mode-toggle-wrap { display: flex; }
+.mode-toggle {
+  display: inline-flex;
+  border: 1.5px solid var(--border, #dde3ec);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--card-bg, #fff);
+}
+.mode-btn {
+  padding: 7px 22px;
+  font-size: 14px;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #6b7a99);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+  white-space: nowrap;
+}
+.mode-btn:not(:last-child) { border-left: 1.5px solid var(--border, #dde3ec); }
+.mode-btn.active {
+  background: #1a3a5c;
+  color: #fff;
+}
+.mode-btn:not(.active):hover { background: #f0f4f8; color: var(--text, #1a2540); }
+
+/* ── Student search ── */
 .student-search { position: relative; }
 .student-results {
   position: absolute;
@@ -316,21 +491,186 @@ const gradesUrl   = "{{ url_for('grades.report_api_grades') }}";
 const sectionsUrl = "{{ url_for('grades.report_api_sections') }}";
 const studentsUrl = "{{ url_for('grades.report_api_students') }}";
 
-const stageFilter      = document.getElementById('stageFilter');
-const gradeFilter      = document.getElementById('gradeFilter');
-const sectionFilter    = document.getElementById('sectionFilter');
+// ── Mode toggle ───────────────────────────────────────────────────────────────
+const hiddenMode       = document.getElementById('hiddenMode');
+const hiddenSectionId  = document.getElementById('hiddenSectionId');
+const hiddenStudentId  = document.getElementById('hiddenStudentId');
+const sectionModePanel = document.getElementById('sectionModePanel');
+const studentModePanel = document.getElementById('studentModePanel');
+const btnModeSection   = document.getElementById('modeSection');
+const btnModeStudent   = document.getElementById('modeStudent');
+
+function switchMode(mode) {
+  hiddenMode.value = mode;
+  if (mode === 'section') {
+    sectionModePanel.classList.remove('d-none');
+    studentModePanel.classList.add('d-none');
+    btnModeSection.classList.add('active');
+    btnModeStudent.classList.remove('active');
+    hiddenStudentId.value = '';
+  } else {
+    studentModePanel.classList.remove('d-none');
+    sectionModePanel.classList.add('d-none');
+    btnModeStudent.classList.add('active');
+    btnModeSection.classList.remove('active');
+    hiddenSectionId.value = '';
+  }
+}
+
+btnModeSection.addEventListener('click', () => switchMode('section'));
+btnModeStudent.addEventListener('click', () => switchMode('student'));
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION MODE cascade
+// ═══════════════════════════════════════════════════════════════════════════════
+const stageFilterSec   = document.getElementById('stageFilterSec');
+const gradeFilterSec   = document.getElementById('gradeFilterSec');
+const sectionFilterSec = document.getElementById('sectionFilterSec');
+const submitBtnSec     = document.getElementById('submitBtnSec');
+
+function resetGradeSec() {
+  gradeFilterSec.innerHTML = '<option value="">— اختر الصف —</option>';
+  gradeFilterSec.disabled = true;
+  resetSectionSec();
+}
+function resetSectionSec() {
+  sectionFilterSec.innerHTML = '<option value="">— اختر الشعبة —</option>';
+  sectionFilterSec.disabled = true;
+  hiddenSectionId.value = '';
+  submitBtnSec.disabled = true;
+}
+
+stageFilterSec.addEventListener('change', function () {
+  resetGradeSec();
+  if (!this.value) return;
+  fetch(`${gradesUrl}?stage=${encodeURIComponent(this.value)}`, { headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      gradeFilterSec.innerHTML = '<option value="">— اختر الصف —</option>';
+      data.forEach(g => {
+        const o = document.createElement('option');
+        o.value = g.id; o.textContent = g.name;
+        gradeFilterSec.appendChild(o);
+      });
+      gradeFilterSec.disabled = data.length === 0;
+    }).catch(() => {});
+});
+
+gradeFilterSec.addEventListener('change', function () {
+  resetSectionSec();
+  if (!this.value) return;
+  fetch(`${sectionsUrl}?grade_id=${encodeURIComponent(this.value)}`, { headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      sectionFilterSec.innerHTML = '<option value="">— اختر الشعبة —</option>';
+      data.forEach(s => {
+        const o = document.createElement('option');
+        o.value = s.id; o.textContent = s.name;
+        sectionFilterSec.appendChild(o);
+      });
+      sectionFilterSec.disabled = data.length === 0;
+    }).catch(() => {});
+});
+
+sectionFilterSec.addEventListener('change', function () {
+  hiddenSectionId.value = this.value || '';
+  submitBtnSec.disabled = !this.value;
+});
+
+// ── Restore section mode dropdowns on page reload ─────────────────────────────
+{% if mode == 'section' and selected_section_obj and section_grade %}
+const _restoreSectionId = {{ selected_section_obj.id }};
+const _restoreGradeId   = {{ section_grade.id }};
+const _restoreStage     = {{ section_stage | tojson }};
+
+function _loadStagesSec() {
+  fetch(stagesUrl, { headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      stageFilterSec.innerHTML = '<option value="">— كل المراحل —</option>';
+      data.forEach(s => {
+        const o = document.createElement('option');
+        o.value = s.value; o.textContent = s.label;
+        stageFilterSec.appendChild(o);
+      });
+      if (_restoreStage) {
+        stageFilterSec.value = _restoreStage;
+        _loadGradesSec(_restoreStage, _restoreGradeId);
+      }
+    }).catch(() => {});
+}
+
+function _loadGradesSec(stage, restoreGradeId) {
+  fetch(`${gradesUrl}?stage=${encodeURIComponent(stage)}`, { headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      gradeFilterSec.innerHTML = '<option value="">— اختر الصف —</option>';
+      data.forEach(g => {
+        const o = document.createElement('option');
+        o.value = g.id; o.textContent = g.name;
+        gradeFilterSec.appendChild(o);
+      });
+      gradeFilterSec.disabled = data.length === 0;
+      if (restoreGradeId) {
+        gradeFilterSec.value = restoreGradeId;
+        _loadSectionsSec(restoreGradeId, _restoreSectionId);
+      }
+    }).catch(() => {});
+}
+
+function _loadSectionsSec(gradeId, restoreSectionId) {
+  fetch(`${sectionsUrl}?grade_id=${encodeURIComponent(gradeId)}`, { headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      sectionFilterSec.innerHTML = '<option value="">— اختر الشعبة —</option>';
+      data.forEach(s => {
+        const o = document.createElement('option');
+        o.value = s.id; o.textContent = s.name;
+        sectionFilterSec.appendChild(o);
+      });
+      sectionFilterSec.disabled = data.length === 0;
+      if (restoreSectionId) {
+        sectionFilterSec.value = restoreSectionId;
+        hiddenSectionId.value = restoreSectionId;
+        submitBtnSec.disabled = false;
+      }
+    }).catch(() => {});
+}
+
+_loadStagesSec();
+{% else %}
+// Load stages for section mode (no restore needed)
+(function loadStagesSec() {
+  fetch(stagesUrl, { headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      stageFilterSec.innerHTML = '<option value="">— كل المراحل —</option>';
+      data.forEach(s => {
+        const o = document.createElement('option');
+        o.value = s.value; o.textContent = s.label;
+        stageFilterSec.appendChild(o);
+      });
+    }).catch(() => {});
+})();
+{% endif %}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STUDENT MODE cascade + search
+// ═══════════════════════════════════════════════════════════════════════════════
+const stageFilterStu   = document.getElementById('stageFilterStu');
+const gradeFilterStu   = document.getElementById('gradeFilterStu');
+const sectionFilterStu = document.getElementById('sectionFilterStu');
 const studentSearch    = document.getElementById('studentSearch');
 const studentResults   = document.getElementById('studentResults');
 const studentCard      = document.getElementById('selectedStudentCard');
 const studentDropdown  = document.getElementById('studentDropdown');
-const hiddenStudentId  = document.getElementById('hiddenStudentId');
-const submitBtn        = document.getElementById('submitBtn');
+const submitBtnStu     = document.getElementById('submitBtnStu');
 
 let searchTimer = null;
 let currentSectionId = null;
 let currentGradeId   = null;
 
-// ── Restore selected student name on page load (if student_id in URL) ────────
+// Restore selected student name on page load
 {% if selected_student_obj %}
 showStudentCard({
   id:         {{ selected_student_obj.id }},
@@ -341,68 +681,53 @@ showStudentCard({
 });
 {% endif %}
 
-// ── Stage cascade ─────────────────────────────────────────────────────────────
-function loadStages() {
-  fetch(stagesUrl, { headers: { Accept: 'application/json' } })
-    .then(r => r.ok ? r.json() : [])
-    .then(data => {
-      stageFilter.innerHTML = '<option value="">— كل المراحل —</option>';
-      data.forEach(s => {
-        const o = document.createElement('option');
-        o.value = s.value; o.textContent = s.label;
-        stageFilter.appendChild(o);
-      });
-    }).catch(() => {});
-}
-
-function resetGrade() {
-  gradeFilter.innerHTML = '<option value="">— اختر الصف —</option>';
-  gradeFilter.disabled = true;
+function resetGradeStu() {
+  gradeFilterStu.innerHTML = '<option value="">— اختر الصف —</option>';
+  gradeFilterStu.disabled = true;
   currentGradeId = null;
-  resetSection();
+  resetSectionStu();
 }
-
-function resetSection() {
-  sectionFilter.innerHTML = '<option value="">— اختر الشعبة —</option>';
-  sectionFilter.disabled = true;
+function resetSectionStu() {
+  sectionFilterStu.innerHTML = '<option value="">— اختر الشعبة —</option>';
+  sectionFilterStu.disabled = true;
   currentSectionId = null;
   showSearchMode();
 }
 
-stageFilter.addEventListener('change', function () {
-  resetGrade();
+stageFilterStu.addEventListener('change', function () {
+  resetGradeStu();
   if (!this.value) return;
   fetch(`${gradesUrl}?stage=${encodeURIComponent(this.value)}`, { headers: { Accept: 'application/json' } })
     .then(r => r.ok ? r.json() : [])
     .then(data => {
-      gradeFilter.innerHTML = '<option value="">— اختر الصف —</option>';
+      gradeFilterStu.innerHTML = '<option value="">— اختر الصف —</option>';
       data.forEach(g => {
         const o = document.createElement('option');
         o.value = g.id; o.textContent = g.name;
-        gradeFilter.appendChild(o);
+        gradeFilterStu.appendChild(o);
       });
-      gradeFilter.disabled = data.length === 0;
+      gradeFilterStu.disabled = data.length === 0;
     }).catch(() => {});
 });
 
-gradeFilter.addEventListener('change', function () {
-  resetSection();
+gradeFilterStu.addEventListener('change', function () {
+  resetSectionStu();
   currentGradeId = this.value || null;
   if (!this.value) return;
   fetch(`${sectionsUrl}?grade_id=${encodeURIComponent(this.value)}`, { headers: { Accept: 'application/json' } })
     .then(r => r.ok ? r.json() : [])
     .then(data => {
-      sectionFilter.innerHTML = '<option value="">— اختر الشعبة —</option>';
+      sectionFilterStu.innerHTML = '<option value="">— اختر الشعبة —</option>';
       data.forEach(s => {
         const o = document.createElement('option');
         o.value = s.id; o.textContent = s.name;
-        sectionFilter.appendChild(o);
+        sectionFilterStu.appendChild(o);
       });
-      sectionFilter.disabled = data.length === 0;
+      sectionFilterStu.disabled = data.length === 0;
     }).catch(() => {});
 });
 
-sectionFilter.addEventListener('change', function () {
+sectionFilterStu.addEventListener('change', function () {
   currentSectionId = this.value || null;
   clearStudentPick();
   if (currentSectionId) {
@@ -412,7 +737,6 @@ sectionFilter.addEventListener('change', function () {
   }
 });
 
-// ── Student widget ────────────────────────────────────────────────────────────
 function showSearchMode() {
   document.getElementById('searchMode').classList.remove('d-none');
   document.getElementById('dropdownMode').classList.add('d-none');
@@ -451,7 +775,6 @@ studentDropdown.addEventListener('change', function () {
   chooseStudent(JSON.parse(decodeURIComponent(this.value)));
 });
 
-// ── Live search ───────────────────────────────────────────────────────────────
 function hideResults() {
   studentResults.classList.add('d-none');
   studentResults.innerHTML = '';
@@ -459,7 +782,7 @@ function hideResults() {
 
 function clearStudentPick() {
   hiddenStudentId.value = '';
-  submitBtn.disabled = true;
+  submitBtnStu.disabled = true;
   studentSearch.value = '';
   if (studentDropdown) studentDropdown.value = '';
   studentCard.classList.add('d-none');
@@ -473,7 +796,7 @@ function studentMeta(s) {
 
 function showStudentCard(s) {
   hiddenStudentId.value = s.id;
-  submitBtn.disabled = false;
+  submitBtnStu.disabled = false;
   studentCard.classList.remove('d-none');
   studentCard.innerHTML = `
     <i class="bi bi-person-check-fill"></i>
@@ -507,7 +830,7 @@ function renderResults(students) {
 studentSearch.addEventListener('input', () => {
   clearTimeout(searchTimer);
   hiddenStudentId.value = '';
-  submitBtn.disabled = true;
+  submitBtnStu.disabled = true;
   studentCard.classList.add('d-none');
   const q = studentSearch.value.trim();
   if (q.length < 2) { hideResults(); return; }
@@ -544,6 +867,18 @@ document.addEventListener('click', e => {
   if (!e.target.closest('.student-search')) hideResults();
 });
 
-loadStages();
+// ── Load stages for student mode ──────────────────────────────────────────────
+(function loadStagesStu() {
+  fetch(stagesUrl, { headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(data => {
+      stageFilterStu.innerHTML = '<option value="">— كل المراحل —</option>';
+      data.forEach(s => {
+        const o = document.createElement('option');
+        o.value = s.value; o.textContent = s.label;
+        stageFilterStu.appendChild(o);
+      });
+    }).catch(() => {});
+})();
 </script>
 {% endblock %}
