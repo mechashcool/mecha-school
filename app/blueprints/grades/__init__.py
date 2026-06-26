@@ -753,6 +753,16 @@ def gradebook():
             multi_section = True
             exams, rows = _pivot_data_multi(grade_sec_ids, subject_filter,
                                             exam_type_filter, start_date, end_date)
+    elif stage_filter:
+        # "كل الصفوف + كل الشعب" — all sections under the selected stage
+        stage_sec_ids = [s.id for s in sections]
+        if _is_teacher():
+            allowed_set = set(get_teacher_section_ids(current_user) or [])
+            stage_sec_ids = [sid for sid in stage_sec_ids if sid in allowed_set]
+        if stage_sec_ids:
+            multi_section = True
+            exams, rows = _pivot_data_multi(stage_sec_ids, subject_filter,
+                                            exam_type_filter, start_date, end_date)
 
     if exams or rows:
         with_avg = [r for r in rows if r['avg'] is not None]
@@ -796,8 +806,12 @@ def gradebook_export():
     school = get_current_school()
     year   = get_view_year(school.id) if school else None
 
-    if not section_id and not grade_filter:
-        flash('يرجى اختيار الشعبة أو الصف أولاً.', 'warning')
+    if not section_id and not grade_filter and not stage_filter:
+        flash('يرجى اختيار المرحلة أو الصف أو الشعبة أولاً.', 'warning')
+        return redirect(url_for('grades.gradebook'))
+
+    if not school or not year:
+        flash('لا يوجد عام دراسي نشط.', 'warning')
         return redirect(url_for('grades.gradebook'))
 
     if section_id:
@@ -805,11 +819,8 @@ def gradebook_export():
             abort(403)
         exams, rows = _pivot_data(section_id, subject_filter, exam_type_filter,
                                    start_date, end_date)
-    else:
+    elif grade_filter:
         # Grade-level export: all sections for the selected grade
-        if not school or not year:
-            flash('لا يوجد عام دراسي نشط.', 'warning')
-            return redirect(url_for('grades.gradebook'))
         secs_q = (Section.query
                   .filter_by(grade_id=grade_filter,
                              school_id=school.id,
@@ -822,6 +833,27 @@ def gradebook_export():
             flash('لا توجد شعب متاحة لهذا الصف.', 'warning')
             return redirect(url_for('grades.gradebook'))
         exams, rows = _pivot_data_multi(grade_sec_ids, subject_filter,
+                                         exam_type_filter, start_date, end_date)
+    else:
+        # Stage-level export: all sections under the selected stage
+        stage_grades = (Grade.query
+                        .filter_by(school_id=school.id,
+                                   academic_year_id=year.id,
+                                   stage=stage_filter)
+                        .all())
+        stage_grade_ids = [g.id for g in stage_grades]
+        secs_q = (Section.query
+                  .filter(Section.grade_id.in_(stage_grade_ids),
+                          Section.school_id == school.id,
+                          Section.academic_year_id == year.id))
+        if _is_teacher():
+            allowed = set(get_teacher_section_ids(current_user) or [])
+            secs_q = secs_q.filter(Section.id.in_(allowed))
+        stage_sec_ids = [s.id for s in secs_q.all()]
+        if not stage_sec_ids:
+            flash('لا توجد شعب متاحة لهذه المرحلة.', 'warning')
+            return redirect(url_for('grades.gradebook'))
+        exams, rows = _pivot_data_multi(stage_sec_ids, subject_filter,
                                          exam_type_filter, start_date, end_date)
 
     data = export_gradebook(exams, rows)
