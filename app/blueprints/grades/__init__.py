@@ -1,4 +1,5 @@
 """Al-Muhandis – Grades Blueprint"""
+from collections import defaultdict
 from flask import Blueprint, render_template, redirect, url_for, flash, request, abort, jsonify
 from flask_login import login_required, current_user
 from datetime import datetime as dt
@@ -1028,6 +1029,52 @@ def report():
         .all()
     )
 
+    # ── Single-student mode detection and subject grouping ────────────────────
+    # Triggered when all results belong to exactly one student.
+    # Grouping and averages are pure Python over the already-fetched ORM rows —
+    # no extra queries, no schema change, no new grade calculation.
+    single_student_obj = None
+    subject_groups     = []
+    overall_avg        = None
+
+    if results_view:
+        unique_sids = {r.student_id for r in results_view}
+        if len(unique_sids) == 1:
+            single_student_obj = results_view[0].student
+            sub_map = defaultdict(list)
+            # Re-sort ascending by date for grouped display
+            for r in sorted(results_view,
+                            key=lambda r: (r.exam.exam_date or dt.min.date(), r.exam.id)):
+                key = (
+                    r.exam.subject_id,
+                    r.exam.subject.name if r.exam.subject else 'غير محددة',
+                )
+                sub_map[key].append(r)
+
+            all_valid_pcts = []
+            for (sub_id, sub_name), sub_results in sorted(
+                    sub_map.items(), key=lambda x: x[0][1]):
+                valid_pcts = []
+                for r in sub_results:
+                    try:
+                        mx = float(r.exam.max_marks)
+                        if mx > 0:
+                            pct = float(r.marks) / mx * 100
+                            valid_pcts.append(pct)
+                            all_valid_pcts.append(pct)
+                    except (TypeError, ValueError):
+                        pass
+                subject_groups.append({
+                    'subject_id':   sub_id,
+                    'subject_name': sub_name,
+                    'results':      sub_results,
+                    'avg':          round(sum(valid_pcts) / len(valid_pcts), 1)
+                                    if valid_pcts else None,
+                    'count':        len(sub_results),
+                })
+            if all_valid_pcts:
+                overall_avg = round(sum(all_valid_pcts) / len(all_valid_pcts), 1)
+
     exam_types = ExamType.query.all()
     if _is_teacher():
         subject_ids = _teacher_subject_ids()
@@ -1037,6 +1084,9 @@ def report():
 
     return render_template('grades/report.html',
                            results_view=results_view,
+                           single_student_obj=single_student_obj,
+                           subject_groups=subject_groups,
+                           overall_avg=overall_avg,
                            exam_types=exam_types,
                            subjects=subjects,
                            available_grades=available_grades,

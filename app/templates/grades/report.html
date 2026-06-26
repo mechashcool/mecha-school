@@ -5,6 +5,16 @@
 {% block extra_css %}
 <style>
 .print-only { display: none; }
+.info-label {
+  font-size: .76em;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: .02em;
+  margin-bottom: 3px;
+}
+.student-info-val { font-weight: 600; color: #1a3a5c; }
+
 @media print {
   #sidebar, #sidebar-overlay, #topbar,
   .page-header .d-flex,
@@ -30,6 +40,12 @@
     font-size: 9pt; color: #555;
     display: flex; justify-content: center; gap: 20pt; flex-wrap: wrap;
   }
+
+  /* Single-student report additions */
+  .subject-group { page-break-inside: avoid; }
+  .info-label { font-size: 7.5pt !important; color: #666 !important; text-transform: none !important; letter-spacing: 0 !important; }
+  .student-info-val { font-size: 9pt !important; }
+  .overall-avg-row { border-top: 1pt solid #ccc; padding-top: 5pt; margin-top: 5pt; }
 
   @page { size: A4 landscape; margin: 15mm 12mm; }
   .page-header { margin-bottom: 10pt !important; }
@@ -86,7 +102,30 @@
 {% endblock %}
 
 {% block content %}
-{# ── Print-only header (hidden on screen) ── #}
+
+{# ── Print-only header (hidden on screen, visible on print) ── #}
+{% if single_student_obj %}
+  {%- set _psec   = single_student_obj.section -%}
+  {%- set _pgrade = _psec.grade if _psec else none -%}
+  {%- set _sns    = namespace(name='') -%}
+  {%- for subj in subjects -%}{%- if subject_filter == subj.id|string -%}{%- set _sns.name = subj.name -%}{%- endif -%}{%- endfor -%}
+<div class="print-header" style="display:none">
+  <div class="print-school-name">{{ school.school_name_ar or school.school_name if school else '' }}</div>
+  <div class="print-report-title">تقرير درجات الطالب</div>
+  <div class="print-meta">
+    <span>{{ single_student_obj.full_name }}</span>
+    <span>رقم الطالب: {{ single_student_obj.student_id }}</span>
+    {% if _pgrade and _pgrade.stage %}<span>المرحلة: {{ _pgrade.stage }}</span>{% endif %}
+    {% if _pgrade %}<span>الصف: {{ _pgrade.name }}</span>{% endif %}
+    {% if _psec %}<span>الشعبة: {{ _psec.name }}</span>{% endif %}
+    {% if active_year %}<span>العام الدراسي: {{ active_year.name }}</span>{% endif %}
+    <span>المادة: {{ _sns.name if _sns.name else 'كل المواد' }}</span>
+    {% if start_date or end_date %}<span>الفترة: {{ start_date or '' }}{% if start_date and end_date %} — {% endif %}{{ end_date or '' }}</span>{% endif %}
+    {% if overall_avg is not none %}<span>المعدل العام: {{ overall_avg }}%</span>{% endif %}
+    <span>تاريخ الطباعة: <span class="js-print-date"></span></span>
+  </div>
+</div>
+{% else %}
 <div class="print-header" style="display:none">
   <div class="print-school-name">{{ school.school_name_ar or school.school_name if school else '' }}</div>
   <div class="print-report-title">نتائج الطلاب</div>
@@ -112,6 +151,7 @@
     <span>تاريخ الطباعة: <span class="js-print-date"></span></span>
   </div>
 </div>
+{% endif %}
 <script>
 document.querySelectorAll('.js-print-date').forEach(function(el){
   el.textContent = new Date().toLocaleDateString('ar-SA', {year:'numeric',month:'long',day:'numeric'});
@@ -233,7 +273,195 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
   </div>
 </div>
 
-{# ── Results table ── #}
+{# ════════════════════════════════════════════════════════════════════════════
+   Results area — branches on single_student_obj
+   ════════════════════════════════════════════════════════════════════════════ #}
+
+{% if single_student_obj %}
+
+{# ── Single-student report layout ── #}
+{%- set _sec   = single_student_obj.section -%}
+{%- set _grade = _sec.grade if _sec else none -%}
+{%- set _sns   = namespace(name='') -%}
+{%- for subj in subjects -%}{%- if subject_filter == subj.id|string -%}{%- set _sns.name = subj.name -%}{%- endif -%}{%- endfor -%}
+
+{# Student info card #}
+<div class="card mb-3">
+  <div class="card-header d-flex align-items-center gap-2" style="background:#1a3a5c;color:#fff">
+    <i class="bi bi-person-lines-fill" style="font-size:18px"></i>
+    <span style="font-weight:700;font-size:1.05em">تقرير درجات الطالب</span>
+    {% if subject_filter != 'all' %}
+    <span class="badge ms-auto" style="background:rgba(255,255,255,.18);color:#fff;font-weight:600">
+      {{ _sns.name }}
+    </span>
+    {% endif %}
+  </div>
+  <div class="card-body">
+    <div class="row g-3 align-items-start">
+      <div class="col-6 col-md-3">
+        <div class="info-label">اسم الطالب</div>
+        <div class="student-info-val" style="font-size:1.05em">{{ single_student_obj.full_name }}</div>
+      </div>
+      <div class="col-6 col-md-2">
+        <div class="info-label">رقم الطالب</div>
+        <div><code style="font-size:.9em;color:#1a3a5c">{{ single_student_obj.student_id }}</code></div>
+      </div>
+      {% if _grade and _grade.stage %}
+      <div class="col-6 col-md-2">
+        <div class="info-label">المرحلة</div>
+        <div class="student-info-val">{{ _grade.stage }}</div>
+      </div>
+      {% endif %}
+      {% if _grade %}
+      <div class="col-6 col-md-2">
+        <div class="info-label">الصف</div>
+        <div class="student-info-val">{{ _grade.name }}</div>
+      </div>
+      {% endif %}
+      {% if _sec %}
+      <div class="col-6 col-md-2">
+        <div class="info-label">الشعبة</div>
+        <div class="student-info-val">{{ _sec.name }}</div>
+      </div>
+      {% endif %}
+      <div class="col-6 col-md-2">
+        <div class="info-label">العام الدراسي</div>
+        <div class="student-info-val">{{ active_year.name if active_year else '—' }}</div>
+      </div>
+      <div class="col-6 col-md-2">
+        <div class="info-label">المادة</div>
+        <div class="student-info-val">{{ _sns.name if _sns.name else 'كل المواد' }}</div>
+      </div>
+      {% if start_date or end_date %}
+      <div class="col-6 col-md-3">
+        <div class="info-label">الفترة الزمنية</div>
+        <div class="student-info-val">
+          {{ start_date or '' }}{% if start_date and end_date %} — {% endif %}{{ end_date or '' }}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+    {% if overall_avg is not none %}
+    <hr class="my-3">
+    <div class="overall-avg-row d-flex align-items-center gap-3 flex-wrap">
+      <span class="fw-700">المعدل العام:</span>
+      <span class="badge px-3 py-2" style="
+        font-size:.95em;font-weight:700;
+        background:{% if overall_avg >= 60 %}#e8f8f0{% else %}#fef0f0{% endif %};
+        color:{% if overall_avg >= 60 %}#1aab6d{% else %}#e03e3e{% endif %}">
+        {{ overall_avg }}%
+      </span>
+      <span class="text-muted small">
+        ({{ results_view|length }} نتيجة في {{ subject_groups|length }} {% if subject_groups|length == 1 %}مادة{% else %}مواد{% endif %})
+      </span>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{# Subject-grouped exam tables #}
+{% for grp in subject_groups %}
+<div class="card mb-3 subject-group">
+  <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2"
+       style="background:#1a3a5c;color:#fff">
+    <span style="font-weight:700;font-size:1em">
+      <i class="bi bi-book-fill me-2"></i>{{ grp.subject_name }}
+    </span>
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+      <span class="badge" style="background:rgba(255,255,255,.18);color:#fff;font-weight:600;font-size:.82em">
+        {{ grp.count }} {% if grp.count == 1 %}نتيجة{% else %}نتائج{% endif %}
+      </span>
+      {% if grp.avg is not none %}
+      <span class="badge px-3 py-1" style="
+        background:{% if grp.avg >= 60 %}#e8f8f0{% else %}#fef0f0{% endif %};
+        color:{% if grp.avg >= 60 %}#1aab6d{% else %}#e03e3e{% endif %};
+        font-weight:700;font-size:.85em">
+        متوسط المادة: {{ grp.avg }}%
+      </span>
+      {% endif %}
+    </div>
+  </div>
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>اسم الاختبار</th>
+          <th>الفئة</th>
+          <th>التاريخ</th>
+          <th>الدرجة</th>
+          <th>الدرجة القصوى</th>
+          <th>النسبة</th>
+          <th>التقدير</th>
+          <th>الحالة</th>
+          <th>ملاحظات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in grp.results %}
+        {% if r.exam.max_marks and r.exam.max_marks|float > 0 %}
+          {% set _pct = (r.marks|float / r.exam.max_marks|float * 100)|round(1) %}
+        {% else %}
+          {% set _pct = none %}
+        {% endif %}
+        <tr>
+          <td class="text-muted">{{ loop.index }}</td>
+          <td class="fw-600">{{ r.exam.display_name }}</td>
+          <td>
+            {% if r.exam.exam_type %}
+            <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
+              {{ r.exam.exam_type.name }}
+            </span>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>{{ r.exam.exam_date.strftime('%Y-%m-%d') }}</td>
+          <td>
+            <span class="fw-700" style="color:{% if r.is_pass %}#1aab6d{% else %}#e03e3e{% endif %}">
+              {{ r.marks }}
+            </span>
+          </td>
+          <td class="text-muted">{{ r.exam.max_marks }}</td>
+          <td>
+            {% if _pct is not none %}
+            <span class="fw-600" style="color:{% if r.is_pass %}#1aab6d{% else %}#e03e3e{% endif %}">{{ _pct }}%</span>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>
+            {% if r.grade_letter %}
+            <span class="badge" style="
+              background:{% if r.is_pass %}#e8f8f0{% else %}#fef0f0{% endif %};
+              color:{% if r.is_pass %}#1aab6d{% else %}#e03e3e{% endif %};
+              font-weight:700">
+              {{ r.grade_letter }}
+            </span>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>
+            {% if r.is_pass %}
+            <span class="badge-status badge-active">ناجح</span>
+            {% else %}
+            <span class="badge-status badge-inactive">راسب</span>
+            {% endif %}
+          </td>
+          <td class="text-muted small">{{ r.notes or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">
+    <i class="bi bi-clipboard-data" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+    لا توجد نتائج لهذه التصفية
+  </div>
+</div>
+{% endfor %}
+
+{% else %}
+
+{# ── General multi-student results table (unchanged) ── #}
 <div class="card">
   <div class="card-header d-flex align-items-center gap-2">
     <i class="bi bi-table text-accent"></i>
@@ -312,6 +540,8 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
     </table>
   </div>
 </div>
+
+{% endif %}
 {% endblock %}
 
 {% block extra_js %}
