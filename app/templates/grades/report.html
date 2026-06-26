@@ -16,7 +16,7 @@
 .student-info-val { font-weight: 600; color: #1a3a5c; }
 
 @media print {
-  /* Hide chrome, filter form, screen-only info card, and page heading */
+  /* Hide chrome, filter form, screen-only student info card, and page heading */
   #sidebar, #sidebar-overlay, #topbar,
   .page-header,
   .card.mb-4,
@@ -29,65 +29,68 @@
   #main-content { margin: 0 !important; padding: 0 !important; }
   * { box-shadow: none !important; }
 
-  /* ── Compact print header (shared container) ── */
+  /* ── Shared print header ── */
   .print-header {
     display: block !important;
     border-bottom: 2pt solid #1a3a5c;
-    padding-bottom: 5pt;
-    margin-bottom: 7pt;
-  }
-
-  /* Single-student: top bar (school | title | date) */
-  .ph-top {
-    display: flex !important;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 4pt;
-  }
-  .ph-school {
-    font-size: 14pt; font-weight: 900; color: #1a3a5c;
+    padding-bottom: 6pt;
+    margin-bottom: 8pt;
+    text-align: center;
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
-  .ph-title { font-size: 10.5pt; font-weight: 700; color: #333; }
-  .ph-date  { font-size: 7.5pt; color: #888; }
 
-  /* Single-student: compact student info grid table */
-  .ph-info-table { width: 100%; border-collapse: collapse; font-size: 8pt; margin-top: 3pt; }
-  .ph-info-table th {
-    background: #1a3a5c !important; color: #fff !important;
-    -webkit-print-color-adjust: exact; print-color-adjust: exact;
-    font-weight: 600; padding: 3pt 7pt;
-    border: 1pt solid #0f2440;
-    text-align: right; white-space: nowrap;
-  }
-  .ph-info-table td { padding: 3pt 7pt; border: 1pt solid #ccc; }
-  .ph-avg-cell { font-weight: 700; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-
-  /* Multi-student print header (unchanged style, kept centered) */
-  .print-header .print-school-name {
+  /* Shared: school name line */
+  .ph-school-name, .print-school-name {
     font-size: 15pt; font-weight: 900; color: #1a3a5c;
     margin: 0 0 3pt; text-align: center;
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
-  .print-header .print-report-title { font-size: 11pt; font-weight: 700; color: #333; margin: 0 0 3pt; text-align: center; }
-  .print-header .print-meta {
+  /* Shared: report title line */
+  .ph-report-title, .print-report-title {
+    font-size: 11pt; font-weight: 700; color: #333; margin: 0 0 3pt; text-align: center;
+  }
+  /* Shared: compact meta row — used by both single-student and multi-student headers */
+  .ph-meta-row, .print-meta {
     font-size: 8.5pt; color: #555;
-    display: flex; justify-content: center; gap: 16pt; flex-wrap: wrap;
+    display: flex; justify-content: center; gap: 12pt; flex-wrap: wrap; margin-top: 4pt;
+  }
+  .ph-meta-row span, .print-meta span { white-space: nowrap; }
+  .ph-avg-val {
+    font-weight: 700;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
 
   .subject-group { page-break-inside: avoid; }
-  .overall-avg-row { border-top: 1pt solid #ccc; padding-top: 4pt; margin-top: 4pt; }
 
-  @page { size: A4 landscape; margin: 10mm 10mm; }
-
-  .card { border: none !important; border-radius: 0 !important; box-shadow: none !important; background: #fff !important; break-inside: auto; }
-  .card.mb-3 { margin-bottom: 5pt !important; }
-  .card-header {
-    background: #1a3a5c !important; color: #fff !important;
-    -webkit-print-color-adjust: exact; print-color-adjust: exact;
-    border-radius: 0 !important; padding: 5pt 8pt !important; font-size: 9pt !important;
+  @page {
+    size: A4 landscape; margin: 10mm 10mm;
+    @bottom-center {
+      content: "صفحة " counter(page) " من " counter(pages);
+      font-size: 8pt; color: #666; font-family: 'Cairo', sans-serif;
+    }
+    @bottom-right {
+      content: "{{ school.school_name if school else '' }}";
+      font-size: 8pt; color: #666;
+    }
   }
-  .card-header .badge { background: rgba(255,255,255,.2) !important; color: #fff !important; }
+
+  /* Cards: clean, borderless */
+  .card { border: none !important; border-radius: 0 !important; box-shadow: none !important; background: #fff !important; break-inside: auto; }
+  .card.mb-3 { margin-bottom: 6pt !important; }
+
+  /* Card section headers: simple dark-blue text + bottom rule, no filled bar */
+  .card-header {
+    background: transparent !important;
+    color: #1a3a5c !important;
+    border-radius: 0 !important;
+    border: none !important;
+    border-bottom: 1.5pt solid #1a3a5c !important;
+    padding: 4pt 6pt !important;
+    font-size: 9pt !important;
+    font-weight: 700 !important;
+  }
+  /* Header badges (count/avg) are redundant — summary table below covers them */
+  .card-header .badge { display: none !important; }
 
   .table-wrapper { border: none !important; overflow: visible !important; }
   .table { font-size: 8.5pt !important; width: 100% !important; border-collapse: collapse !important; }
@@ -103,6 +106,11 @@
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
   .table tbody tr:hover td { background: inherit !important; }
+  .table tfoot tr td {
+    background: #f0f4f8 !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    border-top: 1.5pt solid #1a3a5c !important;
+  }
 
   .badge { border: 1px solid #999 !important; background: transparent !important; color: #000 !important; font-size: 7.5pt !important; padding: 1pt 3pt !important; }
   .badge-status { border: 1px solid currentColor !important; background: transparent !important; font-size: 7.5pt !important; padding: 1pt 4pt !important; }
@@ -116,17 +124,6 @@
   .no-print { display: none !important; }
   .print-only { display: inline !important; }
   .bi { font-size: inherit !important; }
-
-  @page {
-    @bottom-center {
-      content: "صفحة " counter(page) " من " counter(pages);
-      font-size: 8pt; color: #666; font-family: 'Cairo', sans-serif;
-    }
-    @bottom-right {
-      content: "{{ school.school_name if school else '' }}";
-      font-size: 8pt; color: #666;
-    }
-  }
 }
 </style>
 {% endblock %}
@@ -140,49 +137,27 @@
   {%- set _sns    = namespace(name='') -%}
   {%- for subj in subjects -%}{%- if subject_filter == subj.id|string -%}{%- set _sns.name = subj.name -%}{%- endif -%}{%- endfor -%}
 <div class="print-header" style="display:none">
-  {# Top bar: school name | report title | print date #}
-  <div class="ph-top">
-    <div class="ph-school">{{ school.school_name_ar or school.school_name if school else '' }}</div>
-    <div class="ph-title">تقرير درجات الطالب</div>
-    <div class="ph-date">تاريخ الطباعة: <span class="js-print-date"></span></div>
+  <div class="ph-school-name">{{ school.school_name_ar or school.school_name if school else '' }}</div>
+  <div class="ph-report-title">تقرير درجات الطالب</div>
+  <div class="ph-meta-row">
+    <span><strong>الطالب:</strong> {{ single_student_obj.full_name }}</span>
+    <span><strong>الرقم:</strong> {{ single_student_obj.student_id }}</span>
+    {% if _pgrade and _pgrade.stage %}<span><strong>المرحلة:</strong> {{ _pgrade.stage }}</span>{% endif %}
+    {% if _pgrade %}<span><strong>الصف:</strong> {{ _pgrade.name }}</span>{% endif %}
+    {% if _psec %}<span><strong>الشعبة:</strong> {{ _psec.name }}</span>{% endif %}
+    <span><strong>العام الدراسي:</strong> {{ active_year.name if active_year else '—' }}</span>
+    <span><strong>المادة:</strong> {{ _sns.name if _sns.name else 'كل المواد' }}</span>
+    {% if overall_avg is not none %}
+    <span><strong>المعدل العام:</strong>
+      <span class="ph-avg-val" style="color:{% if overall_avg >= 60 %}#0a6640{% else %}#8b1a1a{% endif %}">{{ overall_avg }}%</span>
+      <span style="color:#777">({{ overall_marks_sum }}/{{ overall_max_sum }})</span>
+    </span>
+    {% endif %}
+    {% if start_date or end_date %}
+    <span><strong>الفترة:</strong> {{ start_date or '' }}{% if start_date and end_date %} — {% endif %}{{ end_date or '' }}</span>
+    {% endif %}
+    <span style="color:#888">تاريخ الطباعة: <span class="js-print-date"></span></span>
   </div>
-  {# Compact 2-row student info grid #}
-  <table class="ph-info-table">
-    <tbody>
-      <tr>
-        <th>اسم الطالب</th>
-        <td style="font-weight:700">{{ single_student_obj.full_name }}</td>
-        <th>رقم الطالب</th>
-        <td>{{ single_student_obj.student_id }}</td>
-        <th>المرحلة</th>
-        <td>{{ _pgrade.stage if _pgrade and _pgrade.stage else '—' }}</td>
-        <th>الصف</th>
-        <td>{{ _pgrade.name if _pgrade else '—' }}</td>
-      </tr>
-      <tr>
-        <th>الشعبة</th>
-        <td>{{ _psec.name if _psec else '—' }}</td>
-        <th>العام الدراسي</th>
-        <td>{{ active_year.name if active_year else '—' }}</td>
-        <th>المادة</th>
-        <td>{{ _sns.name if _sns.name else 'كل المواد' }}</td>
-        {% if overall_avg is not none %}
-        <th>المعدل العام</th>
-        <td class="ph-avg-cell" style="color:{% if overall_avg >= 60 %}#0a6640{% else %}#8b1a1a{% endif %}">
-          {{ overall_avg }}%&nbsp;&nbsp;({{ overall_marks_sum }}/{{ overall_max_sum }})
-        </td>
-        {% else %}
-        <td colspan="2"></td>
-        {% endif %}
-      </tr>
-      {% if start_date or end_date %}
-      <tr>
-        <th>الفترة الزمنية</th>
-        <td colspan="7">{{ start_date or '' }}{% if start_date and end_date %} — {% endif %}{{ end_date or '' }}</td>
-      </tr>
-      {% endif %}
-    </tbody>
-  </table>
 </div>
 {% else %}
 <div class="print-header" style="display:none">
