@@ -839,149 +839,99 @@ def gradebook_export():
 @login_required
 @permission_required('enter_grades')
 def report():
+    search           = request.args.get('q', '').strip()
+    student_search   = request.args.get('student_q', '').strip()
+    exam_type_filter = request.args.get('exam_type', 'all')
+    subject_filter   = request.args.get('subject_id', 'all')
+    start_date       = request.args.get('start_date', '')
+    end_date         = request.args.get('end_date', '')
+
     school = get_current_school()
     year   = get_view_year(school.id) if school else None
 
-    mode = request.args.get('mode', 'student')
-    if mode not in ('student', 'section'):
-        mode = 'student'
+    results_base = ExamResult.query.join(Exam)
+    if school:
+        results_base = results_base.filter(ExamResult.school_id == school.id)
+    if year:
+        results_base = results_base.filter(ExamResult.academic_year_id == year.id)
+    if _is_teacher():
+        results_base = _apply_teacher_scope(results_base)
+    if student_search:
+        results_base = results_base.join(
+            Student, ExamResult.student_id == Student.id
+        ).filter(
+            Student.full_name.ilike(f'%{student_search}%') |
+            Student.student_id.ilike(f'%{student_search}%')
+        )
+    results_view = (
+        _build_exam_query(
+            results_base,
+            search, exam_type_filter, subject_filter, start_date, end_date
+        )
+        .order_by(Exam.exam_date.desc(), ExamResult.marks.desc())
+        .all()
+    )
 
-    selected_student_id  = request.args.get('student_id',  type=int)
-    selected_section_id  = request.args.get('section_id',  type=int)
-    student_q            = request.args.get('student_q', '').strip()
-
-    results                = []
-    subject_results        = []   # student mode: grouped by subject
-    overall_avg            = None # student mode: overall percentage avg
-    selected_student_obj   = None
-    selected_section_obj   = None
-    section_grade          = None
-    section_stage          = ''
-    student_search_results = []   # student mode: multiple matches for student_q
-
-    # ── Resolve typed name/code → student_id when not already set ───────────
-    if mode == 'student' and not selected_student_id and student_q and school and year:
-        q = (Student.query
-             .filter_by(school_id=school.id,
-                        academic_year_id=year.id,
-                        status='active')
-             .filter(
-                 Student.full_name.ilike(f'%{student_q}%') |
-                 Student.student_id.ilike(f'%{student_q}%')
-             ))
-        if _is_teacher():
-            allowed = get_teacher_section_ids(current_user) or []
-            q = q.filter(Student.section_id.in_(allowed))
-        matches = q.order_by(Student.full_name).limit(50).all()
-        if len(matches) == 1:
-            selected_student_id = matches[0].id   # unique match — proceed directly
-        else:
-            student_search_results = matches       # 0 or many — let template handle
-
-    if mode == 'section' and selected_section_id and school and year:
-        section = Section.query.filter_by(
-            id=selected_section_id,
-            school_id=school.id,
-            academic_year_id=year.id,
-        ).first()
-
-        if section and _is_teacher():
-            allowed = get_teacher_section_ids(current_user)
-            if section.id not in (allowed or []):
-                section = None
-
-        if section:
-            selected_section_obj = section
-            section_grade = section.grade
-            section_stage = section.grade.stage if section.grade else ''
-
-            students = (Student.query
-                        .filter_by(section_id=section.id,
-                                   school_id=school.id,
-                                   status='active')
-                        .order_by(Student.full_name)
-                        .all())
-
-            for student in students:
-                s_results = (ExamResult.query
-                             .filter_by(student_id=student.id,
-                                        school_id=school.id,
-                                        academic_year_id=year.id)
-                             .all())
-                avg = None
-                if s_results:
-                    avg = round(
-                        sum(float(r.marks) for r in s_results) / len(s_results), 2
-                    )
-                results.append({
-                    'student': student,
-                    'avg':     avg,
-                    'count':   len(s_results),
-                })
-
-    elif mode == 'student' and selected_student_id and school and year:
-        student = Student.query.filter_by(
-            id=selected_student_id,
-            school_id=school.id,
-            academic_year_id=year.id,
-            status='active',
-        ).first()
-
-        if student and _is_teacher():
-            allowed = get_teacher_section_ids(current_user)
-            if student.section_id not in (allowed or []):
-                student = None
-
-        if student:
-            selected_student_obj = student
-            s_results = (ExamResult.query
-                         .filter_by(student_id=student.id,
-                                    school_id=school.id,
-                                    academic_year_id=year.id)
-                         .all())
-            if s_results:
-                from collections import defaultdict as _dd
-                subj_map = _dd(list)
-                for r in s_results:
-                    subj_map[r.exam.subject_id].append(r)
-
-                for subj_id, res_list in subj_map.items():
-                    res_sorted = sorted(res_list,
-                                        key=lambda r: (r.exam.exam_date, r.exam.id))
-                    subj = res_sorted[0].exam.subject
-                    pairs = [(r, r.exam) for r in res_sorted]
-                    subj_avg = round(
-                        sum(float(r.marks) / float(e.max_marks) * 100
-                            for r, e in pairs) / len(pairs), 1
-                    ) if pairs else None
-                    subject_results.append({
-                        'subject': subj,
-                        'rows':    res_sorted,
-                        'avg':     subj_avg,
-                    })
-
-                subject_results.sort(
-                    key=lambda x: x['subject'].name if x['subject'] else '')
-
-                all_pairs = [(r, r.exam) for r in s_results]
-                overall_avg = round(
-                    sum(float(r.marks) / float(e.max_marks) * 100
-                        for r, e in all_pairs) / len(all_pairs), 1
-                ) if all_pairs else None
+    exam_types = ExamType.query.all()
+    if _is_teacher():
+        subject_ids = _teacher_subject_ids()
+        subjects = Subject.query.filter(Subject.id.in_(subject_ids)).all() if subject_ids else []
+    else:
+        subjects = Subject.query.all()
 
     return render_template('grades/report.html',
-                           results=results,
-                           subject_results=subject_results,
-                           overall_avg=overall_avg,
-                           mode=mode,
-                           selected_student_id=selected_student_id,
-                           selected_student_obj=selected_student_obj,
-                           selected_section_id=selected_section_id,
-                           selected_section_obj=selected_section_obj,
-                           section_grade=section_grade,
-                           section_stage=section_stage,
-                           student_q=student_q,
-                           student_search_results=student_search_results)
+                           results_view=results_view,
+                           exam_types=exam_types,
+                           subjects=subjects,
+                           search=search,
+                           student_search=student_search,
+                           exam_type_filter=exam_type_filter,
+                           subject_filter=subject_filter,
+                           start_date=start_date,
+                           end_date=end_date)
+
+
+@grades_bp.route('/report/export')
+@login_required
+@permission_required('enter_grades')
+def report_export():
+    from flask import Response
+    from app.utils.excel_export import export_exams
+
+    search           = request.args.get('q', '').strip()
+    student_search   = request.args.get('student_q', '').strip()
+    exam_type_filter = request.args.get('exam_type', 'all')
+    subject_filter   = request.args.get('subject_id', 'all')
+    start_date       = request.args.get('start_date', '')
+    end_date         = request.args.get('end_date', '')
+
+    school = get_current_school()
+    year   = get_view_year(school.id) if school else None
+
+    base = Exam.query
+    if school:
+        base = base.filter(Exam.school_id == school.id)
+    if year:
+        base = base.filter(Exam.academic_year_id == year.id)
+    if _is_teacher():
+        base = _apply_teacher_scope(base)
+
+    exams = _build_exam_query(
+        base, search, exam_type_filter, subject_filter, start_date, end_date
+    ).order_by(Exam.exam_date.desc()).all()
+
+    data = export_exams(exams, subject_report=True, student_search=student_search)
+    if not data:
+        flash('مكتبة Excel غير متاحة.', 'warning')
+        return redirect(url_for('grades.report', q=search, student_q=student_search,
+                                exam_type=exam_type_filter, subject_id=subject_filter,
+                                start_date=start_date, end_date=end_date))
+
+    return Response(
+        data,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename=student_results.xlsx'}
+    )
 
 
 # ── Grades report — cascade + student search JSON APIs ───────────────────────
