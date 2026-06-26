@@ -210,7 +210,7 @@ def _collect_user_ids(
     regardless of the request's active-year context.
     """
     user_ids: set[int] = set()
-    stats = {'admins': 0, 'teachers': 0, 'parents': 0, 'no_parent_students': 0}
+    stats = {'admins': 0, 'teachers': 0, 'parents': 0, 'students': 0, 'no_parent_students': 0}
 
     # ── Always include all school-level admin users ───────────────────────────
     try:
@@ -339,6 +339,75 @@ def _collect_user_ids(
             _add_section_members(school_id, sec_id, user_ids, stats,
                                  include_teachers=False)
 
+    elif scope == 'parent_scope':
+        # Parents-only hierarchical scope — no teachers added.
+        # Level is determined by which field is set: section_id > grade_id > stage > all.
+        if section_id:
+            _add_parent_members_only(school_id, int(section_id), user_ids, stats)
+        elif grade_id:
+            grade = (
+                Grade.query
+                .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+                .filter_by(id=int(grade_id), school_id=school_id)
+                .first()
+            )
+            if grade:
+                sections = (
+                    Section.query
+                    .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+                    .filter_by(grade_id=grade.id, school_id=school_id)
+                    .all()
+                )
+                for sec in sections:
+                    _add_parent_members_only(school_id, sec.id, user_ids, stats)
+            else:
+                _log.warning('[chat] parent_scope grade_id=%s not found for school=%s',
+                             grade_id, school_id)
+        elif stage:
+            grades = (
+                Grade.query
+                .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+                .filter_by(school_id=school_id, stage=stage)
+                .all()
+            )
+            _log.info('[chat] parent_scope stage=%r grades_found=%d', stage, len(grades))
+            for grade in grades:
+                sections = (
+                    Section.query
+                    .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+                    .filter_by(grade_id=grade.id, school_id=school_id)
+                    .all()
+                )
+                for sec in sections:
+                    _add_parent_members_only(school_id, sec.id, user_ids, stats)
+        else:
+            # All parents in school
+            all_student_ids = [
+                s.id for s in
+                Student.query
+                .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+                .filter_by(school_id=school_id, status='active')
+                .all()
+            ]
+            stats['students'] += len(all_student_ids)
+            _log.info('[chat] parent_scope all active_students=%d', len(all_student_ids))
+            if all_student_ids:
+                parent_rows = (
+                    db.session.query(parent_students.c.user_id)
+                    .filter(parent_students.c.student_id.in_(all_student_ids))
+                    .all()
+                )
+                for (uid,) in parent_rows:
+                    user_ids.add(uid)
+                    stats['parents'] += 1
+                linked_ids = set(
+                    r[0] for r in
+                    db.session.query(parent_students.c.student_id)
+                    .filter(parent_students.c.student_id.in_(all_student_ids))
+                    .distinct().all()
+                )
+                stats['no_parent_students'] += len(all_student_ids) - len(linked_ids)
+
     _log.info('[chat] _collect_user_ids scope=%s total=%d stats=%s',
               scope, len(user_ids), stats)
     return user_ids, stats
@@ -427,6 +496,58 @@ def _add_section_members(
         stats['no_parent_students'] = stats.get('no_parent_students', 0) + no_parent
         _log.info('[chat] section=%s parents_found=%d no_parent_students=%d',
                   section_id, len(parent_rows), no_parent)
+
+
+def _add_parent_members_only(
+    school_id: int,
+    section_id: int,
+    user_ids: set[int],
+    stats: dict,
+) -> None:
+    """
+    Add only parent users (no teachers) for active students in one section.
+    Used exclusively by the parent_scope hierarchical filter.
+    """
+    section = (
+        Section.query
+        .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+        .filter_by(id=section_id, school_id=school_id)
+        .first()
+    )
+    if not section:
+        _log.warning('[chat] parent_scope section_id=%s not found for school=%s',
+                     section_id, school_id)
+        return
+
+    student_ids = [
+        s.id for s in
+        Student.query
+        .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+        .filter_by(section_id=section_id, school_id=school_id, status='active')
+        .all()
+    ]
+    stats['students'] = stats.get('students', 0) + len(student_ids)
+    _log.info('[chat] parent_scope section=%s active_students=%d', section_id, len(student_ids))
+
+    if student_ids:
+        parent_rows = (
+            db.session.query(parent_students.c.user_id)
+            .filter(parent_students.c.student_id.in_(student_ids))
+            .all()
+        )
+        for (uid,) in parent_rows:
+            user_ids.add(uid)
+            stats['parents'] += 1
+
+        linked_ids = set(
+            r[0] for r in
+            db.session.query(parent_students.c.student_id)
+            .filter(parent_students.c.student_id.in_(student_ids))
+            .distinct().all()
+        )
+        stats['no_parent_students'] = stats.get('no_parent_students', 0) + len(student_ids) - len(linked_ids)
+        _log.info('[chat] parent_scope section=%s parents_found=%d no_parent_students=%d',
+                  section_id, len(parent_rows), len(student_ids) - len(linked_ids))
 
 
 def _sync_members(room: ChatRoom, user_ids: set[int], creator_id: int) -> int:
@@ -676,6 +797,13 @@ def create_room():
         subject_id = request.form.get('subject_id') or None
         stage      = request.form.get('stage', '').strip() or None
 
+        # For parent_scope, read the three hierarchical filter fields and override
+        # the standard scope-fields so room storage and _collect_user_ids work correctly.
+        if scope == 'parent_scope':
+            stage      = request.form.get('parent_stage', '').strip() or None
+            grade_id   = request.form.get('parent_grade_id') or None
+            section_id = request.form.get('parent_section_id') or None
+
         if not name:
             flash('اسم المحادثة مطلوب.', 'danger')
             return render_template('chat/create_room.html',
@@ -799,12 +927,18 @@ def create_room():
         _log.info('[chat] room %d created — uid_set=%d added=%d stats=%s',
                   room.id, len(uid_set), added, stats)
 
-        flash(f'تم إنشاء المحادثة "{name}" بنجاح. '
-              f'الأعضاء المضافون: {added} '
-              f'(مشرفون: {stats["admins"]} — معلمون: {stats["teachers"]} — '
-              f'أولياء أمور: {stats["parents"]}).', 'success')
+        if scope == 'parent_scope':
+            flash(f'تم إنشاء المحادثة "{name}" بنجاح. '
+                  f'الطلاب المطابقون: {stats.get("students", 0)} — '
+                  f'أولياء الأمور المضافون: {stats["parents"]} — '
+                  f'إجمالي الأعضاء: {len(uid_set)}.', 'success')
+        else:
+            flash(f'تم إنشاء المحادثة "{name}" بنجاح. '
+                  f'الأعضاء المضافون: {added} '
+                  f'(مشرفون: {stats["admins"]} — معلمون: {stats["teachers"]} — '
+                  f'أولياء أمور: {stats["parents"]}).', 'success')
 
-        if stats['parents'] == 0 and scope != 'custom':
+        if stats['parents'] == 0 and scope not in ('custom',):
             flash('تنبيه: لم يتم العثور على أولياء أمور مرتبطين بالنطاق المحدد. '
                   'تحقق من ربط أولياء الأمور بطلابهم في النظام.', 'warning')
         elif stats.get('no_parent_students', 0) > 0:
@@ -1265,11 +1399,16 @@ def rebuild_members(room_id):
                           room.created_by_user_id or current_user.id)
     db.session.commit()
 
-    flash(f'تم إعادة توليد الأعضاء. أُضيف {added} عضو جديد. '
-          f'(مشرفون: {stats["admins"]} — معلمون: {stats["teachers"]} — '
-          f'أولياء أمور: {stats["parents"]}).', 'success')
+    if room.scope == 'parent_scope':
+        flash(f'تم إعادة توليد الأعضاء. أُضيف {added} عضو جديد. '
+              f'(الطلاب المطابقون: {stats.get("students", 0)} — '
+              f'أولياء الأمور: {stats["parents"]}).', 'success')
+    else:
+        flash(f'تم إعادة توليد الأعضاء. أُضيف {added} عضو جديد. '
+              f'(مشرفون: {stats["admins"]} — معلمون: {stats["teachers"]} — '
+              f'أولياء أمور: {stats["parents"]}).', 'success')
 
-    if stats['parents'] == 0 and room.scope != 'custom':
+    if stats['parents'] == 0 and room.scope not in ('custom',):
         flash('تنبيه: لم يتم العثور على أولياء أمور مرتبطين بالنطاق المحدد. '
               'تحقق من ربط أولياء الأمور بطلابهم في النظام.', 'warning')
     elif stats.get('no_parent_students', 0) > 0:

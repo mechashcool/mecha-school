@@ -66,6 +66,7 @@ var SECTIONS_PREVIEW_URL = "{{ url_for('chat.sections_preview') }}";
               <select name="scope" id="scopeSelect" class="form-select"
                       onchange="updateScopeFields()">
                 <option value="multi_section">شعبات متعددة (مُوصى)</option>
+                <option value="parent_scope">أولياء الأمور حسب النطاق الأكاديمي</option>
                 <option value="section">شعبة واحدة</option>
                 <option value="grade">صف كامل</option>
                 <option value="stage">مرحلة دراسية</option>
@@ -206,6 +207,57 @@ var SECTIONS_PREVIEW_URL = "{{ url_for('chat.sections_preview') }}";
               </select>
             </div>
 
+            {# ══ PARENT SCOPE (hierarchical) ══════════════════ #}
+            <div id="parentScopeField" class="col-12 scope-field d-none">
+              <div class="row g-3 mb-2">
+
+                <div class="col-md-4">
+                  <label class="form-label">المرحلة الدراسية</label>
+                  <select name="parent_stage" id="psStage" class="form-select"
+                          onchange="psUpdateGrades()">
+                    <option value="">كل المراحل</option>
+                    {% for st in stages %}
+                    <option value="{{ st }}">{{ st }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+
+                <div class="col-md-4">
+                  <label class="form-label">الصف</label>
+                  <select name="parent_grade_id" id="psGrade" class="form-select"
+                          onchange="psUpdateSections()">
+                    <option value="">كل الصفوف</option>
+                    {% for item in grades_tree %}
+                    <option value="{{ item.grade.id }}"
+                            data-stage="{{ item.grade.stage or '' }}">
+                      {{ item.grade.name }}{% if item.grade.stage %} ({{ item.grade.stage }}){% endif %}
+                    </option>
+                    {% endfor %}
+                  </select>
+                </div>
+
+                <div class="col-md-4">
+                  <label class="form-label">الشعبة</label>
+                  <select name="parent_section_id" id="psSection" class="form-select">
+                    <option value="">كل الشعب</option>
+                    {% for item in grades_tree %}
+                      {% for sec in item.sections %}
+                      <option value="{{ sec.id }}" data-grade="{{ item.grade.id }}">
+                        {{ sec.name }} — {{ item.grade.name }}
+                      </option>
+                      {% endfor %}
+                    {% endfor %}
+                  </select>
+                </div>
+
+              </div>
+              <small class="text-muted d-block">
+                <i class="bi bi-info-circle me-1"></i>
+                يُضيف أولياء أمور الطلاب المطابقين تلقائياً. اختيار "كل المراحل" يشمل جميع أولياء أمور المدرسة.
+                المعلمون لا يُضافون في هذا النوع — الإدارة تُضاف دائماً.
+              </small>
+            </div>
+
             {# ══ CUSTOM ═══════════════════════════════════════ #}
             <div id="customField" class="col-12 scope-field d-none">
               <label class="form-label fw-semibold">اختيار الأعضاء يدوياً</label>
@@ -291,6 +343,7 @@ var SECTIONS_PREVIEW_URL = "{{ url_for('chat.sections_preview') }}";
         <div class="card-body" style="font-size:13px">
           <ul class="mb-3 ps-3">
             <li class="mb-1"><b>شعبات متعددة:</b> اختر شعبتين أو أكثر — الأعضاء يُحسبون بدون تكرار</li>
+            <li class="mb-1"><b>أولياء الأمور حسب النطاق:</b> مرحلة ← صف ← شعبة؛ يضيف أولياء الأمور فقط دون معلمين</li>
             <li class="mb-1"><b>شعبة:</b> أولياء أمور الطلاب + معلمو الشعبة</li>
             <li class="mb-1"><b>صف:</b> جميع شعب الصف + معلموها + أولياء أمورها</li>
             <li class="mb-1"><b>مرحلة:</b> كل صفوف المرحلة وشعبها</li>
@@ -419,6 +472,7 @@ function updateScopeFields() {
   });
   var map = {
     'multi_section': 'multiSectionField',
+    'parent_scope':  'parentScopeField',
     'section':       'sectionField',
     'grade':         'gradeField',
     'stage':         'stageField',
@@ -683,6 +737,38 @@ if (_createRoomForm) {
       }
     });
   });
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Parent scope cascade
+══════════════════════════════════════════════════════════════ */
+function psUpdateGrades() {
+  var stageF = document.getElementById('psStage').value;
+  var gradeEl = document.getElementById('psGrade');
+  Array.from(gradeEl.options).forEach(function (opt, i) {
+    if (i === 0) return; // "كل الصفوف"
+    opt.hidden = stageF ? (opt.dataset.stage !== stageF) : false;
+  });
+  // Reset grade selection if its option is now hidden
+  if (gradeEl.selectedIndex > 0 &&
+      gradeEl.options[gradeEl.selectedIndex].hidden) {
+    gradeEl.selectedIndex = 0;
+  }
+  psUpdateSections();
+}
+
+function psUpdateSections() {
+  var gradeF = document.getElementById('psGrade').value;
+  var sectionEl = document.getElementById('psSection');
+  Array.from(sectionEl.options).forEach(function (opt, i) {
+    if (i === 0) return; // "كل الشعب"
+    opt.hidden = gradeF ? (opt.dataset.grade !== gradeF) : false;
+  });
+  // Reset section selection if its option is now hidden
+  if (sectionEl.selectedIndex > 0 &&
+      sectionEl.options[sectionEl.selectedIndex].hidden) {
+    sectionEl.selectedIndex = 0;
+  }
 }
 
 /* ── Cascade listeners ───────────────────── */
