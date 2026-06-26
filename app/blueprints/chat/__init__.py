@@ -11,6 +11,7 @@ GET  /chat/rooms/<id>/edit                         – edit room form
 POST /chat/rooms/<id>/edit                         – update room
 POST /chat/rooms/<id>/close                        – close room
 POST /chat/rooms/<id>/reopen                       – reopen room
+POST /chat/rooms/<id>/delete                       – permanently delete group room
 POST /chat/rooms/<id>/members/<uid>/block          – block member
 POST /chat/rooms/<id>/members/<uid>/unblock        – unblock member
 POST /chat/rooms/<id>/members/<uid>/make-admin     – promote to admin
@@ -1231,6 +1232,71 @@ def reopen_room(room_id):
     db.session.commit()
     flash('تم فتح المحادثة.', 'success')
     return redirect(url_for('chat.room_detail', room_id=room.id))
+
+
+@chat_bp.route('/rooms/<int:room_id>/delete', methods=['POST'])
+@login_required
+@admin_required
+def delete_room(room_id):
+    """
+    Permanently delete a group or announcement chat room together with all its
+    messages, read receipts, members, and schedules.
+
+    Security:
+    - Admin-only (@admin_required).
+    - Room must belong to the admin's school (school_id check).
+    - Private/direct rooms are rejected (403) — this action is for groups only.
+    - All deletions run inside a single transaction; any failure rolls back.
+    """
+    _require_chat_module()
+    school = get_current_school()
+    if not school:
+        abort(404)
+
+    room = (ChatRoom.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(id=room_id, school_id=school.id)
+            .first_or_404())
+
+    if room.type == 'private':
+        abort(403)
+
+    room_name = room.name
+    try:
+        # Explicit deletion in FK-dependency order so no constraint is violated
+        # and no SQLAlchemy lazy-dynamic cascade ambiguity arises.
+
+        # 1. Read receipts for every message in this room
+        msg_ids_sq = db.session.query(ChatMessage.id).filter(
+            ChatMessage.room_id == room.id
+        )
+        ChatMessageRead.query.filter(
+            ChatMessageRead.message_id.in_(msg_ids_sq)
+        ).delete(synchronize_session=False)
+
+        # 2. Messages
+        ChatMessage.query.filter_by(room_id=room.id).delete(synchronize_session=False)
+
+        # 3. Members
+        ChatRoomMember.query.filter_by(room_id=room.id).delete(synchronize_session=False)
+
+        # 4. Schedules
+        ChatRoomSchedule.query.filter_by(room_id=room.id).delete(synchronize_session=False)
+
+        # 5. The room itself
+        db.session.delete(room)
+        db.session.commit()
+
+        _log.info('[chat] delete_room room_id=%s name=%r school=%s by user=%s',
+                  room_id, room_name, school.id, current_user.id)
+        flash('تم حذف المجموعة وجميع الرسائل المرتبطة بها بنجاح.', 'success')
+
+    except Exception:
+        db.session.rollback()
+        _log.exception('[chat] delete_room failed room_id=%s school=%s', room_id, school.id)
+        flash('حدث خطأ أثناء حذف المجموعة. يرجى المحاولة مرة أخرى.', 'danger')
+
+    return redirect(url_for('chat.index'))
 
 
 # ─── Manual add-member ───────────────────────────────────────────────────────

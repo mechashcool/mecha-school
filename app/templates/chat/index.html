@@ -401,6 +401,15 @@
                       </form>
                     </li>
                     {% endif %}
+                    <li><hr class="dropdown-divider my-1"></li>
+                    <li>
+                      <form method="POST" action="{{ url_for('chat.delete_room', room_id=room.id) }}"
+                            onsubmit="return confirm('هل أنت متأكد من حذف المجموعة «{{ room.name }}» نهائياً؟\n\nسيتم حذف جميع الرسائل والأعضاء بشكل دائم.\nلا يمكن التراجع عن هذا الإجراء.')">
+                        <button type="submit" class="dropdown-item text-danger">
+                          <i class="bi bi-trash-fill me-2"></i>حذف المجموعة
+                        </button>
+                      </form>
+                    </li>
                   </ul>
                 </div>
               </div>
