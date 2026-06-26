@@ -6,7 +6,6 @@
 <style>
 .print-only { display: none; }
 @media print {
-  /* ── Hide all chrome ── */
   #sidebar, #sidebar-overlay, #topbar,
   .page-header .d-flex,
   .card.mb-4,
@@ -14,12 +13,10 @@
   .breadcrumb,
   #flash-container { display: none !important; }
 
-  /* ── Reset page shell ── */
   body { background: #fff !important; font-family: 'Cairo', 'Tajawal', sans-serif !important; color: #000 !important; }
   #main-content { margin: 0 !important; padding: 0 !important; }
   * { box-shadow: none !important; }
 
-  /* ── Print header ── */
   .print-header {
     display: block !important;
     text-align: center;
@@ -29,18 +26,16 @@
   }
   .print-header .print-school-name { font-size: 18pt; font-weight: 900; color: #1a3a5c; margin: 0 0 4pt; }
   .print-header .print-report-title { font-size: 14pt; font-weight: 700; color: #333; margin: 0 0 4pt; }
-  .print-header .print-meta { font-size: 9pt; color: #555; display: flex; justify-content: center; gap: 24pt; }
+  .print-header .print-meta {
+    font-size: 9pt; color: #555;
+    display: flex; justify-content: center; gap: 20pt; flex-wrap: wrap;
+  }
 
-  /* ── Page layout ── */
   @page { size: A4 landscape; margin: 15mm 12mm; }
   .page-header { margin-bottom: 10pt !important; }
   .page-title { font-size: 14pt !important; font-weight: 800 !important; }
 
-  /* ── Cards ── */
-  .card {
-    border: none !important; border-radius: 0 !important;
-    box-shadow: none !important; background: #fff !important; break-inside: auto;
-  }
+  .card { border: none !important; border-radius: 0 !important; box-shadow: none !important; background: #fff !important; break-inside: auto; }
   .card-header {
     background: #1a3a5c !important; color: #fff !important;
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
@@ -48,7 +43,6 @@
   }
   .card-header .badge { background: rgba(255,255,255,.2) !important; color: #fff !important; }
 
-  /* ── Tables ── */
   .table-wrapper { border: none !important; overflow: visible !important; }
   .table { font-size: 9pt !important; width: 100% !important; border-collapse: collapse !important; }
   .table thead th {
@@ -64,7 +58,6 @@
   }
   .table tbody tr:hover td { background: inherit !important; }
 
-  /* ── Badges & status ── */
   .badge { border: 1px solid #999 !important; background: transparent !important; color: #000 !important; font-size: 8pt !important; padding: 1pt 4pt !important; }
   .badge-status { border: 1px solid currentColor !important; background: transparent !important; font-size: 8pt !important; padding: 1pt 5pt !important; }
   .badge-active  { color: #0a6640 !important; border-color: #0a6640 !important; }
@@ -99,6 +92,23 @@
   <div class="print-report-title">نتائج الطلاب</div>
   <div class="print-meta">
     {% if active_year %}<span>العام الدراسي: {{ active_year.name }}</span>{% endif %}
+    {% if stage_f %}<span>المرحلة: {{ stage_f }}</span>{% endif %}
+    {% if selected_grade_obj %}
+      <span>الصف: {{ selected_grade_obj.name }}</span>
+    {% elif stage_f %}
+      <span>الصف: كل الصفوف</span>
+    {% endif %}
+    {% if selected_section_obj %}
+      <span>الشعبة: {{ selected_section_obj.name }}</span>
+    {% elif stage_f or grade_id_f %}
+      <span>الشعبة: كل الشعب</span>
+    {% endif %}
+    {% for subj in subjects if subject_filter == subj.id|string %}
+      <span>المادة: {{ subj.name }}</span>
+    {% else %}
+      {% if subject_filter == 'all' %}<span>كل المواد</span>{% endif %}
+    {% endfor %}
+    {% if student_search %}<span>الطالب: {{ student_search }}</span>{% endif %}
     <span>تاريخ الطباعة: <span class="js-print-date"></span></span>
   </div>
 </div>
@@ -111,7 +121,12 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
 <div class="page-header">
   <div><h1 class="page-title">نتائج الطلاب</h1></div>
   <div class="d-flex gap-2">
-    <a href="{{ url_for('grades.report_export', q=search, student_q=student_search, exam_type=exam_type_filter, subject_id=subject_filter, start_date=start_date, end_date=end_date) }}"
+    <a href="{{ url_for('grades.report_export',
+                        q=search, student_q=student_search,
+                        exam_type=exam_type_filter, subject_id=subject_filter,
+                        start_date=start_date, end_date=end_date,
+                        stage=stage_f, grade_id=grade_id_f or '',
+                        section_id=section_id_f or '') }}"
        class="btn btn-outline-success">
       <i class="bi bi-file-earmark-excel-fill me-1"></i>تصدير Excel
     </a>
@@ -128,8 +143,44 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
 <div class="card mb-4">
   <div class="card-body py-3">
     <form method="GET" class="row g-2 align-items-end">
-      <div class="col-md-2">
-        <label class="form-label">المادة</label>
+
+      {# ── Row 1: academic structure + subject ── #}
+      <div class="col-6 col-md-3">
+        <label class="form-label fw-600 small">المرحلة</label>
+        <select name="stage" id="rpStage" class="form-select">
+          <option value="">كل المراحل</option>
+          {% for st in stages %}
+          <option value="{{ st }}" {% if stage_f == st %}selected{% endif %}>{{ st }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-6 col-md-3">
+        <label class="form-label fw-600 small">الصف</label>
+        <select name="grade_id" id="rpGrade" class="form-select">
+          <option value="">كل الصفوف</option>
+          {% for g in available_grades %}
+          <option value="{{ g.id }}" data-stage="{{ g.stage or '' }}"
+                  {% if grade_id_f == g.id %}selected{% endif %}>{{ g.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-6 col-md-3">
+        <label class="form-label fw-600 small">الشعبة</label>
+        <select name="section_id" id="rpSection" class="form-select">
+          <option value="">كل الشعب</option>
+          {% for sec in available_sections %}
+          <option value="{{ sec.id }}" data-grade-id="{{ sec.grade_id }}"
+                  {% if section_id_f == sec.id %}selected{% endif %}>
+            {{ sec.grade.name if sec.grade else '' }} — {{ sec.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-6 col-md-3">
+        <label class="form-label small">المادة</label>
         <select name="subject_id" class="form-select">
           <option value="all" {% if subject_filter == 'all' %}selected{% endif %}>كل المواد</option>
           {% for subj in subjects %}
@@ -137,8 +188,10 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-2">
-        <label class="form-label">الفئة</label>
+
+      {# ── Row 2: refinement + student search + submit ── #}
+      <div class="col-6 col-md-2">
+        <label class="form-label small">الفئة</label>
         <select name="exam_type" class="form-select">
           <option value="all" {% if exam_type_filter == 'all' %}selected{% endif %}>كل الفئات</option>
           {% for et in exam_types %}
@@ -146,28 +199,36 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-2">
-        <label class="form-label">من تاريخ</label>
+
+      <div class="col-6 col-md-2">
+        <label class="form-label small">من تاريخ</label>
         <input type="date" name="start_date" class="form-control" value="{{ start_date }}">
       </div>
-      <div class="col-md-2">
-        <label class="form-label">إلى تاريخ</label>
+
+      <div class="col-6 col-md-2">
+        <label class="form-label small">إلى تاريخ</label>
         <input type="date" name="end_date" class="form-control" value="{{ end_date }}">
       </div>
-      <div class="col-md-2">
-        <label class="form-label">بحث باسم الاختبار</label>
+
+      <div class="col-6 col-md-2">
+        <label class="form-label small">بحث باسم الاختبار</label>
         <input type="text" name="q" class="form-control" placeholder="مثلاً: الامتحان النهائي" value="{{ search }}">
       </div>
-      <div class="col-md-2">
-        <label class="form-label">بحث باسم الطالب</label>
+
+      <div class="col-6 col-md-2">
+        <label class="form-label small">بحث باسم الطالب</label>
         <input type="text" name="student_q" class="form-control" placeholder="اسم الطالب أو رقمه" value="{{ student_search }}">
       </div>
-      <div class="col-md-2 d-flex gap-2">
-        <button class="btn btn-primary flex-grow-1"><i class="bi bi-search me-1"></i>تصفية</button>
+
+      <div class="col-6 col-md-2 d-flex gap-1 align-items-end">
+        <button class="btn btn-primary flex-grow-1">
+          <i class="bi bi-search me-1"></i>تصفية
+        </button>
         <a href="{{ url_for('grades.report') }}" class="btn btn-outline-secondary" title="إعادة تعيين">
           <i class="bi bi-x-lg"></i>
         </a>
       </div>
+
     </form>
   </div>
 </div>
@@ -251,4 +312,45 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
     </table>
   </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const stageEl   = document.getElementById('rpStage');
+  const gradeEl   = document.getElementById('rpGrade');
+  const sectionEl = document.getElementById('rpSection');
+
+  const gradeOpts   = Array.from(gradeEl.options).slice(1);
+  const sectionOpts = Array.from(sectionEl.options).slice(1);
+
+  function filterGrades() {
+    const stage = stageEl.value;
+    for (const opt of gradeOpts) {
+      opt.hidden = stage ? opt.dataset.stage !== stage : false;
+    }
+    // If currently selected grade was hidden, clear it
+    const selGrade = gradeEl.selectedOptions[0];
+    if (selGrade && selGrade.hidden) gradeEl.value = '';
+    filterSections();
+  }
+
+  function filterSections() {
+    const gradeId = gradeEl.value;
+    for (const opt of sectionOpts) {
+      // When no grade is selected, hide all sections (must pick grade first)
+      opt.hidden = gradeId ? opt.dataset.gradeId !== gradeId : true;
+    }
+    // If currently selected section was hidden, clear it
+    const selSec = sectionEl.selectedOptions[0];
+    if (selSec && selSec.hidden) sectionEl.value = '';
+  }
+
+  stageEl.addEventListener('change', filterGrades);
+  gradeEl.addEventListener('change', filterSections);
+
+  // Apply on page load to restore consistent dropdown state from URL params
+  filterGrades();
+})();
+</script>
 {% endblock %}

@@ -845,10 +845,52 @@ def report():
     subject_filter   = request.args.get('subject_id', 'all')
     start_date       = request.args.get('start_date', '')
     end_date         = request.args.get('end_date', '')
+    stage_f          = request.args.get('stage', '').strip()
+    grade_id_f       = request.args.get('grade_id', type=int)
+    section_id_f     = request.args.get('section_id', type=int)
 
     school = get_current_school()
     year   = get_view_year(school.id) if school else None
 
+    # ── Cascade dropdown data ─────────────────────────────────────────────────
+    if school and year:
+        grades_q   = Grade.query.filter_by(school_id=school.id, academic_year_id=year.id)
+        sections_q = Section.query.filter_by(school_id=school.id, academic_year_id=year.id)
+        if _is_teacher():
+            allowed_sec_ids = get_teacher_section_ids(current_user) or []
+            allowed_grade_sq = (
+                db.session.query(Section.grade_id)
+                .filter(Section.id.in_(allowed_sec_ids))
+                .subquery()
+            )
+            grades_q   = grades_q.filter(Grade.id.in_(allowed_grade_sq))
+            sections_q = sections_q.filter(Section.id.in_(allowed_sec_ids))
+        available_grades   = grades_q.order_by(Grade.name).all()
+        available_sections = sections_q.order_by(Section.name).all()
+    else:
+        available_grades   = []
+        available_sections = []
+
+    stages = sorted({g.stage for g in available_grades if g.stage})
+
+    # ── Look up selected grade / section for print header display ─────────────
+    selected_grade_obj   = None
+    selected_section_obj = None
+    if school and year and grade_id_f:
+        selected_grade_obj = Grade.query.filter_by(
+            id=grade_id_f, school_id=school.id, academic_year_id=year.id
+        ).first()
+    if school and section_id_f:
+        selected_section_obj = Section.query.filter_by(
+            id=section_id_f, school_id=school.id
+        ).first()
+        if selected_section_obj and _is_teacher():
+            allowed_check = get_teacher_section_ids(current_user) or []
+            if selected_section_obj.id not in allowed_check:
+                selected_section_obj = None
+                section_id_f = None
+
+    # ── ExamResult query ───────────────────────────────────────────────────────
     results_base = ExamResult.query.join(Exam)
     if school:
         results_base = results_base.filter(ExamResult.school_id == school.id)
@@ -856,13 +898,30 @@ def report():
         results_base = results_base.filter(ExamResult.academic_year_id == year.id)
     if _is_teacher():
         results_base = _apply_teacher_scope(results_base)
-    if student_search:
-        results_base = results_base.join(
-            Student, ExamResult.student_id == Student.id
-        ).filter(
-            Student.full_name.ilike(f'%{student_search}%') |
-            Student.student_id.ilike(f'%{student_search}%')
-        )
+
+    # Join Student once if any student-level filter is needed
+    if student_search or section_id_f or grade_id_f or stage_f:
+        results_base = results_base.join(Student, ExamResult.student_id == Student.id)
+        if student_search:
+            results_base = results_base.filter(
+                Student.full_name.ilike(f'%{student_search}%') |
+                Student.student_id.ilike(f'%{student_search}%')
+            )
+        if section_id_f:
+            results_base = results_base.filter(Student.section_id == section_id_f)
+        elif grade_id_f:
+            results_base = (results_base
+                            .join(Section, Student.section_id == Section.id)
+                            .filter(Section.grade_id == grade_id_f,
+                                    Section.school_id == school.id))
+        elif stage_f:
+            results_base = (results_base
+                            .join(Section, Student.section_id == Section.id)
+                            .join(Grade, Section.grade_id == Grade.id)
+                            .filter(Grade.stage == stage_f,
+                                    Grade.school_id == school.id,
+                                    Grade.academic_year_id == year.id))
+
     results_view = (
         _build_exam_query(
             results_base,
@@ -883,12 +942,20 @@ def report():
                            results_view=results_view,
                            exam_types=exam_types,
                            subjects=subjects,
+                           available_grades=available_grades,
+                           available_sections=available_sections,
+                           stages=stages,
                            search=search,
                            student_search=student_search,
                            exam_type_filter=exam_type_filter,
                            subject_filter=subject_filter,
                            start_date=start_date,
-                           end_date=end_date)
+                           end_date=end_date,
+                           stage_f=stage_f,
+                           grade_id_f=grade_id_f,
+                           section_id_f=section_id_f,
+                           selected_grade_obj=selected_grade_obj,
+                           selected_section_obj=selected_section_obj)
 
 
 @grades_bp.route('/report/export')
@@ -904,6 +971,9 @@ def report_export():
     subject_filter   = request.args.get('subject_id', 'all')
     start_date       = request.args.get('start_date', '')
     end_date         = request.args.get('end_date', '')
+    stage_f          = request.args.get('stage', '').strip()
+    grade_id_f       = request.args.get('grade_id', type=int)
+    section_id_f     = request.args.get('section_id', type=int)
 
     school = get_current_school()
     year   = get_view_year(school.id) if school else None
@@ -916,6 +986,28 @@ def report_export():
     if _is_teacher():
         base = _apply_teacher_scope(base)
 
+    # Structural section filter on the Exam query
+    if section_id_f:
+        base = base.filter(Exam.section_id == section_id_f)
+    elif grade_id_f and school and year:
+        sec_ids = [s.id for s in Section.query.filter_by(
+            grade_id=grade_id_f, school_id=school.id, academic_year_id=year.id
+        ).all()]
+        base = base.filter(Exam.section_id.in_(sec_ids)) if sec_ids else base.filter(Exam.id == -1)
+    elif stage_f and school and year:
+        gids = [g.id for g in Grade.query.filter_by(
+            stage=stage_f, school_id=school.id, academic_year_id=year.id
+        ).all()]
+        if gids:
+            sec_ids = [s.id for s in Section.query.filter(
+                Section.grade_id.in_(gids),
+                Section.school_id == school.id,
+                Section.academic_year_id == year.id,
+            ).all()]
+            base = base.filter(Exam.section_id.in_(sec_ids)) if sec_ids else base.filter(Exam.id == -1)
+        else:
+            base = base.filter(Exam.id == -1)
+
     exams = _build_exam_query(
         base, search, exam_type_filter, subject_filter, start_date, end_date
     ).order_by(Exam.exam_date.desc()).all()
@@ -925,7 +1017,9 @@ def report_export():
         flash('مكتبة Excel غير متاحة.', 'warning')
         return redirect(url_for('grades.report', q=search, student_q=student_search,
                                 exam_type=exam_type_filter, subject_id=subject_filter,
-                                start_date=start_date, end_date=end_date))
+                                start_date=start_date, end_date=end_date,
+                                stage=stage_f, grade_id=grade_id_f or '',
+                                section_id=section_id_f or ''))
 
     return Response(
         data,
