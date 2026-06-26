@@ -65,8 +65,8 @@ var SECTIONS_PREVIEW_URL = "{{ url_for('chat.sections_preview') }}";
               <label class="form-label">نطاق الأعضاء</label>
               <select name="scope" id="scopeSelect" class="form-select"
                       onchange="updateScopeFields()">
-                <option value="multi_section">شعبات متعددة (مُوصى)</option>
-                <option value="parent_scope">أولياء الأمور حسب النطاق الأكاديمي</option>
+                <option value="parent_scope">أولياء الأمور حسب النطاق الأكاديمي (مُوصى)</option>
+                <option value="multi_section">شعبات متعددة (معلمون + أولياء أمور)</option>
                 <option value="section">شعبة واحدة</option>
                 <option value="grade">صف كامل</option>
                 <option value="stage">مرحلة دراسية</option>
@@ -78,7 +78,7 @@ var SECTIONS_PREVIEW_URL = "{{ url_for('chat.sections_preview') }}";
             </div>
 
             {# ══ MULTI-SECTION PANEL ══════════════════════════ #}
-            <div id="multiSectionField" class="col-12 scope-field">
+            <div id="multiSectionField" class="col-12 scope-field d-none">
 
               {# Cascade filter row #}
               <div class="row g-2 mb-3">
@@ -207,8 +207,8 @@ var SECTIONS_PREVIEW_URL = "{{ url_for('chat.sections_preview') }}";
               </select>
             </div>
 
-            {# ══ PARENT SCOPE (hierarchical) ══════════════════ #}
-            <div id="parentScopeField" class="col-12 scope-field d-none">
+            {# ══ PARENT SCOPE (hierarchical) — default scope ══ #}
+            <div id="parentScopeField" class="col-12 scope-field">
               <div class="row g-3 mb-2">
 
                 <div class="col-md-4">
@@ -242,7 +242,9 @@ var SECTIONS_PREVIEW_URL = "{{ url_for('chat.sections_preview') }}";
                     <option value="">كل الشعب</option>
                     {% for item in grades_tree %}
                       {% for sec in item.sections %}
-                      <option value="{{ sec.id }}" data-grade="{{ item.grade.id }}">
+                      <option value="{{ sec.id }}"
+                              data-grade="{{ item.grade.id }}"
+                              data-stage="{{ item.grade.stage or '' }}">
                         {{ sec.name }} — {{ item.grade.name }}
                       </option>
                       {% endfor %}
@@ -342,8 +344,8 @@ var SECTIONS_PREVIEW_URL = "{{ url_for('chat.sections_preview') }}";
         </div>
         <div class="card-body" style="font-size:13px">
           <ul class="mb-3 ps-3">
-            <li class="mb-1"><b>شعبات متعددة:</b> اختر شعبتين أو أكثر — الأعضاء يُحسبون بدون تكرار</li>
-            <li class="mb-1"><b>أولياء الأمور حسب النطاق:</b> مرحلة ← صف ← شعبة؛ يضيف أولياء الأمور فقط دون معلمين</li>
+            <li class="mb-1"><b>أولياء الأمور حسب النطاق (مُوصى):</b> اختر مرحلة ← صف ← شعبة. كل اختيار "كل..." يوسّع النطاق. يضيف أولياء أمور الطلاب المطابقين فقط (للسنة الدراسية الحالية) دون معلمين.</li>
+            <li class="mb-1"><b>شعبات متعددة:</b> اختر شعبتين أو أكثر يدوياً — معلمون + أولياء أمور بدون تكرار</li>
             <li class="mb-1"><b>شعبة:</b> أولياء أمور الطلاب + معلمو الشعبة</li>
             <li class="mb-1"><b>صف:</b> جميع شعب الصف + معلموها + أولياء أمورها</li>
             <li class="mb-1"><b>مرحلة:</b> كل صفوف المرحلة وشعبها</li>
@@ -758,11 +760,20 @@ function psUpdateGrades() {
 }
 
 function psUpdateSections() {
+  var stageF = document.getElementById('psStage').value;
   var gradeF = document.getElementById('psGrade').value;
   var sectionEl = document.getElementById('psSection');
   Array.from(sectionEl.options).forEach(function (opt, i) {
     if (i === 0) return; // "كل الشعب"
-    opt.hidden = gradeF ? (opt.dataset.grade !== gradeF) : false;
+    // A grade selection is the most specific filter; otherwise fall back to the
+    // stage filter so picking a stage alone still narrows the sections shown.
+    if (gradeF) {
+      opt.hidden = (opt.dataset.grade !== gradeF);
+    } else if (stageF) {
+      opt.hidden = (opt.dataset.stage !== stageF);
+    } else {
+      opt.hidden = false;
+    }
   });
   // Reset section selection if its option is now hidden
   if (sectionEl.selectedIndex > 0 &&

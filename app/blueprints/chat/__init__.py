@@ -200,6 +200,7 @@ def _collect_user_ids(
     grade_id=None,
     subject_id=None,
     stage=None,
+    academic_year_id=None,
 ) -> tuple[set[int], dict]:
     """
     Compute which user_ids should be auto-added to a room based on scope.
@@ -341,76 +342,69 @@ def _collect_user_ids(
 
     elif scope == 'parent_scope':
         # Parents-only hierarchical scope — no teachers added.
-        # Level is determined by which field is set: section_id > grade_id > stage > all.
+        # The selected academic filters resolve to a concrete set of CURRENT-YEAR
+        # sections, and only the parents of active students in those sections are
+        # added. Granularity: section_id > grade_id > stage > all.
+        #
+        # Year isolation is mandatory: Grade/Section are year-scoped models, but
+        # these queries set bypass_tenant_scope (which disables BOTH school and
+        # year ORM criteria), so we MUST re-apply academic_year_id explicitly.
+        # Otherwise a stage/grade match would pull grades/sections from every
+        # academic year and add parents school-wide.
+        #
         # Snapshot the user_ids already present (admins) so the parent count below
-        # reflects UNIQUE parents added, not raw parent_students rows (a parent with
-        # several children in scope must be counted once).
+        # reflects UNIQUE parents added, not raw parent_students rows.
         _before_parent_uids = set(user_ids)
+
+        def _year_sections_query():
+            q = (Section.query
+                 .execution_options(bypass_tenant_scope=True)
+                 .filter_by(school_id=school_id))
+            if academic_year_id:
+                q = q.filter_by(academic_year_id=academic_year_id)
+            return q
+
+        target_section_ids: list[int] = []
         if section_id:
-            _add_parent_members_only(school_id, int(section_id), user_ids, stats)
-        elif grade_id:
-            grade = (
-                Grade.query
-                .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
-                .filter_by(id=int(grade_id), school_id=school_id)
-                .first()
-            )
-            if grade:
-                sections = (
-                    Section.query
-                    .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
-                    .filter_by(grade_id=grade.id, school_id=school_id)
-                    .all()
-                )
-                for sec in sections:
-                    _add_parent_members_only(school_id, sec.id, user_ids, stats)
+            # Exact section — validate it belongs to this school and (when known)
+            # this academic year before using it.
+            sec = _year_sections_query().filter_by(id=int(section_id)).first()
+            if sec:
+                target_section_ids = [sec.id]
             else:
-                _log.warning('[chat] parent_scope grade_id=%s not found for school=%s',
-                             grade_id, school_id)
-        elif stage:
-            grades = (
-                Grade.query
-                .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
-                .filter_by(school_id=school_id, stage=stage)
-                .all()
-            )
-            _log.info('[chat] parent_scope stage=%r grades_found=%d', stage, len(grades))
-            for grade in grades:
-                sections = (
-                    Section.query
-                    .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
-                    .filter_by(grade_id=grade.id, school_id=school_id)
-                    .all()
-                )
-                for sec in sections:
-                    _add_parent_members_only(school_id, sec.id, user_ids, stats)
-        else:
-            # All parents in school
-            all_student_ids = [
-                s.id for s in
-                Student.query
-                .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
-                .filter_by(school_id=school_id, status='active')
-                .all()
+                _log.warning('[chat] parent_scope section_id=%s not found for '
+                             'school=%s year=%s', section_id, school_id, academic_year_id)
+        elif grade_id:
+            target_section_ids = [
+                s.id for s in _year_sections_query()
+                .filter_by(grade_id=int(grade_id)).all()
             ]
-            stats['students'] += len(all_student_ids)
-            _log.info('[chat] parent_scope all active_students=%d', len(all_student_ids))
-            if all_student_ids:
-                parent_rows = (
-                    db.session.query(parent_students.c.user_id)
-                    .filter(parent_students.c.student_id.in_(all_student_ids))
-                    .all()
-                )
-                for (uid,) in parent_rows:
-                    user_ids.add(uid)
-                    stats['parents'] += 1
-                linked_ids = set(
-                    r[0] for r in
-                    db.session.query(parent_students.c.student_id)
-                    .filter(parent_students.c.student_id.in_(all_student_ids))
-                    .distinct().all()
-                )
-                stats['no_parent_students'] += len(all_student_ids) - len(linked_ids)
+            if not target_section_ids:
+                _log.warning('[chat] parent_scope grade_id=%s has no sections for '
+                             'school=%s year=%s', grade_id, school_id, academic_year_id)
+        elif stage:
+            grade_q = (Grade.query
+                       .execution_options(bypass_tenant_scope=True)
+                       .filter_by(school_id=school_id, stage=stage))
+            if academic_year_id:
+                grade_q = grade_q.filter_by(academic_year_id=academic_year_id)
+            grade_ids = [g.id for g in grade_q.all()]
+            _log.info('[chat] parent_scope stage=%r year=%s grades_found=%d',
+                      stage, academic_year_id, len(grade_ids))
+            if grade_ids:
+                target_section_ids = [
+                    s.id for s in _year_sections_query()
+                    .filter(Section.grade_id.in_(grade_ids)).all()
+                ]
+        else:
+            # No filter selected → all sections in the current academic year.
+            target_section_ids = [s.id for s in _year_sections_query().all()]
+
+        _log.info('[chat] parent_scope resolved sections=%d (section=%s grade=%s '
+                  'stage=%r year=%s)', len(target_section_ids),
+                  section_id, grade_id, stage, academic_year_id)
+        for sid in target_section_ids:
+            _add_parent_members_only(school_id, sid, user_ids, stats)
 
         # Accurate unique-parent count: everything added during this branch is a
         # parent (no teachers), so the new user_ids minus the admin snapshot are
@@ -924,6 +918,7 @@ def create_room():
                 grade_id   = int(grade_id)   if grade_id   else None,
                 subject_id = int(subject_id) if subject_id else None,
                 stage      = stage,
+                academic_year_id = year.id if year else None,
             )
 
         # Creator is always owner — add explicitly so even an empty uid_set
@@ -1400,6 +1395,7 @@ def rebuild_members(room_id):
         grade_id   = room.grade_id,
         subject_id = room.subject_id,
         stage      = room.stage,
+        academic_year_id = room.academic_year_id,
     )
     uid_set.add(room.created_by_user_id or current_user.id)
     uid_set.add(current_user.id)
