@@ -86,6 +86,21 @@
   span[style*="#e03e3e"] { color: #8b1a1a !important; }
 
   code { font-size: 9pt !important; background: transparent !important; border: none !important; }
+
+  /* ── Student subject-grouped print layout ── */
+  .subject-result-card { break-inside: avoid; margin-bottom: 14pt !important; }
+  .overall-avg-card { break-inside: avoid; border: 2px solid #1a3a5c !important; margin-top: 8pt !important; }
+  .subject-avg-row td { background: #f0f4f8 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .student-summary-card { break-inside: avoid; border: 2px solid #1a3a5c !important; margin-bottom: 14pt !important; }
+
+  /* Inline coloured span in subject avg rows */
+  .subject-avg-row span { font-size: 11pt !important; }
+
+  /* Badge-status */
+  .badge-status { font-size: 8pt !important; border: 1px solid currentColor !important;
+    background: transparent !important; padding: 1pt 4pt !important; }
+  .badge-active  { color: #0a6640 !important; border-color: #0a6640 !important; }
+  .badge-inactive { color: #8b1a1a !important; border-color: #8b1a1a !important; }
 }
 </style>
 {% endblock %}
@@ -98,18 +113,25 @@
     {% if mode == 'section' and selected_section_obj %}
       تقرير شعبة: {{ selected_section_obj.name }}
       {% if section_grade %} — {{ section_grade.name }}{% endif %}
-    {% elif selected_student_obj %}
-      تقرير الدرجات — {{ selected_student_obj.full_name }}
+    {% elif mode == 'student' and selected_student_obj %}
+      نتائج الطالب: {{ selected_student_obj.full_name }}
     {% else %}
-      تقرير الدرجات
+      نتائج الطلاب
     {% endif %}
   </div>
   <div class="print-meta">
     {% if mode == 'section' and selected_section_obj %}
       {% if section_grade %}<span>الصف: {{ section_grade.name }}</span>{% endif %}
       <span>الشعبة: {{ selected_section_obj.name }}</span>
-    {% elif selected_student_obj and selected_student_obj.section %}
-      <span>الصف: {{ selected_student_obj.section.grade.name }} / شعبة {{ selected_student_obj.section.name }}</span>
+    {% elif mode == 'student' and selected_student_obj %}
+      {% if selected_student_obj.section and selected_student_obj.section.grade %}
+        <span>الصف: {{ selected_student_obj.section.grade.name }}</span>
+        <span>الشعبة: {{ selected_student_obj.section.name }}</span>
+      {% endif %}
+      <span>الرمز: {{ selected_student_obj.student_id or '—' }}</span>
+      {% if overall_avg is not none %}
+        <span>المتوسط الإجمالي: {{ overall_avg }}%</span>
+      {% endif %}
     {% endif %}
     {% if active_year %}<span>العام الدراسي: {{ active_year.name }}</span>{% endif %}
     <span>تاريخ الطباعة: <span class="js-print-date"></span></span>
@@ -270,11 +292,13 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
   </div>
 </div>
 
-{# ── Results ── #}
-{% if results %}
+{# ══════════════════════════════════════════════════════════════════════════ #}
+{# ── Results ──────────────────────────────────────────────────────────── #}
+{# ══════════════════════════════════════════════════════════════════════════ #}
 
-  {% if mode == 'section' and selected_section_obj %}
-  {# Section report results #}
+{# ── SECTION MODE ── #}
+{% if mode == 'section' and selected_section_obj %}
+  {% if results %}
   <div class="card">
     <div class="card-header d-flex align-items-center gap-2">
       <i class="bi bi-people-fill text-accent"></i>
@@ -340,65 +364,172 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
       </table>
     </div>
   </div>
+  {% else %}
+  <div class="card">
+    <div class="card-body text-center text-muted py-5">لا يوجد طلاب أو نتائج مسجلة لهذه الشعبة بعد</div>
+  </div>
+  {% endif %}
+
+{# ── STUDENT MODE ── #}
+{% elif mode == 'student' and selected_student_obj %}
+
+  {# ── Student info summary card ── #}
+  <div class="card mb-3 student-summary-card">
+    <div class="card-body" style="padding:16px 20px">
+      <div class="row g-3 align-items-center">
+        <div class="col-auto">
+          <div style="width:54px;height:54px;border-radius:50%;
+                      background:#e8f4fd;display:flex;align-items:center;justify-content:center">
+            <i class="bi bi-person-fill" style="font-size:26px;color:#1a3a5c"></i>
+          </div>
+        </div>
+        <div class="col">
+          <h5 class="mb-1 fw-700" style="color:#1a3a5c;font-size:17px">
+            {{ selected_student_obj.full_name }}
+          </h5>
+          <div style="font-size:13px;color:#6b7a99">
+            <code>{{ selected_student_obj.student_id or '—' }}</code>
+            {% if selected_student_obj.section %}
+            &nbsp;·&nbsp;{{ selected_student_obj.section.grade.name if selected_student_obj.section.grade else '' }}
+            &nbsp;·&nbsp;شعبة {{ selected_student_obj.section.name }}
+            {% endif %}
+            {% if active_year %}&nbsp;·&nbsp;{{ active_year.name }}{% endif %}
+          </div>
+        </div>
+        {% if overall_avg is not none %}
+        <div class="col-auto text-center" style="min-width:90px">
+          <div style="font-size:30px;font-weight:900;line-height:1;
+            color:{% if overall_avg >= 85 %}#1aab6d{% elif overall_avg >= 60 %}#e8a020{% else %}#e03e3e{% endif %}">
+            {{ overall_avg }}%
+          </div>
+          <div style="font-size:11px;color:#6b7a99;margin-top:4px">المتوسط الإجمالي</div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if subject_results %}
+    {% for sg in subject_results %}
+    <div class="card mb-3 subject-result-card" style="break-inside:avoid">
+      <div class="card-header d-flex align-items-center gap-2">
+        <i class="bi bi-book-fill"></i>
+        <span class="fw-700">{{ sg.subject.name if sg.subject else '—' }}</span>
+        <span class="ms-auto" style="
+          background:{% if sg.avg is not none %}{% if sg.avg >= 85 %}#1a5c3a{% elif sg.avg >= 60 %}#7a4a00{% else %}#5c1a1a{% endif %}{% else %}#444{% endif %};
+          color:#fff;font-weight:700;font-size:13px;
+          padding:3px 12px;border-radius:20px;white-space:nowrap">
+          {% if sg.avg is not none %}متوسط المادة: {{ sg.avg }}%{% else %}لا توجد نتائج{% endif %}
+        </span>
+      </div>
+      <div class="table-wrapper">
+        <table class="table table-sm" style="margin-bottom:0">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>اسم الاختبار</th>
+              <th>الفئة</th>
+              <th>التاريخ</th>
+              <th>الدرجة</th>
+              <th>من</th>
+              <th>النسبة %</th>
+              <th>الحالة</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in sg.rows %}
+            {%- set pct = (r.marks / r.exam.max_marks * 100) | round(1) if r.exam.max_marks else none -%}
+            <tr>
+              <td class="text-muted">{{ loop.index }}</td>
+              <td class="fw-600">{{ r.exam.display_name }}</td>
+              <td>
+                {% if r.exam.exam_type %}
+                <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
+                  {{ r.exam.exam_type.name }}
+                </span>
+                {% else %}—{% endif %}
+              </td>
+              <td>{{ r.exam.exam_date.strftime('%Y-%m-%d') }}</td>
+              <td>
+                <span class="fw-700" style="color:{% if r.is_pass %}#1aab6d{% else %}#e03e3e{% endif %}">
+                  {{ r.marks }}
+                </span>
+              </td>
+              <td class="text-muted">{{ r.exam.max_marks }}</td>
+              <td>
+                {% if pct is not none %}
+                <span class="fw-600" style="
+                  color:{% if pct >= 85 %}#1aab6d{% elif pct >= 60 %}#e8a020{% else %}#e03e3e{% endif %}">
+                  {{ pct }}%
+                </span>
+                {% else %}—{% endif %}
+              </td>
+              <td>
+                {% if r.is_pass %}
+                <span class="badge-status badge-active">ناجح</span>
+                {% else %}
+                <span class="badge-status badge-inactive">راسب</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+            {# Subject average summary row #}
+            <tr class="subject-avg-row">
+              <td colspan="6" style="font-size:13px;color:#555;font-weight:700;padding:8px 16px">
+                متوسط مادة {{ sg.subject.name if sg.subject else '' }}
+              </td>
+              <td colspan="2">
+                {% if sg.avg is not none %}
+                <span class="fw-700" style="font-size:14px;
+                  color:{% if sg.avg >= 85 %}#1aab6d{% elif sg.avg >= 60 %}#e8a020{% else %}#e03e3e{% endif %}">
+                  {{ sg.avg }}%
+                </span>
+                {% else %}—{% endif %}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endfor %}
+
+    {# ── Overall average summary card ── #}
+    {% if overall_avg is not none %}
+    <div class="card overall-avg-card" style="break-inside:avoid">
+      <div class="card-body d-flex align-items-center justify-content-between" style="padding:14px 20px">
+        <span class="fw-700" style="font-size:15px;color:#1a3a5c">
+          <i class="bi bi-calculator-fill me-2"></i>المتوسط الإجمالي لجميع المواد
+        </span>
+        <span class="fw-900" style="font-size:22px;
+          color:{% if overall_avg >= 85 %}#1aab6d{% elif overall_avg >= 60 %}#e8a020{% else %}#e03e3e{% endif %}">
+          {{ overall_avg }}%
+        </span>
+      </div>
+    </div>
+    {% endif %}
 
   {% else %}
-  {# Student report results #}
   <div class="card">
-    <div class="card-header">
-      <i class="bi bi-bar-chart-fill text-accent"></i>
-      نتيجة الطالب: <strong>{{ selected_student_obj.full_name }}</strong>
-      {% if selected_student_obj.section %}
-      <span class="badge ms-2" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
-        {{ selected_student_obj.section.grade.name }} / شعبة {{ selected_student_obj.section.name }}
-      </span>
-      {% endif %}
-    </div>
-    <div class="table-wrapper">
-      <table class="table">
-        <thead>
-          <tr>
-            <th>الاسم</th><th>رقم الطالب</th>
-            <th>عدد الاختبارات</th><th>المتوسط</th><th>التقدير</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in results %}
-          <tr>
-            <td class="fw-600">{{ r.student.full_name }}</td>
-            <td><code>{{ r.student.student_id }}</code></td>
-            <td>{{ r.count }}</td>
-            <td>
-              <span class="fw-700" style="font-size:15px;
-                color:{% if r.avg >= 85 %}#1aab6d{% elif r.avg >= 60 %}#e8a020{% else %}#e03e3e{% endif %}">
-                {{ r.avg }}%
-              </span>
-            </td>
-            <td>
-              <span class="badge" style="
-                background:{% if r.avg >= 85 %}#e8f8f0{% elif r.avg >= 60 %}#fff8ec{% else %}#fef0f0{% endif %};
-                color:{% if r.avg >= 85 %}#1aab6d{% elif r.avg >= 60 %}#e8a020{% else %}#e03e3e{% endif %};
-                font-weight:700">
-                {% if r.avg >= 95 %}A+{% elif r.avg >= 90 %}A{% elif r.avg >= 85 %}B+
-                {% elif r.avg >= 80 %}B{% elif r.avg >= 75 %}C+{% elif r.avg >= 70 %}C
-                {% elif r.avg >= 60 %}D{% else %}F{% endif %}
-              </span>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+    <div class="card-body text-center text-muted py-5">
+      <i class="bi bi-clipboard-x" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+      لا توجد نتائج مسجلة لهذا الطالب بعد
     </div>
   </div>
   {% endif %}
 
+{# ── SECTION mode — no section resolved ── #}
 {% elif mode == 'section' and selected_section_id %}
 <div class="card">
   <div class="card-body text-center text-muted py-5">لا يوجد طلاب أو نتائج مسجلة لهذه الشعبة بعد</div>
 </div>
+
+{# ── STUDENT mode — student not found/authorized ── #}
 {% elif mode == 'student' and selected_student_id %}
 <div class="card">
   <div class="card-body text-center text-muted py-5">لا توجد نتائج مسجلة لهذا الطالب بعد</div>
 </div>
+
+{# ── Nothing selected ── #}
 {% else %}
 <div class="card">
   <div class="card-body text-center text-muted py-5">
@@ -407,7 +538,7 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
     اختر المرحلة والصف والشعبة ثم اضغط عرض الشعبة
     {% else %}
     <i class="bi bi-person-search" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-    ابحث عن طالب واختره لعرض تقريره
+    ابحث عن طالب واختره لعرض نتائجه مجمعة حسب المادة
     {% endif %}
   </div>
 </div>

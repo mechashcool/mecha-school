@@ -883,6 +883,8 @@ def report():
     selected_section_id  = request.args.get('section_id',  type=int)
 
     results              = []
+    subject_results      = []   # student mode: grouped by subject
+    overall_avg          = None # student mode: overall percentage avg
     selected_student_obj = None
     selected_section_obj = None
     section_grade        = None
@@ -950,13 +952,39 @@ def report():
                                     academic_year_id=year.id)
                          .all())
             if s_results:
-                avg = sum(float(r.marks) for r in s_results) / len(s_results)
-                results.append({'student': student,
-                                'avg': round(avg, 2),
-                                'count': len(s_results)})
+                from collections import defaultdict as _dd
+                subj_map = _dd(list)
+                for r in s_results:
+                    subj_map[r.exam.subject_id].append(r)
+
+                for subj_id, res_list in subj_map.items():
+                    res_sorted = sorted(res_list,
+                                        key=lambda r: (r.exam.exam_date, r.exam.id))
+                    subj = res_sorted[0].exam.subject
+                    pairs = [(r, r.exam) for r in res_sorted]
+                    subj_avg = round(
+                        sum(float(r.marks) / float(e.max_marks) * 100
+                            for r, e in pairs) / len(pairs), 1
+                    ) if pairs else None
+                    subject_results.append({
+                        'subject': subj,
+                        'rows':    res_sorted,
+                        'avg':     subj_avg,
+                    })
+
+                subject_results.sort(
+                    key=lambda x: x['subject'].name if x['subject'] else '')
+
+                all_pairs = [(r, r.exam) for r in s_results]
+                overall_avg = round(
+                    sum(float(r.marks) / float(e.max_marks) * 100
+                        for r, e in all_pairs) / len(all_pairs), 1
+                ) if all_pairs else None
 
     return render_template('grades/report.html',
                            results=results,
+                           subject_results=subject_results,
+                           overall_avg=overall_avg,
                            mode=mode,
                            selected_student_id=selected_student_id,
                            selected_student_obj=selected_student_obj,
