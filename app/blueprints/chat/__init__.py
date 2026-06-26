@@ -414,16 +414,36 @@ def _collect_user_ids(
 
     elif scope == 'teachers':
         # All active teachers for the school only — no parents, no students.
+        # Two-step: collect employee user_ids, then validate each linked User also
+        # belongs to school_id.  An employee→user school mismatch (e.g. a user
+        # reassigned to another school without updating the employee record) must
+        # never cause a cross-school member to be added.
         emps = (
             Employee.query
             .execution_options(bypass_tenant_scope=True)
             .filter_by(school_id=school_id, status='active')
             .all()
         )
-        for emp in emps:
-            if emp.user_id:
-                user_ids.add(emp.user_id)
+        emp_user_ids = [emp.user_id for emp in emps if emp.user_id]
+        if emp_user_ids:
+            valid_users = (
+                User.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter(
+                    User.id.in_(emp_user_ids),
+                    User.school_id == school_id,
+                    User.is_active == True,
+                )
+                .all()
+            )
+            for u in valid_users:
+                user_ids.add(u.id)
                 stats['teachers'] += 1
+            skipped = len(emp_user_ids) - stats['teachers']
+            if skipped > 0:
+                _log.warning('[chat] teachers scope: skipped %d employee-linked users '
+                             'with mismatched school_id (expected school=%s)',
+                             skipped, school_id)
         _log.info('[chat] scope=teachers school=%s teachers_found=%d',
                   school_id, stats['teachers'])
 
@@ -1076,6 +1096,36 @@ def room_detail(room_id):
                 .filter_by(room_id=room.id)
                 .order_by(ChatRoomMember.role)
                 .all())
+
+    # Pre-build display names bypassing ORM school scope so that members whose
+    # User.school_id differs from this room's school (data inconsistency, or a
+    # user later reassigned) still display a readable name instead of '—'.
+    # Priority: employee full_name → user full_name → username → '#<id>'.
+    _member_uids = [m.user_id for m in members]
+    member_display_names: dict[int, str] = {}
+    if _member_uids:
+        _emp_rows = (Employee.query
+                     .execution_options(bypass_tenant_scope=True)
+                     .filter(Employee.user_id.in_(_member_uids))
+                     .all())
+        _emp_name_map = {
+            e.user_id: e.full_name
+            for e in _emp_rows if e.user_id and e.full_name
+        }
+        _user_rows = (User.query
+                      .execution_options(bypass_tenant_scope=True)
+                      .filter(User.id.in_(_member_uids))
+                      .all())
+        _user_map = {u.id: u for u in _user_rows}
+        for uid in _member_uids:
+            if uid in _emp_name_map:
+                member_display_names[uid] = _emp_name_map[uid]
+            elif uid in _user_map:
+                u = _user_map[uid]
+                member_display_names[uid] = u.full_name or u.username or f'#{uid}'
+            else:
+                member_display_names[uid] = f'#{uid}'
+
     schedules = room.schedules.order_by(ChatRoomSchedule.day_of_week).all()
 
     # Mark unread messages as read for current user (mirrors user_room logic).
@@ -1113,6 +1163,7 @@ def room_detail(room_id):
     return render_template('chat/room_detail.html',
                            room=room, messages=messages,
                            members=members, schedules=schedules,
+                           member_display_names=member_display_names,
                            can_send=can_send,
                            send_blocked_reason=send_blocked_reason,
                            membership=membership,

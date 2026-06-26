@@ -158,7 +158,7 @@
             <li class="list-group-item d-flex justify-content-between align-items-center py-2">
               <div>
                 <span class="fw-semibold" style="font-size:13px">
-                  {{ mem.user.full_name if mem.user else '—' }}
+                  {{ member_display_names.get(mem.user_id) or '—' }}
                 </span>
                 <br>
                 <small class="text-muted">
