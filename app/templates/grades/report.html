@@ -150,7 +150,7 @@
     {% if overall_avg is not none %}
     <span><strong>المعدل العام:</strong>
       <span class="ph-avg-val" style="color:{% if overall_avg >= 60 %}#0a6640{% else %}#8b1a1a{% endif %}">{{ overall_avg }}%</span>
-      <span style="color:#777">({{ overall_marks_sum }}/{{ overall_max_sum }})</span>
+      <span style="color:#777">(إجمالي: {{ overall_marks_sum }}/{{ overall_max_sum }})</span>
     </span>
     {% endif %}
     {% if start_date or end_date %}
@@ -386,7 +386,7 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
         {{ overall_avg }}%
       </span>
       <span class="text-muted small">
-        {{ overall_marks_sum }}/{{ overall_max_sum }}
+        إجمالي الدرجات: {{ overall_marks_sum }}/{{ overall_max_sum }}
         &nbsp;·&nbsp;
         {{ results_view|length }} نتيجة في {{ subject_groups|length }} {% if subject_groups|length == 1 %}مادة{% else %}مواد{% endif %}
       </span>

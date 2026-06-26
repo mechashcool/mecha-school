@@ -1053,8 +1053,6 @@ def report():
                 )
                 sub_map[key].append(r)
 
-            # avg = sum(marks) / sum(max_marks) × 100 — weighted, not mean of percentages.
-            # This ensures subjects with more exams don't skew the overall unfairly.
             def _fmt(v):
                 iv = int(v)
                 return iv if iv == v else round(v, 2)
@@ -1085,8 +1083,12 @@ def report():
                     'total_max':    _fmt(_smx),
                     'count':        len(sub_results),
                 })
-            if _all_mx > 0:
-                overall_avg       = round(_all_m / _all_mx * 100, 1)
+            # overall_avg = mean of subject percentages (equal weight per subject).
+            # overall_marks_sum / overall_max_sum = raw totals shown as إجمالي الدرجات,
+            # not used as the average basis.
+            sub_avgs = [grp['avg'] for grp in subject_groups if grp['avg'] is not None]
+            if sub_avgs:
+                overall_avg       = round(sum(sub_avgs) / len(sub_avgs), 1)
                 overall_marks_sum = _fmt(_all_m)
                 overall_max_sum   = _fmt(_all_mx)
 
