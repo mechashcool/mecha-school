@@ -1,6 +1,6 @@
 {% extends "shared/base.html" %}
-{% block title %}تقرير الدرجات{% endblock %}
-{% block page_title %}تقرير الدرجات{% endblock %}
+{% block title %}نتائج الطلاب{% endblock %}
+{% block page_title %}نتائج الطلاب{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -144,7 +144,7 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
 </script>
 
 <div class="page-header">
-  <div><h1 class="page-title">تقرير الدرجات</h1></div>
+  <div><h1 class="page-title">نتائج الطلاب</h1></div>
   <div class="d-flex gap-2">
     {% if (mode == 'student' and selected_student_id) or (mode == 'section' and selected_section_id) %}
     <button type="button" class="btn btn-outline-secondary" onclick="window.print()">
@@ -256,6 +256,8 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
                 <div class="input-group">
                   <span class="input-group-text"><i class="bi bi-search"></i></span>
                   <input type="search" id="studentSearch" class="form-control"
+                         name="student_q"
+                         value="{{ student_q }}"
                          placeholder="ابحث عن الطالب بالاسم أو الرمز..."
                          autocomplete="off">
                 </div>
@@ -273,7 +275,7 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
           <div class="col-md-2">
             <div class="d-flex gap-2">
               <button type="submit" id="submitBtnStu" class="btn btn-primary flex-fill"
-                      {% if not selected_student_id or mode != 'student' %}disabled{% endif %}>
+                      {% if (not selected_student_id and not student_q) or mode != 'student' %}disabled{% endif %}>
                 <i class="bi bi-bar-chart-fill me-1"></i>عرض
               </button>
               {% if mode == 'student' and selected_student_id %}
@@ -529,6 +531,58 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
   <div class="card-body text-center text-muted py-5">لا توجد نتائج مسجلة لهذا الطالب بعد</div>
 </div>
 
+{# ── STUDENT mode — multiple matches for typed search ── #}
+{% elif mode == 'student' and student_search_results %}
+<div class="card">
+  <div class="card-header d-flex align-items-center gap-2">
+    <i class="bi bi-people-fill text-accent"></i>
+    <span>
+      {{ student_search_results|length }} نتيجة لـ &ldquo;{{ student_q }}&rdquo;
+      <span class="text-muted fw-400" style="font-size:13px">— اختر الطالب لعرض نتائجه</span>
+    </span>
+  </div>
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>الاسم</th>
+          <th>رقم الطالب</th>
+          <th>الصف</th>
+          <th>الشعبة</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in student_search_results %}
+        <tr>
+          <td class="text-muted">{{ loop.index }}</td>
+          <td class="fw-600">{{ s.full_name }}</td>
+          <td><code>{{ s.student_id or '—' }}</code></td>
+          <td>{{ s.section.grade.name if s.section and s.section.grade else '—' }}</td>
+          <td>{{ s.section.name if s.section else '—' }}</td>
+          <td>
+            <a href="{{ url_for('grades.report', mode='student', student_id=s.id) }}"
+               class="btn btn-sm btn-outline-primary">
+              <i class="bi bi-bar-chart-fill me-1"></i>عرض
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ── STUDENT mode — no matches for typed search ── #}
+{% elif mode == 'student' and student_q %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">
+    <i class="bi bi-person-x" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+    لم يتم العثور على طالب بهذا الاسم أو الرمز: <strong>{{ student_q }}</strong>
+  </div>
+</div>
+
 {# ── Nothing selected ── #}
 {% else %}
 <div class="card">
@@ -538,7 +592,7 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
     اختر المرحلة والصف والشعبة ثم اضغط عرض الشعبة
     {% else %}
     <i class="bi bi-person-search" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-    ابحث عن طالب واختره لعرض نتائجه مجمعة حسب المادة
+    اكتب اسم الطالب أو رقمه واضغط عرض
     {% endif %}
   </div>
 </div>
@@ -961,9 +1015,10 @@ function renderResults(students) {
 studentSearch.addEventListener('input', () => {
   clearTimeout(searchTimer);
   hiddenStudentId.value = '';
-  submitBtnStu.disabled = true;
   studentCard.classList.add('d-none');
   const q = studentSearch.value.trim();
+  // Enable submit as soon as there is a searchable term; autocomplete selection is not required
+  submitBtnStu.disabled = q.length < 2;
   if (q.length < 2) { hideResults(); return; }
   searchTimer = setTimeout(() => {
     let url = `${studentsUrl}?q=${encodeURIComponent(q)}`;

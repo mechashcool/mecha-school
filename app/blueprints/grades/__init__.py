@@ -848,14 +848,35 @@ def report():
 
     selected_student_id  = request.args.get('student_id',  type=int)
     selected_section_id  = request.args.get('section_id',  type=int)
+    student_q            = request.args.get('student_q', '').strip()
 
-    results              = []
-    subject_results      = []   # student mode: grouped by subject
-    overall_avg          = None # student mode: overall percentage avg
-    selected_student_obj = None
-    selected_section_obj = None
-    section_grade        = None
-    section_stage        = ''
+    results                = []
+    subject_results        = []   # student mode: grouped by subject
+    overall_avg            = None # student mode: overall percentage avg
+    selected_student_obj   = None
+    selected_section_obj   = None
+    section_grade          = None
+    section_stage          = ''
+    student_search_results = []   # student mode: multiple matches for student_q
+
+    # ── Resolve typed name/code → student_id when not already set ───────────
+    if mode == 'student' and not selected_student_id and student_q and school and year:
+        q = (Student.query
+             .filter_by(school_id=school.id,
+                        academic_year_id=year.id,
+                        status='active')
+             .filter(
+                 Student.full_name.ilike(f'%{student_q}%') |
+                 Student.student_id.ilike(f'%{student_q}%')
+             ))
+        if _is_teacher():
+            allowed = get_teacher_section_ids(current_user) or []
+            q = q.filter(Student.section_id.in_(allowed))
+        matches = q.order_by(Student.full_name).limit(50).all()
+        if len(matches) == 1:
+            selected_student_id = matches[0].id   # unique match — proceed directly
+        else:
+            student_search_results = matches       # 0 or many — let template handle
 
     if mode == 'section' and selected_section_id and school and year:
         section = Section.query.filter_by(
@@ -958,7 +979,9 @@ def report():
                            selected_section_id=selected_section_id,
                            selected_section_obj=selected_section_obj,
                            section_grade=section_grade,
-                           section_stage=section_stage)
+                           section_stage=section_stage,
+                           student_q=student_q,
+                           student_search_results=student_search_results)
 
 
 # ── Grades report — cascade + student search JSON APIs ───────────────────────
