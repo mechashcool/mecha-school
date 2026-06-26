@@ -2,197 +2,517 @@
 {% block title %}الإيرادات والمصروفات{% endblock %}
 {% block page_title %}الإيرادات والمصروفات{% endblock %}
 
+{% block extra_css %}
+<style>
+  /* ── Finance Dashboard page-level styles (fin- prefix) ──────────── */
+
+  /* Header */
+  .fin-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 24px; flex-wrap: wrap; gap: 14px;
+  }
+  .fin-header-right { display: flex; align-items: center; gap: 16px; }
+  .fin-header-icon {
+    width: 52px; height: 52px;
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+    border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px; color: #fff;
+    box-shadow: 0 4px 14px rgba(26,58,92,.25);
+    flex-shrink: 0;
+  }
+  .fin-page-title  { font-size: 22px; font-weight: 800; color: var(--text); }
+  .fin-page-sub    { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+
+  /* Action tabs */
+  .fin-tabs { display: flex; gap: 10px; flex-wrap: wrap; }
+  .fin-tab {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 9px 18px; border-radius: 10px;
+    font-size: 13.5px; font-weight: 600;
+    text-decoration: none; border: 1.5px solid;
+    transition: all .18s var(--ease);
+  }
+  .fin-tab:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,.12); }
+  .fin-tab-rev { color: var(--success); border-color: var(--success); background: rgba(22,160,106,.06); }
+  .fin-tab-rev:hover { background: var(--success); color: #fff; }
+  .fin-tab-exp { color: var(--danger); border-color: var(--danger); background: rgba(222,61,61,.06); }
+  .fin-tab-exp:hover { background: var(--danger); color: #fff; }
+  .fin-tab-cat { color: var(--text-muted); border-color: var(--border); background: rgba(100,116,139,.06); }
+  .fin-tab-cat:hover { background: var(--text-muted); color: #fff; }
+
+  /* Filter form */
+  .fin-filter-form {
+    display: flex; align-items: flex-end; gap: 18px; flex-wrap: wrap;
+  }
+  .fin-fg { display: flex; flex-direction: column; gap: 5px; }
+  .fin-fg label { font-size: 11.5px; font-weight: 600; color: var(--text-muted); }
+  .fin-fg .form-select,
+  .fin-fg .form-control { font-size: 13px !important; }
+  .fin-sel-year  { min-width: 100px; }
+  .fin-sel-month { min-width: 140px; }
+  .fin-date-inp  { min-width: 132px; }
+  .fin-filter-divider {
+    width: 1px; height: 38px; background: var(--border); flex-shrink: 0;
+  }
+  .fin-date-range { display: flex; align-items: center; gap: 8px; }
+  .fin-date-sep   { font-size: 12px; color: var(--text-muted); font-weight: 500; white-space: nowrap; }
+  .fin-filter-btn { align-self: flex-end; padding: 8px 22px; flex-shrink: 0; }
+
+  /* KPI cards */
+  .fin-kpi {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 22px 24px;
+    display: flex; align-items: center; gap: 16px;
+    box-shadow: var(--shadow-sm);
+    transition: transform .2s var(--ease), box-shadow .2s var(--ease);
+    height: 100%;
+    border-top: 3px solid transparent;
+  }
+  .fin-kpi:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); }
+  .fin-kpi-icon {
+    width: 58px; height: 58px; border-radius: 16px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px; color: #fff; flex-shrink: 0;
+  }
+  .fin-kpi-amount { font-size: 26px; font-weight: 800; color: var(--text); line-height: 1.2; }
+  .fin-kpi-label  { font-size: 12.5px; color: var(--text-muted); margin-top: 3px; font-weight: 500; }
+  .fin-kpi-badge  {
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: 3px 10px; border-radius: 20px;
+    font-size: 11.5px; font-weight: 700; margin-top: 6px;
+  }
+  /* colour variants */
+  .fin-kpi-rev  { border-top-color: #2196f3; }
+  .fin-kpi-rev  .fin-kpi-icon { background: linear-gradient(135deg, #1a7adb, #2196f3); }
+  .fin-kpi-exp  { border-top-color: var(--danger); }
+  .fin-kpi-exp  .fin-kpi-icon { background: linear-gradient(135deg, #c9252d, #ef4444); }
+  .fin-kpi-net  { border-top-color: var(--success); }
+  .fin-kpi-net  .fin-kpi-icon { background: linear-gradient(135deg, #16a06a, #22c55e); }
+  .fin-kpi-net-neg              { border-top-color: var(--danger); }
+  .fin-kpi-net-neg .fin-kpi-icon { background: linear-gradient(135deg, #c9252d, #ef4444); }
+  .fin-badge-pos { background: #e7f7f0; color: #16a06a; }
+  .fin-badge-neg { background: #fdeeee; color: var(--danger); }
+
+  /* Period summary */
+  .fin-donut-wrap {
+    position: relative; width: 180px; height: 180px; margin: 0 auto 4px;
+  }
+  .fin-donut-center {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center; pointer-events: none;
+  }
+  .fin-donut-pct { font-size: 26px; font-weight: 800; color: var(--text); line-height: 1; }
+  .fin-donut-lbl { font-size: 11px; color: var(--text-muted); margin-top: 4px; font-weight: 500; line-height: 1.4; }
+
+  .fin-sum-rows  { border-top: 1px solid var(--border); padding-top: 10px; }
+  .fin-sum-row   {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 0; border-bottom: 1px solid var(--border);
+    font-size: 12.5px;
+  }
+  .fin-sum-row:last-child { border-bottom: none; }
+  .fin-sum-dot   { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .fin-dot-rev   { background: #2196f3; }
+  .fin-dot-exp   { background: #ef4444; }
+  .fin-dot-net   { background: #22c55e; }
+  .fin-sum-name  { flex: 1; color: var(--text-muted); font-size: 12px; }
+  .fin-sum-val   { font-weight: 700; font-size: 12.5px; white-space: nowrap; }
+
+  /* Insight cards */
+  .fin-insight {
+    background: #fff; border: 1px solid var(--border);
+    border-radius: 14px; padding: 18px 20px;
+    box-shadow: var(--shadow-xs);
+    transition: transform .2s var(--ease), box-shadow .2s var(--ease);
+    height: 100%;
+  }
+  .fin-insight:hover { transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+  .fin-insight-top {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .fin-insight-lbl  { font-size: 12.5px; color: var(--text-muted); font-weight: 600; }
+  .fin-insight-ico  {
+    width: 38px; height: 38px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px; color: #fff; flex-shrink: 0;
+  }
+  .ico-rev-hi  { background: linear-gradient(135deg, #16a06a, #22c55e); }
+  .ico-exp-hi  { background: linear-gradient(135deg, #c9252d, #ef4444); }
+  .ico-rev-avg { background: linear-gradient(135deg, #1a7adb, #2196f3); }
+  .ico-exp-avg { background: linear-gradient(135deg, var(--accent), #f5c25a); }
+  .fin-insight-month { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+  .fin-insight-val   { font-size: 22px; font-weight: 800; color: var(--text); line-height: 1.2; }
+  .fin-insight-cur   { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+  .fin-insight-empty { font-size: 13px; color: var(--text-muted); margin-top: 8px; }
+
+  @media (max-width: 768px) {
+    .fin-filter-form  { flex-direction: column; align-items: stretch; }
+    .fin-filter-divider { display: none; }
+    .fin-date-range { flex-wrap: wrap; }
+    .fin-date-inp   { min-width: 100%; }
+  }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="page-header">
-  <div>
-    <h1 class="page-title">الإيرادات والمصروفات</h1>
-    <p class="page-subtitle">نظرة عامة — {{ year }}{% if month %} / {{ arabic_months[month] }}{% endif %}</p>
+
+{# ── Derived values (Jinja only, no backend changes needed) ──────── #}
+{% set net_pct = ((balance / total_rev * 100) | round(1)) if total_rev > 0 else 0 %}
+{% set avg_rev_val = (total_rev / 12) | int %}
+{% set avg_exp_val = (total_exp / 12) | int %}
+
+{% set max_rev = namespace(v=0, i=0) %}
+{% for k in range(12) %}{% if chart_rev[k] > max_rev.v %}{% set max_rev.v = chart_rev[k] %}{% set max_rev.i = k %}{% endif %}{% endfor %}
+
+{% set max_exp = namespace(v=0, i=0) %}
+{% for k in range(12) %}{% if chart_exp[k] > max_exp.v %}{% set max_exp.v = chart_exp[k] %}{% set max_exp.i = k %}{% endif %}{% endfor %}
+
+{% set mo = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'] %}
+
+{# ── Page Header ─────────────────────────────────────────────────── #}
+<div class="fin-header">
+  <div class="fin-header-right">
+    <div class="fin-header-icon"><i class="bi bi-graph-up-arrow"></i></div>
+    <div>
+      <h1 class="fin-page-title">الإيرادات والمصروفات</h1>
+      <p class="fin-page-sub">نظرة عامة — {{ year }}{% if month %} / {{ arabic_months[month] }}{% endif %}</p>
+    </div>
   </div>
-  <div class="d-flex gap-2">
-    <a href="{{ url_for('finances.revenues') }}" class="btn btn-outline-success">
-      <i class="bi bi-arrow-up-circle me-1"></i>الإيرادات
+  <div class="fin-tabs">
+    <a href="{{ url_for('finances.revenues') }}" class="fin-tab fin-tab-rev">
+      <i class="bi bi-arrow-up-circle-fill"></i>الإيرادات
     </a>
-    <a href="{{ url_for('finances.expenses') }}" class="btn btn-outline-danger">
-      <i class="bi bi-arrow-down-circle me-1"></i>المصروفات
+    <a href="{{ url_for('finances.expenses') }}" class="fin-tab fin-tab-exp">
+      <i class="bi bi-arrow-down-circle-fill"></i>المصروفات
     </a>
-    <a href="{{ url_for('finances.categories') }}" class="btn btn-outline-secondary">
-      <i class="bi bi-tags me-1"></i>الفئات
+    <a href="{{ url_for('finances.categories') }}" class="fin-tab fin-tab-cat">
+      <i class="bi bi-tags-fill"></i>الفئات
     </a>
   </div>
 </div>
 
-<!-- Year/Month filter -->
+{# ── Filter Card ──────────────────────────────────────────────────── #}
 <div class="card mb-4">
-  <div class="card-body py-3">
-    <form method="GET" class="d-flex gap-3 align-items-end">
-      <div>
-        <label class="form-label mb-1" style="font-size:12.5px">السنة</label>
-        <select name="year" class="form-select" style="width:100px">
+  <div class="card-body py-3 px-4">
+    <form method="GET" class="fin-filter-form">
+      <div class="fin-fg">
+        <label>السنة</label>
+        <select name="year" class="form-select fin-sel-year">
           {% for y in range(2020, 2030) %}
           <option value="{{ y }}" {{ 'selected' if y == year }}>{{ y }}</option>
           {% endfor %}
         </select>
       </div>
-      <div>
-        <label class="form-label mb-1" style="font-size:12.5px">الشهر (اختياري)</label>
-        <select name="month" class="form-select" style="width:140px">
+      <div class="fin-fg">
+        <label>الشهر (اختياري)</label>
+        <select name="month" class="form-select fin-sel-month">
           <option value="">كل الأشهر</option>
-          {% for i in range(1,13) %}
+          {% for i in range(1, 13) %}
           <option value="{{ i }}" {{ 'selected' if i == month }}>{{ arabic_months[i] }}</option>
           {% endfor %}
         </select>
       </div>
-      <button class="btn btn-primary align-self-end">
+      <div class="fin-filter-divider"></div>
+      <div class="fin-fg">
+        <label>فترة مخصصة</label>
+        <div class="fin-date-range">
+          <input type="date" class="form-control fin-date-inp"
+                 value="{{ year ~ '-01-01' }}" tabindex="-1" readonly>
+          <span class="fin-date-sep">إلى</span>
+          <input type="date" class="form-control fin-date-inp"
+                 value="{{ year ~ '-12-31' }}" tabindex="-1" readonly>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary fin-filter-btn">
         <i class="bi bi-search me-1"></i>عرض
       </button>
     </form>
   </div>
 </div>
 
-<!-- KPIs -->
+{# ── KPI Cards ────────────────────────────────────────────────────── #}
 <div class="row g-3 mb-4">
+  {# Revenues #}
   <div class="col-md-4">
-    <div class="stat-card">
-      <div class="stat-icon" style="background:linear-gradient(135deg,#1aab6d,#16c879)">
-        <i class="bi bi-arrow-up-circle-fill"></i>
-      </div>
+    <div class="fin-kpi fin-kpi-rev">
+      <div class="fin-kpi-icon"><i class="bi bi-arrow-up-circle-fill"></i></div>
       <div>
-        <div class="stat-value">{{ '{:,.0f}'.format(total_rev) }}</div>
-        <div class="stat-label">إجمالي الإيرادات (د.ع)</div>
+        <div class="fin-kpi-amount">{{ '{:,.0f}'.format(total_rev) }}</div>
+        <div class="fin-kpi-label">إجمالي الإيرادات (د.ع)</div>
       </div>
     </div>
   </div>
+  {# Expenses #}
   <div class="col-md-4">
-    <div class="stat-card">
-      <div class="stat-icon" style="background:linear-gradient(135deg,#e03e3e,#f87171)">
-        <i class="bi bi-arrow-down-circle-fill"></i>
-      </div>
+    <div class="fin-kpi fin-kpi-exp">
+      <div class="fin-kpi-icon"><i class="bi bi-arrow-down-circle-fill"></i></div>
       <div>
-        <div class="stat-value">{{ '{:,.0f}'.format(total_exp) }}</div>
-        <div class="stat-label">إجمالي المصروفات (د.ع)</div>
+        <div class="fin-kpi-amount">{{ '{:,.0f}'.format(total_exp) }}</div>
+        <div class="fin-kpi-label">إجمالي المصروفات (د.ع)</div>
       </div>
     </div>
   </div>
+  {# Net #}
   <div class="col-md-4">
-    <div class="stat-card">
-      <div class="stat-icon"
-           style="background:{{ 'linear-gradient(135deg,#1a3a5c,#22508a)' if balance >= 0 else 'linear-gradient(135deg,#e03e3e,#f87171)' }}">
-        <i class="bi bi-wallet2"></i>
-      </div>
+    <div class="fin-kpi fin-kpi-net {% if balance < 0 %}fin-kpi-net-neg{% endif %}">
+      <div class="fin-kpi-icon"><i class="bi bi-wallet2"></i></div>
       <div>
-        <div class="stat-value">{{ '{:,.0f}'.format(balance) }}</div>
-        <div class="stat-label">الصافي (د.ع)</div>
-        <div class="stat-change" style="color:{{ '#1aab6d' if balance >= 0 else '#e03e3e' }}">
+        <div class="fin-kpi-amount">{{ '{:,.0f}'.format(balance) }}</div>
+        <div class="fin-kpi-label">صافي (د.ع)</div>
+        <span class="fin-kpi-badge {% if balance >= 0 %}fin-badge-pos{% else %}fin-badge-neg{% endif %}">
+          <i class="bi bi-arrow-{{ 'up' if balance >= 0 else 'down' }}-short"></i>
           {{ 'فائض' if balance >= 0 else 'عجز' }}
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Chart + Period Summary ───────────────────────────────────────── #}
+<div class="row g-4 mb-4">
+  {# Monthly bar chart #}
+  <div class="col-lg-8">
+    <div class="card h-100">
+      <div class="card-header">
+        <i class="bi bi-bar-chart-fill" style="color:var(--primary)"></i>
+        الإيرادات والمصروفات الشهرية — {{ year }}
+        <div class="ms-auto">
+          <select id="chartTypeSelect" class="form-select form-select-sm d-inline-block"
+                  style="width:auto;min-width:90px">
+            <option value="bar">عمودي</option>
+            <option value="line">خطي</option>
+          </select>
+        </div>
+      </div>
+      <div class="card-body">
+        <canvas id="finChart" style="max-height:300px"></canvas>
+      </div>
+    </div>
+  </div>
+  {# Period summary + donut #}
+  <div class="col-lg-4">
+    <div class="card h-100">
+      <div class="card-header">
+        <i class="bi bi-pie-chart-fill text-accent"></i>
+        ملخص الفترة
+      </div>
+      <div class="card-body d-flex flex-column align-items-center justify-content-center">
+        <div class="fin-donut-wrap">
+          <canvas id="donutChart" width="180" height="180"></canvas>
+          <div class="fin-donut-center">
+            <div class="fin-donut-pct">{{ net_pct }}%</div>
+            <div class="fin-donut-lbl">نسبة صافي<br>الإيرادات</div>
+          </div>
+        </div>
+        <div class="fin-sum-rows w-100 mt-2">
+          <div class="fin-sum-row">
+            <span class="fin-sum-dot fin-dot-rev"></span>
+            <span class="fin-sum-name">إجمالي الإيرادات</span>
+            <span class="fin-sum-val text-success">{{ '{:,.0f}'.format(total_rev) }} د.ع</span>
+            <i class="bi bi-arrow-up-circle-fill text-success ms-1" style="font-size:12px"></i>
+          </div>
+          <div class="fin-sum-row">
+            <span class="fin-sum-dot fin-dot-exp"></span>
+            <span class="fin-sum-name">إجمالي المصروفات</span>
+            <span class="fin-sum-val text-danger">{{ '{:,.0f}'.format(total_exp) }} د.ع</span>
+            <i class="bi bi-arrow-down-circle-fill text-danger ms-1" style="font-size:12px"></i>
+          </div>
+          <div class="fin-sum-row">
+            <span class="fin-sum-dot fin-dot-net"></span>
+            <span class="fin-sum-name">صافي (الإيرادات – المصروفات)</span>
+            <span class="fin-sum-val" style="color:{{ '#16a06a' if balance >= 0 else '#de3d3d' }}">
+              {{ '{:,.0f}'.format(balance) }} د.ع
+            </span>
+            <i class="bi bi-wallet2 ms-1" style="font-size:12px;color:{{ '#16a06a' if balance >= 0 else '#de3d3d' }}"></i>
+          </div>
         </div>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Monthly Chart -->
-<div class="row g-4 mb-4">
-  <div class="col-12">
-    <div class="card">
-      <div class="card-header">
-        <i class="bi bi-bar-chart-line-fill text-accent"></i>
-        الإيرادات والمصروفات الشهرية — {{ year }}
+{# ── Insight Cards ────────────────────────────────────────────────── #}
+<div class="row g-3">
+  {# Highest revenue month #}
+  <div class="col-md-3 col-sm-6">
+    <div class="fin-insight">
+      <div class="fin-insight-top">
+        <span class="fin-insight-lbl">أعلى شهر في الإيرادات</span>
+        <div class="fin-insight-ico ico-rev-hi"><i class="bi bi-arrow-up-circle-fill"></i></div>
       </div>
-      <div class="card-body">
-        <canvas id="finChart" style="max-height:280px"></canvas>
+      {% if max_rev.v > 0 %}
+        <div class="fin-insight-month">{{ mo[max_rev.i] }}</div>
+        <div class="fin-insight-val text-success">{{ '{:,.0f}'.format(max_rev.v) }}</div>
+      {% else %}
+        <div class="fin-insight-empty">لا توجد بيانات</div>
+      {% endif %}
+      <div class="fin-insight-cur">د.ع</div>
+    </div>
+  </div>
+  {# Highest expense month #}
+  <div class="col-md-3 col-sm-6">
+    <div class="fin-insight">
+      <div class="fin-insight-top">
+        <span class="fin-insight-lbl">أعلى شهر في المصروفات</span>
+        <div class="fin-insight-ico ico-exp-hi"><i class="bi bi-arrow-down-circle-fill"></i></div>
       </div>
+      {% if max_exp.v > 0 %}
+        <div class="fin-insight-month">{{ mo[max_exp.i] }}</div>
+        <div class="fin-insight-val text-danger">{{ '{:,.0f}'.format(max_exp.v) }}</div>
+      {% else %}
+        <div class="fin-insight-empty">لا توجد بيانات</div>
+      {% endif %}
+      <div class="fin-insight-cur">د.ع</div>
+    </div>
+  </div>
+  {# Avg monthly revenue #}
+  <div class="col-md-3 col-sm-6">
+    <div class="fin-insight">
+      <div class="fin-insight-top">
+        <span class="fin-insight-lbl">متوسط الإيرادات الشهرية</span>
+        <div class="fin-insight-ico ico-rev-avg"><i class="bi bi-bar-chart-fill"></i></div>
+      </div>
+      <div class="fin-insight-val">{{ '{:,.0f}'.format(avg_rev_val) }}</div>
+      <div class="fin-insight-cur">د.ع</div>
+    </div>
+  </div>
+  {# Avg monthly expense #}
+  <div class="col-md-3 col-sm-6">
+    <div class="fin-insight">
+      <div class="fin-insight-top">
+        <span class="fin-insight-lbl">متوسط المصروفات الشهرية</span>
+        <div class="fin-insight-ico ico-exp-avg"><i class="bi bi-pie-chart-fill"></i></div>
+      </div>
+      <div class="fin-insight-val">{{ '{:,.0f}'.format(avg_exp_val) }}</div>
+      <div class="fin-insight-cur">د.ع</div>
     </div>
   </div>
 </div>
 
-<!-- Recent Transactions -->
-<div class="row g-4">
-  <div class="col-lg-6">
-    <div class="card">
-      <div class="card-header">
-        <i class="bi bi-arrow-up-circle-fill text-success"></i>
-        آخر الإيرادات
-        <a href="{{ url_for('finances.revenues') }}" class="btn btn-sm btn-outline-secondary ms-auto">الكل</a>
-      </div>
-      <div class="table-wrapper">
-        <table class="table table-sm">
-          <thead><tr><th>التاريخ</th><th>الوصف</th><th>المبلغ</th></tr></thead>
-          <tbody>
-            {% for r in recent_rev %}
-            <tr>
-              <td style="font-size:12px;color:#9aabb8">{{ r.date.strftime('%Y-%m-%d') }}</td>
-              <td>{{ r.description or r.category.name }}</td>
-              <td class="fw-700 text-success">{{ '{:,.0f}'.format(r.amount) }}</td>
-            </tr>
-            {% else %}
-            <tr><td colspan="3" class="text-center text-muted py-3">لا توجد إيرادات</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-  <div class="col-lg-6">
-    <div class="card">
-      <div class="card-header">
-        <i class="bi bi-arrow-down-circle-fill text-danger"></i>
-        آخر المصروفات
-        <a href="{{ url_for('finances.expenses') }}" class="btn btn-sm btn-outline-secondary ms-auto">الكل</a>
-      </div>
-      <div class="table-wrapper">
-        <table class="table table-sm">
-          <thead><tr><th>التاريخ</th><th>الوصف</th><th>المبلغ</th></tr></thead>
-          <tbody>
-            {% for e in recent_exp %}
-            <tr>
-              <td style="font-size:12px;color:#9aabb8">{{ e.date.strftime('%Y-%m-%d') }}</td>
-              <td>{{ e.description or e.category.name }}</td>
-              <td class="fw-700 text-danger">{{ '{:,.0f}'.format(e.amount) }}</td>
-            </tr>
-            {% else %}
-            <tr><td colspan="3" class="text-center text-muted py-3">لا توجد مصروفات</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-</div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
-const months = ['يناير','فبراير','مارس','أبريل','مايو','يونيو',
-                 'يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
-new Chart(document.getElementById('finChart'), {
-  type: 'bar',
-  data: {
-    labels: months,
-    datasets: [
-      {
-        label: 'الإيرادات',
-        data: {{ chart_rev | tojson }},
-        backgroundColor: 'rgba(26,171,109,.8)',
-        borderRadius: 6,
+(function () {
+  'use strict';
+
+  const months  = ['يناير','فبراير','مارس','أبريل','مايو','يونيو',
+                    'يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  const revData = {{ chart_rev | tojson }};
+  const expData = {{ chart_exp | tojson }};
+  const totalRev = {{ total_rev }};
+  const totalExp = {{ total_exp }};
+
+  /* ── Bar / line chart ──────────────────────────────── */
+  const barCtx = document.getElementById('finChart');
+  let finChart  = null;
+
+  function buildBarConfig(type) {
+    const isBar = (type === 'bar');
+    return {
+      type: type,
+      data: {
+        labels: months,
+        datasets: [
+          {
+            label: 'الإيرادات',
+            data: revData,
+            backgroundColor: isBar ? 'rgba(26,171,109,.82)' : 'rgba(26,171,109,.15)',
+            borderColor: 'rgba(26,171,109,1)',
+            borderRadius: isBar ? 6 : 0,
+            fill: !isBar,
+            tension: 0.4,
+            pointBackgroundColor: '#1aab6d',
+            pointRadius: isBar ? 0 : 4,
+            borderWidth: isBar ? 0 : 2,
+          },
+          {
+            label: 'المصروفات',
+            data: expData,
+            backgroundColor: isBar ? 'rgba(224,62,62,.75)' : 'rgba(224,62,62,.12)',
+            borderColor: 'rgba(224,62,62,1)',
+            borderRadius: isBar ? 6 : 0,
+            fill: !isBar,
+            tension: 0.4,
+            pointBackgroundColor: '#e03e3e',
+            pointRadius: isBar ? 0 : 4,
+            borderWidth: isBar ? 0 : 2,
+          }
+        ]
       },
-      {
-        label: 'المصروفات',
-        data: {{ chart_exp | tojson }},
-        backgroundColor: 'rgba(224,62,62,.75)',
-        borderRadius: 6,
+      options: {
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: {
+            labels: { font: { family: 'Cairo', size: 13 }, boxWidth: 12, padding: 16 }
+          },
+          tooltip: {
+            rtl: true,
+            bodyFont: { family: 'Cairo' },
+            titleFont: { family: 'Cairo', weight: '700' },
+            callbacks: {
+              title: (items) => items[0].label,
+              label: (item) =>
+                ` ${item.dataset.label}: ${item.raw.toLocaleString('en-US')} د.ع`
+            }
+          }
+        },
+        scales: {
+          y: {
+            ticks: {
+              font: { family: 'Cairo' },
+              callback: (v) => v.toLocaleString('en-US')
+            },
+            grid: { color: '#f0f4f8' }
+          },
+          x: { ticks: { font: { family: 'Cairo', size: 12 } } }
+        }
       }
-    ]
-  },
-  options: {
-    responsive: true,
-    plugins: {
-      legend: { labels: { font: { family: 'Cairo', size: 13 } } }
-    },
-    scales: {
-      y: { ticks: { font: { family: 'Cairo' } }, grid: { color: '#f0f4f8' } },
-      x: { ticks: { font: { family: 'Cairo', size: 12 } } }
-    }
+    };
   }
-});
+
+  finChart = new Chart(barCtx, buildBarConfig('bar'));
+
+  document.getElementById('chartTypeSelect').addEventListener('change', function () {
+    if (finChart) finChart.destroy();
+    finChart = new Chart(barCtx, buildBarConfig(this.value));
+  });
+
+  /* ── Donut chart ───────────────────────────────────── */
+  new Chart(document.getElementById('donutChart'), {
+    type: 'doughnut',
+    data: {
+      labels: ['الإيرادات', 'المصروفات'],
+      datasets: [{
+        data: [totalRev > 0 ? totalRev : 0, totalExp > 0 ? totalExp : 0],
+        backgroundColor: ['rgba(33,150,243,.85)', 'rgba(239,68,68,.82)'],
+        borderWidth: 0,
+        hoverOffset: 6,
+      }]
+    },
+    options: {
+      responsive: false,
+      cutout: '72%',
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          rtl: true,
+          bodyFont: { family: 'Cairo' },
+          callbacks: {
+            label: (item) =>
+              ` ${item.label}: ${item.raw.toLocaleString('en-US')} د.ع`
+          }
+        }
+      }
+    }
+  });
+
+})();
 </script>
 {% endblock %}
