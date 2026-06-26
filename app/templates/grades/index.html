@@ -142,9 +142,7 @@
 {# ── Print-only header (hidden on screen) ── #}
 <div class="print-header" style="display:none">
   <div class="print-school-name">{{ school.school_name_ar or school.school_name if school else '' }}</div>
-  <div class="print-report-title">
-    {% if results_view is not none %}تقرير نتائج الطلاب{% else %}قائمة الاختبارات{% endif %}
-  </div>
+  <div class="print-report-title">قائمة الاختبارات</div>
   <div class="print-meta">
     {% if active_year %}<span>العام الدراسي: {{ active_year.name }}</span>{% endif %}
     <span>تاريخ الطباعة: <span class="js-print-date"></span></span>
@@ -158,10 +156,9 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
 <div class="page-header">
   <div><h1 class="page-title">الاختبارات والدرجات</h1></div>
   <div class="d-flex gap-2">
-    <a href="{{ url_for('grades.export_excel', q=search, student_q=student_search, exam_type=exam_type_filter, subject_id=subject_filter, start_date=start_date, end_date=end_date) }}"
+    <a href="{{ url_for('grades.export_excel', q=search, exam_type=exam_type_filter, subject_id=subject_filter, start_date=start_date, end_date=end_date) }}"
        class="btn btn-outline-success">
-      <i class="bi bi-file-earmark-excel-fill me-1"></i>
-      {% if subject_filter != 'all' %}تصدير تقرير المادة{% else %}تصدير Excel{% endif %}
+      <i class="bi bi-file-earmark-excel-fill me-1"></i>تصدير Excel
     </a>
     <button type="button" class="btn btn-outline-secondary" onclick="window.print()">
       <i class="bi bi-printer-fill me-1"></i>طباعة
@@ -213,10 +210,6 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
         <label class="form-label">بحث باسم الاختبار</label>
         <input type="text" name="q" class="form-control" placeholder="مثلاً: الامتحان النهائي" value="{{ search }}">
       </div>
-      <div class="col-md-2">
-        <label class="form-label">بحث باسم الطالب</label>
-        <input type="text" name="student_q" class="form-control" placeholder="اسم الطالب أو رقمه" value="{{ student_search }}">
-      </div>
       <div class="col-md-2 d-flex gap-2">
         <button class="btn btn-primary flex-grow-1"><i class="bi bi-search me-1"></i>تصفية</button>
         <a href="{{ url_for('grades.index') }}" class="btn btn-outline-secondary" title="إعادة تعيين">
@@ -227,89 +220,7 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
   </div>
 </div>
 
-{% if results_view is not none %}
-{# ── Subject Report: per-student grades table ── #}
-<div class="card">
-  <div class="card-header d-flex align-items-center gap-2">
-    <i class="bi bi-table text-accent"></i>
-    <span>نتائج الطلاب — {{ results_view|length }} سجل</span>
-    {% if subject_filter != 'all' %}
-    <span class="badge ms-auto" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
-      تقرير مادة محدد
-    </span>
-    {% endif %}
-  </div>
-  <div class="table-wrapper">
-    <table class="table table-hover">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>اسم الطالب</th>
-          <th>رقم الطالب</th>
-          <th>المادة</th>
-          <th>اسم الاختبار</th>
-          <th>الفئة</th>
-          <th>التاريخ</th>
-          <th>الدرجة</th>
-          <th>التقدير</th>
-          <th>الحالة</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in results_view %}
-        <tr>
-          <td class="text-muted">{{ loop.index }}</td>
-          <td class="fw-600">{{ r.student.full_name }}</td>
-          <td><code>{{ r.student.student_id }}</code></td>
-          <td>{{ r.exam.subject.name if r.exam.subject else '—' }}</td>
-          <td>{{ r.exam.display_name }}</td>
-          <td>
-            {% if r.exam.exam_type %}
-            <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
-              {{ r.exam.exam_type.name }}
-            </span>
-            {% else %}<span class="text-muted">—</span>{% endif %}
-          </td>
-          <td>{{ r.exam.exam_date.strftime('%Y-%m-%d') }}</td>
-          <td>
-            <span class="fw-700" style="font-size:14px;
-              color:{% if r.is_pass %}#1aab6d{% else %}#e03e3e{% endif %}">
-              {{ r.marks }} / {{ r.exam.max_marks }}
-            </span>
-          </td>
-          <td>
-            {% if r.grade_letter %}
-            <span class="badge" style="
-              background:{% if r.is_pass %}#e8f8f0{% else %}#fef0f0{% endif %};
-              color:{% if r.is_pass %}#1aab6d{% else %}#e03e3e{% endif %};
-              font-weight:700">
-              {{ r.grade_letter }}
-            </span>
-            {% else %}<span class="text-muted">—</span>{% endif %}
-          </td>
-          <td>
-            {% if r.is_pass %}
-            <span class="badge-status badge-active">ناجح</span>
-            {% else %}
-            <span class="badge-status badge-inactive">راسب</span>
-            {% endif %}
-          </td>
-        </tr>
-        {% else %}
-        <tr>
-          <td colspan="10" class="text-center text-muted py-5">
-            <i class="bi bi-clipboard-data" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-            لا توجد نتائج لهذه التصفية
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-
-{% else %}
-{# ── Default: Exam list table ── #}
+{# ── Exam list table ── #}
 <div class="card">
   <div class="table-wrapper">
     <table class="table table-hover">
@@ -377,5 +288,4 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
     </table>
   </div>
 </div>
-{% endif %}
 {% endblock %}

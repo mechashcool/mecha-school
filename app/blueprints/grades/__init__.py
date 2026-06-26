@@ -299,7 +299,6 @@ def _notify_new_exam(exam):
 @permission_required('enter_grades')
 def index():
     search           = request.args.get('q', '').strip()
-    student_search   = request.args.get('student_q', '').strip()
     exam_type_filter = request.args.get('exam_type', 'all')
     subject_filter   = request.args.get('subject_id', 'all')
     start_date       = request.args.get('start_date', '')
@@ -318,29 +317,6 @@ def index():
         base, search, exam_type_filter, subject_filter, start_date, end_date
     ).order_by(Exam.exam_date.desc()).all()
 
-    results_view = None
-    if subject_filter != 'all':
-        results_base = ExamResult.query.join(Exam)
-        if year:
-            results_base = results_base.filter(Exam.academic_year_id == year.id)
-        if _is_teacher():
-            results_base = _apply_teacher_scope(results_base)
-        if student_search:
-            results_base = results_base.join(
-                Student, ExamResult.student_id == Student.id
-            ).filter(
-                Student.full_name.ilike(f'%{student_search}%') |
-                Student.student_id.ilike(f'%{student_search}%')
-            )
-        results_view = (
-            _build_exam_query(
-                results_base,
-                search, exam_type_filter, subject_filter, start_date, end_date
-            )
-            .order_by(Exam.exam_date.desc(), ExamResult.marks.desc())
-            .all()
-        )
-
     exam_types = ExamType.query.all()
     if _is_teacher():
         subject_ids = _teacher_subject_ids()
@@ -350,11 +326,9 @@ def index():
 
     return render_template('grades/index.html',
                            exams=exams,
-                           results_view=results_view,
                            exam_types=exam_types,
                            subjects=subjects,
                            search=search,
-                           student_search=student_search,
                            exam_type_filter=exam_type_filter,
                            subject_filter=subject_filter,
                            start_date=start_date,
@@ -369,7 +343,6 @@ def export_excel():
     from app.utils.excel_export import export_exams
 
     search           = request.args.get('q', '').strip()
-    student_search   = request.args.get('student_q', '').strip()
     exam_type_filter = request.args.get('exam_type', 'all')
     subject_filter   = request.args.get('subject_id', 'all')
     start_date       = request.args.get('start_date', '')
@@ -383,21 +356,15 @@ def export_excel():
         base, search, exam_type_filter, subject_filter, start_date, end_date
     ).order_by(Exam.exam_date.desc()).all()
 
-    subject_report = subject_filter != 'all'
-    data = export_exams(
-        exams,
-        subject_report=subject_report,
-        student_search=student_search if subject_report else '',
-    )
+    data = export_exams(exams, subject_report=False, student_search='')
     if not data:
         flash('مكتبة Excel غير متاحة.', 'warning')
         return redirect(url_for('grades.index'))
 
-    filename = 'subject_report.xlsx' if subject_report else 'exams.xlsx'
     return Response(
         data,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        headers={'Content-Disposition': f'attachment; filename={filename}'}
+        headers={'Content-Disposition': 'attachment; filename=exams.xlsx'}
     )
 
 
