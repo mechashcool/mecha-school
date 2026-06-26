@@ -149,7 +149,7 @@ def get_badge_counts(*, live: bool = False) -> dict:
     try:
         from app.models import (
             Complaint, LeaveRequest,
-            ChatMessage, ChatMessageRead, ChatRoomMember,
+            ChatMessage, ChatMessageRead, ChatRoom, ChatRoomMember,
         )
         from app.utils.decorators import get_current_school
         from app.utils.modules import get_enabled_modules
@@ -220,8 +220,14 @@ def get_badge_counts(*, live: bool = False) -> dict:
 
         if 'chat' in enabled_modules:
             def _load_unread_chat():
+                # Scope membership through the room's school so a stale or
+                # mismatched cross-school ChatRoomMember can never inflate this
+                # badge with another school's unread messages.
                 member_rooms = (db.session.query(ChatRoomMember.room_id)
-                                .filter_by(user_id=uid))
+                                .join(ChatRoom, ChatRoom.id == ChatRoomMember.room_id)
+                                .filter(ChatRoomMember.user_id == uid,
+                                        ChatRoom.school_id == sid,
+                                        ChatRoom.is_active == True))  # noqa: E712
                 read_msgs = (db.session.query(ChatMessageRead.message_id)
                              .filter_by(user_id=uid))
                 return (ChatMessage.query
@@ -233,8 +239,10 @@ def get_badge_counts(*, live: bool = False) -> dict:
                         )
                         .count()) or 0
 
-            # Chat tables are not tenant-scoped; membership and read state are
-            # strictly per user → user id is the whole key.
+            # Membership + read state are per user; the room-school join above
+            # binds the count to the current school, so (user, school) fully
+            # determines it. The user id remains the cache key because a given
+            # user belongs to exactly one school.
             counts['unread_chat'] = badge_cache.get_or_set(
                 (prefix + 'chat', uid), _load_unread_chat, ttl=ttl)
     except Exception:

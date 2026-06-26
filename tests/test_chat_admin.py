@@ -689,6 +689,59 @@ class ChatAdminTest(unittest.TestCase):
         )
         self._logout()
 
+    # ── Test: create_room custom scope drops forged cross-school members ──────
+
+    def test_create_room_custom_rejects_cross_school_member(self):
+        """create_room (custom scope) must drop forged cross-school member_ids.
+
+        The custom member picker only lists same-school users, but the POST
+        handler must not trust the submitted ids.  The _sync_members chokepoint
+        validates every candidate against the room's school, so a forged id from
+        another school can never become a member.
+        """
+        with self.app.app_context():
+            user_b = User(
+                username=f'inj_b_{self.sfx}',
+                email=f'inj_b_{self.sfx}@test.test',
+                full_name=f'Inject School B {self.sfx}',
+                role_id=self.parent_role.id,
+                school_id=self.ids['school_b_id'],
+                is_active=True,
+            )
+            user_b.set_password('Test1234!')
+            db.session.add(user_b)
+            db.session.commit()
+            user_b_id = user_b.id
+
+        self._login(self.ids['admin_a_user'])
+        resp = self.client.post(
+            '/chat/rooms/create',
+            data={
+                'name':  f'Custom Room {self.sfx}',
+                'type':  'group',
+                'scope': 'custom',
+                'member_ids': [str(self.ids['parent_a_id']), str(user_b_id)],
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(resp.status_code, 302)
+        location = resp.headers.get('Location', '')
+        self.assertIn('/chat/rooms/', location)
+        new_room_id = int(location.rstrip('/').split('/')[-1])
+
+        with self.app.app_context():
+            self.assertIsNotNone(
+                ChatRoomMember.query.filter_by(
+                    room_id=new_room_id, user_id=self.ids['parent_a_id']).first(),
+                'Same-school member must be added',
+            )
+            self.assertIsNone(
+                ChatRoomMember.query.filter_by(
+                    room_id=new_room_id, user_id=user_b_id).first(),
+                'Cross-school member must NOT be added via forged member_ids',
+            )
+        self._logout()
+
     # ── helpers ───────────────────────────────────────────────────────────────
 
     def _member_count(self, room_id):

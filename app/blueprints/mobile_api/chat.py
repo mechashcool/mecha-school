@@ -528,7 +528,10 @@ def chat_contacts():
                     emp = db.session.get(Employee, eid)
                     if emp and emp.user_id and emp.school_id == school_id:
                         u = db.session.get(User, emp.user_id)
-                        if u and u.is_active:
+                        # Validate the linked User's school too — an
+                        # Employee.school_id / User.school_id mismatch must never
+                        # surface a teacher from another school as a contact.
+                        if u and u.is_active and u.school_id == school_id:
                             contacts.append({
                                 'user_id':  u.id,
                                 'name':     u.full_name,

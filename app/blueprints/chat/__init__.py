@@ -594,7 +594,39 @@ def _sync_members(room: ChatRoom, user_ids: set[int], creator_id: int) -> int:
     Add missing members to room; do not remove existing ones.
     If the creator is already a member, upgrades their role to 'owner'.
     Returns the count of newly added members.
+
+    Fail-closed cross-school guard
+    ──────────────────────────────
+    This is the single chokepoint through which every auto-scope, multi-section,
+    and custom membership flows.  Regardless of how `user_ids` was collected —
+    employee→user links, parent_students rows, or client-submitted custom
+    member_ids — each candidate is re-validated against the room's own school
+    before a ChatRoomMember row is created.  A mismatched Employee.school_id /
+    User.school_id, a stale cross-school parent link, or a forged member_id can
+    therefore never inject a member from another school.
+
+    The creator is added explicitly below and is intentionally NOT filtered
+    here: a super-admin creator legitimately has User.school_id = NULL while the
+    room belongs to the selected school.
     """
+    if user_ids:
+        valid_ids = {
+            row[0] for row in
+            User.query
+            .execution_options(bypass_tenant_scope=True)
+            .with_entities(User.id)
+            .filter(User.id.in_(user_ids), User.school_id == room.school_id)
+            .all()
+        }
+        dropped = set(user_ids) - valid_ids
+        if dropped:
+            _log.warning(
+                '[chat] _sync_members blocked %d cross-school user_id(s) '
+                'room_id=%s school_id=%s dropped=%s',
+                len(dropped), room.id, room.school_id, sorted(dropped),
+            )
+        user_ids = valid_ids
+
     existing = {m.user_id: m for m in room.members.all()}
     added = 0
 
