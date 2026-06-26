@@ -743,30 +743,51 @@ if (_createRoomForm) {
 
 /* ══════════════════════════════════════════════════════════════
    Parent scope cascade
+   opt.hidden is unreliable on <option> across browsers; we rebuild
+   the dropdown contents from GRADES_DATA instead.
 ══════════════════════════════════════════════════════════════ */
-function psUpdateGrades() {
-  var stageF  = document.getElementById('psStage').value;
+function psRebuildGrades(stageF) {
   var gradeEl = document.getElementById('psGrade');
-  // Always reset grade to "كل الصفوف" when stage changes, then filter options.
-  gradeEl.selectedIndex = 0;
-  Array.from(gradeEl.options).forEach(function (opt, i) {
-    if (i === 0) return;
-    opt.hidden = stageF ? (opt.dataset.stage !== stageF) : false;
+  /* Remove all options except the first ("كل الصفوف") */
+  while (gradeEl.options.length > 1) gradeEl.remove(1);
+  GRADES_DATA.forEach(function (g) {
+    if (stageF && g.stage !== stageF) return;
+    var opt = document.createElement('option');
+    opt.value = g.id;
+    opt.textContent = g.name + (g.stage ? ' (' + g.stage + ')' : '');
+    opt.dataset.stage = g.stage || '';
+    gradeEl.appendChild(opt);
   });
-  psUpdateSections();
+  gradeEl.selectedIndex = 0;
+}
+
+function psRebuildSections(gradeF) {
+  var sectionEl = document.getElementById('psSection');
+  /* Remove all options except the first ("كل الشعب") */
+  while (sectionEl.options.length > 1) sectionEl.remove(1);
+  GRADES_DATA.forEach(function (g) {
+    if (gradeF && String(g.id) !== gradeF) return;
+    g.sections.forEach(function (sec) {
+      var opt = document.createElement('option');
+      opt.value = sec.id;
+      opt.textContent = sec.name + ' — ' + g.name;
+      opt.dataset.grade = g.id;
+      opt.dataset.stage = g.stage || '';
+      sectionEl.appendChild(opt);
+    });
+  });
+  sectionEl.selectedIndex = 0;
+}
+
+function psUpdateGrades() {
+  var stageF = document.getElementById('psStage').value;
+  psRebuildGrades(stageF);   /* rebuilds grade list filtered to stage */
+  psRebuildSections('');     /* reset sections — grade is now "كل الصفوف" */
 }
 
 function psUpdateSections() {
-  var gradeF     = document.getElementById('psGrade').value;
-  var sectionEl  = document.getElementById('psSection');
-  // Always reset section to "كل الشعب" when grade changes, then filter options.
-  sectionEl.selectedIndex = 0;
-  Array.from(sectionEl.options).forEach(function (opt, i) {
-    if (i === 0) return;
-    // Show only the sections belonging to the selected grade;
-    // when no grade is selected, show all sections.
-    opt.hidden = gradeF ? (opt.dataset.grade !== gradeF) : false;
-  });
+  var gradeF = document.getElementById('psGrade').value;
+  psRebuildSections(gradeF); /* rebuilds section list filtered to grade */
 }
 
 /* ── Cascade listeners ───────────────────── */
