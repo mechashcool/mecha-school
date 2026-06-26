@@ -6,7 +6,29 @@
 {# ── Print-only header (hidden on screen) ── #}
 <div class="print-header" style="display:none">
   <div class="print-school-name">{{ school.school_name_ar or school.school_name if school else '' }}</div>
-  <div class="print-report-title">كشف الدرجات الشامل</div>
+  <div class="print-report-title">
+    كشف الدرجات الشامل
+    {%- if subject_filter != 'all' -%}
+      {%- for subj in subjects %}{% if subj.id|string == subject_filter %} لمادة {{ subj.name }}{% endif %}{% endfor -%}
+    {%- else %} — كل المواد{%- endif %}
+  </div>
+  {%- if stage_filter or grade_filter or section_id %}
+  <div class="print-context">
+    {%- if stage_filter %}المرحلة:
+      {%- if stage_filter == 'ابتدائية' %} الابتدائية
+      {%- elif stage_filter == 'متوسطة' %} المتوسطة
+      {%- else %} الإعدادية{%- endif %}
+    {%- endif %}
+    {%- if grade_filter %}
+      {%- if stage_filter %} | {% endif %}الصف:
+      {%- for g in grades %}{% if g.id == grade_filter %} {{ g.name }}{% endif %}{% endfor %}
+    {%- endif %}
+    {%- if section_id %}
+      {%- if stage_filter or grade_filter %} | {% endif %}الشعبة:
+      {%- for sec in sections %}{% if sec.id == section_id %} {{ sec.name }}{% endif %}{% endfor %}
+    {%- endif %}
+  </div>
+  {%- endif %}
   <div class="print-meta">
     {% if active_year %}<span>العام الدراسي: {{ active_year.name }}</span>{% endif %}
     <span>تاريخ الطباعة: <span class="js-print-date"></span></span>
@@ -81,6 +103,7 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
     }
     .print-header .print-school-name { font-size: 18pt; font-weight: 900; color: #1a3a5c; margin: 0 0 4pt; }
     .print-header .print-report-title { font-size: 14pt; font-weight: 700; color: #333; margin: 0 0 4pt; }
+    .print-header .print-context { font-size: 10pt; color: #444; font-weight: 600; margin: 0 0 4pt; }
     .print-header .print-meta { font-size: 9pt; color: #555; display: flex; justify-content: center; gap: 24pt; flex-wrap: wrap; }
 
     /* ── Page layout ── */
