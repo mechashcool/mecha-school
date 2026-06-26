@@ -352,7 +352,9 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
         {{ overall_avg }}%
       </span>
       <span class="text-muted small">
-        ({{ results_view|length }} نتيجة في {{ subject_groups|length }} {% if subject_groups|length == 1 %}مادة{% else %}مواد{% endif %})
+        {{ overall_marks_sum }}/{{ overall_max_sum }}
+        &nbsp;·&nbsp;
+        {{ results_view|length }} نتيجة في {{ subject_groups|length }} {% if subject_groups|length == 1 %}مادة{% else %}مواد{% endif %}
       </span>
     </div>
     {% endif %}
@@ -376,7 +378,8 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
         background:{% if grp.avg >= 60 %}#e8f8f0{% else %}#fef0f0{% endif %};
         color:{% if grp.avg >= 60 %}#1aab6d{% else %}#e03e3e{% endif %};
         font-weight:700;font-size:.85em">
-        متوسط المادة: {{ grp.avg }}%
+        {{ grp.avg }}%
+        <span style="font-weight:500;opacity:.75;font-size:.88em">({{ grp.total_marks }}/{{ grp.total_max }})</span>
       </span>
       {% endif %}
     </div>
@@ -458,6 +461,66 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
   </div>
 </div>
 {% endfor %}
+
+{# ── Single-student: results summary table ── #}
+{% if subject_groups %}
+<div class="card mb-3">
+  <div class="card-header d-flex align-items-center gap-2" style="background:#1a3a5c;color:#fff">
+    <i class="bi bi-bar-chart-fill me-2"></i>
+    <span style="font-weight:700">ملخص النتائج</span>
+  </div>
+  <div class="table-wrapper">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>المادة</th>
+          <th class="text-center">الاختبارات</th>
+          <th class="text-center">مجموع الدرجات</th>
+          <th class="text-center">الدرجة القصوى</th>
+          <th class="text-center">المعدل</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for grp in subject_groups %}
+        <tr>
+          <td class="fw-600">{{ grp.subject_name }}</td>
+          <td class="text-center text-muted">{{ grp.count }}</td>
+          <td class="text-center fw-600">{{ grp.total_marks }}</td>
+          <td class="text-center text-muted">{{ grp.total_max }}</td>
+          <td class="text-center">
+            {% if grp.avg is not none %}
+            <span class="fw-700" style="color:{% if grp.avg >= 60 %}#1aab6d{% else %}#e03e3e{% endif %}">
+              {{ grp.avg }}%
+            </span>
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      {% if overall_avg is not none %}
+      <tfoot>
+        <tr style="font-weight:700;border-top:2px solid #1a3a5c;background:#f0f4f8">
+          <td class="fw-700">الإجمالي</td>
+          <td class="text-center text-muted fw-600">{{ results_view|length }}</td>
+          <td class="text-center fw-700">{{ overall_marks_sum }}</td>
+          <td class="text-center text-muted fw-600">{{ overall_max_sum }}</td>
+          <td class="text-center">
+            <span class="badge px-3 py-2" style="
+              background:{% if overall_avg >= 60 %}#e8f8f0{% else %}#fef0f0{% endif %};
+              color:{% if overall_avg >= 60 %}#1aab6d{% else %}#e03e3e{% endif %};
+              font-weight:700;font-size:.95em">
+              {{ overall_avg }}%
+            </span>
+          </td>
+        </tr>
+      </tfoot>
+      {% endif %}
+    </table>
+  </div>
+</div>
+{% endif %}
 
 {% else %}
 

@@ -1036,6 +1036,8 @@ def report():
     single_student_obj = None
     subject_groups     = []
     overall_avg        = None
+    overall_marks_sum  = 0
+    overall_max_sum    = 0
 
     if results_view:
         unique_sids = {r.student_id for r in results_view}
@@ -1051,29 +1053,42 @@ def report():
                 )
                 sub_map[key].append(r)
 
-            all_valid_pcts = []
+            # avg = sum(marks) / sum(max_marks) × 100 — weighted, not mean of percentages.
+            # This ensures subjects with more exams don't skew the overall unfairly.
+            def _fmt(v):
+                iv = int(v)
+                return iv if iv == v else round(v, 2)
+
+            _all_m  = 0.0
+            _all_mx = 0.0
             for (sub_id, sub_name), sub_results in sorted(
                     sub_map.items(), key=lambda x: x[0][1]):
-                valid_pcts = []
+                _sm  = 0.0
+                _smx = 0.0
                 for r in sub_results:
                     try:
                         mx = float(r.exam.max_marks)
+                        mk = float(r.marks)
                         if mx > 0:
-                            pct = float(r.marks) / mx * 100
-                            valid_pcts.append(pct)
-                            all_valid_pcts.append(pct)
+                            _sm    += mk
+                            _smx   += mx
+                            _all_m  += mk
+                            _all_mx += mx
                     except (TypeError, ValueError):
                         pass
                 subject_groups.append({
                     'subject_id':   sub_id,
                     'subject_name': sub_name,
                     'results':      sub_results,
-                    'avg':          round(sum(valid_pcts) / len(valid_pcts), 1)
-                                    if valid_pcts else None,
+                    'avg':          round(_sm / _smx * 100, 1) if _smx > 0 else None,
+                    'total_marks':  _fmt(_sm),
+                    'total_max':    _fmt(_smx),
                     'count':        len(sub_results),
                 })
-            if all_valid_pcts:
-                overall_avg = round(sum(all_valid_pcts) / len(all_valid_pcts), 1)
+            if _all_mx > 0:
+                overall_avg       = round(_all_m / _all_mx * 100, 1)
+                overall_marks_sum = _fmt(_all_m)
+                overall_max_sum   = _fmt(_all_mx)
 
     exam_types = ExamType.query.all()
     if _is_teacher():
@@ -1087,6 +1102,8 @@ def report():
                            single_student_obj=single_student_obj,
                            subject_groups=subject_groups,
                            overall_avg=overall_avg,
+                           overall_marks_sum=overall_marks_sum,
+                           overall_max_sum=overall_max_sum,
                            exam_types=exam_types,
                            subjects=subjects,
                            available_grades=available_grades,
