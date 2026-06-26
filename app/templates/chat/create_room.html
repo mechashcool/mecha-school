@@ -745,41 +745,28 @@ if (_createRoomForm) {
    Parent scope cascade
 ══════════════════════════════════════════════════════════════ */
 function psUpdateGrades() {
-  var stageF = document.getElementById('psStage').value;
+  var stageF  = document.getElementById('psStage').value;
   var gradeEl = document.getElementById('psGrade');
+  // Always reset grade to "كل الصفوف" when stage changes, then filter options.
+  gradeEl.selectedIndex = 0;
   Array.from(gradeEl.options).forEach(function (opt, i) {
-    if (i === 0) return; // "كل الصفوف"
+    if (i === 0) return;
     opt.hidden = stageF ? (opt.dataset.stage !== stageF) : false;
   });
-  // Reset grade selection if its option is now hidden
-  if (gradeEl.selectedIndex > 0 &&
-      gradeEl.options[gradeEl.selectedIndex].hidden) {
-    gradeEl.selectedIndex = 0;
-  }
   psUpdateSections();
 }
 
 function psUpdateSections() {
-  var stageF = document.getElementById('psStage').value;
-  var gradeF = document.getElementById('psGrade').value;
-  var sectionEl = document.getElementById('psSection');
+  var gradeF     = document.getElementById('psGrade').value;
+  var sectionEl  = document.getElementById('psSection');
+  // Always reset section to "كل الشعب" when grade changes, then filter options.
+  sectionEl.selectedIndex = 0;
   Array.from(sectionEl.options).forEach(function (opt, i) {
-    if (i === 0) return; // "كل الشعب"
-    // A grade selection is the most specific filter; otherwise fall back to the
-    // stage filter so picking a stage alone still narrows the sections shown.
-    if (gradeF) {
-      opt.hidden = (opt.dataset.grade !== gradeF);
-    } else if (stageF) {
-      opt.hidden = (opt.dataset.stage !== stageF);
-    } else {
-      opt.hidden = false;
-    }
+    if (i === 0) return;
+    // Show only the sections belonging to the selected grade;
+    // when no grade is selected, show all sections.
+    opt.hidden = gradeF ? (opt.dataset.grade !== gradeF) : false;
   });
-  // Reset section selection if its option is now hidden
-  if (sectionEl.selectedIndex > 0 &&
-      sectionEl.options[sectionEl.selectedIndex].hidden) {
-    sectionEl.selectedIndex = 0;
-  }
 }
 
 /* ── Cascade listeners ───────────────────── */
