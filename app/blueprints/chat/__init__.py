@@ -342,6 +342,10 @@ def _collect_user_ids(
     elif scope == 'parent_scope':
         # Parents-only hierarchical scope — no teachers added.
         # Level is determined by which field is set: section_id > grade_id > stage > all.
+        # Snapshot the user_ids already present (admins) so the parent count below
+        # reflects UNIQUE parents added, not raw parent_students rows (a parent with
+        # several children in scope must be counted once).
+        _before_parent_uids = set(user_ids)
         if section_id:
             _add_parent_members_only(school_id, int(section_id), user_ids, stats)
         elif grade_id:
@@ -407,6 +411,11 @@ def _collect_user_ids(
                     .distinct().all()
                 )
                 stats['no_parent_students'] += len(all_student_ids) - len(linked_ids)
+
+        # Accurate unique-parent count: everything added during this branch is a
+        # parent (no teachers), so the new user_ids minus the admin snapshot are
+        # exactly the distinct parents added.
+        stats['parents'] = len(user_ids - _before_parent_uids)
 
     _log.info('[chat] _collect_user_ids scope=%s total=%d stats=%s',
               scope, len(user_ids), stats)
