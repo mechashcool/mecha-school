@@ -303,6 +303,9 @@ def index():
     subject_filter   = request.args.get('subject_id', 'all')
     start_date       = request.args.get('start_date', '')
     end_date         = request.args.get('end_date', '')
+    stage_filter     = request.args.get('stage', '').strip()
+    grade_filter     = request.args.get('grade_id', type=int)
+    section_filter   = request.args.get('section_id', type=int)
 
     school = get_current_school()
     year   = get_view_year(school.id) if school else None
@@ -313,11 +316,63 @@ def index():
     if _is_teacher():
         base = _apply_teacher_scope(base)
 
+    # ── Structural cascade filters (stage → grade → section) ─────────────────
+    if section_filter and school and year:
+        sec = Section.query.filter_by(id=section_filter,
+                                      school_id=school.id,
+                                      academic_year_id=year.id).first()
+        base = (base.filter(Exam.section_id == section_filter)
+                if sec else base.filter(Exam.id == -1))
+    elif grade_filter and school and year:
+        sec_ids = [s.id for s in Section.query.filter_by(
+            grade_id=grade_filter, school_id=school.id, academic_year_id=year.id
+        ).all()]
+        base = (base.filter(Exam.section_id.in_(sec_ids))
+                if sec_ids else base.filter(Exam.id == -1))
+    elif stage_filter and school and year:
+        gids = [g.id for g in Grade.query.filter_by(
+            stage=stage_filter, school_id=school.id, academic_year_id=year.id
+        ).all()]
+        if gids:
+            sec_ids = [s.id for s in Section.query.filter(
+                Section.grade_id.in_(gids),
+                Section.school_id == school.id,
+                Section.academic_year_id == year.id,
+            ).all()]
+            base = (base.filter(Exam.section_id.in_(sec_ids))
+                    if sec_ids else base.filter(Exam.id == -1))
+        else:
+            base = base.filter(Exam.id == -1)
+
     exams = _build_exam_query(
         base, search, exam_type_filter, subject_filter, start_date, end_date
     ).order_by(Exam.exam_date.desc()).all()
 
     exam_types = ExamType.query.all()
+
+    # ── Cascade dropdown data ─────────────────────────────────────────────────
+    all_grades   = []
+    all_sections = []
+    stages       = []
+    if school and year:
+        grades_q = Grade.query.filter_by(school_id=school.id, academic_year_id=year.id)
+        if _is_teacher():
+            teacher_sec_ids = get_teacher_section_ids(current_user) or []
+            allowed_grade_sq = (
+                db.session.query(Section.grade_id)
+                .filter(Section.id.in_(teacher_sec_ids))
+                .subquery()
+            )
+            grades_q = grades_q.filter(Grade.id.in_(allowed_grade_sq))
+        all_grades = grades_q.order_by(Grade.name).all()
+        stages     = sorted({g.stage for g in all_grades if g.stage})
+
+        sections_q = Section.query.filter_by(school_id=school.id, academic_year_id=year.id)
+        if _is_teacher():
+            sections_q = sections_q.filter(Section.id.in_(
+                get_teacher_section_ids(current_user) or []))
+        all_sections = sections_q.order_by(Section.name).all()
+
     if _is_teacher():
         subject_ids = _teacher_subject_ids()
         subjects = Subject.query.filter(Subject.id.in_(subject_ids)).all() if subject_ids else []
@@ -328,11 +383,17 @@ def index():
                            exams=exams,
                            exam_types=exam_types,
                            subjects=subjects,
+                           all_grades=all_grades,
+                           all_sections=all_sections,
+                           stages=stages,
                            search=search,
                            exam_type_filter=exam_type_filter,
                            subject_filter=subject_filter,
                            start_date=start_date,
-                           end_date=end_date)
+                           end_date=end_date,
+                           stage_filter=stage_filter,
+                           grade_filter=grade_filter,
+                           section_filter=section_filter)
 
 
 @grades_bp.route('/export/excel')
@@ -347,10 +408,46 @@ def export_excel():
     subject_filter   = request.args.get('subject_id', 'all')
     start_date       = request.args.get('start_date', '')
     end_date         = request.args.get('end_date', '')
+    stage_filter     = request.args.get('stage', '').strip()
+    grade_filter     = request.args.get('grade_id', type=int)
+    section_filter   = request.args.get('section_id', type=int)
+
+    school = get_current_school()
+    year   = get_view_year(school.id) if school else None
 
     base = Exam.query
+    if year:
+        base = base.filter(Exam.academic_year_id == year.id)
     if _is_teacher():
         base = _apply_teacher_scope(base)
+
+    # ── Structural cascade filters (mirrors index view) ───────────────────────
+    if section_filter and school and year:
+        sec = Section.query.filter_by(id=section_filter,
+                                      school_id=school.id,
+                                      academic_year_id=year.id).first()
+        base = (base.filter(Exam.section_id == section_filter)
+                if sec else base.filter(Exam.id == -1))
+    elif grade_filter and school and year:
+        sec_ids = [s.id for s in Section.query.filter_by(
+            grade_id=grade_filter, school_id=school.id, academic_year_id=year.id
+        ).all()]
+        base = (base.filter(Exam.section_id.in_(sec_ids))
+                if sec_ids else base.filter(Exam.id == -1))
+    elif stage_filter and school and year:
+        gids = [g.id for g in Grade.query.filter_by(
+            stage=stage_filter, school_id=school.id, academic_year_id=year.id
+        ).all()]
+        if gids:
+            sec_ids = [s.id for s in Section.query.filter(
+                Section.grade_id.in_(gids),
+                Section.school_id == school.id,
+                Section.academic_year_id == year.id,
+            ).all()]
+            base = (base.filter(Exam.section_id.in_(sec_ids))
+                    if sec_ids else base.filter(Exam.id == -1))
+        else:
+            base = base.filter(Exam.id == -1)
 
     exams = _build_exam_query(
         base, search, exam_type_filter, subject_filter, start_date, end_date

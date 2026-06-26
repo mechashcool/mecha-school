@@ -156,7 +156,7 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
 <div class="page-header">
   <div><h1 class="page-title">الاختبارات والدرجات</h1></div>
   <div class="d-flex gap-2">
-    <a href="{{ url_for('grades.export_excel', q=search, exam_type=exam_type_filter, subject_id=subject_filter, start_date=start_date, end_date=end_date) }}"
+    <a href="{{ url_for('grades.export_excel', q=search, exam_type=exam_type_filter, subject_id=subject_filter, start_date=start_date, end_date=end_date, stage=stage_filter, grade_id=grade_filter or '', section_id=section_filter or '') }}"
        class="btn btn-outline-success">
       <i class="bi bi-file-earmark-excel-fill me-1"></i>تصدير Excel
     </a>
@@ -180,8 +180,45 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
 <div class="card mb-4">
   <div class="card-body py-3">
     <form method="GET" class="row g-2 align-items-end">
-      <div class="col-md-2">
-        <label class="form-label">المادة</label>
+
+      {# ── Row 1: Academic cascade filters ── #}
+      <div class="col-6 col-md-3">
+        <label class="form-label fw-600 small">المرحلة</label>
+        <select name="stage" class="form-select" id="idxStage">
+          <option value="">كل المراحل</option>
+          {% for st in stages %}
+          <option value="{{ st }}" {% if stage_filter == st %}selected{% endif %}>
+            {% if st == 'ابتدائية' %}الابتدائية
+            {% elif st == 'متوسطة' %}المتوسطة
+            {% else %}الإعدادية{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label fw-600 small">الصف</label>
+        <select name="grade_id" class="form-select" id="idxGrade">
+          <option value="">كل الصفوف</option>
+          {% for g in all_grades %}
+          <option value="{{ g.id }}" data-stage="{{ g.stage or '' }}"
+                  {% if grade_filter == g.id %}selected{% endif %}>{{ g.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label fw-600 small">الشعبة</label>
+        <select name="section_id" class="form-select" id="idxSection">
+          <option value="">كل الشعب</option>
+          {% for sec in all_sections %}
+          <option value="{{ sec.id }}" data-grade-id="{{ sec.grade_id }}"
+                  {% if section_filter == sec.id %}selected{% endif %}>
+            {{ sec.grade.name }} — {{ sec.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label small">المادة</label>
         <select name="subject_id" class="form-select">
           <option value="all" {% if subject_filter == 'all' %}selected{% endif %}>كل المواد</option>
           {% for subj in subjects %}
@@ -189,8 +226,10 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-2">
-        <label class="form-label">الفئة</label>
+
+      {# ── Row 2: Refinement filters + submit ── #}
+      <div class="col-6 col-md-2">
+        <label class="form-label small">الفئة</label>
         <select name="exam_type" class="form-select">
           <option value="all" {% if exam_type_filter == 'all' %}selected{% endif %}>كل الفئات</option>
           {% for et in exam_types %}
@@ -198,27 +237,63 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-2">
-        <label class="form-label">من تاريخ</label>
+      <div class="col-6 col-md-2">
+        <label class="form-label small">من تاريخ</label>
         <input type="date" name="start_date" class="form-control" value="{{ start_date }}">
       </div>
-      <div class="col-md-2">
-        <label class="form-label">إلى تاريخ</label>
+      <div class="col-6 col-md-2">
+        <label class="form-label small">إلى تاريخ</label>
         <input type="date" name="end_date" class="form-control" value="{{ end_date }}">
       </div>
-      <div class="col-md-2">
-        <label class="form-label">بحث باسم الاختبار</label>
+      <div class="col-6 col-md-4">
+        <label class="form-label small">بحث باسم الاختبار</label>
         <input type="text" name="q" class="form-control" placeholder="مثلاً: الامتحان النهائي" value="{{ search }}">
       </div>
-      <div class="col-md-2 d-flex gap-2">
+      <div class="col-12 col-md-2 d-flex gap-2">
         <button class="btn btn-primary flex-grow-1"><i class="bi bi-search me-1"></i>تصفية</button>
         <a href="{{ url_for('grades.index') }}" class="btn btn-outline-secondary" title="إعادة تعيين">
           <i class="bi bi-x-lg"></i>
         </a>
       </div>
+
     </form>
   </div>
 </div>
+
+<script>
+(function () {
+  var stageEl   = document.getElementById('idxStage');
+  var gradeEl   = document.getElementById('idxGrade');
+  var sectionEl = document.getElementById('idxSection');
+
+  var gradeOpts   = Array.from(gradeEl.options).slice(1);
+  var sectionOpts = Array.from(sectionEl.options).slice(1);
+
+  function filterGrades() {
+    var stage = stageEl.value;
+    for (var i = 0; i < gradeOpts.length; i++) {
+      gradeOpts[i].hidden = stage ? gradeOpts[i].dataset.stage !== stage : false;
+    }
+    var sel = gradeEl.selectedOptions[0];
+    if (sel && sel.hidden) gradeEl.value = '';
+    filterSections();
+  }
+
+  function filterSections() {
+    var gradeId = gradeEl.value;
+    for (var i = 0; i < sectionOpts.length; i++) {
+      sectionOpts[i].hidden = gradeId ? sectionOpts[i].dataset.gradeId !== gradeId : false;
+    }
+    var sel = sectionEl.selectedOptions[0];
+    if (sel && sel.hidden) sectionEl.value = '';
+  }
+
+  stageEl.addEventListener('change', filterGrades);
+  gradeEl.addEventListener('change', filterSections);
+
+  filterGrades();
+})();
+</script>
 
 {# ── Exam list table ── #}
 <div class="card">
