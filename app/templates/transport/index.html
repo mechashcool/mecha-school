@@ -26,8 +26,14 @@
     <form method="GET" class="d-flex align-items-end gap-3 flex-wrap">
       <div>
         <label class="form-label mb-1 fw-600">اسم الخط</label>
-        <input type="text" name="name" class="form-control" style="width:220px"
-               value="{{ name_f }}" placeholder="البحث باسم الخط...">
+        <select name="route_id" class="form-select" style="width:220px">
+          <option value="">كل الخطوط</option>
+          {% for r in all_routes %}
+          <option value="{{ r.id }}" {% if route_id_f == r.id %}selected{% endif %}>
+            {{ r.name }}
+          </option>
+          {% endfor %}
+        </select>
       </div>
       <div>
         <label class="form-label mb-1 fw-600">الحالة</label>
@@ -41,7 +47,7 @@
         <button type="submit" class="btn btn-primary">
           <i class="bi bi-search me-1"></i>بحث
         </button>
-        {% if name_f or status_f != 'all' %}
+        {% if route_id_f or status_f != 'all' %}
         <a href="{{ url_for('transport.index') }}" class="btn btn-outline-secondary">
           <i class="bi bi-x-circle me-1"></i>إعادة تعيين
         </a>

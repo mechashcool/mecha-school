@@ -38,17 +38,24 @@ def _scope_route(route_id):
 @login_required
 @permission_required('manage_transport')
 def index():
-    school    = get_current_school()
-    status_f  = request.args.get('status', 'all')
-    name_f    = request.args.get('name', '').strip()
+    school      = get_current_school()
+    status_f    = request.args.get('status', 'all')
+    route_id_f  = request.args.get('route_id', type=int)
 
+    # All routes for the dropdown (unfiltered by status/id, scoped to school)
+    all_routes_q = TransportRoute.query
+    if school:
+        all_routes_q = all_routes_q.filter_by(school_id=school.id)
+    all_routes = all_routes_q.order_by(TransportRoute.name).all()
+
+    # Displayed routes — apply status and optional route-id filter
     query = TransportRoute.query
     if school:
         query = query.filter_by(school_id=school.id)
     if status_f != 'all':
         query = query.filter_by(status=status_f)
-    if name_f:
-        query = query.filter(TransportRoute.name.ilike(f'%{name_f}%'))
+    if route_id_f:
+        query = query.filter_by(id=route_id_f)
     routes = query.order_by(TransportRoute.name).all()
 
     # Active student count per route (one query with GROUP BY)
@@ -70,7 +77,8 @@ def index():
 
     return render_template('transport/index.html',
                            routes=routes, counts=counts,
-                           status_f=status_f, name_f=name_f)
+                           all_routes=all_routes,
+                           status_f=status_f, route_id_f=route_id_f)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
