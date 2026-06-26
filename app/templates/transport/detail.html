@@ -44,9 +44,19 @@
     </div>
   </div>
   <div class="col-6 col-md-3">
-    <div class="card text-center py-3">
-      <div style="font-size:28px;font-weight:800;color:#e8a020">{{ route.capacity }}</div>
+    <div class="card text-center py-3"
+         style="{% if is_full %}border-color:#f5c6cb;background:#fff8f8{% endif %}">
+      <div style="font-size:28px;font-weight:800;color:{% if is_full %}#c0392b{% else %}#e8a020{% endif %}">
+        {{ route.capacity }}
+      </div>
       <div class="text-muted" style="font-size:13px">الطاقة الاستيعابية</div>
+      {% if is_full %}
+      <div class="mt-1">
+        <span class="badge" style="background:#fde8e8;color:#c0392b;font-size:11px">ممتلئ</span>
+      </div>
+      {% else %}
+      <div style="font-size:11px;color:#888;margin-top:2px">متاح {{ available_seats }} مقعد</div>
+      {% endif %}
     </div>
   </div>
   <div class="col-6 col-md-3">
@@ -89,7 +99,12 @@
         {{ info_row('رقم المركبة', route.vehicle_number) }}
         <div class="d-flex justify-content-between border-bottom py-2">
           <span class="text-muted">الطاقة الاستيعابية</span>
-          <span class="fw-600">{{ route.capacity }} مقعد</span>
+          <span class="fw-600">
+            {{ active_count }} / {{ route.capacity }} مقعد
+            {% if is_full %}
+            <span class="badge ms-1" style="background:#fde8e8;color:#c0392b;font-size:10px">ممتلئ</span>
+            {% endif %}
+          </span>
         </div>
         <div class="d-flex justify-content-between pt-2">
           <span class="text-muted">الحالة</span>
@@ -126,10 +141,22 @@
   <div class="col-lg-8">
 
     {# ── Add student card ─────────────────────────────────────────────────────── #}
-    {% if not is_historical_year and available_students %}
+    {% if not is_historical_year %}
+
+    {% if is_full %}
+    <div class="alert alert-danger mb-4" style="font-size:13px">
+      <i class="bi bi-exclamation-circle-fill me-1"></i>
+      <strong>الخط ممتلئ</strong> — تم الوصول إلى الطاقة الاستيعابية
+      ({{ active_count }} / {{ route.capacity }}).
+      لا يمكن إضافة طلاب جدد حتى يتم تقليل عدد المشتركين أو زيادة
+      <a href="{{ url_for('transport.edit', route_id=route.id) }}">الطاقة الاستيعابية</a>.
+    </div>
+
+    {% elif available_students %}
     <div class="card mb-4">
-      <div class="card-header">
-        <i class="bi bi-person-plus-fill text-accent me-1"></i>ربط طالب بالخط
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-person-plus-fill text-accent me-1"></i>ربط طالب بالخط</span>
+        <small class="text-muted">المقاعد المتاحة: {{ available_seats }}</small>
       </div>
       <div class="card-body">
         <form method="POST"
@@ -215,11 +242,13 @@
       </div>
     </div>
 
-    {% elif not is_historical_year and not available_students %}
+    {% else %}
     <div class="alert alert-info mb-4 py-2" style="font-size:13px">
       <i class="bi bi-info-circle me-1"></i>
       لا يوجد طلاب متاحون للإضافة — جميع الطلاب النشطين إما مضافون لهذا الخط أو لديهم اشتراك فعّال في خط نقل آخر.
     </div>
+    {% endif %}
+
     {% endif %}
 
     {# ── Linked students table ──────────────────────────────────────────────── #}

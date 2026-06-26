@@ -40,12 +40,15 @@ def _scope_route(route_id):
 def index():
     school    = get_current_school()
     status_f  = request.args.get('status', 'all')
+    name_f    = request.args.get('name', '').strip()
 
     query = TransportRoute.query
     if school:
         query = query.filter_by(school_id=school.id)
     if status_f != 'all':
         query = query.filter_by(status=status_f)
+    if name_f:
+        query = query.filter(TransportRoute.name.ilike(f'%{name_f}%'))
     routes = query.order_by(TransportRoute.name).all()
 
     # Active student count per route (one query with GROUP BY)
@@ -66,7 +69,8 @@ def index():
         counts = {}
 
     return render_template('transport/index.html',
-                           routes=routes, counts=counts, status_f=status_f)
+                           routes=routes, counts=counts,
+                           status_f=status_f, name_f=name_f)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -148,9 +152,16 @@ def detail(route_id):
         avail_q = avail_q.filter(~Student.id.in_(active_in_other))
     available_students = avail_q.order_by(Student.full_name).all()
 
+    active_count    = sum(1 for lk in links if lk.status == 'active')
+    available_seats = max(0, route.capacity - active_count)
+    is_full         = active_count >= route.capacity
+
     return render_template('transport/detail.html',
                            route=route, links=links,
-                           available_students=available_students)
+                           available_students=available_students,
+                           active_count=active_count,
+                           available_seats=available_seats,
+                           is_full=is_full)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -167,6 +178,16 @@ def edit(route_id):
     if request.method == 'POST':
         fd = request.form
         errors = _validate_form(fd)
+        if not errors:
+            new_cap = int(fd['capacity'])
+            active_count = (StudentTransport.query
+                            .filter_by(route_id=route_id, status='active')
+                            .count())
+            if new_cap < active_count:
+                errors.append(
+                    f'لا يمكن تقليل الطاقة الاستيعابية إلى أقل من عدد الطلبة المشتركين حالياً '
+                    f'({active_count} طالب فعّال).'
+                )
         if not errors:
             route.name           = fd['name'].strip()
             route.route_number   = fd.get('route_number', '').strip() or None
@@ -281,6 +302,18 @@ def add_student(route_id):
             )
             return redirect(url_for('transport.detail', route_id=route_id))
 
+    # Capacity enforcement: only active subscriptions count against capacity
+    if sub_status == 'active':
+        active_count = (StudentTransport.query
+                        .filter_by(route_id=route_id, status='active')
+                        .count())
+        if active_count >= route.capacity:
+            flash(
+                'لا يمكن إضافة الطالب، تم الوصول إلى الطاقة الاستيعابية لهذا الخط.',
+                'danger',
+            )
+            return redirect(url_for('transport.detail', route_id=route_id))
+
     start_date = None
     if start_date_str:
         try:
@@ -342,6 +375,19 @@ def toggle_student(link_id):
     if school and link.school_id != school.id:
         abort(403)
 
+    if link.status == 'inactive':
+        # Activating — enforce capacity before switching
+        tr = TransportRoute.query.get(link.route_id)
+        if tr:
+            active_count = (StudentTransport.query
+                            .filter_by(route_id=link.route_id, status='active')
+                            .count())
+            if active_count >= tr.capacity:
+                flash(
+                    'لا يمكن تفعيل اشتراك الطالب، تم الوصول إلى الطاقة الاستيعابية لهذا الخط.',
+                    'danger',
+                )
+                return redirect(url_for('transport.detail', route_id=link.route_id))
     link.status = 'inactive' if link.status == 'active' else 'active'
     db.session.commit()
     label = 'فعّال' if link.status == 'active' else 'متوقف'

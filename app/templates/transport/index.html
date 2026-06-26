@@ -20,18 +20,32 @@
   </div>
 </div>
 
-{# ── Status filter ──────────────────────────────────────────────────────── #}
+{# ── Filters ────────────────────────────────────────────────────────────── #}
 <div class="card mb-4">
   <div class="card-body py-3">
     <form method="GET" class="d-flex align-items-end gap-3 flex-wrap">
       <div>
+        <label class="form-label mb-1 fw-600">اسم الخط</label>
+        <input type="text" name="name" class="form-control" style="width:220px"
+               value="{{ name_f }}" placeholder="البحث باسم الخط...">
+      </div>
+      <div>
         <label class="form-label mb-1 fw-600">الحالة</label>
-        <select name="status" class="form-select" style="width:160px"
-                onchange="this.form.submit()">
+        <select name="status" class="form-select" style="width:160px">
           <option value="all"      {% if status_f == 'all'      %}selected{% endif %}>كل الخطوط</option>
           <option value="active"   {% if status_f == 'active'   %}selected{% endif %}>فعّال فقط</option>
           <option value="inactive" {% if status_f == 'inactive' %}selected{% endif %}>متوقف فقط</option>
         </select>
+      </div>
+      <div class="d-flex gap-2 align-items-end">
+        <button type="submit" class="btn btn-primary">
+          <i class="bi bi-search me-1"></i>بحث
+        </button>
+        {% if name_f or status_f != 'all' %}
+        <a href="{{ url_for('transport.index') }}" class="btn btn-outline-secondary">
+          <i class="bi bi-x-circle me-1"></i>إعادة تعيين
+        </a>
+        {% endif %}
       </div>
       <small class="text-muted align-self-center">
         {{ routes|length }} خط
@@ -59,10 +73,26 @@
             {% if route.route_number %}
             <div class="text-muted" style="font-size:12px">رقم الخط: {{ route.route_number }}</div>
             {% endif %}
-            <span class="badge mt-1"
-                  style="background:{% if route.status == 'active' %}#e8f8f0;color:#1aab6d{% else %}#f0f0f0;color:#888{% endif %}">
-              {% if route.status == 'active' %}فعّال{% else %}متوقف{% endif %}
-            </span>
+            <div class="d-flex flex-wrap gap-1 mt-1">
+              <span class="badge"
+                    style="background:{% if route.status == 'active' %}#e8f8f0;color:#1aab6d{% else %}#f0f0f0;color:#888{% endif %}">
+                {% if route.status == 'active' %}فعّال{% else %}متوقف{% endif %}
+              </span>
+              {% set route_active = counts.get(route.id, 0) %}
+              {% if route_active >= route.capacity %}
+              <span class="badge" style="background:#fde8e8;color:#c0392b">
+                <i class="bi bi-exclamation-circle-fill me-1"></i>ممتلئ
+              </span>
+              {% elif route.capacity - route_active <= 3 %}
+              <span class="badge" style="background:#fff3cd;color:#856404">
+                متاح {{ route.capacity - route_active }} مقعد
+              </span>
+              {% else %}
+              <span class="badge" style="background:#e8f8f0;color:#1aab6d">
+                متاح {{ route.capacity - route_active }} مقعد
+              </span>
+              {% endif %}
+            </div>
           </div>
         </div>
 
@@ -96,7 +126,7 @@
             <div class="fw-600">{{ route.vehicle_number }}</div>
           </div>
           <div class="col-6">
-            <div class="text-muted">الطاقة / المشتركون</div>
+            <div class="text-muted">الطلبة</div>
             <div class="fw-600">
               {{ counts.get(route.id, 0) }}
               <span class="text-muted">/ {{ route.capacity }}</span>
