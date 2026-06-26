@@ -71,8 +71,6 @@ var SECTIONS_PREVIEW_URL = "{{ url_for('chat.sections_preview') }}";
                 <option value="grade">صف كامل</option>
                 <option value="stage">مرحلة دراسية</option>
                 <option value="school">المدرسة كاملاً</option>
-                <option value="subject">مادة دراسية</option>
-                <option value="announcement">المدرسة كاملاً (إعلاني)</option>
                 <option value="custom">اختيار يدوي</option>
               </select>
             </div>
@@ -194,17 +192,6 @@ var SECTIONS_PREVIEW_URL = "{{ url_for('chat.sections_preview') }}";
               <input type="text" name="stage" class="form-control"
                      placeholder="مثال: primary / middle / high">
               {% endif %}
-            </div>
-
-            {# ══ SUBJECT ══════════════════════════════════════ #}
-            <div id="subjectField" class="col-md-6 scope-field d-none">
-              <label class="form-label">المادة الدراسية</label>
-              <select name="subject_id" class="form-select">
-                <option value="">— اختر —</option>
-                {% for subj in subjects %}
-                <option value="{{ subj.id }}">{{ subj.name }}</option>
-                {% endfor %}
-              </select>
             </div>
 
             {# ══ PARENT SCOPE (hierarchical) — default scope ══ #}
@@ -478,7 +465,6 @@ function updateScopeFields() {
     'section':       'sectionField',
     'grade':         'gradeField',
     'stage':         'stageField',
-    'subject':       'subjectField',
     'custom':        'customField',
   };
   var target = map[scope];
