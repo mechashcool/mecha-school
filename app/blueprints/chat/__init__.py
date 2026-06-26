@@ -412,6 +412,21 @@ def _collect_user_ids(
         # exactly the distinct parents added.
         stats['parents'] = len(user_ids - _before_parent_uids)
 
+    elif scope == 'teachers':
+        # All active teachers for the school only — no parents, no students.
+        emps = (
+            Employee.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(school_id=school_id, status='active')
+            .all()
+        )
+        for emp in emps:
+            if emp.user_id:
+                user_ids.add(emp.user_id)
+                stats['teachers'] += 1
+        _log.info('[chat] scope=teachers school=%s teachers_found=%d',
+                  school_id, stats['teachers'])
+
     _log.info('[chat] _collect_user_ids scope=%s total=%d stats=%s',
               scope, len(user_ids), stats)
     return user_ids, stats
@@ -943,7 +958,7 @@ def create_room():
                   f'(مشرفون: {stats["admins"]} — معلمون: {stats["teachers"]} — '
                   f'أولياء أمور: {stats["parents"]}).', 'success')
 
-        if stats['parents'] == 0 and scope not in ('custom',):
+        if stats['parents'] == 0 and scope not in ('custom', 'teachers'):
             flash('تنبيه: لم يتم العثور على أولياء أمور مرتبطين بالنطاق المحدد. '
                   'تحقق من ربط أولياء الأمور بطلابهم في النظام.', 'warning')
         elif stats.get('no_parent_students', 0) > 0:
@@ -1479,7 +1494,7 @@ def rebuild_members(room_id):
               f'(مشرفون: {stats["admins"]} — معلمون: {stats["teachers"]} — '
               f'أولياء أمور: {stats["parents"]}).', 'success')
 
-    if stats['parents'] == 0 and room.scope not in ('custom',):
+    if stats['parents'] == 0 and room.scope not in ('custom', 'teachers'):
         flash('تنبيه: لم يتم العثور على أولياء أمور مرتبطين بالنطاق المحدد. '
               'تحقق من ربط أولياء الأمور بطلابهم في النظام.', 'warning')
     elif stats.get('no_parent_students', 0) > 0:

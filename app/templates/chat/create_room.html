@@ -67,9 +67,7 @@ var SECTIONS_PREVIEW_URL = "{{ url_for('chat.sections_preview') }}";
                       onchange="updateScopeFields()">
                 <option value="parent_scope">أولياء الأمور حسب النطاق الأكاديمي (مُوصى)</option>
                 <option value="multi_section">شعبات متعددة (معلمون + أولياء أمور)</option>
-                <option value="section">شعبة واحدة</option>
-                <option value="grade">صف كامل</option>
-                <option value="stage">مرحلة دراسية</option>
+                <option value="teachers">المعلمون</option>
                 <option value="school">المدرسة كاملاً</option>
                 <option value="custom">اختيار يدوي</option>
               </select>
@@ -148,50 +146,6 @@ var SECTIONS_PREVIEW_URL = "{{ url_for('chat.sections_preview') }}";
               <div id="previewLoading" class="text-center text-muted py-3 small" style="display:none">
                 <div class="spinner-border spinner-border-sm me-2" role="status"></div>جاري حساب الأعضاء...
               </div>
-            </div>
-
-            {# ══ SINGLE SECTION ═══════════════════════════════ #}
-            <div id="sectionField" class="col-md-6 scope-field d-none">
-              <label class="form-label">الشعبة</label>
-              <select name="section_id" class="form-select">
-                <option value="">— اختر —</option>
-                {% for item in grades_tree %}
-                  {% if item.sections %}
-                  <optgroup label="{{ item.grade.name }}">
-                    {% for sec in item.sections %}
-                    <option value="{{ sec.id }}">{{ sec.name }}</option>
-                    {% endfor %}
-                  </optgroup>
-                  {% endif %}
-                {% endfor %}
-              </select>
-            </div>
-
-            {# ══ GRADE ════════════════════════════════════════ #}
-            <div id="gradeField" class="col-md-6 scope-field d-none">
-              <label class="form-label">الصف</label>
-              <select name="grade_id" class="form-select">
-                <option value="">— اختر —</option>
-                {% for item in grades_tree %}
-                <option value="{{ item.grade.id }}">{{ item.grade.name }}</option>
-                {% endfor %}
-              </select>
-            </div>
-
-            {# ══ STAGE ════════════════════════════════════════ #}
-            <div id="stageField" class="col-md-6 scope-field d-none">
-              <label class="form-label">المرحلة الدراسية</label>
-              {% if stages %}
-              <select name="stage" class="form-select">
-                <option value="">— اختر —</option>
-                {% for st in stages %}
-                <option value="{{ st }}">{{ st }}</option>
-                {% endfor %}
-              </select>
-              {% else %}
-              <input type="text" name="stage" class="form-control"
-                     placeholder="مثال: primary / middle / high">
-              {% endif %}
             </div>
 
             {# ══ PARENT SCOPE (hierarchical) — default scope ══ #}
@@ -333,11 +287,8 @@ var SECTIONS_PREVIEW_URL = "{{ url_for('chat.sections_preview') }}";
           <ul class="mb-3 ps-3">
             <li class="mb-1"><b>أولياء الأمور حسب النطاق (مُوصى):</b> اختر مرحلة ← صف ← شعبة. كل اختيار "كل..." يوسّع النطاق. يضيف أولياء أمور الطلاب المطابقين فقط (للسنة الدراسية الحالية) دون معلمين.</li>
             <li class="mb-1"><b>شعبات متعددة:</b> اختر شعبتين أو أكثر يدوياً — معلمون + أولياء أمور بدون تكرار</li>
-            <li class="mb-1"><b>شعبة:</b> أولياء أمور الطلاب + معلمو الشعبة</li>
-            <li class="mb-1"><b>صف:</b> جميع شعب الصف + معلموها + أولياء أمورها</li>
-            <li class="mb-1"><b>مرحلة:</b> كل صفوف المرحلة وشعبها</li>
-            <li class="mb-1"><b>مادة:</b> معلمو المادة + أولياء أمور طلابهم</li>
-            <li class="mb-1"><b>المدرسة:</b> جميع المستخدمين النشطين</li>
+            <li class="mb-1"><b>المعلمون:</b> جميع المعلمين النشطين في المدرسة فقط، دون أولياء أمور أو طلاب.</li>
+            <li class="mb-1"><b>المدرسة:</b> جميع المستخدمين النشطين (معلمون + أولياء أمور)</li>
             <li class="mb-1"><b>اختيار يدوي:</b> حدد الأعضاء بنفسك</li>
           </ul>
           <div class="alert alert-info py-2 mb-0" style="font-size:12px">
@@ -462,9 +413,6 @@ function updateScopeFields() {
   var map = {
     'multi_section': 'multiSectionField',
     'parent_scope':  'parentScopeField',
-    'section':       'sectionField',
-    'grade':         'gradeField',
-    'stage':         'stageField',
     'custom':        'customField',
   };
   var target = map[scope];
