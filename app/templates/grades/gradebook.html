@@ -26,6 +26,8 @@
     {%- if section_id %}
       {%- if stage_filter or grade_filter %} | {% endif %}الشعبة:
       {%- for sec in sections %}{% if sec.id == section_id %} {{ sec.name }}{% endif %}{% endfor %}
+    {%- elif multi_section %}
+      {%- if stage_filter or grade_filter %} | {% endif %}الشعبة: كل الشعب
     {%- endif %}
   </div>
   {%- endif %}
@@ -182,9 +184,11 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
 <div class="page-header">
   <div><h1 class="page-title">كشف الدرجات الشامل</h1></div>
   <div class="d-flex gap-2">
-    {% if section_id and exams %}
+    {% if (section_id or grade_filter) and exams %}
     <a href="{{ url_for('grades.gradebook_export',
-                        section_id=section_id,
+                        section_id=section_id or '',
+                        grade_id=grade_filter or '',
+                        stage=stage_filter,
                         subject_id=subject_filter,
                         exam_type=exam_type_filter,
                         start_date=start_date,
@@ -232,9 +236,9 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
         </select>
       </div>
       <div class="col-6 col-md-3">
-        <label class="form-label fw-600 small">الشعبة <span class="text-danger">*</span></label>
+        <label class="form-label fw-600 small">الشعبة</label>
         <select name="section_id" class="form-select" id="gbSection">
-          <option value="">— اختر الشعبة —</option>
+          <option value="">كل الشعب</option>
           {% for sec in sections %}
           <option value="{{ sec.id }}" data-grade-id="{{ sec.grade_id }}"
                   {% if section_id == sec.id %}selected{% endif %}>
@@ -290,11 +294,11 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
 </div>
 
 {# ── Content area ────────────────────────────────────────────────────────── #}
-{% if not section_id %}
+{% if not section_id and not grade_filter %}
 <div class="card">
   <div class="card-body text-center text-muted py-5">
     <i class="bi bi-grid-3x3-gap" style="font-size:48px;opacity:.25;display:block;margin-bottom:12px"></i>
-    <p class="mb-0">اختر الشعبة لعرض كشف الدرجات الشامل</p>
+    <p class="mb-0">اختر الصف أو الشعبة ثم اضغط بحث لعرض كشف الدرجات</p>
   </div>
 </div>
 
@@ -344,6 +348,7 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
           <th class="col-fixed">#</th>
           <th class="col-fixed">اسم الطالب</th>
           <th class="col-fixed">رقم الطالب</th>
+          {% if multi_section %}<th>الشعبة</th>{% endif %}
           {% for exam in exams %}
           <th class="exam-col-header">
             {{ exam.display_name }}
@@ -363,6 +368,7 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
           <td class="col-fixed text-muted">{{ loop.index }}</td>
           <td class="col-fixed fw-600">{{ row.student.full_name }}</td>
           <td class="col-fixed"><code>{{ row.student.student_id }}</code></td>
+          {% if multi_section %}<td class="text-muted" style="white-space:nowrap;font-size:12px">{{ row.section.name if row.section else '—' }}</td>{% endif %}
 
           {% for cell in row.cells %}
           {% set exam = exams[loop.index0] %}
@@ -395,8 +401,8 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
         </tr>
         {% else %}
         <tr>
-          <td colspan="{{ exams|length + 4 }}" class="text-center text-muted py-4">
-            لا يوجد طلاب في هذه الشعبة
+          <td colspan="{{ exams|length + 4 + (1 if multi_section else 0) }}" class="text-center text-muted py-4">
+            لا يوجد طلاب في هذا الصف
           </td>
         </tr>
         {% endfor %}
@@ -431,7 +437,8 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
   function filterSections() {
     const gradeId = gradeEl.value;
     for (const opt of sectionOpts) {
-      opt.hidden = gradeId ? opt.dataset.gradeId !== gradeId : false;
+      // hide all sections until a grade is chosen; then show only that grade's sections
+      opt.hidden = gradeId ? opt.dataset.gradeId !== gradeId : true;
     }
     const sel = sectionEl.selectedOptions[0];
     if (sel && sel.hidden) sectionEl.value = '';

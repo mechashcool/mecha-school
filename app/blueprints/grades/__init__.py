@@ -631,7 +631,51 @@ def _pivot_data(section_id, subject_filter, exam_type_filter, start_date, end_da
             )
         else:
             avg = None
-        rows.append({'student': student, 'cells': cells, 'avg': avg, 'taken': len(taken)})
+        rows.append({'student': student, 'cells': cells, 'avg': avg, 'taken': len(taken),
+                     'section': student.section})
+
+    return exams, rows
+
+
+def _pivot_data_multi(section_ids, subject_filter, exam_type_filter, start_date, end_date):
+    """Grade-level pivot: same structure as _pivot_data but across all given section IDs."""
+    if not section_ids:
+        return [], []
+
+    base = Exam.query.filter(Exam.section_id.in_(section_ids))
+    exams = _build_exam_query(
+        base, '', exam_type_filter, subject_filter, start_date, end_date
+    ).order_by(Exam.section_id.asc(), Exam.exam_date.asc(), Exam.id.asc()).all()
+
+    rows = []
+    if not exams:
+        return exams, rows
+
+    exam_ids    = [e.id for e in exams]
+    students    = (Student.query
+                   .filter(Student.section_id.in_(section_ids), Student.status == 'active')
+                   .order_by(Student.section_id.asc(), Student.full_name.asc())
+                   .all())
+    student_ids = [s.id for s in students]
+
+    all_results = (ExamResult.query
+                   .filter(ExamResult.exam_id.in_(exam_ids),
+                           ExamResult.student_id.in_(student_ids))
+                   .all())
+    lookup = {(r.student_id, r.exam_id): r for r in all_results}
+
+    for student in students:
+        cells = [lookup.get((student.id, e.id)) for e in exams]
+        taken = [(c, exams[i]) for i, c in enumerate(cells) if c is not None]
+        if taken:
+            avg = round(
+                sum(float(c.marks) / float(e.max_marks) * 100 for c, e in taken)
+                / len(taken), 1
+            )
+        else:
+            avg = None
+        rows.append({'student': student, 'cells': cells, 'avg': avg, 'taken': len(taken),
+                     'section': student.section})
 
     return exams, rows
 
@@ -694,9 +738,23 @@ def gradebook():
 
     exams, rows = [], []
     stats = {}
+    multi_section = False
+
     if section_id:
         exams, rows = _pivot_data(section_id, subject_filter, exam_type_filter,
                                   start_date, end_date)
+    elif grade_filter:
+        # "كل الشعب" — all sections for the selected grade visible to this user
+        grade_sec_ids = [s.id for s in sections]
+        if _is_teacher():
+            allowed_set = set(get_teacher_section_ids(current_user) or [])
+            grade_sec_ids = [sid for sid in grade_sec_ids if sid in allowed_set]
+        if grade_sec_ids:
+            multi_section = True
+            exams, rows = _pivot_data_multi(grade_sec_ids, subject_filter,
+                                            exam_type_filter, start_date, end_date)
+
+    if exams or rows:
         with_avg = [r for r in rows if r['avg'] is not None]
         stats = {
             'n_students': len(rows),
@@ -716,7 +774,8 @@ def gradebook():
                            start_date=start_date,
                            end_date=end_date,
                            stage_filter=stage_filter,
-                           grade_filter=grade_filter)
+                           grade_filter=grade_filter,
+                           multi_section=multi_section)
 
 
 @grades_bp.route('/gradebook/export')
@@ -731,16 +790,40 @@ def gradebook_export():
     exam_type_filter = request.args.get('exam_type', 'all')
     start_date       = request.args.get('start_date', '')
     end_date         = request.args.get('end_date', '')
+    grade_filter     = request.args.get('grade_id', type=int)
+    stage_filter     = request.args.get('stage', '').strip()
 
-    if not section_id:
-        flash('يرجى اختيار الشعبة أولاً.', 'warning')
+    school = get_current_school()
+    year   = get_view_year(school.id) if school else None
+
+    if not section_id and not grade_filter:
+        flash('يرجى اختيار الشعبة أو الصف أولاً.', 'warning')
         return redirect(url_for('grades.gradebook'))
 
-    if _is_teacher() and section_id not in get_teacher_section_ids(current_user):
-        abort(403)
+    if section_id:
+        if _is_teacher() and section_id not in get_teacher_section_ids(current_user):
+            abort(403)
+        exams, rows = _pivot_data(section_id, subject_filter, exam_type_filter,
+                                   start_date, end_date)
+    else:
+        # Grade-level export: all sections for the selected grade
+        if not school or not year:
+            flash('لا يوجد عام دراسي نشط.', 'warning')
+            return redirect(url_for('grades.gradebook'))
+        secs_q = (Section.query
+                  .filter_by(grade_id=grade_filter,
+                             school_id=school.id,
+                             academic_year_id=year.id))
+        if _is_teacher():
+            allowed = set(get_teacher_section_ids(current_user) or [])
+            secs_q = secs_q.filter(Section.id.in_(allowed))
+        grade_sec_ids = [s.id for s in secs_q.all()]
+        if not grade_sec_ids:
+            flash('لا توجد شعب متاحة لهذا الصف.', 'warning')
+            return redirect(url_for('grades.gradebook'))
+        exams, rows = _pivot_data_multi(grade_sec_ids, subject_filter,
+                                         exam_type_filter, start_date, end_date)
 
-    exams, rows = _pivot_data(section_id, subject_filter, exam_type_filter,
-                               start_date, end_date)
     data = export_gradebook(exams, rows)
     if not data:
         flash('مكتبة Excel غير متاحة.', 'warning')
