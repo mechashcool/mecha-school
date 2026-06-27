@@ -35,14 +35,15 @@ def _is_teacher():
 @login_required
 @permission_required('view_students')
 def index():
-    page       = request.args.get('page', 1, type=int)
-    search     = request.args.get('q', '')
-    status     = request.args.get('status', '')
-    grade_id   = request.args.get('grade_id', type=int)
-    section_id = request.args.get('section_id', type=int)
+    page        = request.args.get('page', 1, type=int)
+    search      = request.args.get('q', '')
+    status      = request.args.get('status', '')
+    stage       = request.args.get('stage', '')
+    grade_id    = request.args.get('grade_id', type=int)
+    section_id  = request.args.get('section_id', type=int)
     building_id = request.args.get('building_id', type=int)
-    school     = get_current_school()
-    year       = get_view_year(school.id) if school else None
+    school      = get_current_school()
+    year        = get_view_year(school.id) if school else None
 
     query = Student.query
 
@@ -92,6 +93,20 @@ def index():
             query = query.filter(Student.section_id.in_(section_ids_for_grade))
         else:
             query = query.filter(Student.id == -1)
+    elif stage:
+        grade_q = Grade.query.filter_by(school_id=school.id, stage=stage)
+        if year:
+            grade_q = grade_q.filter_by(academic_year_id=year.id)
+        stage_grade_ids = [g.id for g in grade_q.all()]
+        if stage_grade_ids:
+            stage_sec_ids = [s.id for s in Section.query.filter(
+                Section.grade_id.in_(stage_grade_ids)).all()]
+            if stage_sec_ids:
+                query = query.filter(Student.section_id.in_(stage_sec_ids))
+            else:
+                query = query.filter(Student.id == -1)
+        else:
+            query = query.filter(Student.id == -1)
 
     students = (query
                 .options(joinedload(Student.section).joinedload(Section.grade))
@@ -100,12 +115,24 @@ def index():
                 .paginate(page=page, per_page=20, error_out=False))
 
     # Grades and sections for filter dropdowns
-    grades_q   = Grade.query
     sections_q = Section.query
     if school and year:
-        grades_q   = grades_q.filter_by(school_id=school.id, academic_year_id=year.id)
         sections_q = sections_q.filter_by(school_id=school.id, academic_year_id=year.id)
-    grades_list   = grades_q.order_by(Grade.name).all()
+
+    # All grades for the school/year — used for both stages list and grade dropdown
+    all_grades_q = Grade.query
+    if school and year:
+        all_grades_q = all_grades_q.filter_by(school_id=school.id, academic_year_id=year.id)
+    elif school:
+        all_grades_q = all_grades_q.filter_by(school_id=school.id)
+    all_grades = all_grades_q.order_by(Grade.name).all()
+
+    # Distinct non-empty stages for the stage filter dropdown
+    stages_list = sorted({g.stage for g in all_grades if g.stage})
+
+    # Grade dropdown is filtered by stage when a stage is selected
+    grades_list = [g for g in all_grades if not stage or g.stage == stage]
+
     sections_list = (sections_q.filter_by(grade_id=grade_id).order_by(Section.name).all()
                      if grade_id else [])
 
@@ -131,6 +158,8 @@ def index():
                            students=students, search=search, status=status,
                            capacity_info=capacity_info,
                            active_year=year,
+                           stages_list=stages_list,
+                           stage=stage,
                            grades_list=grades_list,
                            sections_list=sections_list,
                            grade_id=grade_id,
@@ -154,6 +183,7 @@ def search():
     q           = request.args.get('q', '').strip()
     page        = request.args.get('page', 1, type=int)
     status      = request.args.get('status', '')
+    stage       = request.args.get('stage', '')
     grade_id    = request.args.get('grade_id', type=int)
     section_id  = request.args.get('section_id', type=int)
     building_id = request.args.get('building_id', type=int)
@@ -194,6 +224,21 @@ def search():
         _sids = [s.id for s in Section.query.filter_by(grade_id=grade_id).all()]
         if _sids:
             query = query.filter(Student.section_id.in_(_sids))
+        else:
+            query = query.filter(Student.id == -1)
+    elif stage:
+        year = get_view_year(school.id)
+        _gq = Grade.query.filter_by(school_id=school.id, stage=stage)
+        if year:
+            _gq = _gq.filter_by(academic_year_id=year.id)
+        _gids = [g.id for g in _gq.all()]
+        if _gids:
+            _ssids = [s.id for s in Section.query.filter(
+                Section.grade_id.in_(_gids)).all()]
+            if _ssids:
+                query = query.filter(Student.section_id.in_(_ssids))
+            else:
+                query = query.filter(Student.id == -1)
         else:
             query = query.filter(Student.id == -1)
 
