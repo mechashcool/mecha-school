@@ -5,8 +5,27 @@ Calculates working days, virtual absences, and per-employee stats.
 Kept entirely separate from student attendance to avoid any interference.
 """
 from __future__ import annotations
+import re as _re
 from datetime import date, timedelta
 from typing import Dict, List
+
+# Matches the AiFace dedup tag written by _process_employee_punch:
+#   "AI Face YYYY-MM-DD HH:MM:SS"
+# Multiple tags are pipe-separated; each segment is checked individually.
+_AIFACE_DEDUP_RE = _re.compile(r'^AI Face \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$')
+
+
+def _clean_employee_notes(raw: str | None) -> str | None:
+    """Strip AiFace dedup tags from the notes field for display purposes.
+
+    The raw DB value must not be modified — it is still used by
+    _process_employee_punch to detect duplicate device punches.
+    """
+    if not raw:
+        return None
+    parts = [p.strip() for p in raw.split('|')]
+    cleaned = [p for p in parts if p and not _AIFACE_DEDUP_RE.match(p)]
+    return ' | '.join(cleaned) or None
 
 
 # ── Working-day calendar ─────────────────────────────────────────────────────
@@ -101,7 +120,7 @@ def calculate_employee_stats(employee,
                 'check_out': rec.check_out,
                 'source': rec.source,
                 'device': rec.device,
-                'notes': rec.notes,
+                'notes': _clean_employee_notes(rec.notes),
                 'is_virtual': False,
                 'record_id': rec.id,
             })
