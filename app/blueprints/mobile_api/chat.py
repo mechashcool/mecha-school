@@ -13,6 +13,8 @@ GET  /chat/rooms/<id>                     room detail + my permissions
 GET  /chat/rooms/<id>/messages            paginated message history
 POST /chat/rooms/<id>/messages            send a text message
 POST /chat/rooms/<id>/read                mark all unread messages as read
+POST /chat/rooms/<id>/mute                mute push notifications for this room
+POST /chat/rooms/<id>/unmute              unmute push notifications for this room
 GET  /chat/contacts                       available contacts (for starting private chats)
 
 Security rules
@@ -163,13 +165,13 @@ def _member_can_send(membership: ChatRoomMember, room: ChatRoom) -> tuple[bool, 
 # ─── FCM push for new message ─────────────────────────────────────────────────
 
 def _push_new_message(room: ChatRoom, msg: ChatMessage, sender_name: str) -> None:
-    """Send FCM push to all non-blocked, non-sender members of the room."""
+    """Send FCM push to all non-blocked, non-muted, non-sender members of the room."""
     try:
         from app.services.fcm_service import is_enabled, send_push_to_user
         if not is_enabled():
             return
         members = (ChatRoomMember.query
-                   .filter_by(room_id=room.id, is_blocked=False)
+                   .filter_by(room_id=room.id, is_blocked=False, is_muted=False)
                    .all())
         ntype  = 'school_announcement' if room.is_announcement_only else 'chat_message'
         title  = (f'رسالة جديدة في {room.name}'
@@ -251,6 +253,7 @@ def chat_rooms():
             'can_send':            can_send_flag,
             'my_role':             mem.role if mem else 'member',
             'is_blocked':          mem.is_blocked if mem else False,
+            'is_muted':            mem.is_muted if mem else False,
             'unread_count':        _unread_count(room.id, user.id),
             'last_message':        _last_message_payload(room.id),
         })
@@ -318,9 +321,10 @@ def chat_room_detail(room_id):
                                      if room.created_at else None),
         },
         my_membership={
-            'role':       mem.role,
-            'is_blocked': mem.is_blocked,
-            'can_send':   can_send,
+            'role':        mem.role,
+            'is_blocked':  mem.is_blocked,
+            'is_muted':    mem.is_muted,
+            'can_send':    can_send,
             'send_reason': send_reason,
         },
         member_count=room.members.count(),
@@ -481,6 +485,60 @@ def chat_mark_read(room_id):
         db.session.commit()
 
     return ok(marked=marked)
+
+
+# ─── Mute / unmute room ──────────────────────────────────────────────────────
+
+@mobile_api_bp.route('/chat/rooms/<int:room_id>/mute', methods=['POST'])
+@jwt_required()
+@role_required(*_CHAT_ROLES)
+def chat_mute_room(room_id):
+    guard = _check_chat_access()
+    if guard:
+        return guard
+
+    user = g.mobile_user
+    mem = _get_membership(room_id, user.id)
+    if not mem:
+        return err('لست عضواً في هذه المحادثة.', 403)
+
+    room = (ChatRoom.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(id=room_id, school_id=user.school_id, is_active=True)
+            .first())
+    if not room:
+        return err('المحادثة غير موجودة.', 404)
+
+    mem.is_muted = True
+    db.session.commit()
+    _log.info('[chat_api] muted room_id=%s user_id=%s', room_id, user.id)
+    return ok(message='تم كتم إشعارات المحادثة.', is_muted=True)
+
+
+@mobile_api_bp.route('/chat/rooms/<int:room_id>/unmute', methods=['POST'])
+@jwt_required()
+@role_required(*_CHAT_ROLES)
+def chat_unmute_room(room_id):
+    guard = _check_chat_access()
+    if guard:
+        return guard
+
+    user = g.mobile_user
+    mem = _get_membership(room_id, user.id)
+    if not mem:
+        return err('لست عضواً في هذه المحادثة.', 403)
+
+    room = (ChatRoom.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(id=room_id, school_id=user.school_id, is_active=True)
+            .first())
+    if not room:
+        return err('المحادثة غير موجودة.', 404)
+
+    mem.is_muted = False
+    db.session.commit()
+    _log.info('[chat_api] unmuted room_id=%s user_id=%s', room_id, user.id)
+    return ok(message='تم تفعيل إشعارات المحادثة.', is_muted=False)
 
 
 # ─── Available contacts ───────────────────────────────────────────────────────

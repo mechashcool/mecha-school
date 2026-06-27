@@ -1884,10 +1884,10 @@ def _push_chat_message(app, push_data: dict) -> None:
 
             # ── Query members and active tokens in batch ─────────────────────
             members = (_CRM.query
-                       .filter_by(room_id=room_id, is_blocked=False)
+                       .filter_by(room_id=room_id, is_blocked=False, is_muted=False)
                        .all())
             if not members:
-                _log.info('[chat-fcm] room_id=%s no non-blocked members — skip', room_id)
+                _log.info('[chat-fcm] room_id=%s no non-blocked/non-muted members — skip', room_id)
                 return
 
             member_ids = {m.user_id for m in members if m.user_id != sender_user_id}
