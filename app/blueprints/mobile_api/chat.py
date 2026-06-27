@@ -83,7 +83,14 @@ def _can_send_now(room: ChatRoom, school) -> tuple[bool, str]:
         from app.utils.attendance_helpers import get_local_now
         local_now = get_local_now(school)
     except Exception:
-        local_now = datetime.utcnow()
+        # Fall back to Iraq local time rather than raw UTC.
+        # Raw UTC gives the wrong weekday between 21:00–24:00 UTC (midnight–03:00 Iraq).
+        import pytz as _pytz
+        _log.warning(
+            '[chat_api] _can_send_now: get_local_now failed for room_id=%s — '
+            'falling back to Asia/Baghdad', room.id,
+        )
+        local_now = datetime.now(_pytz.timezone('Asia/Baghdad')).replace(tzinfo=None)
     dow = (local_now.weekday() + 1) % 7  # Sun=0 scheme
     now_t = local_now.time()
     for sch in schedules:
@@ -241,7 +248,8 @@ def chat_rooms():
         can_send_flag = False
         if mem and not mem.is_blocked and not room.is_closed and room.allow_replies:
             if not room.is_announcement_only or mem.role in ('owner', 'admin'):
-                can_send_flag = True
+                sched_ok, _ = _can_send_now(room, user.school)
+                can_send_flag = sched_ok
 
         rooms_out.append({
             'id':                  room.id,
