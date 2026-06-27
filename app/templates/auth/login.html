@@ -458,7 +458,7 @@
         </div>
 
         <!-- Submit -->
-        <button type="submit" class="submit-btn">تسجيل الدخول</button>
+        <button type="submit" class="submit-btn" id="loginBtn">تسجيل الدخول</button>
 
       </form>
 
@@ -475,15 +475,29 @@
 
   <script>
     (function () {
+      /* Password visibility toggle */
       var btn  = document.getElementById('togglePw');
       var inp  = document.getElementById('passwordInput');
       var icon = document.getElementById('togglePwIcon');
-      if (!btn || !inp || !icon) return;
-      btn.addEventListener('click', function () {
-        var show = inp.type === 'password';
-        inp.type = show ? 'text' : 'password';
-        icon.className = show ? 'bi bi-eye' : 'bi bi-eye-slash';
-      });
+      if (btn && inp && icon) {
+        btn.addEventListener('click', function () {
+          var show = inp.type === 'password';
+          inp.type = show ? 'text' : 'password';
+          icon.className = show ? 'bi bi-eye' : 'bi bi-eye-slash';
+        });
+      }
+
+      /* Prevent duplicate login submissions */
+      var form      = document.querySelector('form');
+      var loginBtn  = document.getElementById('loginBtn');
+      if (form && loginBtn) {
+        form.addEventListener('submit', function () {
+          loginBtn.disabled = true;
+          loginBtn.textContent = 'جارٍ تسجيل الدخول…';
+          loginBtn.style.opacity = '0.7';
+          loginBtn.style.cursor  = 'not-allowed';
+        });
+      }
     })();
   </script>
 

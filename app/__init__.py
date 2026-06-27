@@ -6,7 +6,7 @@ import os
 from flask import Flask, request
 from flask_login import LoginManager
 from flask_migrate import Migrate
-from flask_wtf.csrf import CSRFProtect
+from flask_wtf.csrf import CSRFProtect, CSRFError
 
 from app.models import db, bcrypt, User
 from app.utils.scoping import register_tenant_guards
@@ -389,6 +389,15 @@ def create_app(config_name=None):
     @app.errorhandler(500)
     def server_error(e):
         return _render_error_page('shared/500.html'), 500
+
+    @app.errorhandler(CSRFError)
+    def handle_csrf_error(e):
+        from flask import flash, redirect, url_for
+        flash(
+            'انتهت صلاحية الجلسة أو تم إرسال الطلب أكثر من مرة، يرجى المحاولة مجددًا.',
+            'danger',
+        )
+        return redirect(url_for('auth.login'))
 
     # ── Security response headers ─────────────────────────────────────────────
     @app.after_request
