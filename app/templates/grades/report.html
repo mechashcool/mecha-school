@@ -255,10 +255,13 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
 
       <div class="col-6 col-md-3">
         <label class="form-label small">المادة</label>
-        <select name="subject_id" class="form-select">
+        <select name="subject_id" id="rpSubject" class="form-select">
           <option value="all" {% if subject_filter == 'all' %}selected{% endif %}>كل المواد</option>
           {% for subj in subjects %}
-          <option value="{{ subj.id }}" {% if subject_filter == subj.id|string %}selected{% endif %}>{{ subj.name }}</option>
+          <option value="{{ subj.id }}"
+                  data-grade-id="{{ subj.grade_id or '' }}"
+                  data-stage="{{ subj.stage or '' }}"
+                  {% if subject_filter == subj.id|string %}selected{% endif %}>{{ subj.name }}</option>
           {% endfor %}
         </select>
       </div>
@@ -647,34 +650,56 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
   const stageEl   = document.getElementById('rpStage');
   const gradeEl   = document.getElementById('rpGrade');
   const sectionEl = document.getElementById('rpSection');
+  const subjectEl = document.getElementById('rpSubject');
 
   const gradeOpts   = Array.from(gradeEl.options).slice(1);
   const sectionOpts = Array.from(sectionEl.options).slice(1);
+  // slice(1) skips the fixed "كل المواد" option which is never hidden
+  const subjectOpts = Array.from(subjectEl.options).slice(1);
 
   function filterGrades() {
     const stage = stageEl.value;
     for (const opt of gradeOpts) {
       opt.hidden = stage ? opt.dataset.stage !== stage : false;
     }
-    // If currently selected grade was hidden, clear it
     const selGrade = gradeEl.selectedOptions[0];
     if (selGrade && selGrade.hidden) gradeEl.value = '';
     filterSections();
+    filterSubjects();
   }
 
   function filterSections() {
     const gradeId = gradeEl.value;
     for (const opt of sectionOpts) {
-      // When no grade is selected, hide all sections (must pick grade first)
       opt.hidden = gradeId ? opt.dataset.gradeId !== gradeId : true;
     }
-    // If currently selected section was hidden, clear it
     const selSec = sectionEl.selectedOptions[0];
     if (selSec && selSec.hidden) sectionEl.value = '';
   }
 
+  function filterSubjects() {
+    const gradeId = gradeEl.value;
+    const stage   = stageEl.value;
+    for (const opt of subjectOpts) {
+      const optGrade = opt.dataset.gradeId;
+      const optStage = opt.dataset.stage;
+      if (gradeId) {
+        // Hide subjects explicitly assigned to a different grade; keep unassigned ones visible
+        opt.hidden = optGrade !== '' && optGrade !== gradeId;
+      } else if (stage) {
+        // Hide subjects explicitly assigned to a different stage; keep unassigned ones visible
+        opt.hidden = optStage !== '' && optStage !== stage;
+      } else {
+        opt.hidden = false;
+      }
+    }
+    // If currently selected subject was hidden, reset to "كل المواد"
+    const selSub = subjectEl.selectedOptions[0];
+    if (selSub && selSub.hidden) subjectEl.value = 'all';
+  }
+
   stageEl.addEventListener('change', filterGrades);
-  gradeEl.addEventListener('change', filterSections);
+  gradeEl.addEventListener('change', function () { filterSections(); filterSubjects(); });
 
   // Apply on page load to restore consistent dropdown state from URL params
   filterGrades();

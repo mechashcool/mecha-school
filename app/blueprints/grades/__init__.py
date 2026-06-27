@@ -1093,11 +1093,36 @@ def report():
                 overall_max_sum   = _fmt(_all_mx)
 
     exam_types = ExamType.query.all()
-    if _is_teacher():
-        subject_ids = _teacher_subject_ids()
-        subjects = Subject.query.filter(Subject.id.in_(subject_ids)).all() if subject_ids else []
+
+    # Subjects scoped to the current school + year (fixes missing isolation in the original query)
+    if school and year:
+        subjects_q = Subject.query.filter_by(school_id=school.id, academic_year_id=year.id)
     else:
-        subjects = Subject.query.all()
+        subjects_q = Subject.query.filter(False)
+
+    if _is_teacher():
+        teacher_sub_ids = _teacher_subject_ids()
+        if teacher_sub_ids:
+            subjects_q = subjects_q.filter(Subject.id.in_(teacher_sub_ids))
+        else:
+            subjects_q = subjects_q.filter(False)
+
+    subjects = subjects_q.order_by(Subject.name).all()
+
+    # Reset subject_filter if it no longer belongs to the selected grade/stage.
+    # Subjects with no grade_id/stage assignment are treated as general (never reset).
+    if subject_filter != 'all':
+        try:
+            sf_int = int(subject_filter)
+            matched_sub = next((s for s in subjects if s.id == sf_int), None)
+            if matched_sub is None:
+                subject_filter = 'all'
+            elif grade_id_f and matched_sub.grade_id and matched_sub.grade_id != grade_id_f:
+                subject_filter = 'all'
+            elif stage_f and not grade_id_f and matched_sub.stage and matched_sub.stage != stage_f:
+                subject_filter = 'all'
+        except (ValueError, TypeError):
+            subject_filter = 'all'
 
     return render_template('grades/report.html',
                            results_view=results_view,
