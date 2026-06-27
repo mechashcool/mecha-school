@@ -628,6 +628,15 @@ def create_exam():
 def enter_results(exam_id):
     exam = Exam.query.get_or_404(exam_id)
 
+    # Explicit school-ownership guard (defence-in-depth) before this route
+    # creates/updates ExamResult rows. The exam is loaded by id; do not rely
+    # solely on ORM auto-scoping of .get_or_404() for a mutation route. Super
+    # admin keeps its intentional cross-school capability.
+    if not getattr(current_user, 'is_super_admin', False):
+        _school = get_current_school()
+        if _school and exam.school_id and exam.school_id != _school.id:
+            abort(403)
+
     if _is_teacher():
         allowed_sections = get_teacher_section_ids(current_user)
         allowed_subjects = _teacher_subject_ids()

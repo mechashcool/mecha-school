@@ -532,7 +532,9 @@ def teacher_schedule():
         )
 
         # Derive grade_ids so that unassigned whole-grade rows are included.
-        # Explicit school_id guard — ORM scope is inert for mobile requests.
+        # Explicit school_id guard — defence-in-depth. The ORM tenant scope is
+        # active for authenticated mobile requests (set_mobile_request_scope);
+        # this explicit filter must not be removed.
         grade_sections = (
             Section.query
             .filter(
@@ -1087,7 +1089,8 @@ def teacher_create_exam():
     # In-app Notification + FCM push to parents of active students in this section.
     # Delegates to _notify_new_exam() which is fully context-independent:
     # it uses bypass_tenant_scope=True + explicit school_id so it works correctly
-    # from the mobile API where g.tenant_scope_school_id is None at request time.
+    # regardless of the ORM tenant scope (which, for authenticated mobile
+    # requests, is set to the teacher's school by set_mobile_request_scope).
     # Best-effort: a notification failure must never fail the API response.
     _exam_id_for_log = new_exam.id  # PK retained after commit — safe to read
     try:

@@ -136,6 +136,12 @@ class _NotificationService:
 
     def send_to_user(self, user_id: int, title: str, body: str,
                      ntype: str = 'general', data: dict | None = None):
+        # Contract: callers MUST pass a user_id that has already been resolved
+        # from a tenant-scoped query (e.g. parents of a school-scoped student).
+        # This helper does not — and cannot — re-derive the authorised school,
+        # so it must never receive a raw client-supplied user_id. The persisted
+        # PushNotification + in-app row are tagged with the recipient's own
+        # school_id, so a correctly-scoped caller can never cross schools.
         user = User.query.get(user_id)
         if not user:
             return []

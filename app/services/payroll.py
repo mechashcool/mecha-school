@@ -143,9 +143,15 @@ def _minutes_between(t_from, t_to) -> int:
     return int(delta) if delta > 0 else 0
 
 
-def compute_attendance(record: SalaryRecord, settings: PayrollSettings, school) -> dict:
+def compute_attendance(record: SalaryRecord, settings: PayrollSettings, school,
+                       working_days=None) -> dict:
     """
     Calculate attendance-based deduction details for one payroll record's month.
+
+    ``working_days`` may be a pre-computed list of working days for the same
+    month/year/school (identical for every employee in a generation run) so the
+    holiday/weekend calendar is not recomputed per employee. When None it is
+    computed here, exactly as before.
 
     Uses EmployeeAttendance (NOT student attendance). Mirrors the HR attendance
     report logic (calculate_employee_stats): iterates over every working day in
@@ -172,7 +178,8 @@ def compute_attendance(record: SalaryRecord, settings: PayrollSettings, school) 
     if effective_to < date_from:
         return result  # salary month is entirely in the future
 
-    working_days = get_working_days(date_from, effective_to, school)
+    if working_days is None:
+        working_days = get_working_days(date_from, effective_to, school)
     if not working_days:
         return result
 
@@ -269,19 +276,25 @@ def _clear_generated_items(record: SalaryRecord):
     return keep
 
 
-def apply_recurring_components(record: SalaryRecord):
+def apply_recurring_components(record: SalaryRecord, comps=None):
     """Add PayrollItem lines for every active recurring component that applies
-    to this record's employee (general scope + employee-specific)."""
-    comps = (
-        SalaryComponent.query
-        .execution_options(bypass_tenant_scope=True)
-        .filter(
-            SalaryComponent.school_id == record.school_id,
-            SalaryComponent.is_active.is_(True),
-            SalaryComponent.recurrence == 'recurring',
+    to this record's employee (general scope + employee-specific).
+
+    ``comps`` may be a pre-fetched list of the school's active recurring
+    components so a bulk generation run does not re-query them once per
+    employee. When None (single-record callers), they are loaded as before.
+    """
+    if comps is None:
+        comps = (
+            SalaryComponent.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter(
+                SalaryComponent.school_id == record.school_id,
+                SalaryComponent.is_active.is_(True),
+                SalaryComponent.recurrence == 'recurring',
+            )
+            .all()
         )
-        .all()
-    )
     for comp in comps:
         if comp.scope == 'employee' and comp.employee_id != record.employee_id:
             continue
@@ -296,10 +309,15 @@ def apply_recurring_components(record: SalaryRecord):
         ))
 
 
-def apply_attendance_items(record: SalaryRecord, settings: PayrollSettings, school):
+def apply_attendance_items(record: SalaryRecord, settings: PayrollSettings, school,
+                           working_days=None):
     """Compute attendance deductions and store them as 'attendance' line items
-    plus informational counts on the record."""
-    stats = compute_attendance(record, settings, school)
+    plus informational counts on the record.
+
+    ``working_days`` is forwarded to compute_attendance() so a bulk run can
+    share one pre-computed working-day calendar across all employees.
+    """
+    stats = compute_attendance(record, settings, school, working_days=working_days)
     record.absence_days      = stats['absence_days']
     record.late_count        = stats['late_count']
     record.early_leave_count = stats['early_leave_count']
@@ -358,6 +376,29 @@ def generate_payroll(school, active_year, month: int, year: int,
         )
     }
 
+    # ── Hoist per-run work out of the per-employee loop ─────────────────────────
+    # The active recurring components and the working-day calendar are identical
+    # for every employee in this month/year/school, so compute them once instead
+    # of re-querying / recomputing per employee. Behaviour is unchanged.
+    recurring_comps = (
+        SalaryComponent.query
+        .execution_options(bypass_tenant_scope=True)
+        .filter(
+            SalaryComponent.school_id == school.id,
+            SalaryComponent.is_active.is_(True),
+            SalaryComponent.recurrence == 'recurring',
+        )
+        .all()
+    )
+
+    shared_working_days = None
+    if settings and settings.attendance_deduction_enabled:
+        from app.utils.employee_attendance_helper import get_working_days
+        _df, _dt = _month_range(month, year)
+        _eff_to = min(_dt, date.today())
+        shared_working_days = (get_working_days(_df, _eff_to, school)
+                               if _eff_to >= _df else [])
+
     created = skipped = 0
     with db.session.no_autoflush:
         for emp in employees:
@@ -380,8 +421,9 @@ def generate_payroll(school, active_year, month: int, year: int,
             _snapshot(record, emp)
             db.session.add(record)
             db.session.flush()  # need record.id + academic_year_id for items
-            apply_recurring_components(record)
-            apply_attendance_items(record, settings, school)
+            apply_recurring_components(record, comps=recurring_comps)
+            apply_attendance_items(record, settings, school,
+                                   working_days=shared_working_days)
             record.recompute()
             created += 1
 

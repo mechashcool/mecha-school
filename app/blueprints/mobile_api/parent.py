@@ -44,7 +44,7 @@ from app.models import (
     StudentTransport,
     parent_students,
 )
-from app.utils.helpers import save_uploaded_file, delete_uploaded_file, resolve_photo_url
+from app.utils.helpers import save_uploaded_file, delete_uploaded_file
 from app.utils.notification_visibility import notification_visible_to
 
 from . import mobile_api_bp
@@ -694,7 +694,7 @@ def _leave_dict(r) -> dict:
         'created_at':       (r.created_at.replace(tzinfo=timezone.utc).isoformat()
                              if r.created_at else None),
         'attachment': {
-            'url':       resolve_photo_url(r.attachment_path),
+            'url':       photo_url(r.attachment_path),
             'file_name': r.attachment_name,
             'mime_type': r.attachment_mime,
             'size':      r.attachment_size,
@@ -1002,9 +1002,10 @@ def parent_child_transportation(student_id):
         transport data is accessed. A 404 is returned for unowned children so
         the response does not reveal whether another parent's child exists.
       • The StudentTransport query adds explicit school_id, student_id, and
-        status='active' filters. The ORM global tenant scope is inert on mobile
-        (jwt_required sets current_user inside the view, after before_request
-        has already cached the scope), so all isolation is enforced explicitly.
+        status='active' filters. The ORM global tenant scope IS active for
+        authenticated mobile requests (jwt_required calls
+        set_mobile_request_scope() after token validation), so these explicit
+        column filters are defence-in-depth — they must not be removed.
       • The loaded route's school_id is re-verified against the authenticated
         user's school as defense-in-depth against any FK-only trust.
       • No internal IDs, license plates, route internals, or sensitive vehicle

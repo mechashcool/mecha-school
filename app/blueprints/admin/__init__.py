@@ -6,7 +6,7 @@ Handles: Dashboard, User Management, Role/Permission Management,
 from flask import (Blueprint, render_template, redirect, url_for,
                    flash, request, jsonify)
 from flask_login import login_required, current_user
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, extract
 from datetime import date, timedelta, datetime
 import json
 import logging
@@ -358,14 +358,27 @@ def dashboard():
     stats['fees_collected_today'] = float(paid_today)
     stats['overdue_installments'] = overdue
 
-    # Attendance today — school-scoped
-    att_q_base = StudentAttendance.query.filter_by(date=today)
+    # Attendance for today + yesterday — one grouped query instead of four
+    # separate COUNT round-trips. Semantics preserved exactly:
+    #   present = status in ('present','late');  absent = status == 'absent'.
+    yesterday = today - timedelta(days=1)
+    _att_rows = (db.session.query(
+                    StudentAttendance.date,
+                    StudentAttendance.status,
+                    func.count().label('n'))
+                 .filter(StudentAttendance.date.in_([today, yesterday])))
     if school_id:
-        att_q_base = att_q_base.filter_by(school_id=school_id)
-    stats['present_today'] = att_q_base.filter(
-        StudentAttendance.status.in_(['present', 'late'])
-    ).count()
-    stats['absent_today']  = att_q_base.filter_by(status='absent').count()
+        _att_rows = _att_rows.filter(StudentAttendance.school_id == school_id)
+    _att_rows = _att_rows.group_by(StudentAttendance.date,
+                                   StudentAttendance.status).all()
+
+    def _att_count(day, statuses):
+        return sum(r.n for r in _att_rows if r.date == day and r.status in statuses)
+
+    stats['present_today'] = _att_count(today, ('present', 'late'))
+    stats['absent_today']  = _att_count(today, ('absent',))
+    present_yday = _att_count(yesterday, ('present', 'late'))
+    absent_yday  = _att_count(yesterday, ('absent',))
 
     # Revenue vs Expense this month — school-scoped, across all academic years
     first_of_month = today.replace(day=1)
@@ -410,13 +423,8 @@ def dashboard():
     prev_rev = float(_prq.scalar() or 0)
     prev_exp = float(_peq.scalar() or 0)
 
-    # ── Yesterday attendance counts (for KPI trend %) ────────────────────────────
-    yesterday    = today - timedelta(days=1)
-    _att_yday    = StudentAttendance.query.filter_by(date=yesterday)
-    if school_id:
-        _att_yday = _att_yday.filter_by(school_id=school_id)
-    present_yday = _att_yday.filter(StudentAttendance.status.in_(['present', 'late'])).count()
-    absent_yday  = _att_yday.filter_by(status='absent').count()
+    # (Yesterday attendance counts present_yday / absent_yday were computed above
+    #  together with today's counts in a single grouped query.)
 
     # ── Yesterday fees collected (for KPI trend %) ───────────────────────────────
     from app.models import FeeRecord
@@ -437,29 +445,47 @@ def dashboard():
     stats['fees_today_change_pct'] = _pct(paid_today,               fees_yday)    if fees_yday    else None
 
     # ── Last 6-month finance series (for multi-month chart) ──────────────────────
+    # Was 12 separate SUM queries (one per month per table). Collapsed into two
+    # grouped queries over the 6-month window; per-month values are identical
+    # because each row maps to exactly one (year, month) bucket.
     _AR = ['يناير','فبراير','مارس','أبريل','مايو','يونيو',
            'يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر']
-    m_labels, m_rev, m_exp, m_net = [], [], [], []
+
+    # Ordered list of (year, month) buckets, oldest → current month.
+    _months = []
     for _d in range(5, -1, -1):
         _mo = today.month - _d
         _yr = today.year
         while _mo <= 0:
             _mo += 12
             _yr -= 1
-        _ms = date(_yr, _mo, 1)
-        _me = (date(_yr, _mo + 1, 1) - timedelta(days=1)
-               if _mo < 12 else date(_yr + 1, 1, 1) - timedelta(days=1))
-        _rq = (db.session.query(func.sum(Revenue.amount))
-               .execution_options(include_all_years=True)
-               .filter(Revenue.date >= _ms, Revenue.date <= _me))
-        _eq = (db.session.query(func.sum(Expense.amount))
-               .execution_options(include_all_years=True)
-               .filter(Expense.date >= _ms, Expense.date <= _me))
+        _months.append((_yr, _mo))
+
+    _win_start = date(_months[0][0], _months[0][1], 1)
+    # Exclusive upper bound = first day of the month after the current month,
+    # equivalent to "<= last day of current month" for a DATE column.
+    _win_end_excl = (date(today.year, today.month + 1, 1)
+                     if today.month < 12 else date(today.year + 1, 1, 1))
+
+    def _month_sums(model):
+        q = (db.session.query(
+                extract('year', model.date).label('y'),
+                extract('month', model.date).label('m'),
+                func.sum(model.amount).label('t'))
+             .execution_options(include_all_years=True)
+             .filter(model.date >= _win_start, model.date < _win_end_excl))
         if school_id:
-            _rq = _rq.filter(Revenue.school_id == school_id)
-            _eq = _eq.filter(Expense.school_id == school_id)
-        _rv = float(_rq.scalar() or 0)
-        _ev = float(_eq.scalar() or 0)
+            q = q.filter(model.school_id == school_id)
+        return {(int(r.y), int(r.m)): float(r.t or 0)
+                for r in q.group_by('y', 'm').all()}
+
+    _rev_map = _month_sums(Revenue)
+    _exp_map = _month_sums(Expense)
+
+    m_labels, m_rev, m_exp, m_net = [], [], [], []
+    for (_yr, _mo) in _months:
+        _rv = _rev_map.get((_yr, _mo), 0.0)
+        _ev = _exp_map.get((_yr, _mo), 0.0)
         m_labels.append(_AR[_mo - 1])
         m_rev.append(_rv)
         m_exp.append(_ev)

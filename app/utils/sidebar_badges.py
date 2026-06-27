@@ -133,10 +133,18 @@ def get_badge_counts(*, live: bool = False) -> dict:
         def _load_notifications():
             read_ids = (db.session.query(NotificationRead.notification_id)
                         .filter_by(user_id=uid).subquery())
-            return (Notification.query
-                    .filter(notification_visible_to(current_user))
-                    .filter(Notification.id.notin_(read_ids))
-                    .count())
+            q = (Notification.query
+                 .filter(notification_visible_to(current_user))
+                 .filter(Notification.id.notin_(read_ids)))
+            # Explicit school filter (defence-in-depth). The ORM auto-scope
+            # already constrains Notification by g.tenant_scope_school_id, but
+            # binding the count to notif_sid here guarantees a role-broadcast
+            # from another school can never inflate this badge even if the ORM
+            # scope is ever bypassed or changes. For a global super admin
+            # (notif_sid is None) the behaviour is unchanged.
+            if notif_sid is not None:
+                q = q.filter(Notification.school_id == notif_sid)
+            return q.count()
 
         counts['unread_notifications'] = badge_cache.get_or_set(
             (prefix + 'notif', uid, notif_sid, role),

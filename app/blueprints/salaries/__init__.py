@@ -22,6 +22,8 @@ from decimal import Decimal, InvalidOperation
 from flask import (Blueprint, render_template, redirect, url_for,
                    flash, request, jsonify, abort, Response)
 from flask_login import login_required, current_user
+from sqlalchemy import or_, and_
+from sqlalchemy.orm import contains_eager
 
 from app.models import (db, SalaryRecord, Employee, PayrollItem,
                         PayrollSettings, SalaryComponent)
@@ -68,9 +70,23 @@ def _parse_amount(raw, default='0') -> Decimal:
         return Decimal(default)
 
 
-def _owned_record(rec_id) -> SalaryRecord:
-    """Fetch a record and enforce school ownership (403 on mismatch)."""
-    record = SalaryRecord.query.get_or_404(rec_id)
+def _owned_record(rec_id, *, include_all_years: bool = False) -> SalaryRecord:
+    """Fetch a record and enforce school ownership (403 on mismatch).
+
+    School ownership is ALWAYS enforced explicitly here, so a cross-year fetch
+    can never cross schools.
+
+    ``include_all_years=True`` is used only by read-only routes (detail / slip /
+    print) that are reachable from the multi-year payroll report and the
+    employee statement, so a salary record from a previous academic year is not
+    incorrectly 404'd just because the active view year changed. Mutation routes
+    keep the default (current-year scope) so historical records stay effectively
+    frozen and are never silently edited from the normal flow.
+    """
+    q = SalaryRecord.query
+    if include_all_years:
+        q = q.execution_options(include_all_years=True)
+    record = q.filter_by(id=rec_id).first_or_404()
     _, school_id = _school_or_redirect()
     if school_id and record.school_id and record.school_id != school_id:
         abort(403)
@@ -131,7 +147,15 @@ def _collect_report(args, school_id):
     period_from = (args.get('period_from') or '').strip()
     period_to   = (args.get('period_to') or '').strip()
 
-    q = SalaryRecord.query.execution_options(include_all_years=True)
+    pf, pt = _parse_period(period_from), _parse_period(period_to)
+
+    # Join + eager-load the employee so the report template and the free-text
+    # search below can read r.employee.* without an N+1 query per row. Stays
+    # school-scoped (include_all_years only relaxes the academic-year filter).
+    q = (SalaryRecord.query
+         .execution_options(include_all_years=True)
+         .join(SalaryRecord.employee)
+         .options(contains_eager(SalaryRecord.employee)))
     if school_id:
         q = q.filter(SalaryRecord.school_id == school_id)
     if year:
@@ -146,17 +170,21 @@ def _collect_report(args, school_id):
         else:
             q = q.filter(SalaryRecord.status == status)
 
-    records = (q.join(Employee)
-               .order_by(SalaryRecord.year.desc(), SalaryRecord.month.desc(),
-                         Employee.full_name)
-               .all())
-
-    # Period range (YYYY-MM) over the salary period (year, month).
-    pf, pt = _parse_period(period_from), _parse_period(period_to)
+    # Period range (YYYY-MM) over the salary period — pushed into SQL with
+    # explicit (year, month) comparisons (portable; no row-value dependency)
+    # instead of materialising every record and slicing in Python.
     if pf:
-        records = [r for r in records if (r.year, r.month) >= pf]
+        q = q.filter(or_(SalaryRecord.year > pf[0],
+                         and_(SalaryRecord.year == pf[0],
+                              SalaryRecord.month >= pf[1])))
     if pt:
-        records = [r for r in records if (r.year, r.month) <= pt]
+        q = q.filter(or_(SalaryRecord.year < pt[0],
+                         and_(SalaryRecord.year == pt[0],
+                              SalaryRecord.month <= pt[1])))
+
+    records = (q.order_by(SalaryRecord.year.desc(), SalaryRecord.month.desc(),
+                          Employee.full_name)
+               .all())
 
     # Department filter (property prefers the snapshot taken at generation time).
     if dept:
@@ -371,7 +399,8 @@ def create():
 @login_required
 @permission_required('manage_salaries')
 def detail(rec_id):
-    record = _owned_record(rec_id)
+    # Read-only view reachable from the multi-year report — allow cross-year.
+    record = _owned_record(rec_id, include_all_years=True)
     _, school_id = _school_or_redirect()
     components = (SalaryComponent.query
                   .filter_by(school_id=record.school_id, is_active=True)
@@ -921,7 +950,7 @@ def report_export_pdf():
 @login_required
 @permission_required('manage_salaries')
 def slip(rec_id):
-    record = _owned_record(rec_id)
+    record = _owned_record(rec_id, include_all_years=True)
     return render_template('salaries/slip.html',
                            record=record, status_labels=STATUS_LABELS,
                            arabic_months=ARABIC_MONTHS)
@@ -932,7 +961,7 @@ def slip(rec_id):
 @permission_required('manage_salaries')
 def slip_pdf(rec_id):
     from app.utils.pdf_gen import generate_salary_pdf
-    record = _owned_record(rec_id)
+    record = _owned_record(rec_id, include_all_years=True)
     pdf_bytes = generate_salary_pdf(record)
     if not pdf_bytes:
         flash('مكتبة PDF غير متاحة — استخدم نسخة الطباعة HTML.', 'warning')

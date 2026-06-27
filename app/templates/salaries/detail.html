@@ -3,7 +3,11 @@
 {% block page_title %}مراجعة سجل راتب{% endblock %}
 
 {% set st_cls = {'draft':'badge-pending','pending':'badge-pending','approved':'badge-approved','paid':'badge-paid','cancelled':'badge-cancelled'} %}
-{% set editable = (not record.is_locked) and record.status != 'cancelled' and not is_historical_year %}
+{# A record opened from the multi-year report may belong to a previous academic
+   year. Such records are read-only here: mutation routes are year-scoped and
+   would 404. When no active year context exists, do not restrict (unchanged). #}
+{% set record_is_current_year = (real_active_year is none) or (record.academic_year_id == real_active_year.id) %}
+{% set editable = (not record.is_locked) and record.status != 'cancelled' and not is_historical_year and record_is_current_year %}
 
 {% block content %}
 <div class="page-header">
@@ -146,8 +150,8 @@
       <div class="card-body">
         <form method="POST" action="{{ url_for('salaries.update_notes', rec_id=record.id) }}">
           <textarea name="notes" class="form-control" rows="2"
-                    {{ 'readonly' if is_historical_year }}>{{ record.notes or '' }}</textarea>
-          {% if not is_historical_year %}
+                    {{ 'readonly' if is_historical_year or not record_is_current_year }}>{{ record.notes or '' }}</textarea>
+          {% if not is_historical_year and record_is_current_year %}
           <button class="btn btn-sm btn-outline-secondary mt-2">حفظ الملاحظات</button>
           {% endif %}
         </form>
@@ -179,7 +183,7 @@
     {% endif %}
 
     <!-- Workflow actions -->
-    {% if not is_historical_year %}
+    {% if not is_historical_year and record_is_current_year %}
     <div class="card">
       <div class="card-header"><i class="bi bi-diagram-3 text-accent"></i> سير العمل</div>
       <div class="card-body d-flex flex-column gap-2">

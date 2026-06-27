@@ -488,6 +488,15 @@ def delete_category(ctype, cat_id):
     else:
         abort(404)
 
+    # Explicit school-ownership check before any delete. This route loads the
+    # category by id and then mutates it, so it must not depend solely on ORM
+    # auto-scoping of .get_or_404(). A non-super-admin user may only delete a
+    # category that belongs to their own school. Super admin (no active school)
+    # keeps its intentional cross-school capability.
+    _school = get_current_school()
+    if _school and cat.school_id and cat.school_id != _school.id:
+        abort(403)
+
     if record_count > 0:
         flash(
             f'لا يمكن حذف الفئة "{cat.name}" لأنها مرتبطة بـ {record_count} سجل {entity_label}. '

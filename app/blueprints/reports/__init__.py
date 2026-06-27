@@ -9,6 +9,7 @@ generate_schedule_pdf() in schedules blueprint.
 from flask import Blueprint, render_template, request, jsonify
 from flask_login import login_required
 from sqlalchemy import func, extract
+from sqlalchemy.orm import joinedload
 from datetime import date
 
 from app.models import (db, Revenue, Expense, FeeInstallment, FeeRecord,
@@ -111,10 +112,15 @@ def index():
     absent_today  = _att_count('absent')
     late_today    = _att_count('late')
 
-    # Salary year total (exclude cancelled payroll records)
-    sal_q = db.session.query(func.coalesce(func.sum(SalaryRecord.net_salary), 0))\
-                      .filter(SalaryRecord.year == year,
-                              SalaryRecord.status != 'cancelled')
+    # Salary year total (exclude cancelled payroll records).
+    # include_all_years: this is a CALENDAR-year total (SalaryRecord.year), so it
+    # must not be silently restricted to the active academic year — otherwise the
+    # same calendar year split across two academic years is undercounted. School
+    # isolation stays explicit via the school_id filter below.
+    sal_q = (db.session.query(func.coalesce(func.sum(SalaryRecord.net_salary), 0))
+             .execution_options(include_all_years=True)
+             .filter(SalaryRecord.year == year,
+                     SalaryRecord.status != 'cancelled'))
     if school_id:
         sal_q = sal_q.filter(SalaryRecord.school_id == school_id)
     salary_year = float(sal_q.scalar())
@@ -363,18 +369,27 @@ def attendance_report():
                         .filter(Student.section_id.in_(sec_ids))
                         .order_by(Student.full_name).all())
 
-    rows = []
-    for s in students:
+    # Bulk-fetch attendance for ALL selected students in one query (was one
+    # query per student). Per-student counts and rates are identical; scoping is
+    # unchanged (ORM still applies the active school/view-year filters).
+    student_ids = [s.id for s in students]
+    by_student = {sid: {'present': 0, 'absent': 0, 'late': 0, 'on_leave': 0}
+                  for sid in student_ids}
+    if student_ids:
         att_q = (StudentAttendance.query
-                 .filter_by(student_id=s.id)
+                 .filter(StudentAttendance.student_id.in_(student_ids))
                  .filter(StudentAttendance.date.between(start_d, end_d)))
         if school_id:
             att_q = att_q.filter_by(school_id=school_id)
-        recs = att_q.all()
-        p  = sum(1 for r in recs if r.status == 'present')
-        a  = sum(1 for r in recs if r.status == 'absent')
-        l  = sum(1 for r in recs if r.status == 'late')
-        ol = sum(1 for r in recs if r.status == 'on_leave')
+        for r in att_q.all():
+            bucket = by_student.get(r.student_id)
+            if bucket is not None and r.status in bucket:
+                bucket[r.status] += 1
+
+    rows = []
+    for s in students:
+        c = by_student[s.id]
+        p, a, l, ol = c['present'], c['absent'], c['late'], c['on_leave']
         total = p + a + l
         rows.append({'student': s, 'present': p, 'absent': a,
                      'late': l, 'on_leave': ol, 'total': total,
@@ -495,12 +510,15 @@ def attendance_api_students():
         )
 
     limit = 200 if (section_id and not term) else 20
-    students = q.order_by(Student.full_name).limit(limit).all()
+    # Eager-load section + grade so the loop below does not run two extra
+    # queries per student (was up to 2×200 lookups). Same school/year scoping.
+    students = (q.options(joinedload(Student.section).joinedload(Section.grade))
+                 .order_by(Student.full_name).limit(limit).all())
 
     results = []
     for s in students:
-        sec = Section.query.get(s.section_id) if s.section_id else None
-        grd = Grade.query.get(sec.grade_id) if sec else None
+        sec = s.section if s.section_id else None
+        grd = sec.grade if sec else None
         results.append({
             'id':         s.id,
             'full_name':  s.full_name,
@@ -521,10 +539,14 @@ def salary_report():
 
     year  = request.args.get('year', date.today().year, type=int)
 
+    # Calendar-year payroll report: span all academic years (include_all_years)
+    # but keep school isolation explicit, so a calendar year that straddles two
+    # academic years is reported correctly and independently of the active year.
     sal_q = (db.session.query(
                 Employee.full_name, Employee.job_title,
                 func.count(SalaryRecord.id).label('months'),
                 func.coalesce(func.sum(SalaryRecord.net_salary), 0).label('total'))
+             .execution_options(include_all_years=True)
              .join(SalaryRecord, SalaryRecord.employee_id == Employee.id)
              .filter(SalaryRecord.year == year,
                      SalaryRecord.status != 'cancelled'))
@@ -533,9 +555,10 @@ def salary_report():
     rows = (sal_q.group_by(Employee.full_name, Employee.job_title)
                  .order_by(func.sum(SalaryRecord.net_salary).desc()).all())
 
-    grand_q = db.session.query(func.coalesce(func.sum(SalaryRecord.net_salary), 0))\
-                        .filter(SalaryRecord.year == year,
-                                SalaryRecord.status != 'cancelled')
+    grand_q = (db.session.query(func.coalesce(func.sum(SalaryRecord.net_salary), 0))
+               .execution_options(include_all_years=True)
+               .filter(SalaryRecord.year == year,
+                       SalaryRecord.status != 'cancelled'))
     if school_id:
         grand_q = grand_q.filter(SalaryRecord.school_id == school_id)
     grand_total = float(grand_q.scalar())
