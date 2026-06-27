@@ -219,10 +219,13 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
       </div>
       <div class="col-6 col-md-3">
         <label class="form-label small">المادة</label>
-        <select name="subject_id" class="form-select">
+        <select name="subject_id" id="idxSubject" class="form-select">
           <option value="all" {% if subject_filter == 'all' %}selected{% endif %}>كل المواد</option>
           {% for subj in subjects %}
-          <option value="{{ subj.id }}" {% if subject_filter == subj.id|string %}selected{% endif %}>{{ subj.name }}</option>
+          <option value="{{ subj.id }}"
+                  data-grade-id="{{ subj.grade_id or '' }}"
+                  data-stage="{{ subj.stage or '' }}"
+                  {% if subject_filter == subj.id|string %}selected{% endif %}>{{ subj.name }}</option>
           {% endfor %}
         </select>
       </div>
@@ -265,9 +268,11 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
   var stageEl   = document.getElementById('idxStage');
   var gradeEl   = document.getElementById('idxGrade');
   var sectionEl = document.getElementById('idxSection');
+  var subjectEl = document.getElementById('idxSubject');
 
   var gradeOpts   = Array.from(gradeEl.options).slice(1);
   var sectionOpts = Array.from(sectionEl.options).slice(1);
+  var subjectOpts = Array.from(subjectEl.options).slice(1); // skip fixed "كل المواد" option
 
   function filterGrades() {
     var stage = stageEl.value;
@@ -277,6 +282,7 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
     var sel = gradeEl.selectedOptions[0];
     if (sel && sel.hidden) gradeEl.value = '';
     filterSections();
+    filterSubjects();
   }
 
   function filterSections() {
@@ -288,8 +294,29 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
     if (sel && sel.hidden) sectionEl.value = '';
   }
 
+  function filterSubjects() {
+    var gradeId = gradeEl.value;
+    var stage   = stageEl.value;
+    for (var i = 0; i < subjectOpts.length; i++) {
+      var optGrade = subjectOpts[i].dataset.gradeId;
+      var optStage = subjectOpts[i].dataset.stage;
+      if (gradeId) {
+        // Hide subjects explicitly assigned to a different grade; keep unassigned ones visible
+        subjectOpts[i].hidden = optGrade !== '' && optGrade !== gradeId;
+      } else if (stage) {
+        // Hide subjects explicitly assigned to a different stage; keep unassigned ones visible
+        subjectOpts[i].hidden = optStage !== '' && optStage !== stage;
+      } else {
+        subjectOpts[i].hidden = false;
+      }
+    }
+    // If the selected subject was hidden, reset to "كل المواد"
+    var selSub = subjectEl.selectedOptions[0];
+    if (selSub && selSub.hidden) subjectEl.value = 'all';
+  }
+
   stageEl.addEventListener('change', filterGrades);
-  gradeEl.addEventListener('change', filterSections);
+  gradeEl.addEventListener('change', function () { filterSections(); filterSubjects(); });
 
   filterGrades();
 })();
