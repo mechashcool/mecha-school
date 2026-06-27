@@ -331,8 +331,13 @@ def _process_record_list(sn: str, device, school, records: list,
                         device.id, scope, enrollid, source_cmd)
                     unmatched += 1
             else:
+                # scope == 'students' (default): an employee punch on a student-only
+                # device is never tried against employee mappings. This is the most
+                # common reason employee attendance "does not record" from a device.
                 log.warning(
-                    "  [aiface] No mapping for device_id=%d scope=%s enrollid=%s source=%s",
+                    "  [aiface] No student mapping for device_id=%d scope=%s enrollid=%s "
+                    "source=%s — if this enrollid is an EMPLOYEE, set the device scope to "
+                    "'employees' or 'mixed' and add a DeviceEmployeeMapping.",
                     device.id, scope, enrollid, source_cmd)
                 unmatched += 1
             continue
@@ -460,6 +465,7 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
     """
     from app.models import DeviceEmployeeMapping, EmployeeAttendance, Employee, db
     from app.utils.decorators import get_active_year
+    from sqlalchemy.exc import IntegrityError
 
     log.warning("[aiface-log] employee mapping lookup device_id=%d enrollid=%s is_active=True",
                 device.id, enrollid)
@@ -502,10 +508,20 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
                     emp_mapping.employee_id, enrollid)
         return 'unmatched'
 
+    # Cross-school safety: the mapping, employee and device must all belong to the
+    # same school. bypass_tenant_scope above disables automatic filtering, so this
+    # is verified explicitly to prevent any cross-school attendance write.
+    if employee.school_id != school.id:
+        log.warning("  [aiface] SCHOOL MISMATCH — employee_id=%d school_id=%d != "
+                    "device school_id=%d enrollid=%s sn=%s — rejecting punch",
+                    employee.id, employee.school_id, school.id, enrollid, sn)
+        return 'unmatched'
+
     year = get_active_year(school.id)
     if not year:
-        log.warning("  [aiface] no active year for school_id=%d — skipping employee punch",
-                    school.id)
+        log.warning("  [aiface] no active year for school_id=%d — skipping employee "
+                    "punch enrollid=%s employee_id=%d. Set a current academic year "
+                    "for this school.", school.id, enrollid, employee.id)
         return 'skipped'
 
     punch_date = punch_dt.date()
@@ -547,8 +563,23 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
                  employee.id, employee.full_name, punch_time)
         return 'processed'
 
+    except IntegrityError:
+        # Unique (employee_id, date) race: a concurrent punch (realtime sendlog +
+        # periodic getnewlog) created the row between our SELECT and INSERT.
+        # Roll back and treat as an already-recorded duplicate, not an error, so
+        # the rest of the batch keeps processing.
+        db.session.rollback()
+        log.info("  [aiface] employee attendance duplicate/race (unique constraint) "
+                 "employee_id=%d date=%s enrollid=%s — skipped",
+                 employee.id, punch_date, enrollid)
+        return 'skipped'
     except Exception:
-        log.exception("  [aiface] Employee attendance error employee_id=%d", employee.id)
+        # Roll back the failed transaction; without this the session stays in a
+        # failed state and every subsequent record in the same batch would also
+        # fail with PendingRollbackError.
+        db.session.rollback()
+        log.exception("  [aiface] Employee attendance error employee_id=%d enrollid=%s "
+                      "school_id=%d", employee.id, enrollid, school.id)
         return 'error'
 
 

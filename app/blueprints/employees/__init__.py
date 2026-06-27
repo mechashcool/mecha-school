@@ -977,6 +977,11 @@ def manual_attendance_save():
     year   = get_active_year(school.id) if school else None
 
     if not school or not year:
+        _log.warning('[emp-manual-att] aborted — missing active academic year '
+                     '(school_id=%s year=%s user_id=%s). Set a current academic year '
+                     'for this school before recording employee attendance.',
+                     getattr(school, 'id', None), getattr(year, 'id', None),
+                     getattr(current_user, 'id', None))
         flash('لا توجد سنة دراسية نشطة.', 'danger')
         return redirect(url_for('employees.manual_attendance'))
 
@@ -1000,6 +1005,9 @@ def manual_attendance_save():
         emp_ids = []
 
     if not emp_ids:
+        _log.warning('[emp-manual-att] no employee ids submitted '
+                     '(school_id=%s date=%s user_id=%s raw_ids=%r) — nothing to save',
+                     school.id, att_date, getattr(current_user, 'id', None), raw_ids)
         flash('لم يتم إرسال أي موظفين.', 'warning')
         return redirect(url_for('employees.manual_attendance', date=att_date.isoformat()))
 
@@ -1012,6 +1020,17 @@ def manual_attendance_save():
                  ).all())
     emp_map = {e.id: e for e in employees}
     valid_ids = list(emp_map.keys())
+
+    # Surface any submitted ids that did not resolve to an active employee in
+    # this school: cross-school attempt, inactive employee, or stale form id.
+    rejected_ids = [i for i in emp_ids if i not in emp_map]
+    if rejected_ids:
+        _log.warning('[emp-manual-att] %d submitted id(s) rejected — not an active '
+                     'employee in school_id=%s (cross-school / inactive / stale): %r',
+                     len(rejected_ids), school.id, rejected_ids)
+    _log.info('[emp-manual-att] save start school_id=%s date=%s user_id=%s '
+              'submitted=%d valid=%d', school.id, att_date,
+              getattr(current_user, 'id', None), len(emp_ids), len(valid_ids))
 
     # Fetch existing records for update (bypass ORM scope, explicit school filter)
     existing: dict = {}
@@ -1029,10 +1048,12 @@ def manual_attendance_save():
 
     for emp_id in emp_ids:
         if emp_id not in emp_map:
-            continue  # Cross-school attempt — silently rejected
+            continue  # Cross-school / inactive — already logged above, rejected
 
         status_choice = request.form.get(f'status_{emp_id}', 'absent').strip()
         if status_choice not in ('present', 'late', 'absent', 'on_leave'):
+            _log.warning('[emp-manual-att] employee_id=%s skipped — invalid status %r '
+                         '(school_id=%s date=%s)', emp_id, status_choice, school.id, att_date)
             continue
 
         check_in_val  = None
@@ -1095,9 +1116,13 @@ def manual_attendance_save():
         db.session.commit()
     except Exception:
         db.session.rollback()
-        _log.exception('[emp-manual-att] commit failed date=%s school_id=%s', att_date, school.id)
+        _log.exception('[emp-manual-att] commit failed date=%s school_id=%s '
+                       'created=%d updated=%d', att_date, school.id, created, updated)
         flash('حدث خطأ أثناء الحفظ. يرجى المحاولة مرة أخرى.', 'danger')
         return redirect(url_for('employees.manual_attendance', date=att_date.isoformat()))
+
+    _log.info('[emp-manual-att] save done school_id=%s date=%s created=%d updated=%d',
+              school.id, att_date, created, updated)
 
     parts = []
     if created:
