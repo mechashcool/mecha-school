@@ -15,57 +15,138 @@ notifications_bp = Blueprint('notifications', __name__,
                               template_folder='../../templates/notifications')
 
 
+_MOBILE_ROLES = frozenset({'parent', 'teacher'})
+
+
 def _dispatch_fcm_push(title: str, body: str, ntype: str,
                        target_user_id: int | None,
                        target_role: str | None,
-                       school_id: int) -> None:
+                       school_id: int,
+                       notification_id: int | None = None,
+                       sender_user_id: int | None = None) -> None:
     """
     Fire FCM push for a just-committed Notification row.
     Runs after DB commit so the in-app row is already saved regardless of FCM outcome.
     Handles three target modes:
       - target_user_id set → push to one user
       - target_role set → push to all active users with that role in the school
-      - both None → push to all active users in the school
+      - both None → push to all active mobile users (parent + teacher) in the school
+
+    Only 'parent' and 'teacher' roles use the mobile app and register device tokens.
+    Admin/manager users are excluded from broadcasts to avoid misleading
+    "no active device tokens" log spam and ensure push delivery to actual recipients.
     """
     try:
+        from app.models import MobileDeviceToken
         from app.services.fcm_service import is_enabled, send_push_to_user
         if not is_enabled():
-            _log.warning('[notifications] FCM disabled — skipping push for title=%r', title)
+            _log.warning('[notifications] FCM disabled — skipping push notification_id=%s title=%r',
+                         notification_id, title)
             return
 
-        data = {'type': 'message', 'screen': 'notifications', 'school_id': str(school_id)}
+        data = {
+            'type':     'message',
+            'screen':   'notifications',
+            'ntype':    ntype,
+            'school_id': str(school_id),
+        }
+
+        _log.warning(
+            '[notifications] FCM dispatch start '
+            'notification_id=%s sender_user_id=%s school_id=%s '
+            'target_user_id=%s target_role=%s title=%r',
+            notification_id, sender_user_id, school_id,
+            target_user_id, target_role, title,
+        )
 
         if target_user_id:
-            _log.warning('[notifications] FCM push → user_id=%s title=%r', target_user_id, title)
-            send_push_to_user(target_user_id, title, body, data)
+            token_count = MobileDeviceToken.query.filter_by(
+                user_id=target_user_id, is_active=True).count()
+            _log.warning(
+                '[notifications] FCM push → specific user  '
+                'notification_id=%s user_id=%s active_tokens=%d title=%r',
+                notification_id, target_user_id, token_count, title,
+            )
+            ok_n, fail_n = send_push_to_user(target_user_id, title, body, data)
+            _log.warning(
+                '[notifications] FCM result  notification_id=%s user_id=%s sent=%d failed=%d',
+                notification_id, target_user_id, ok_n, fail_n,
+            )
 
         elif target_role:
             role_obj = Role.query.filter_by(name=target_role).first()
             if not role_obj:
-                _log.warning('[notifications] FCM broadcast skipped — unknown role=%r', target_role)
+                _log.warning(
+                    '[notifications] FCM broadcast skipped — unknown role=%r '
+                    'notification_id=%s', target_role, notification_id,
+                )
                 return
             users = (User.query
                      .filter_by(role_id=role_obj.id, school_id=school_id, is_active=True)
                      .all())
-            _log.warning('[notifications] FCM broadcast → role=%s users=%d title=%r',
-                         target_role, len(users), title)
+            user_ids = [u.id for u in users]
+            _log.warning(
+                '[notifications] FCM broadcast → role=%s  '
+                'notification_id=%s school_id=%s resolved_user_ids=%s count=%d title=%r',
+                target_role, notification_id, school_id, user_ids, len(users), title,
+            )
+            total_ok = total_fail = 0
             for u in users:
-                _log.warning('[notifications] dispatching FCM user_id=%s title=%r', u.id, title)
-                send_push_to_user(u.id, title, body, data)
+                token_count = MobileDeviceToken.query.filter_by(
+                    user_id=u.id, is_active=True).count()
+                _log.warning(
+                    '[notifications] dispatching FCM  notification_id=%s user_id=%s '
+                    'active_tokens=%d', notification_id, u.id, token_count,
+                )
+                ok_n, fail_n = send_push_to_user(u.id, title, body, data)
+                total_ok += ok_n
+                total_fail += fail_n
+            _log.warning(
+                '[notifications] FCM broadcast result  notification_id=%s role=%s '
+                'recipients=%d total_sent=%d total_failed=%d',
+                notification_id, target_role, len(users), total_ok, total_fail,
+            )
 
         else:
-            # Broadcast to all active users in the school
+            # Broadcast to all active mobile users (parents + teachers) in the school.
+            # Admin/manager accounts cannot log into the mobile app and therefore never
+            # register device tokens — including them only produces misleading "no active
+            # device tokens" log noise and never delivers a push.
+            mobile_role_ids = [
+                r.id for r in
+                Role.query.filter(Role.name.in_(_MOBILE_ROLES)).all()
+            ]
             users = (User.query
-                     .filter_by(school_id=school_id, is_active=True)
+                     .filter(User.school_id == school_id,
+                             User.is_active.is_(True),
+                             User.role_id.in_(mobile_role_ids))
                      .all())
-            _log.warning('[notifications] FCM broadcast → all_school_users=%d title=%r',
-                         len(users), title)
+            user_ids = [u.id for u in users]
+            _log.warning(
+                '[notifications] FCM broadcast → all mobile users  '
+                'notification_id=%s school_id=%s resolved_user_ids=%s count=%d title=%r',
+                notification_id, school_id, user_ids, len(users), title,
+            )
+            total_ok = total_fail = 0
             for u in users:
-                _log.warning('[notifications] dispatching FCM user_id=%s title=%r', u.id, title)
-                send_push_to_user(u.id, title, body, data)
+                token_count = MobileDeviceToken.query.filter_by(
+                    user_id=u.id, is_active=True).count()
+                _log.warning(
+                    '[notifications] dispatching FCM  notification_id=%s user_id=%s '
+                    'active_tokens=%d', notification_id, u.id, token_count,
+                )
+                ok_n, fail_n = send_push_to_user(u.id, title, body, data)
+                total_ok += ok_n
+                total_fail += fail_n
+            _log.warning(
+                '[notifications] FCM broadcast result  notification_id=%s '
+                'recipients=%d total_sent=%d total_failed=%d',
+                notification_id, len(users), total_ok, total_fail,
+            )
 
     except Exception:
-        _log.exception('[notifications] FCM dispatch failed title=%r', title)
+        _log.exception('[notifications] FCM dispatch failed notification_id=%s title=%r',
+                       notification_id, title)
 
 
 # ntype values that are always system-generated (never admin-issued).
@@ -73,6 +154,10 @@ _SYSTEM_NTYPES = {
     'attendance', 'fee_reminder', 'homework', 'rfid', 'aiface',
     'parent_request', 'chat_message', 'school_announcement',
 }
+
+_ATTENDANCE_NTYPES = frozenset({'attendance', 'rfid', 'aiface'})
+_FEE_NTYPES        = frozenset({'fee_reminder', 'fee'})
+_ADMIN_NTYPES      = frozenset({'announcement'})
 
 
 @notifications_bp.route('/')
@@ -83,7 +168,7 @@ def index():
 
     page     = request.args.get('page', 1, type=int)
     tab      = request.args.get('tab', 'all')
-    if tab not in ('all', 'admin', 'system'):
+    if tab not in ('all', 'admin', 'attendance', 'fees', 'system'):
         tab = 'all'
 
     can_manage = current_user.has_permission('manage_notifications')
@@ -96,9 +181,13 @@ def index():
         q = q.filter(Notification.school_id == school_id)
 
     if tab == 'admin':
-        q = q.filter(Notification.ntype == 'announcement')
+        q = q.filter(Notification.ntype.in_(_ADMIN_NTYPES))
+    elif tab == 'attendance':
+        q = q.filter(Notification.ntype.in_(_ATTENDANCE_NTYPES))
+    elif tab == 'fees':
+        q = q.filter(Notification.ntype.in_(_FEE_NTYPES))
     elif tab == 'system':
-        q = q.filter(Notification.ntype != 'announcement')
+        q = q.filter(Notification.ntype.notin_(_ATTENDANCE_NTYPES | _FEE_NTYPES | _ADMIN_NTYPES))
 
     notifs = q.paginate(page=page, per_page=20, error_out=False)
 
@@ -230,8 +319,11 @@ def create():
         body  = request.form.get('body', '').strip()
         ntype = request.form.get('ntype', 'announcement')
 
-        _log.warning('[notifications] target_mode=%r target_user_id=%s target_role=%s',
-                     target_mode, target_user_id, target_role)
+        _log.warning(
+            '[notifications] create  sender_user_id=%s school_id=%s '
+            'target_mode=%r target_user_id=%s target_role=%s title=%r',
+            current_user.id, school_id, target_mode, target_user_id, target_role, title,
+        )
 
         n = Notification(
             school_id      = school_id,
@@ -248,8 +340,6 @@ def create():
                      'target_role=%s title=%r', n.id, target_user_id, target_role, title)
 
         # FCM push — after DB commit so in-app row is saved regardless of push outcome
-        _log.warning('[notifications] dispatching FCM target_user_id=%s target_role=%s title=%r',
-                     target_user_id, target_role, title)
         _dispatch_fcm_push(
             title=title,
             body=body,
@@ -257,6 +347,8 @@ def create():
             target_user_id=target_user_id,
             target_role=target_role,
             school_id=school_id,
+            notification_id=n.id,
+            sender_user_id=current_user.id,
         )
 
         flash('تم إرسال الإشعار بنجاح.', 'success')

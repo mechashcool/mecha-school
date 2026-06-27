@@ -25,6 +25,14 @@
        href="{{ url_for('notifications.index', tab='admin') }}">التبليغات</a>
   </li>
   <li class="nav-item">
+    <a class="nav-link {{ 'active' if active_tab == 'attendance' }}"
+       href="{{ url_for('notifications.index', tab='attendance') }}">الحضور والغياب</a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {{ 'active' if active_tab == 'fees' }}"
+       href="{{ url_for('notifications.index', tab='fees') }}">الأقساط والرسوم</a>
+  </li>
+  <li class="nav-item">
     <a class="nav-link {{ 'active' if active_tab == 'system' }}"
        href="{{ url_for('notifications.index', tab='system') }}">تنبيهات النظام</a>
   </li>
