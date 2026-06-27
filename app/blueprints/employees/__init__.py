@@ -339,24 +339,33 @@ def _handle_employee_post(employee):
                        .execution_options(bypass_tenant_scope=True)
                        .get(employee.user_id))
         if linked_user:
-            changed    = False
-            new_role   = request.form.get('role_id', type=int)
-            user_active = request.form.get('user_is_active')
+            _current_school_id = school.id if school else None
+            if _current_school_id and linked_user.school_id != _current_school_id:
+                # Linked user belongs to a different school — the tenant write guard
+                # (_before_flush) would raise PermissionError and crash the request.
+                # Skip all user mutations and inform the operator.
+                flash_msgs.append(('warning',
+                    'حساب تسجيل الدخول المرتبط بهذا الموظف يعود لمدرسة مختلفة '
+                    'ولا يمكن تعديله من هنا. تم حفظ بيانات الموظف فقط.'))
+            else:
+                changed    = False
+                new_role   = request.form.get('role_id', type=int)
+                user_active = request.form.get('user_is_active')
 
-            if new_role and new_role != linked_user.role_id:
-                linked_user.role_id = new_role
-                changed = True
-            if user_active is not None:
-                linked_user.is_active = bool(user_active)
-                changed = True
-            if reset_password:
-                new_pw = request.form.get('user_password', '').strip()
-                if new_pw:
-                    linked_user.set_password(new_pw)
+                if new_role and new_role != linked_user.role_id:
+                    linked_user.role_id = new_role
                     changed = True
-                    flash_msgs.append(('success', 'تم تغيير كلمة مرور الحساب.'))
-            if changed:
-                db.session.commit()
+                if user_active is not None:
+                    linked_user.is_active = bool(user_active)
+                    changed = True
+                if reset_password:
+                    new_pw = request.form.get('user_password', '').strip()
+                    if new_pw:
+                        linked_user.set_password(new_pw)
+                        changed = True
+                        flash_msgs.append(('success', 'تم تغيير كلمة مرور الحساب.'))
+                if changed:
+                    db.session.commit()
 
     # ── Teacher assignments ───────────────────────────────────────────────────
     if request.form.get('save_teacher_section'):
