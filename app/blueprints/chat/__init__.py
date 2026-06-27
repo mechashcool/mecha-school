@@ -663,7 +663,15 @@ def _can_send_now(room: ChatRoom, school) -> tuple[bool, str]:
         from app.utils.attendance_helpers import get_local_now
         local_now = get_local_now(school)
     except Exception:
-        local_now = datetime.utcnow()
+        # Fall back to Iraq local time (Asia/Baghdad = UTC+3, no DST) rather than
+        # raw UTC.  Raw UTC gives the wrong weekday between 21:00–24:00 UTC, which
+        # is midnight–03:00 Iraq time — exactly when schedules cross day boundaries.
+        import pytz as _pytz
+        _log.warning(
+            '[chat] _can_send_now: get_local_now failed for room_id=%s — '
+            'falling back to Asia/Baghdad', room.id,
+        )
+        local_now = datetime.now(_pytz.timezone('Asia/Baghdad')).replace(tzinfo=None)
 
     # Python weekday: Mon=0..Sun=6  →  our Sunday=0 scheme
     dow = (local_now.weekday() + 1) % 7

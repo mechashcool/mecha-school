@@ -392,11 +392,15 @@ def create_app(config_name=None):
 
     @app.errorhandler(CSRFError)
     def handle_csrf_error(e):
-        from flask import flash, redirect, url_for
-        flash(
-            'انتهت صلاحية الجلسة أو تم إرسال الطلب أكثر من مرة، يرجى المحاولة مجددًا.',
-            'danger',
+        from flask import flash, redirect, url_for, jsonify as _jsonify
+        msg = 'انتهت صلاحية الجلسة أو تم إرسال الطلب أكثر من مرة، يرجى المحاولة مجددًا.'
+        is_ajax = (
+            request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+            or 'application/json' in request.headers.get('Accept', '')
         )
+        if is_ajax:
+            return _jsonify({'ok': False, 'error': msg}), 400
+        flash(msg, 'danger')
         return redirect(url_for('auth.login'))
 
     # ── Security response headers ─────────────────────────────────────────────

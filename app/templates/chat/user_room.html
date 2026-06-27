@@ -307,6 +307,13 @@ if (form) {
       });
       console.log('[chat-ajax] response status', resp.status);
       console.log('[chat-ajax] response content-type', resp.headers.get('content-type'));
+      const ct = resp.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) {
+        // Non-JSON response — session expired or unexpected redirect.
+        showError('انتهت صلاحية الجلسة. يرجى تحديث الصفحة وإعادة المحاولة.');
+        console.warn('[chat-ajax] non-JSON response status=%d ct=%s', resp.status, ct);
+        return;
+      }
       const data = await resp.json();
       console.log('[chat-ajax] response json', data);
       if (data.ok) {
@@ -317,7 +324,7 @@ if (form) {
         showError(data.error || 'حدث خطأ أثناء الإرسال.');
       }
     } catch (err) {
-      showError('تعذر إرسال الرسالة، حاول مرة أخرى');
+      showError('تعذر الاتصال بالخادم. يرجى التحقق من اتصالك والمحاولة مجددًا.');
       console.error('[chat-ajax] send failed', err);
     } finally {
       enableSendBtn();
