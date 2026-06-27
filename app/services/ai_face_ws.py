@@ -527,6 +527,12 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
     punch_date = punch_dt.date()
     punch_time = punch_dt.time().replace(microsecond=0)
 
+    # Track what was written so we can notify after the commit and outside the
+    # exception handler. Notification failure must never trigger a rollback of
+    # attendance data that was already committed successfully.
+    _notify_action   = None   # 'check_in' | 'check_out'
+    _notify_att      = None   # EmployeeAttendance instance for the notification
+
     try:
         emp_att = (EmployeeAttendance.query
                    .execution_options(bypass_tenant_scope=True)
@@ -549,19 +555,22 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
             db.session.commit()
             log.info("  [aiface] employee check_in: employee_id=%d (%s) at %s",
                      employee.id, employee.full_name, punch_time)
-            return 'processed'
+            _notify_action = 'check_in'
+            _notify_att    = emp_att
 
-        if dedup_tag in (emp_att.notes or ''):
+        elif dedup_tag in (emp_att.notes or ''):
             log.debug("  [aiface] duplicate punch employee_id=%d tag=%s",
                       employee.id, dedup_tag)
             return 'skipped'
 
-        emp_att.check_out = punch_time
-        emp_att.notes     = (emp_att.notes or '') + '|' + dedup_tag
-        db.session.commit()
-        log.info("  [aiface] employee check_out: employee_id=%d (%s) at %s",
-                 employee.id, employee.full_name, punch_time)
-        return 'processed'
+        else:
+            emp_att.check_out = punch_time
+            emp_att.notes     = (emp_att.notes or '') + '|' + dedup_tag
+            db.session.commit()
+            log.info("  [aiface] employee check_out: employee_id=%d (%s) at %s",
+                     employee.id, employee.full_name, punch_time)
+            _notify_action = 'check_out'
+            _notify_att    = emp_att
 
     except IntegrityError:
         # Unique (employee_id, date) race: a concurrent punch (realtime sendlog +
@@ -581,6 +590,19 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
         log.exception("  [aiface] Employee attendance error employee_id=%d enrollid=%s "
                       "school_id=%d", employee.id, enrollid, school.id)
         return 'error'
+
+    # Send notification after the confirmed commit, outside the exception handler.
+    # A notification failure must not affect the attendance result.
+    if _notify_action and _notify_att:
+        try:
+            from app.services.notifications import NotificationService
+            NotificationService.send_employee_attendance_notification(
+                employee, _notify_att, _notify_action, 'aiface')
+        except Exception:
+            log.exception("  [aiface] employee attendance notification error "
+                          "employee_id=%d action=%s", employee.id, _notify_action)
+
+    return 'processed'
 
 
 def _handle_getnewlog_records(sn: str, records: list) -> tuple:

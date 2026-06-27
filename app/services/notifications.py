@@ -236,6 +236,93 @@ class _NotificationService:
         payload.setdefault('route', '/parent/notifications')
         return self.send_to_users(parent_ids, title, body, ntype, payload)
 
+    def send_employee_attendance_notification(
+        self,
+        employee,       # Employee instance: .id, .user_id, .school_id, .full_name
+        att_record,     # EmployeeAttendance instance: .id, .date, .status, .check_in, .check_out
+        action: str,    # 'check_in' | 'check_out' | 'status_update'
+        source: str,    # 'manual' | 'aiface'
+    ) -> list:
+        """
+        Send an in-app + FCM push notification to the employee's linked user account.
+
+        Isolation guarantees:
+        - Requires employee.user_id to be set; returns [] if not.
+        - Looks up the linked User with bypass_tenant_scope because employee and
+          device paths may already operate outside the ORM tenant filter; school
+          ownership is verified explicitly below.
+        - Rejects and logs a warning if linked user.school_id != employee.school_id
+          (cross-school mismatch — must never notify across schools).
+        - Only called after a confirmed successful DB commit; if the attendance
+          write rolled back, the caller never reaches this function.
+        """
+        if not employee or not employee.user_id:
+            return []
+
+        user = (User.query
+                .execution_options(bypass_tenant_scope=True)
+                .get(employee.user_id))
+        if not user:
+            log.warning(
+                '[emp-att-notify] linked user_id=%s not found for employee_id=%s '
+                'school_id=%s — notification skipped',
+                employee.user_id, employee.id, employee.school_id,
+            )
+            return []
+
+        # Critical school-isolation check: the linked user MUST belong to the
+        # same school as the employee. A cross-school user_id linkage (which
+        # should not occur but could via data corruption) must never result in
+        # a notification being delivered to someone from another school.
+        if user.school_id != employee.school_id:
+            log.warning(
+                '[emp-att-notify] SCHOOL MISMATCH — employee_id=%s school_id=%s '
+                'linked user_id=%s user.school_id=%s source=%s action=%s '
+                '— notification rejected',
+                employee.id, employee.school_id,
+                user.id, user.school_id, source, action,
+            )
+            return []
+
+        check_in_str  = att_record.check_in.strftime('%H:%M')  if att_record.check_in  else ''
+        check_out_str = att_record.check_out.strftime('%H:%M') if att_record.check_out else ''
+
+        if action == 'check_in':
+            title = 'تسجيل الحضور'
+            body  = 'تم تسجيل حضورك بنجاح'
+            if check_in_str:
+                body += f' الساعة {check_in_str}'
+        elif action == 'check_out':
+            title = 'تسجيل الانصراف'
+            body  = 'تم تسجيل انصرافك بنجاح'
+            if check_out_str:
+                body += f' الساعة {check_out_str}'
+        else:  # status_update
+            title = 'تحديث الحضور'
+            body  = 'تم تحديث حالة حضورك'
+
+        # Flutter routing: derive from user role so teachers open the teacher app.
+        user_role = user.role.name if user.role else ''
+        route = '/teacher/notifications' if user_role == 'teacher' else '/notifications'
+
+        data = {
+            'type':          'employee_attendance',
+            'route':         route,
+            'employee_id':   str(employee.id),
+            'attendance_id': str(att_record.id),
+            'date':          att_record.date.isoformat() if att_record.date else '',
+            'status':        att_record.status or '',
+            'source':        source,
+            'action':        action,
+        }
+
+        log.info(
+            '[emp-att-notify] employee_id=%s user_id=%s school_id=%s '
+            'action=%s source=%s',
+            employee.id, user.id, employee.school_id, action, source,
+        )
+        return self.send_to_user(user.id, title, body, ntype='employee_attendance', data=data)
+
     def broadcast(self, announcement_id: int):
         """Legacy Announcement broadcasts are disabled.
 

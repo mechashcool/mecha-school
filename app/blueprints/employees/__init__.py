@@ -1045,6 +1045,10 @@ def manual_attendance_save():
             existing[a.employee_id] = a
 
     created = updated = 0
+    # Notification queue: tuples of (employee_obj, att_record, action).
+    # Populated during the loop; flushed after a confirmed commit so that no
+    # notification is ever sent if the transaction rolls back.
+    _notify_queue = []
 
     for emp_id in emp_ids:
         if emp_id not in emp_map:
@@ -1097,8 +1101,11 @@ def manual_attendance_save():
             rec.source      = 'manual'
             rec.recorded_by = current_user.id
             updated += 1
+            # Status-update notification covers all manual changes (present, late,
+            # absent, on_leave) — the employee is informed their record changed.
+            _notify_queue.append((emp_map[emp_id], rec, 'status_update'))
         else:
-            db.session.add(EmployeeAttendance(
+            new_att = EmployeeAttendance(
                 employee_id      = emp_id,
                 school_id        = school.id,
                 academic_year_id = year.id,
@@ -1109,8 +1116,14 @@ def manual_attendance_save():
                 notes            = notes_val,
                 source           = 'manual',
                 recorded_by      = current_user.id,
-            ))
+            )
+            db.session.add(new_att)
             created += 1
+            # Only notify for actual attendance events (not absence / leave creation).
+            if status_choice in ('present', 'late'):
+                _notify_queue.append((emp_map[emp_id], new_att, 'check_in'))
+            if check_out_val is not None:
+                _notify_queue.append((emp_map[emp_id], new_att, 'check_out'))
 
     try:
         db.session.commit()
@@ -1120,6 +1133,18 @@ def manual_attendance_save():
                        'created=%d updated=%d', att_date, school.id, created, updated)
         flash('حدث خطأ أثناء الحفظ. يرجى المحاولة مرة أخرى.', 'danger')
         return redirect(url_for('employees.manual_attendance', date=att_date.isoformat()))
+
+    # Send notifications after confirmed commit.  Each call is individually
+    # guarded so a single failure does not prevent the rest from being sent.
+    if _notify_queue:
+        from app.services.notifications import NotificationService
+        for _emp_obj, _att_obj, _action in _notify_queue:
+            try:
+                NotificationService.send_employee_attendance_notification(
+                    _emp_obj, _att_obj, _action, 'manual')
+            except Exception:
+                _log.exception('[emp-manual-att] notification error employee_id=%s action=%s',
+                               _emp_obj.id, _action)
 
     _log.info('[emp-manual-att] save done school_id=%s date=%s created=%d updated=%d',
               school.id, att_date, created, updated)
