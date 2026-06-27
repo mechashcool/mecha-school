@@ -471,13 +471,17 @@ def dashboard():
         q = (db.session.query(
                 extract('year', model.date).label('y'),
                 extract('month', model.date).label('m'),
-                func.sum(model.amount).label('t'))
+                func.sum(model.amount).label('total'))
              .execution_options(include_all_years=True)
              .filter(model.date >= _win_start, model.date < _win_end_excl))
         if school_id:
             q = q.filter(model.school_id == school_id)
-        return {(int(r.y), int(r.m)): float(r.t or 0)
-                for r in q.group_by('y', 'm').all()}
+        # Unpack each result row positionally (year, month, total). Do NOT use
+        # attribute access like r.t — single-letter labels such as "t" collide
+        # with reserved Row attributes in SQLAlchemy 2.0 (Row.t is the deprecated
+        # tuple accessor) and would return the whole Row instead of the column.
+        return {(int(_y), int(_mo)): float(_tot or 0)
+                for _y, _mo, _tot in q.group_by('y', 'm').all()}
 
     _rev_map = _month_sums(Revenue)
     _exp_map = _month_sums(Expense)
