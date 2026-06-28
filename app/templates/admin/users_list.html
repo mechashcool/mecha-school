@@ -28,10 +28,12 @@
         <select name="role_id" class="form-select">
           <option value="all" {% if role_filter == 'all' %}selected{% endif %}>كل الأدوار</option>
           {% for role in roles %}
+          {% if role.name in ('teacher', 'parent') %}
           <option value="{{ role.id }}"
                   {% if role_filter == role.id|string %}selected{% endif %}>
             {{ role.label }}
           </option>
+          {% endif %}
           {% endfor %}
         </select>
       </div>
