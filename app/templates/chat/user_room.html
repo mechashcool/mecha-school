@@ -130,8 +130,9 @@
   {# ── Room info panel ── #}
   <div class="col-lg-4">
 
-    {# Schedule notice — only shown when at least one day is enabled (schedule active) #}
-    {% if schedules | selectattr('is_enabled') | list %}
+    {# Schedule notice — only shown when at least one day has a restricted time range #}
+    {% set restricted_days = schedules | selectattr('is_enabled') | list %}
+    {% if restricted_days %}
     <div class="card mb-3">
       <div class="card-header">
         <i class="bi bi-clock-fill text-accent me-1"></i>أوقات الإرسال
@@ -139,19 +140,18 @@
       <div class="card-body p-0">
         <ul class="list-group list-group-flush">
           {% set day_names = {0:'الأحد',1:'الاثنين',2:'الثلاثاء',3:'الأربعاء',4:'الخميس',5:'الجمعة',6:'السبت'} %}
-          {% for sch in schedules %}
+          {% for sch in restricted_days %}
           <li class="list-group-item py-1" style="font-size:12px">
             {{ day_names[sch.day_of_week] }}:
-            {% if sch.is_enabled %}
-              <span class="text-success fw-semibold">
-                {{ sch.open_time.strftime('%H:%M') }} – {{ sch.close_time.strftime('%H:%M') }}
-              </span>
-            {% else %}
-              <span class="text-muted">معطل</span>
-            {% endif %}
+            <span class="text-success fw-semibold">
+              {{ sch.open_time.strftime('%H:%M') }} – {{ sch.close_time.strftime('%H:%M') }}
+            </span>
           </li>
           {% endfor %}
         </ul>
+        <div class="px-3 py-2 text-muted" style="font-size:11px">
+          الأيام غير المذكورة مسموح فيها بالإرسال في أي وقت.
+        </div>
       </div>
     </div>
     {% endif %}

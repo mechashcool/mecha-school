@@ -73,18 +73,22 @@ def _get_membership(room_id: int, user_id: int) -> ChatRoomMember | None:
 
 
 def _can_send_now(room: ChatRoom, school) -> tuple[bool, str]:
-    """Check schedule; return (allowed, reason)."""
-    schedules = (ChatRoomSchedule.query
-                 .filter_by(room_id=room.id, is_enabled=True)
-                 .all())
-    if not schedules:
-        return True, ''
+    """
+    Per-day independent schedule check.
+
+    Each day is evaluated in isolation:
+    - No row for today, or today's row is disabled  → allowed (no restriction for today).
+    - Today's row is enabled and current time is within open/close → allowed.
+    - Today's row is enabled but current time is outside the range  → blocked.
+
+    Other days' enabled/disabled state never affects today's result.
+    """
     try:
         from app.utils.attendance_helpers import get_local_now
         local_now = get_local_now(school)
     except Exception:
         # Fall back to Iraq local time rather than raw UTC.
-        # Raw UTC gives the wrong weekday between 21:00–24:00 UTC (midnight–03:00 Iraq).
+        # UTC gives the wrong weekday between 21:00–24:00 UTC (midnight–03:00 Iraq).
         import pytz as _pytz
         _log.warning(
             '[chat_api] _can_send_now: get_local_now failed for room_id=%s — '
@@ -93,13 +97,19 @@ def _can_send_now(room: ChatRoom, school) -> tuple[bool, str]:
         local_now = datetime.now(_pytz.timezone('Asia/Baghdad')).replace(tzinfo=None)
     dow = (local_now.weekday() + 1) % 7  # Sun=0 scheme
     now_t = local_now.time()
-    for sch in schedules:
-        if sch.day_of_week == dow:
-            if sch.open_time <= now_t <= sch.close_time:
-                return True, ''
-            return (False,
-                    'المراسلات غير متاحة حالياً، يمكنكم الإرسال ضمن أوقات '
-                    'التواصل المحددة من المدرسة.')
+
+    # Look up ONLY today's row — other days are irrelevant
+    today_sch = (ChatRoomSchedule.query
+                 .filter_by(room_id=room.id, day_of_week=dow)
+                 .first())
+
+    if today_sch is None or not today_sch.is_enabled:
+        # No schedule configured for today, or today is disabled → no restriction
+        return True, ''
+
+    if today_sch.open_time <= now_t <= today_sch.close_time:
+        return True, ''
+
     return (False,
             'المراسلات غير متاحة حالياً، يمكنكم الإرسال ضمن أوقات التواصل '
             'المحددة من المدرسة.')
@@ -292,8 +302,8 @@ def chat_room_detail(room_id):
         return err('المحادثة غير موجودة.', 404)
 
     can_send, send_reason = _member_can_send(mem, room)
-    # Schedule check
-    if can_send and room.schedules.filter_by(is_enabled=True).count() > 0:
+    # Per-day schedule check — always evaluate today's row regardless of other days
+    if can_send:
         can_send, send_reason = _can_send_now(room, user.school)
 
     members_out = []
@@ -414,11 +424,10 @@ def chat_send_message(room_id):
     if not can_send:
         return err(reason, 403)
 
-    # Schedule check
-    if room.schedules.filter_by(is_enabled=True).count() > 0:
-        can_send, reason = _can_send_now(room, user.school)
-        if not can_send:
-            return err(reason, 403)
+    # Per-day schedule check — always evaluate today's row regardless of other days
+    can_send, reason = _can_send_now(room, user.school)
+    if not can_send:
+        return err(reason, 403)
 
     payload = request.get_json(silent=True) or {}
     body    = (payload.get('body') or '').strip()
