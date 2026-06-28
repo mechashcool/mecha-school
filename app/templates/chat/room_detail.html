@@ -69,6 +69,13 @@
       <div class="card-body p-0">
         {% if messages %}
         <div style="max-height:560px;overflow-y:auto;padding:16px" id="msgBox">
+          {% if total_messages > messages|length %}
+          <div id="loadOlderWrap" class="text-center mb-3">
+            <button id="loadOlderBtn" class="btn btn-outline-secondary btn-sm" type="button">
+              <i class="bi bi-arrow-up-circle me-1"></i>تحميل الرسائل السابقة
+            </button>
+          </div>
+          {% endif %}
           {% for msg in messages %}
           <div class="d-flex mb-3 align-items-start gap-2
             {{ 'flex-row-reverse' if msg.sender and msg.sender.id == current_user.id }}"
@@ -414,5 +421,101 @@ document.addEventListener('visibilitychange', function() {
 startPolling();
 
 window.addEventListener('beforeunload', stopPolling);
+
+// ─── Load older messages ──────────────────────────────────────────────────────
+const OLDER_URL      = '{{ older_url }}';
+const loadOlderBtn   = document.getElementById('loadOlderBtn');
+const loadOlderWrap  = document.getElementById('loadOlderWrap');
+
+// Track the smallest message ID currently in the DOM.
+let oldestMsgId = Infinity;
+document.querySelectorAll('[data-msg-id]').forEach(function(el) {
+  const id = parseInt(el.dataset.msgId, 10);
+  if (id < oldestMsgId) oldestMsgId = id;
+});
+if (!isFinite(oldestMsgId)) oldestMsgId = 0;
+
+function buildOlderMsgHtml(msgData) {
+  const rev        = msgData.is_self ? 'flex-row-reverse' : '';
+  const initial    = escapeHtml((msgData.sender_name || '؟')[0]);
+  const senderHtml = escapeHtml(msgData.sender_name || 'محذوف');
+  const timeHtml   = escapeHtml(msgData.created_at || '');
+  const bubbleHtml = msgData.is_deleted
+    ? `<div class="bg-light border rounded p-2 text-muted fst-italic" style="font-size:13px">تم حذف هذه الرسالة</div>`
+    : `<div class="bg-white border rounded p-2 shadow-sm" style="font-size:14px">${escapeHtml(msgData.body || '')}</div>`;
+  return `<div class="d-flex mb-3 align-items-start gap-2 ${rev}" data-msg-id="${msgData.id}">
+    <div class="rounded-circle bg-secondary text-white d-flex align-items-center justify-content-center flex-shrink-0"
+         style="width:34px;height:34px;font-size:13px">${initial}</div>
+    <div style="max-width:70%">
+      <div class="d-flex gap-2 align-items-center mb-1 ${rev}">
+        <span class="fw-semibold" style="font-size:13px">${senderHtml}</span>
+        <span class="text-muted" style="font-size:11px">${timeHtml}</span>
+      </div>
+      ${bubbleHtml}
+    </div>
+  </div>`;
+}
+
+if (loadOlderBtn) {
+  loadOlderBtn.addEventListener('click', async function() {
+    if (oldestMsgId <= 0) return;
+
+    loadOlderBtn.disabled = true;
+    loadOlderBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> جار التحميل...';
+
+    const box = document.getElementById('msgBox');
+    try {
+      const resp = await fetch(
+        OLDER_URL + '?before_id=' + oldestMsgId,
+        { headers: { 'X-Requested-With': 'XMLHttpRequest' } }
+      );
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+      const msgs = data.messages || [];
+
+      if (msgs.length === 0) {
+        if (loadOlderWrap) loadOlderWrap.innerHTML =
+          '<p class="text-muted text-center mb-2" style="font-size:12px">لا توجد رسائل أقدم</p>';
+        return;
+      }
+
+      // Build all message HTML before touching the DOM.
+      const html = msgs.map(buildOlderMsgHtml).join('');
+
+      // Record height before inserting so we can restore scroll position.
+      const prevScrollHeight = box ? box.scrollHeight : 0;
+
+      // Insert older messages just before the first existing message element,
+      // which keeps them in chronological order (older above newer).
+      const firstExisting = box ? box.querySelector('[data-msg-id]') : null;
+      if (firstExisting) {
+        firstExisting.insertAdjacentHTML('beforebegin', html);
+      } else if (box) {
+        box.insertAdjacentHTML('afterbegin', html);
+      }
+
+      // Shift scrollTop by the height added at the top so the view stays put.
+      if (box) box.scrollTop += (box.scrollHeight - prevScrollHeight);
+
+      // Update oldestMsgId to the smallest ID among the newly loaded batch.
+      msgs.forEach(function(m) { if (m.id < oldestMsgId) oldestMsgId = m.id; });
+
+      // Show or hide the button based on whether even older messages exist.
+      if (data.has_more) {
+        loadOlderBtn.disabled = false;
+        loadOlderBtn.innerHTML = '<i class="bi bi-arrow-up-circle me-1"></i>تحميل الرسائل السابقة';
+      } else {
+        if (loadOlderWrap) loadOlderWrap.innerHTML =
+          '<p class="text-muted text-center mb-2" style="font-size:12px">لا توجد رسائل أقدم</p>';
+      }
+    } catch (err) {
+      console.error('[chat-older] error', err);
+      loadOlderBtn.disabled = false;
+      loadOlderBtn.innerHTML = '<i class="bi bi-arrow-up-circle me-1"></i>تحميل الرسائل السابقة';
+      showError('تعذر تحميل الرسائل السابقة. يرجى المحاولة مجددًا.');
+      setTimeout(hideError, 4000);
+    }
+  });
+}
 </script>
 {% endblock %}

@@ -1285,7 +1285,8 @@ def room_detail(room_id):
                            send_blocked_reason=send_blocked_reason,
                            membership=membership,
                            sse_url=url_for('chat.room_events', room_id=room.id),
-                           poll_url=url_for('chat.room_poll', room_id=room.id))
+                           poll_url=url_for('chat.room_poll', room_id=room.id),
+                           older_url=url_for('chat.room_older_messages', room_id=room.id))
 
 
 # ─── Edit room ────────────────────────────────────────────────────────────────
@@ -2312,6 +2313,76 @@ def room_poll(room_id: int):
     after_id = max(0, int(request.args.get('after_id', 0)))
     _mark_all_room_messages_read(room.id, current_user.id, label='room_poll')
     return _poll_messages_json(room_id, current_user.id, after_id)
+
+
+@chat_bp.route('/rooms/<int:room_id>/messages/older')
+@login_required
+@admin_required
+def room_older_messages(room_id: int):
+    """Return a JSON batch of messages older than ``before_id`` for the admin room view.
+
+    Used by the "تحميل الرسائل السابقة" button.  School isolation: room is
+    fetched with ``school_id`` so a different school's room_id returns 404.
+    ``before_id`` must be a positive integer that already belongs to this room;
+    the query is further scoped by ``room_id`` so a forged before_id from
+    another room cannot leak messages.
+    """
+    _require_chat_module()
+    school = get_current_school()
+    room = (ChatRoom.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(id=room_id, school_id=school.id if school else 0)
+            .first_or_404())
+
+    try:
+        before_id = int(request.args.get('before_id', 0))
+        limit     = min(max(1, int(request.args.get('limit', 100))), 200)
+    except (ValueError, TypeError):
+        abort(400)
+    if before_id <= 0:
+        abort(400)
+
+    # Fetch the `limit` messages immediately before before_id.
+    # Order desc so the LIMIT trims to the newest of the older batch,
+    # then reverse to chronological (asc) order for display.
+    older = (ChatMessage.query
+             .filter(
+                 ChatMessage.room_id == room.id,
+                 ChatMessage.id < before_id,
+             )
+             .order_by(ChatMessage.created_at.desc())
+             .limit(limit)
+             .all())
+    older = list(reversed(older))
+
+    # Determine whether even older messages exist beyond this batch.
+    has_more = bool(
+        older and
+        (ChatMessage.query
+         .filter(
+             ChatMessage.room_id == room.id,
+             ChatMessage.id < older[0].id,
+         )
+         .first())
+    )
+
+    # Mark all room messages read: the user is actively viewing the room.
+    _mark_all_room_messages_read(room.id, current_user.id, label='room_older')
+
+    return jsonify({
+        'messages': [
+            {
+                'id':          m.id,
+                'body':        m.body or '[مرفق]',
+                'sender_name': m.sender.full_name if m.sender else 'محذوف',
+                'created_at':  m.created_at.strftime('%Y-%m-%d %H:%M'),
+                'is_self':     m.sender_user_id == current_user.id,
+                'is_deleted':  bool(m.is_deleted),
+            }
+            for m in older
+        ],
+        'has_more': has_more,
+    })
 
 
 @chat_bp.route('/my-rooms/<int:room_id>/events')
