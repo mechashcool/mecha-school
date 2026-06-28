@@ -30,6 +30,8 @@ import logging
 import time
 from datetime import datetime, timezone
 
+from sqlalchemy import func
+
 from flask import (
     Blueprint, Response, abort, current_app, flash, jsonify, redirect,
     render_template, request, stream_with_context, url_for,
@@ -786,6 +788,32 @@ def index():
             'message_count': room.messages.filter_by(is_deleted=False).count(),
             'last_message':  last_msg,
         })
+
+    # Batch per-room unread counts — one query for all rooms, no N+1.
+    # room_ids are already school-scoped via filter_by(school_id=school.id) above.
+    if rooms:
+        _read_subq = (db.session.query(ChatMessageRead.message_id)
+                      .filter(ChatMessageRead.user_id == current_user.id))
+        _unread_rows = (
+            db.session.query(
+                ChatMessage.room_id,
+                func.count(ChatMessage.id).label('unread'),
+            )
+            .filter(
+                ChatMessage.room_id.in_([r.id for r in rooms]),
+                ChatMessage.is_deleted == False,  # noqa: E712
+                ChatMessage.sender_user_id != current_user.id,
+                ChatMessage.id.notin_(_read_subq),
+            )
+            .group_by(ChatMessage.room_id)
+            .all()
+        )
+        _unread_by_room = {row.room_id: row.unread for row in _unread_rows}
+    else:
+        _unread_by_room = {}
+
+    for stat in room_stats:
+        stat['unread_count'] = _unread_by_room.get(stat['room'].id, 0)
 
     # Separate private (1-to-1) from group/announcement rooms.
     private_stats = [s for s in room_stats if s['room'].type == 'private']
