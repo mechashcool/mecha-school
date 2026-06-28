@@ -749,6 +749,56 @@ def _ensure_admin_member(room: ChatRoom) -> ChatRoomMember:
     return mem
 
 
+# ─── Read-receipt helper ──────────────────────────────────────────────────────
+
+def _mark_all_room_messages_read(room_id: int, user_id: int, label: str = '') -> None:
+    """Insert ChatMessageRead rows for every non-deleted, non-self message in
+    the room that the user has not yet read.
+
+    Scans the entire room — not a limited window — so rooms with many messages
+    (where the load-100 window covers only old messages) are fully cleared.
+    Safe to call even if all messages are already read (no-op in that case).
+    Silently rolls back and returns on any DB error so a read-marking failure
+    never breaks the page load.
+    """
+    try:
+        _all_ids = [
+            r[0] for r in
+            db.session.query(ChatMessage.id)
+            .filter(
+                ChatMessage.room_id == room_id,
+                ChatMessage.is_deleted == False,  # noqa: E712
+                ChatMessage.sender_user_id != user_id,
+            )
+            .all()
+        ]
+        if not _all_ids:
+            return
+        _already = {
+            r.message_id for r in
+            ChatMessageRead.query
+            .filter(
+                ChatMessageRead.user_id == user_id,
+                ChatMessageRead.message_id.in_(_all_ids),
+            )
+            .all()
+        }
+        _new = [
+            ChatMessageRead(message_id=mid, user_id=user_id)
+            for mid in _all_ids
+            if mid not in _already
+        ]
+        if _new:
+            db.session.add_all(_new)
+            db.session.commit()
+            _log.debug(
+                '[chat] %s: marked %d messages read room_id=%s user_id=%s',
+                label or 'mark_read', len(_new), room_id, user_id,
+            )
+    except Exception:
+        db.session.rollback()
+
+
 # ─── Room list ────────────────────────────────────────────────────────────────
 
 @chat_bp.route('/')
@@ -1204,37 +1254,12 @@ def room_detail(room_id):
 
     schedules = room.schedules.order_by(ChatRoomSchedule.day_of_week).all()
 
-    # Mark unread messages as read for current user (mirrors user_room logic).
-    # Scoped to this room's loaded message IDs — avoids pulling all user reads globally.
-    _unread_msg_ids = [
-        m.id for m in messages
-        if not m.is_deleted and m.sender_user_id != current_user.id
-    ]
-    if _unread_msg_ids:
-        _already_read = {
-            r.message_id for r in
-            ChatMessageRead.query
-            .filter(
-                ChatMessageRead.user_id == current_user.id,
-                ChatMessageRead.message_id.in_(_unread_msg_ids),
-            )
-            .all()
-        }
-        _new_reads = [
-            ChatMessageRead(message_id=mid, user_id=current_user.id)
-            for mid in _unread_msg_ids
-            if mid not in _already_read
-        ]
-        if _new_reads:
-            db.session.add_all(_new_reads)
-            try:
-                db.session.commit()
-                _log.debug(
-                    '[chat] room_detail: marked %d messages read room_id=%s user_id=%s',
-                    len(_new_reads), room.id, current_user.id,
-                )
-            except Exception:
-                db.session.rollback()
+    # Mark ALL non-deleted, non-self messages in this room as read.
+    # Must scan the whole room, not just the loaded `messages` slice: the default
+    # limit=100 returns the OLDEST messages first, so any newer unread messages
+    # (beyond position 100 in message history, or arriving via live polling)
+    # would never be included in the slice and would stay unread in the DB.
+    _mark_all_room_messages_read(room.id, current_user.id, label='room_detail')
 
     return render_template('chat/room_detail.html',
                            room=room, messages=messages,
@@ -2215,23 +2240,10 @@ def user_room(room_id):
                 .order_by(ChatMessage.created_at.asc())
                 .limit(100).all())
 
-    already_read = {
-        r.message_id for r in
-        ChatMessageRead.query.filter_by(user_id=current_user.id).all()
-    }
-    new_reads = [
-        ChatMessageRead(message_id=m.id, user_id=current_user.id)
-        for m in messages
-        if not m.is_deleted
-        and m.id not in already_read
-        and m.sender_user_id != current_user.id
-    ]
-    if new_reads:
-        db.session.add_all(new_reads)
-        try:
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
+    # Mark ALL non-deleted, non-self messages in this room as read.
+    # Same fix as room_detail: the limit-100 window only covers the oldest
+    # messages; unread messages beyond that window must also be cleared.
+    _mark_all_room_messages_read(room.id, current_user.id, label='user_room')
 
     schedules = room.schedules.order_by(ChatRoomSchedule.day_of_week).all()
 
@@ -2270,7 +2282,11 @@ def room_events(room_id: int):
 @login_required
 @admin_required
 def room_poll(room_id: int):
-    """JSON polling fallback for school-admin room view."""
+    """JSON polling fallback for school-admin room view.
+
+    Also marks the returned messages as read so messages received while the
+    room page is open are cleared from the unread counter immediately.
+    """
     _require_chat_module()
     school = get_current_school()
     room = (ChatRoom.query
@@ -2278,6 +2294,7 @@ def room_poll(room_id: int):
             .filter_by(id=room_id, school_id=school.id if school else 0)
             .first_or_404())
     after_id = max(0, int(request.args.get('after_id', 0)))
+    _mark_all_room_messages_read(room.id, current_user.id, label='room_poll')
     return _poll_messages_json(room_id, current_user.id, after_id)
 
 
@@ -2306,7 +2323,11 @@ def user_room_events(room_id: int):
 @chat_bp.route('/my-rooms/<int:room_id>/poll')
 @login_required
 def user_room_poll(room_id: int):
-    """JSON polling fallback for parent/teacher room view."""
+    """JSON polling fallback for parent/teacher room view.
+
+    Also marks messages as read so messages delivered via polling are cleared
+    from the user's unread counter, matching the room-open behavior.
+    """
     _require_chat_module()
     school_id = getattr(current_user, 'school_id', None)
     if not school_id:
@@ -2321,6 +2342,7 @@ def user_room_poll(room_id: int):
     if not membership:
         abort(403)
     after_id = max(0, int(request.args.get('after_id', 0)))
+    _mark_all_room_messages_read(room.id, current_user.id, label='user_room_poll')
     return _poll_messages_json(room_id, current_user.id, after_id)
 
 
