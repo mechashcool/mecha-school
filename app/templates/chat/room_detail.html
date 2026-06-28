@@ -57,8 +57,14 @@
   <div class="col-md-8">
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-chat-left-text-fill text-accent"></i>الرسائل ({{ messages|length }})</span>
-        <small class="text-muted">أحدث {{ messages|length }} رسالة</small>
+        <span><i class="bi bi-chat-left-text-fill text-accent"></i>الرسائل ({{ total_messages }})</span>
+        <small class="text-muted">
+          {% if total_messages > messages|length %}
+            أحدث {{ messages|length }} من أصل {{ total_messages }} رسالة
+          {% else %}
+            {{ messages|length }} رسالة
+          {% endif %}
+        </small>
       </div>
       <div class="card-body p-0">
         {% if messages %}

@@ -1213,11 +1213,26 @@ def room_detail(room_id):
             return jsonify({'ok': True, 'message': _format_message_json(msg)})
         return redirect(url_for('chat.room_detail', room_id=room.id))
 
-    limit    = min(int(request.args.get('limit', 100)), 500)
+    limit = min(int(request.args.get('limit', 100)), 500)
+
+    # Load the *latest* `limit` messages but display them in chronological order.
+    # The inner subquery picks the newest IDs (desc + limit); the outer query
+    # re-orders them ascending so the chat reads oldest-to-newest on screen.
+    # room.id is already school-verified above, so the room_id filter is safe.
+    _latest_ids_subq = (
+        db.session.query(ChatMessage.id)
+        .filter(ChatMessage.room_id == room.id)
+        .order_by(ChatMessage.created_at.desc())
+        .limit(limit)
+        .subquery()
+    )
     messages = (ChatMessage.query
-                .filter_by(room_id=room.id)
+                .filter(ChatMessage.id.in_(_latest_ids_subq))
                 .order_by(ChatMessage.created_at.asc())
-                .limit(limit).all())
+                .all())
+    total_messages = (ChatMessage.query
+                      .filter_by(room_id=room.id)
+                      .count())
     members  = (ChatRoomMember.query
                 .filter_by(room_id=room.id)
                 .order_by(ChatRoomMember.role)
@@ -1263,6 +1278,7 @@ def room_detail(room_id):
 
     return render_template('chat/room_detail.html',
                            room=room, messages=messages,
+                           total_messages=total_messages,
                            members=members, schedules=schedules,
                            member_display_names=member_display_names,
                            can_send=can_send,
