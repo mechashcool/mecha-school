@@ -130,8 +130,8 @@
   {# ── Room info panel ── #}
   <div class="col-lg-4">
 
-    {# Schedule notice if applicable #}
-    {% if schedules %}
+    {# Schedule notice — only shown when at least one day is enabled (schedule active) #}
+    {% if schedules | selectattr('is_enabled') | list %}
     <div class="card mb-3">
       <div class="card-header">
         <i class="bi bi-clock-fill text-accent me-1"></i>أوقات الإرسال
