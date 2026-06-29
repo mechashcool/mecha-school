@@ -487,17 +487,56 @@
         });
       }
 
-      /* Prevent duplicate login submissions */
-      var form      = document.querySelector('form');
-      var loginBtn  = document.getElementById('loginBtn');
+      /* Prevent duplicate login submissions.
+       *
+       * Only disable the button after HTML5 constraint validation passes
+       * (checkValidity). If validation fails the browser cancels the submit
+       * event before this handler runs in modern browsers, but we guard
+       * explicitly so the button is never stuck disabled after a
+       * client-side validation rejection.
+       *
+       * pageshow with persisted=true fires when the browser restores the
+       * page from the back/forward cache (bfcache). Re-enable the button
+       * there so users who press Back after a failed login can try again.
+       */
+      var form     = document.querySelector('form');
+      var loginBtn = document.getElementById('loginBtn');
+
+      function resetBtn() {
+        if (!loginBtn) return;
+        loginBtn.disabled    = false;
+        loginBtn.textContent = 'تسجيل الدخول';
+        loginBtn.style.opacity = '';
+        loginBtn.style.cursor  = '';
+      }
+
       if (form && loginBtn) {
-        form.addEventListener('submit', function () {
-          loginBtn.disabled = true;
-          loginBtn.textContent = 'جارٍ تسجيل الدخول…';
-          loginBtn.style.opacity = '0.7';
-          loginBtn.style.cursor  = 'not-allowed';
+        form.addEventListener('submit', function (e) {
+          /* checkValidity() returns false when a required field is empty.
+           * The browser will show its native tooltip and abort the submit,
+           * so we must not disable the button in that case. */
+          if (!form.checkValidity()) return;
+
+          /* Guard against a second submit while the first is in flight. */
+          if (form.dataset.submitting === '1') {
+            e.preventDefault();
+            return;
+          }
+          form.dataset.submitting  = '1';
+          loginBtn.disabled        = true;
+          loginBtn.textContent     = 'جارٍ تسجيل الدخول…';
+          loginBtn.style.opacity   = '0.7';
+          loginBtn.style.cursor    = 'not-allowed';
         });
       }
+
+      /* Restore button when browser serves page from bfcache. */
+      window.addEventListener('pageshow', function (e) {
+        if (e.persisted) {
+          if (form) form.dataset.submitting = '0';
+          resetBtn();
+        }
+      });
     })();
   </script>
 

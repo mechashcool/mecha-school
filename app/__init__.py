@@ -390,6 +390,20 @@ def create_app(config_name=None):
     def server_error(e):
         return _render_error_page('shared/500.html'), 500
 
+    @app.errorhandler(429)
+    def too_many_requests(e):
+        # API / AJAX callers (mobile app, fetch, XHR) get a JSON response.
+        # Browser form submissions (web login) get the friendly Arabic page.
+        from flask import jsonify as _jsonify
+        is_api = (
+            request.path.startswith('/api/')
+            or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+            or 'application/json' in request.headers.get('Accept', '')
+        )
+        if is_api:
+            return _jsonify({'ok': False, 'error': 'rate_limited', 'message': 'طلبات كثيرة، يرجى المحاولة لاحقاً.'}), 429
+        return _render_error_page('shared/429.html'), 429
+
     @app.errorhandler(CSRFError)
     def handle_csrf_error(e):
         from flask import flash, redirect, url_for, jsonify as _jsonify
