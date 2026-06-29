@@ -339,6 +339,16 @@
 
     .support-note i { color: #f0c842; font-size: 13px; }
 
+    .privacy-link {
+      display: block;
+      margin-top: 8px;
+      font-size: clamp(10px, 1.1vh, 11px);
+      color: rgba(255, 255, 255, 0.45);
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .privacy-link:hover { color: rgba(255, 255, 255, 0.75); }
+
     /* ── Mobile ───────────────────────────────────────────────────────
        On phones the page is taller than the viewport so allow full
        natural scrolling; overflow: hidden would trap the card.
@@ -468,6 +478,7 @@
           <i class="bi bi-headset"></i>
           للدعم والمساعدة، تواصل معنا مباشرة
         </div>
+        <a href="/privacy" class="privacy-link">سياسة الخصوصية</a>
       </div>
 
     </div>
