@@ -77,7 +77,16 @@ def login():
             # error message and throttle behaviour are identical for a wrong
             # username and a wrong password.
             record_failed_attempt(ip, username)
-            error = 'اسم المستخدم أو كلمة المرور غير صحيحة.'
+            # If this attempt crossed a lockout threshold show the lockout
+            # message immediately — not only on the next submit.
+            locked, wait_seconds = check_lockout(ip, username)
+            if locked:
+                error = (
+                    f'تجاوزت الحد المسموح لمحاولات تسجيل الدخول. '
+                    f'يرجى المحاولة {format_wait_ar(wait_seconds)}.'
+                )
+            else:
+                error = 'اسم المستخدم أو كلمة المرور غير صحيحة.'
 
     return render_template('auth/login.html', error=error)
 

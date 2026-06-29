@@ -20,6 +20,28 @@ from . import mobile_api_bp
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
+def _lockout_response(wait_seconds: int):
+    """Build the standard LOGIN_LOCKED 429 response."""
+    retry_minutes = (wait_seconds + 59) // 60
+    locked_until = (
+        datetime.datetime.now(datetime.timezone.utc)
+        + datetime.timedelta(seconds=wait_seconds)
+    ).isoformat()
+    return jsonify({
+        'ok':                  False,
+        'error':               'LOGIN_LOCKED',
+        'message':             (
+            f'تجاوزت الحد المسموح لمحاولات تسجيل الدخول. '
+            f'يرجى المحاولة {format_wait_ar(wait_seconds)}.'
+        ),
+        'remaining_seconds':   wait_seconds,
+        'retry_after_seconds': wait_seconds,
+        'retry_after_minutes': retry_minutes,
+        'locked_until':        locked_until,
+        'wait_seconds':        wait_seconds,
+    }), 429
+
+
 def _school_payload(school) -> dict | None:
     if not school:
         return None
@@ -87,21 +109,7 @@ def login():
     # requests cost nothing and cannot be used to time-attack username existence.
     locked, wait_seconds = check_lockout(ip, identifier)
     if locked:
-        retry_minutes = (wait_seconds + 59) // 60
-        locked_until = (
-            datetime.datetime.now(datetime.timezone.utc)
-            + datetime.timedelta(seconds=wait_seconds)
-        ).isoformat()
-        return jsonify({
-            'ok':                  False,
-            'error':               'LOGIN_LOCKED',
-            'message':             f'تجاوزت الحد المسموح لمحاولات تسجيل الدخول. يرجى المحاولة {format_wait_ar(wait_seconds)}.',
-            'remaining_seconds':   wait_seconds,
-            'retry_after_seconds': wait_seconds,
-            'retry_after_minutes': retry_minutes,
-            'locked_until':        locked_until,
-            'wait_seconds':        wait_seconds,
-        }), 429
+        return _lockout_response(wait_seconds)
 
     user = User.query.filter(
         (User.username == identifier) | (User.email == identifier)
@@ -111,6 +119,12 @@ def login():
         # Record against (IP, identifier) regardless of whether the username
         # exists — same counter, same error, prevents username enumeration.
         record_failed_attempt(ip, identifier)
+        # If this attempt crossed a lockout threshold the lock key was just
+        # created; return 429 immediately so the Nth attempt itself triggers
+        # the lockout response rather than the (N+1)th request.
+        locked, wait_seconds = check_lockout(ip, identifier)
+        if locked:
+            return _lockout_response(wait_seconds)
         return err('invalid_credentials', 401)
 
     # Credentials are valid — clear the throttle counter before any further
