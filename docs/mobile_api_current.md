@@ -48,15 +48,20 @@ All responses are JSON with an `ok` boolean field.
 { "ok": false, "error": "error_code_or_message" }
 ```
 
-**Rate-limit / lockout (login only):**
+**Rate-limit / lockout (login only — HTTP 429):**
 ```json
 {
   "ok": false,
-  "error": "too_many_attempts",
-  "wait_seconds": 300,
-  "message": "محاولات تسجيل دخول كثيرة. يرجى المحاولة مرة أخرى بعد 5 دقائق."
+  "error": "LOGIN_LOCKED",
+  "message": "تجاوزت الحد المسموح لمحاولات تسجيل الدخول. يرجى المحاولة بعد 5 دقائق.",
+  "remaining_seconds": 300,
+  "retry_after_seconds": 300,
+  "retry_after_minutes": 5,
+  "locked_until": "2026-06-29T15:30:00+00:00",
+  "wait_seconds": 300
 }
 ```
+`remaining_seconds` is always an integer. `retry_after_seconds` and `wait_seconds` carry the same value and are kept for backward compatibility. `locked_until` is a UTC ISO-8601 timestamp.
 
 ---
 
@@ -106,7 +111,7 @@ configured, uploads are stored locally and returned as `/media/uploads/...` URLs
 | 403 | `forbidden` | Role not allowed for this endpoint |
 | 403 | `role_not_supported…` | Non-parent/teacher role tried to login |
 | 404 | (various) | Record not found or access denied |
-| 429 | `too_many_attempts` | Login throttle active |
+| 429 | `LOGIN_LOCKED` | Login throttle active — includes `remaining_seconds`, `locked_until` |
 
 ---
 

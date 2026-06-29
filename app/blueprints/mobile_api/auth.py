@@ -94,8 +94,9 @@ def login():
         ).isoformat()
         return jsonify({
             'ok':                  False,
-            'error':               'login_rate_limited',
+            'error':               'LOGIN_LOCKED',
             'message':             f'تجاوزت الحد المسموح لمحاولات تسجيل الدخول. يرجى المحاولة {format_wait_ar(wait_seconds)}.',
+            'remaining_seconds':   wait_seconds,
             'retry_after_seconds': wait_seconds,
             'retry_after_minutes': retry_minutes,
             'locked_until':        locked_until,
