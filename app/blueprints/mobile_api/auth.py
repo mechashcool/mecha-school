@@ -10,8 +10,7 @@ import datetime
 from flask import g, jsonify, request
 
 from app.models import db, User, Employee, MobileDeviceToken
-from app.utils.helpers import resolve_photo_url
-from app.utils.login_throttle import check_lockout, record_failed_attempt, reset_attempts
+from app.utils.login_throttle import check_lockout, record_failed_attempt, reset_attempts, format_wait_ar
 from app.utils.ratelimit import limiter, LOGIN_RATE_LIMIT
 from .utils import encode_token, jwt_required, ok, err, photo_url
 
@@ -21,29 +20,6 @@ from . import mobile_api_bp
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _format_wait_ar(seconds: int) -> str:
-    """Return a human-readable Arabic wait-time phrase for login throttle messages."""
-    if seconds < 60:
-        return 'بعد أقل من دقيقة'
-    minutes = (seconds + 59) // 60   # round up to nearest minute
-    if minutes < 60:
-        if minutes == 1:
-            return 'بعد دقيقة'
-        if minutes == 2:
-            return 'بعد دقيقتين'
-        if minutes <= 10:
-            return f'بعد {minutes} دقائق'
-        return f'بعد {minutes} دقيقة'
-    hours = (minutes + 59) // 60     # round up to nearest hour
-    if hours == 1:
-        return 'بعد ساعة'
-    if hours == 2:
-        return 'بعد ساعتين'
-    if hours <= 10:
-        return f'بعد {hours} ساعات'
-    return f'بعد {hours} ساعة'
-
-
 def _school_payload(school) -> dict | None:
     if not school:
         return None
@@ -51,7 +27,7 @@ def _school_payload(school) -> dict | None:
         'id':            school.id,
         'name':          school.school_name,
         'name_ar':       school.school_name_ar,
-        'logo':          resolve_photo_url(school.logo_path),
+        'logo':          photo_url(school.logo_path),
         'primary_color': school.primary_color,
         'currency':      school.currency_symbol,
         'currency_code': school.currency_code,
@@ -111,11 +87,19 @@ def login():
     # requests cost nothing and cannot be used to time-attack username existence.
     locked, wait_seconds = check_lockout(ip, identifier)
     if locked:
+        retry_minutes = (wait_seconds + 59) // 60
+        locked_until = (
+            datetime.datetime.now(datetime.timezone.utc)
+            + datetime.timedelta(seconds=wait_seconds)
+        ).isoformat()
         return jsonify({
-            'ok':          False,
-            'error':       'too_many_attempts',
-            'wait_seconds': wait_seconds,
-            'message':     f'محاولات تسجيل دخول كثيرة. يرجى المحاولة مرة أخرى {_format_wait_ar(wait_seconds)}.',
+            'ok':                  False,
+            'error':               'login_rate_limited',
+            'message':             f'تجاوزت الحد المسموح لمحاولات تسجيل الدخول. يرجى المحاولة {format_wait_ar(wait_seconds)}.',
+            'retry_after_seconds': wait_seconds,
+            'retry_after_minutes': retry_minutes,
+            'locked_until':        locked_until,
+            'wait_seconds':        wait_seconds,
         }), 429
 
     user = User.query.filter(

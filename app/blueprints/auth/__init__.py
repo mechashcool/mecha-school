@@ -9,7 +9,7 @@ from flask_login import login_user, logout_user, login_required, current_user
 from app.models import db, User
 from app.utils.audit import log_action
 from app.utils.ratelimit import limiter, LOGIN_RATE_LIMIT
-from app.utils.login_throttle import check_lockout, record_failed_attempt, reset_attempts
+from app.utils.login_throttle import check_lockout, record_failed_attempt, reset_attempts, format_wait_ar
 from datetime import datetime
 
 auth_bp = Blueprint('auth', __name__, template_folder='../../templates/auth')
@@ -45,10 +45,9 @@ def login():
         # (the attacker already knows what they submitted).
         locked, wait_seconds = check_lockout(ip, username)
         if locked:
-            mins = max(1, (wait_seconds + 59) // 60)
             error = (
-                f'تم تجاوز الحد المسموح من المحاولات. '
-                f'يرجى المحاولة مرة أخرى بعد {mins} دقيقة.'
+                f'تجاوزت الحد المسموح لمحاولات تسجيل الدخول. '
+                f'يرجى المحاولة {format_wait_ar(wait_seconds)}.'
             )
             return render_template('auth/login.html', error=error)
 

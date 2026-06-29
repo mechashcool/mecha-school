@@ -7,8 +7,8 @@ lockout periods to resist brute-force attacks:
     attempts 1–5  →  no lockout
     attempt  6    →  2 minutes
     attempt  7    →  5 minutes
-    attempt  8    →  15 minutes
-    attempt  9    →  1 hour
+    attempt  8    →  10 minutes
+    attempt  9    →  30 minutes
     attempt  10+  →  2 hours
 
 Counters auto-expire after 24 hours so legitimate users are never permanently
@@ -36,8 +36,8 @@ _log = logging.getLogger('mecha.login_throttle')
 # Sorted descending so the first matching threshold is the most restrictive.
 _SCHEDULE = [
     (10, 7200),  # >= 10 attempts → 2 hours
-    (9,  3600),  # 9  attempts    → 1 hour
-    (8,   900),  # 8  attempts    → 15 minutes
+    (9,  1800),  # 9  attempts    → 30 minutes
+    (8,   600),  # 8  attempts    → 10 minutes
     (7,   300),  # 7  attempts    → 5 minutes
     (6,   120),  # 6  attempts    → 2 minutes
     # 1–5 → no lockout
@@ -223,3 +223,32 @@ def reset_attempts(ip: str, username: str) -> None:
         _redis_reset(ip, username)
     else:
         _mem_reset(ip, username)
+
+
+def format_wait_ar(seconds: int) -> str:
+    """
+    Return a human-readable Arabic wait-time phrase, including the preposition
+    'بعد', so callers can embed it directly:
+
+        f'يرجى المحاولة {format_wait_ar(300)}.'
+        → 'يرجى المحاولة بعد 5 دقائق.'
+    """
+    if seconds < 60:
+        return 'بعد أقل من دقيقة'
+    minutes = (seconds + 59) // 60   # round up to nearest whole minute
+    if minutes < 60:
+        if minutes == 1:
+            return 'بعد دقيقة'
+        if minutes == 2:
+            return 'بعد دقيقتين'
+        if minutes <= 10:
+            return f'بعد {minutes} دقائق'
+        return f'بعد {minutes} دقيقة'
+    hours = (minutes + 59) // 60     # round up to nearest whole hour
+    if hours == 1:
+        return 'بعد ساعة'
+    if hours == 2:
+        return 'بعد ساعتين'
+    if hours <= 10:
+        return f'بعد {hours} ساعات'
+    return f'بعد {hours} ساعة'
