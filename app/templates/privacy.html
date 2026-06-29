@@ -39,6 +39,28 @@
       color: #a8c4e0;
       margin-top: 6px;
     }
+    .logo-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: #fff;
+      border-radius: 18px;
+      padding: 10px;
+      margin-bottom: 18px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.22);
+      width: 96px;
+      height: 96px;
+    }
+    .logo-badge img {
+      width: 76px;
+      height: 76px;
+      object-fit: contain;
+      display: block;
+    }
+    @media (max-width: 600px) {
+      .logo-badge { width: 80px; height: 80px; }
+      .logo-badge img { width: 62px; height: 62px; }
+    }
 
     /* ── Container ────────────────────────────────────────────── */
     .container {
@@ -134,6 +156,10 @@
 <body>
 
   <div class="page-header">
+    <div class="logo-badge">
+      <img src="{{ url_for('static', filename='images/core_school_app_logo.png') }}"
+           alt="Core School Logo">
+    </div>
     <div class="app-name">Core School</div>
     <h1>سياسة الخصوصية – Privacy Policy</h1>
     <div class="updated">آخر تحديث: 29 حزيران 2026 &nbsp;|&nbsp; Last Updated: June 29, 2026</div>
