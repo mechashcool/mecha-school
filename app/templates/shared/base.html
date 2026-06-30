@@ -599,6 +599,77 @@
       .table td { padding: 10px 10px; font-size: 12.5px; }
     }
 
+    /* ── Responsive — laptop / small desktop (1025 – 1440 px) ─────────── */
+    @media (min-width: 1025px) and (max-width: 1440px) {
+      :root {
+        --sidebar-width: 240px;
+        --topbar-h:      58px;
+      }
+
+      #topbar { padding: 0 20px; gap: 12px; }
+
+      #main-content { padding: 20px 24px 36px; }
+
+      /* Sidebar internals */
+      .sidebar-logo { padding: 16px 16px 12px; gap: 10px; }
+      .sidebar-logo .logo-icon { width: 38px; height: 38px; font-size: 18px; border-radius: 10px; }
+      .sidebar-logo .logo-text { font-size: 14.5px; }
+      .sidebar-user { padding: 10px 16px; gap: 10px; }
+      .sidebar-nav  { padding: 8px 10px 14px; }
+      .nav-item a   { padding: 8px 10px; font-size: 13px; }
+      .nav-group-toggle { padding: 8px 10px; font-size: 13px; }
+      .nav-group-items .nav-item a { padding: 7px 8px; font-size: 12.5px; }
+      .nav-section-label { padding: 13px 10px 5px; }
+
+      /* Cards */
+      .card-header { padding: 13px 18px; font-size: 14px; }
+      .card-body   { padding: 18px; }
+      .card-footer { padding: 11px 18px; }
+
+      /* Stat cards */
+      .stat-card  { padding: 16px 18px; gap: 13px; }
+      .stat-icon  { width: 46px; height: 46px; font-size: 21px; }
+      .stat-value { font-size: 22px; }
+
+      /* Page header */
+      .page-header { margin-bottom: 20px; }
+      .page-title  { font-size: 20px; }
+
+      /* Table wrapper: allow horizontal scroll when columns are tight */
+      .table-wrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    }
+
+    /* ── Responsive — narrow laptop (1025 – 1280 px) ──────────────────── */
+    @media (min-width: 1025px) and (max-width: 1280px) {
+      :root {
+        --sidebar-width: 224px;
+        --topbar-h:      56px;
+      }
+
+      #main-content { padding: 16px 20px 28px; }
+
+      /* Cards */
+      .card-header { padding: 11px 16px; font-size: 13.5px; }
+      .card-body   { padding: 15px; }
+      .card-footer { padding: 10px 16px; }
+
+      /* Stat cards */
+      .stat-card  { padding: 14px 16px; gap: 12px; }
+      .stat-icon  { width: 42px; height: 42px; font-size: 19px; }
+      .stat-value { font-size: 20px; }
+      .stat-label { font-size: 12px; }
+
+      /* Page header */
+      .page-title { font-size: 18px; }
+
+      /* Form controls: slightly tighter for filter rows */
+      .form-control, .form-select { padding: 8px 12px; font-size: 13px; }
+
+      /* Tables */
+      .table thead th { padding: 11px 13px; }
+      .table td       { padding: 11px 13px; font-size: 13px; }
+    }
+
     /* ── Historical year — hide write actions ────────── */
     body.historical-mode .write-action { display: none !important; }
 
