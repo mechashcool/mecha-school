@@ -84,7 +84,10 @@ def _scheduler_loop(app, interval: int) -> None:
 
 def _run_check() -> None:
     """Called every tick. Iterates all active schools and fires per-school logic."""
+    import time as _time
     from app.models import School
+
+    tick_started = _time.monotonic()
 
     schools = (
         School.query
@@ -94,29 +97,38 @@ def _run_check() -> None:
     )
 
     if not schools:
-        _log.warning('[attendance] tick: no active schools found — nothing to process')
+        _log.warning('[attendance] tick: start — no active schools found — nothing to process')
         return
 
-    _log.info('[attendance] tick: checking %d active school(s)', len(schools))
+    _log.info('[attendance] tick: start — checking %d active school(s) ids=%s',
+              len(schools), [s.id for s in schools])
 
+    ok_count = 0
+    err_count = 0
     for school in schools:
         try:
             _check_school(school)
+            ok_count += 1
         except Exception as exc:
+            err_count += 1
             _log.error('[attendance] scheduler error school_id=%s name=%s: %s',
-                       school.id, getattr(school, 'name', '?'), exc)
+                       school.id, getattr(school, 'school_name', '?'), exc)
             try:
                 from app.models import db
                 db.session.rollback()
             except Exception:
                 pass
 
+    elapsed_ms = (_time.monotonic() - tick_started) * 1000
+    _log.info('[attendance] tick: finished in %.0fms — schools_ok=%d schools_failed=%d',
+              elapsed_ms, ok_count, err_count)
+
 
 def _check_school(school) -> None:
     """Per-school check: fire _run_auto_absent if cutoff has passed."""
     from app.utils.attendance_helpers import get_local_now, get_local_date
 
-    school_name = getattr(school, 'name', f'school_{school.id}')
+    school_name = getattr(school, 'school_name', f'school_{school.id}')
     local_now   = get_local_now(school)
     local_date  = get_local_date(school)
 

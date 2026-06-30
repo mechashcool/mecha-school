@@ -121,7 +121,7 @@ def _run_auto_absent(school, year, settings, recorded_by_id=None, target_date=No
     Fully idempotent: calling multiple times per day is safe (won't create duplicates).
     """
     school_id   = school.id if school else None
-    school_name = getattr(school, 'name', f'school_{school_id}')
+    school_name = getattr(school, 'school_name', f'school_{school_id}')
     today       = target_date if target_date is not None else get_local_date(settings)
     now_local   = get_local_now(settings)
     now_time    = now_local.time()

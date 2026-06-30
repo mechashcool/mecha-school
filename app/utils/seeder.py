@@ -1009,3 +1009,108 @@ def register_commands(app):
         dev.api_key = new_key
         db.session.commit()
         click.echo(f'✓ New api_key for {device_id}: {new_key}')
+
+    @app.cli.command('auto-absent-dry-run')
+    @click.option('--school-id', required=True, type=int,
+                  help='School ID to preview automatic absence for.')
+    @click.option('--date', 'date_str', default=None,
+                  help="Date to preview (YYYY-MM-DD). Default: today in the school's local timezone.")
+    @with_appcontext
+    def auto_absent_dry_run_cmd(school_id, date_str):
+        """
+        Preview what the automatic-absence job would do for one school/date.
+
+        READ-ONLY — never inserts, updates, or deletes any row. Safe to run
+        against production at any time. Use this to diagnose why a school did
+        or did not get automatic absences for a given date, without risking
+        any data change.
+        """
+        from datetime import datetime as _dt
+        from app.utils.attendance_helpers import get_local_now, get_local_date, is_holiday_date
+        from app.utils.decorators import get_active_year
+        from app.models import Student, StudentAttendance
+
+        school = (School.query
+                  .execution_options(bypass_tenant_scope=True)
+                  .get(school_id))
+        if not school:
+            click.echo(f'✗ School id={school_id} not found.')
+            return
+
+        local_now = get_local_now(school)
+        if date_str:
+            try:
+                target_date = _dt.strptime(date_str, '%Y-%m-%d').date()
+            except ValueError:
+                click.echo(f"✗ Invalid --date {date_str!r}, expected YYYY-MM-DD.")
+                return
+        else:
+            target_date = get_local_date(school)
+
+        click.echo(f'School        : {school.school_name} (id={school_id})')
+        click.echo(f'is_active     : {school.is_active}')
+        click.echo(f'Timezone      : {school.timezone or "Asia/Baghdad (default)"}')
+        click.echo(f'Local now     : {local_now.strftime("%Y-%m-%d %H:%M:%S")}')
+        click.echo(f'Target date   : {target_date}')
+
+        if not school.is_active:
+            click.echo('⚠ School is INACTIVE — the live scheduler excludes it entirely from '
+                       'every tick (this preview ignores that and shows what WOULD happen '
+                       'if it were active).')
+
+        if school.enable_attendance_shifts:
+            click.echo('⚠ enable_attendance_shifts=True — this school uses per-shift cutoffs; '
+                       'this single-cutoff preview does not model shift timing. Use the '
+                       'AttendanceShift rows for a shift-accurate picture.')
+
+        cutoff = school.att_absence_threshold
+        if not cutoff:
+            click.echo('⚠ att_absence_threshold is NULL/00:00 — the scheduler would SKIP this '
+                       'school (no cutoff configured).')
+        else:
+            same_day_passed = local_now.date() == target_date and local_now.time() >= cutoff
+            past_day = local_now.date() > target_date
+            click.echo(f'Cutoff        : {cutoff}  '
+                       f'(passed as of local_now: {same_day_passed or past_day})')
+
+        if is_holiday_date(target_date, school_id, school):
+            click.echo('⚠ HOLIDAY (weekly off-day or school_holidays entry) — auto-absence '
+                       'would be skipped entirely for this date.')
+
+        year = get_active_year(school_id)
+        if year:
+            click.echo(f'Active year   : {year.id} ({getattr(year, "name", "")})')
+        else:
+            click.echo('Active year   : NONE — the scheduler would SKIP (no is_current=True '
+                       'academic year for this school).')
+
+        all_students = (Student.query
+                        .execution_options(bypass_tenant_scope=True)
+                        .filter_by(status='active', school_id=school_id)
+                        .all())
+        student_ids = [s.id for s in all_students]
+        click.echo(f'Active students : {len(student_ids)}')
+
+        if student_ids:
+            existing = (StudentAttendance.query
+                       .execution_options(bypass_tenant_scope=True)
+                       .filter_by(date=target_date)
+                       .filter(StudentAttendance.student_id.in_(student_ids))
+                       .all())
+            existing_ids = {r.student_id for r in existing}
+            by_source = {}
+            for r in existing:
+                key = r.source or 'unknown'
+                by_source[key] = by_source.get(key, 0) + 1
+            missing = [s for s in all_students if s.id not in existing_ids]
+
+            click.echo(f'Existing attendance records : {len(existing_ids)}  (by source: {by_source})')
+            click.echo(f'Would be marked ABSENT now  : {len(missing)}')
+            if missing:
+                names = ', '.join(
+                    f'{s.id}:{getattr(s, "full_name", "?")}' for s in missing[:20]
+                )
+                suffix = '' if len(missing) <= 20 else f' …(+{len(missing) - 20} more)'
+                click.echo(f'  -> {names}{suffix}')
+
+        click.echo('\n(READ-ONLY preview — no attendance records were created, changed, or deleted.)')
