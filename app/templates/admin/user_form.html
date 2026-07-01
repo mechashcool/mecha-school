@@ -290,19 +290,42 @@
           <p class="text-muted mb-3" style="font-size:13px">
             حدد المواد التي يُدرّسها هذا المعلم. يمكن للمعلم إدخال الدرجات والحضور لهذه المواد في الشعب المختارة أعلاه فقط.
           </p>
+          <div class="row g-2 mb-3 align-items-center">
+            <div class="col-md-5">
+              <select id="subjectStageFilter" class="form-select form-select-sm">
+                <option value="">كل المراحل</option>
+              </select>
+            </div>
+            <div class="col-md-5">
+              <select id="subjectGradeFilter" class="form-select form-select-sm">
+                <option value="">كل الصفوف</option>
+              </select>
+            </div>
+            <div class="col-md-2">
+              <button type="button" class="btn btn-sm btn-outline-secondary w-100"
+                      id="subjectFilterClear" title="إعادة تعيين الفلاتر">
+                <i class="bi bi-x-circle"></i>
+              </button>
+            </div>
+          </div>
           <div class="mb-3">
             <div class="input-group">
               <span class="input-group-text"><i class="bi bi-search"></i></span>
-              <input type="search" class="form-control link-filter"
-                     data-filter-target="subjectOptions"
+              <input type="search" id="subjectSearchInput" class="form-control"
                      placeholder="&#1575;&#1576;&#1581;&#1579; &#1576;&#1575;&#1587;&#1605; &#1575;&#1604;&#1605;&#1575;&#1583;&#1577;...">
             </div>
           </div>
-          <div class="row g-2" id="subjectOptions" style="max-height:260px;overflow-y:auto">
+          <div class="row g-2" id="subjectOptions" style="max-height:300px;overflow-y:auto">
             {% if all_subjects %}
             {% for subject in all_subjects %}
-            <div class="col-md-4 link-option"
-                 data-search="{{ (subject.name ~ ' ' ~ (subject.code or ''))|lower }}">
+            {% set subj_stage = subject.stage or (subject.grade.stage if subject.grade else '') %}
+            {% set subj_grade_name = subject.grade.name if subject.grade else '' %}
+            {% set subj_grade_id = subject.grade_id if subject.grade_id else '' %}
+            <div class="col-md-4 link-option subject-filter-item"
+                 data-search="{{ (subject.name ~ ' ' ~ (subject.code or '') ~ ' ' ~ subj_grade_name ~ ' ' ~ subj_stage)|lower }}"
+                 data-stage="{{ subj_stage }}"
+                 data-grade-id="{{ subj_grade_id }}"
+                 data-grade-name="{{ subj_grade_name }}">
               <div class="form-check p-2 border rounded"
                    style="cursor:pointer;transition:background .15s"
                    onmouseover="this.style.background='#f0faf4'"
@@ -314,9 +337,17 @@
                 <label class="form-check-label w-100" for="subj_{{ subject.id }}"
                        style="cursor:pointer;font-size:13px">
                   <b>{{ subject.name }}</b>
-                  {% if subject.code %}
-                  <span class="text-muted d-block" style="font-size:11px">{{ subject.code }}</span>
-                  {% endif %}
+                  <span class="d-flex gap-1 flex-wrap mt-1" style="font-size:11px;line-height:1.6">
+                    {% if subj_stage %}
+                    <span class="badge bg-secondary">{{ subj_stage }}</span>
+                    {% endif %}
+                    {% if subj_grade_name %}
+                    <span class="badge bg-info text-dark">{{ subj_grade_name }}</span>
+                    {% endif %}
+                    {% if subject.code %}
+                    <span class="text-muted">{{ subject.code }}</span>
+                    {% endif %}
+                  </span>
                 </label>
               </div>
             </div>
@@ -462,6 +493,94 @@
       });
     });
   });
+})();
+
+// ── Subject stage / grade cascading filter ──────────────────────────────────
+(function () {
+  const stageFilter = document.getElementById('subjectStageFilter');
+  const gradeFilter = document.getElementById('subjectGradeFilter');
+  const clearBtn    = document.getElementById('subjectFilterClear');
+  const searchInput = document.getElementById('subjectSearchInput');
+  const subjectGrid = document.getElementById('subjectOptions');
+  if (!stageFilter || !gradeFilter || !subjectGrid) return;
+
+  const allItems = Array.from(subjectGrid.querySelectorAll('.subject-filter-item'));
+
+  // Collect unique stages and grades from data attributes
+  const stagesSet = {};
+  const gradesMap = {};
+  allItems.forEach(item => {
+    const stage     = item.dataset.stage     || '';
+    const gradeId   = item.dataset.gradeId   || '';
+    const gradeName = item.dataset.gradeName || '';
+    if (stage)   stagesSet[stage] = true;
+    if (gradeId && !gradesMap[gradeId]) {
+      gradesMap[gradeId] = { id: gradeId, name: gradeName, stage };
+    }
+  });
+
+  // Populate stage dropdown from unique stages in the data
+  Object.keys(stagesSet)
+    .sort((a, b) => a.localeCompare(b, 'ar'))
+    .forEach(stage => {
+      const opt = document.createElement('option');
+      opt.value = stage;
+      opt.textContent = stage;
+      stageFilter.appendChild(opt);
+    });
+
+  function populateGrades(selectedStage) {
+    const prevGrade = gradeFilter.value;
+    gradeFilter.innerHTML = '<option value="">كل الصفوف</option>';
+    Object.values(gradesMap)
+      .filter(g => !selectedStage || g.stage === selectedStage)
+      .sort((a, b) => a.name.localeCompare(b.name, 'ar'))
+      .forEach(g => {
+        const opt = document.createElement('option');
+        opt.value = g.id;
+        opt.textContent = g.name;
+        if (g.id === prevGrade) opt.selected = true;
+        gradeFilter.appendChild(opt);
+      });
+  }
+  populateGrades('');
+
+  function normalize(val) {
+    return (val || '').toString().toLowerCase()
+      .replace(/[ً-ٰٟـ]/g, '')
+      .replace(/[إأآٱ]/g, 'ا')
+      .replace(/ى/g, 'ي')
+      .replace(/ة/g, 'ه');
+  }
+
+  function applyFilters() {
+    const stage   = stageFilter.value;
+    const gradeId = gradeFilter.value;
+    const term    = searchInput ? normalize(searchInput.value) : '';
+    allItems.forEach(item => {
+      const stageOk = !stage   || item.dataset.stage   === stage;
+      const gradeOk = !gradeId || item.dataset.gradeId === gradeId;
+      const textOk  = !term   || normalize(item.dataset.search).includes(term);
+      item.style.display = (stageOk && gradeOk && textOk) ? '' : 'none';
+    });
+  }
+
+  stageFilter.addEventListener('change', () => {
+    populateGrades(stageFilter.value);
+    gradeFilter.value = '';
+    applyFilters();
+  });
+  gradeFilter.addEventListener('change', applyFilters);
+  if (searchInput) searchInput.addEventListener('input', applyFilters);
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      stageFilter.value = '';
+      populateGrades('');
+      gradeFilter.value = '';
+      if (searchInput) searchInput.value = '';
+      applyFilters();
+    });
+  }
 })();
 </script>
 {% endblock %}

@@ -210,8 +210,10 @@ def _section_options(school, year):
 def _subject_options(school, year):
     if not (school and year):
         return []
+    from sqlalchemy.orm import joinedload
     return (Subject.query
             .execution_options(bypass_tenant_scope=True)
+            .options(joinedload(Subject.grade))
             .filter_by(school_id=school.id, academic_year_id=year.id)
             .order_by(Subject.name)
             .all())
