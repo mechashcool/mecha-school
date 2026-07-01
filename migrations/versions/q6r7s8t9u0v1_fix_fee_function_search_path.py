@@ -29,15 +29,21 @@ What is NOT changed
 * Any other database object.
 
 Revision ID: q6r7s8t9u0v1
-Revises: p5q6r7s8t9u0
+Revises: o4p5q6r7s8t9
 Create Date: 2026-07-01
+
+Note on down_revision
+---------------------
+Originally set to p5q6r7s8t9u0 (the RLS migration) but that file was never
+committed to git and therefore does not exist on the VPS.  Corrected to
+o4p5q6r7s8t9, which is the actual last committed migration head.
 """
 from alembic import op
 import sqlalchemy as sa
 
 
 revision = 'q6r7s8t9u0v1'
-down_revision = 'p5q6r7s8t9u0'
+down_revision = 'o4p5q6r7s8t9'
 branch_labels = None
 depends_on = None
 
