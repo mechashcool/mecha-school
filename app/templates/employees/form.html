@@ -206,8 +206,26 @@
         </div>
         <div class="collapse{{ ' show' if linked_user }}" id="collapseAccount">
           <div class="card-body">
-            {% if linked_user %}
-            {# Edit existing account #}
+            {% if linked_user and linked_user.school_id != employee.school_id %}
+            {# Mismatch: the linked login account belongs to a DIFFERENT school.
+               Editing it from here is unsafe and is blocked server-side, so we
+               show a clear warning and offer the safe unlink action only. The
+               unlink button submits the separate #unlinkAccountForm below (via
+               the HTML5 form= attribute) so it never saves the employee form and
+               never touches the other school's user account. #}
+            <div class="alert alert-danger py-2 mb-3">
+              <i class="bi bi-exclamation-triangle-fill me-1"></i>
+              حساب الدخول المرتبط (<strong>{{ linked_user.username }}</strong>) يعود
+              لمدرسة مختلفة، ولا يمكن تعديله من هنا. الإجراء الآمن هو فك الربط فقط —
+              لن يتم حذف أو تعديل حساب المستخدم في مدرسته.
+            </div>
+            <button type="submit" form="unlinkAccountForm"
+                    class="btn btn-outline-danger btn-sm"
+                    onclick="return confirm('سيتم فك ربط حساب الدخول عن هذا الموظف فقط. لن يتم تعديل حساب المستخدم في مدرسته. متابعة؟');">
+              <i class="bi bi-link-45deg me-1"></i>فك ربط الحساب الخاطئ
+            </button>
+            {% elif linked_user %}
+            {# Edit existing (same-school) account #}
             <div class="alert alert-info py-2 mb-3">
               <i class="bi bi-check-circle-fill me-1"></i>
               مرتبط بحساب: <strong>{{ linked_user.username }}</strong>
@@ -241,6 +259,14 @@
                   <input type="password" name="user_password" class="form-control"
                          placeholder="كلمة المرور الجديدة" autocomplete="new-password">
                 </div>
+              </div>
+              <div class="col-12">
+                <hr class="my-2">
+                <button type="submit" form="unlinkAccountForm"
+                        class="btn btn-outline-danger btn-sm"
+                        onclick="return confirm('سيتم فك ربط حساب الدخول عن هذا الموظف فقط. لن يتم حذف أو تعديل حساب المستخدم. متابعة؟');">
+                  <i class="bi bi-link-45deg me-1"></i>فك ربط الحساب
+                </button>
               </div>
             </div>
             {% else %}
@@ -507,6 +533,18 @@
   </div>
 
 </form>
+
+{# Standalone unlink form — kept OUTSIDE the main employee form (forms cannot be
+   nested). The unlink buttons in the account card target it via form=
+   "unlinkAccountForm" so unlinking never submits the employee edit form and
+   never mutates the linked user account. #}
+{% if employee and linked_user %}
+<form id="unlinkAccountForm" method="post"
+      action="{{ url_for('employees.unlink_account', emp_id=employee.id) }}"
+      class="d-none">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+</form>
+{% endif %}
 
 <style>
 .collapse-chevron { transition: transform .2s; }

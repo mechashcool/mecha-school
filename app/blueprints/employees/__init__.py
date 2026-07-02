@@ -12,6 +12,7 @@ from app.utils.decorators import (permission_required, get_current_school,
                                    historical_guard, get_active_year, action_required)
 from app.utils.helpers import save_uploaded_file
 from app.utils import code_generator
+from app.utils.audit import log_action
 
 _log = logging.getLogger(__name__)
 
@@ -23,12 +24,37 @@ employees_bp = Blueprint('employees', __name__,
 #  Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Login roles that may be created/assigned for an employee FROM THE EMPLOYEE PAGE.
+# Deliberately limited to non-privileged roles. Privileged roles (school_admin,
+# super_admin) must never be creatable or assignable from this page. Every
+# server-side handler that reads a submitted role_id re-validates it against this
+# allow-list, so a crafted POST cannot bypass the restricted dropdown.
+_ACCOUNT_ROLE_NAMES = ('teacher', 'parent')
+
+
 def _available_roles():
-    """Roles selectable for employee accounts based on current user's permissions."""
-    excluded = {'super_admin', 'parent'}
-    if not current_user.is_admin_user:
-        excluded.add('school_admin')
-    return Role.query.filter(Role.name.notin_(excluded)).order_by(Role.name).all()
+    """Roles selectable for an employee login account from the employee page.
+
+    Restricted to teacher and parent only (see _ACCOUNT_ROLE_NAMES). This is an
+    allow-list, not an exclude-list, so no privileged role can ever leak into the
+    selector even if new roles are added to the system later.
+    """
+    return (Role.query
+            .filter(Role.name.in_(_ACCOUNT_ROLE_NAMES))
+            .order_by(Role.name)
+            .all())
+
+
+def _is_allowed_account_role(role_id) -> bool:
+    """True when role_id maps to a role permitted for employee login accounts.
+
+    Used to re-validate a client-submitted role_id server-side. Never trust the
+    posted value: the dropdown is already restricted, but the POST body is not.
+    """
+    if not role_id:
+        return False
+    role = Role.query.get(role_id)
+    return bool(role and role.name in _ACCOUNT_ROLE_NAMES)
 
 
 def _form_context(employee=None):
@@ -317,6 +343,10 @@ def _handle_employee_post(employee):
             acct_error = 'يرجى إدخال كلمة المرور.'
         elif not role_id:
             acct_error = 'يرجى اختيار الدور الوظيفي للحساب.'
+        elif not _is_allowed_account_role(role_id):
+            # Only teacher/parent accounts may be created from the employee page.
+            # Reject any other (or forged) role_id server-side.
+            acct_error = 'الدور المحدد غير مسموح به لحساب الموظف. الأدوار المتاحة: معلم أو ولي أمر.'
         elif User.query.filter_by(username=username).first():
             acct_error = 'اسم المستخدم مستخدم بالفعل — اختر اسماً آخر.'
 
@@ -353,8 +383,15 @@ def _handle_employee_post(employee):
                 user_active = request.form.get('user_is_active')
 
                 if new_role and new_role != linked_user.role_id:
-                    linked_user.role_id = new_role
-                    changed = True
+                    # Only allow switching the linked account to a permitted
+                    # (teacher/parent) role. Ignore any other/forged role_id so a
+                    # crafted POST cannot promote the account to a privileged role.
+                    if _is_allowed_account_role(new_role):
+                        linked_user.role_id = new_role
+                        changed = True
+                    else:
+                        flash_msgs.append(('warning',
+                            'لم يتم تغيير دور الحساب: الدور المطلوب غير مسموح به من صفحة الموظف.'))
                 if user_active is not None:
                     linked_user.is_active = bool(user_active)
                     changed = True
@@ -505,6 +542,48 @@ def edit(emp_id):
     if request.method == 'POST':
         return _handle_employee_post(employee)
     return render_template('employees/form.html', **_form_context(employee))
+
+
+@employees_bp.route('/<int:emp_id>/unlink-account', methods=['POST'])
+@login_required
+@historical_guard
+@permission_required('manage_employees')
+def unlink_account(emp_id):
+    """Remove the login-account link from an employee — nothing else.
+
+    Safety guarantees (why this is safe even when the linked account belongs to
+    another school):
+      • Employee.query.get_or_404 is tenant-scoped, so the operator can only ever
+        reach an employee in their OWN school. A manager cannot target another
+        school's employee.
+      • The ONLY write is employee.user_id = None on that in-scope employee row.
+        The linked User row is never loaded into the session as dirty, so it is
+        never validated, updated, or deleted by this request — its username,
+        password, role, school_id, and status are all left exactly as they were.
+      • Because we do not mutate the (possibly cross-school) User, the tenant
+        write-guard (_before_flush) has nothing cross-school to reject, so the
+        request cannot 500 the way an in-place edit of a mismatched account would.
+    """
+    employee = Employee.query.get_or_404(emp_id)
+
+    old_user_id = employee.user_id
+    if not old_user_id:
+        flash('لا يوجد حساب دخول مرتبط بهذا الموظف.', 'info')
+        return redirect(url_for('employees.view', emp_id=employee.id))
+
+    # Detach the reference only. Do NOT touch the User row in any way.
+    employee.user_id = None
+    db.session.commit()
+
+    # Audit trail (scoped to the operator's school). log_action never raises and
+    # commits its own row separately, so it cannot affect the unlink above.
+    log_action('unlink_account', 'employee', employee.id,
+               details=f'Unlinked login account (former user_id={old_user_id}); '
+                       f'user record left unmodified.')
+
+    flash('تم فك ربط حساب الدخول عن الموظف. لم يتم حذف أو تعديل حساب المستخدم.',
+          'success')
+    return redirect(url_for('employees.view', emp_id=employee.id))
 
 
 @employees_bp.route('/<int:emp_id>/sync-to-device', methods=['POST'])
