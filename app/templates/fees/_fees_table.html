@@ -190,7 +190,7 @@
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">إلغاء</button>
-          <button type="submit" class="btn btn-success">
+          <button type="submit" id="paySubmitBtn" class="btn btn-success">
             <i class="bi bi-check-circle-fill me-1"></i>تأكيد الدفع
           </button>
         </div>
@@ -209,10 +209,22 @@
   };
 
   var _lastRemaining = 0;
+  var _paySubmitting = false;
+  var _paySubmitBtn  = document.getElementById('paySubmitBtn');
+
+  function _resetPayBtn() {
+    _paySubmitting = false;
+    if (_paySubmitBtn) {
+      _paySubmitBtn.disabled  = false;
+      _paySubmitBtn.innerHTML = '<i class="bi bi-check-circle-fill me-1"></i>تأكيد الدفع';
+    }
+  }
 
   window.openPayModal = function (instId, studentName, amount, received, instNo) {
     var remaining = (amount - received).toFixed(2);
     _lastRemaining = parseFloat(remaining);
+
+    _resetPayBtn();
 
     document.getElementById('payForm').action =
       "{{ url_for('fees.pay_installment', inst_id=0) }}".replace('/0', '/' + instId);
@@ -243,11 +255,20 @@
     if (win) { win.onload = function () { win.print(); }; }
   };
 
+  document.getElementById('payModal').addEventListener('hidden.bs.modal', _resetPayBtn);
+
   document.getElementById('payForm').addEventListener('submit', function (e) {
     e.preventDefault();
-    fetch(this.action, {
+    if (_paySubmitting) return;
+    _paySubmitting = true;
+    if (_paySubmitBtn) {
+      _paySubmitBtn.disabled  = true;
+      _paySubmitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status"></span>جارٍ الحفظ...';
+    }
+    var form = this;
+    fetch(form.action, {
       method: 'POST',
-      body: new FormData(this),
+      body: new FormData(form),
       headers: { 'X-Requested-With': 'XMLHttpRequest' }
     })
     .then(function (r) {
@@ -270,10 +291,12 @@
         alert(data.message);
         location.reload();
       } else {
+        _resetPayBtn();
         alert(data.message || 'حدث خطأ أثناء معالجة الدفعة.');
       }
     })
     .catch(function (err) {
+      _resetPayBtn();
       if (err && err.message === 'server_error') {
         alert('حدث خطأ في الخادم. يرجى المحاولة مرة أخرى.');
       } else {

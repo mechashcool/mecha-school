@@ -860,14 +860,9 @@ def pay_installment(inst_id):
         if received <= 0:
             return jsonify({'status': 'error', 'message': 'يجب أن يكون المبلغ المستلم أكبر من صفر.'}), 400
 
-        # Cap at remaining balance so we never record over-pay.
-        remaining = Decimal(str(inst.amount)) - Decimal(str(inst.received_amount or 0))
-        if received > remaining:
-            received = remaining
-
-        # ── Resolve the Revenue category before the main transaction ─────────
-        # Doing this in a separate step means a category-creation IntegrityError
-        # (race condition) can be retried without corrupting the payment transaction.
+        # ── Resolve the Revenue category before acquiring the row lock ────────
+        # This must happen before the FOR UPDATE lock: on first use it issues its
+        # own db.session.commit(), which would release any lock acquired before it.
         fee_category = (
             RevenueCategory.query
             .execution_options(bypass_tenant_scope=True)
@@ -912,6 +907,28 @@ def pay_installment(inst_id):
             school = get_current_school()
             active_year = get_active_year(school.id) if school else None
             rev_academic_year_id = active_year.id if active_year else None
+
+        # ── Acquire row lock and recheck remaining (race-condition guard) ─────
+        # SELECT FOR UPDATE serializes concurrent payment attempts for this
+        # installment. populate_existing() refreshes inst's scalar attributes
+        # from the latest committed DB state so any payment already committed by
+        # a concurrent request is reflected before we compute remaining.
+        # The lock is held until the transaction commits below.
+        (
+            db.session.query(FeeInstallment)
+            .execution_options(include_all_years=True)
+            .with_for_update()
+            .filter(FeeInstallment.id == inst_id)
+            .populate_existing()
+            .one()
+        )
+
+        remaining = Decimal(str(inst.amount)) - Decimal(str(inst.received_amount or 0))
+        if remaining <= 0:
+            return jsonify({'status': 'error',
+                            'message': 'هذا القسط مسدّد بالكامل بالفعل.'}), 400
+        if received > remaining:
+            received = remaining
 
         # ── Apply ALL DB mutations in ONE atomic transaction ──────────────────
         # Installment fields, receipt number, and Revenue record are written
