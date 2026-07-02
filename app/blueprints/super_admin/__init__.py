@@ -200,7 +200,8 @@ def school_detail(school_id):
         .order_by(SchoolBilling.created_at.desc()).all()
 
     users = User.query.execution_options(bypass_tenant_scope=True)\
-        .filter_by(school_id=school_id)\
+        .filter(User.school_id == school_id,
+                User.username.notlike('~deleted~%'))\
         .order_by(User.full_name).all()
 
     all_years = AcademicYear.query.execution_options(bypass_tenant_scope=True)\

@@ -17,7 +17,7 @@ from app.models import (db, User, Role, Permission, Employee, Student, Subject,
                          teacher_subjects, parent_students, Complaint, LeaveRequest,
                          EmployeeLeaveRequest,
                          SchoolVideo, SchoolAnnouncement, SchoolContentRead,
-                         SchoolBuilding, UserBuildingAccess)
+                         SchoolBuilding, UserBuildingAccess, MobileDeviceToken)
 from app.utils.decorators import (admin_required, staff_required,
                                    get_current_school,
                                    get_active_year, get_view_year, super_admin_required)
@@ -104,6 +104,11 @@ def _assignable_roles(existing_role_name=None):
 
 def _is_super_admin_account(user):
     return bool(user and user.role and user.role.name == SUPER_ADMIN_ROLE)
+
+
+def _is_soft_deleted(user):
+    """True when the user account has been soft-deleted via delete_user()."""
+    return bool(user and user.username and user.username.startswith('~deleted~'))
 
 
 def _non_super_visible_roles():
@@ -537,7 +542,7 @@ def users_list():
     role_filter = request.args.get('role_id', 'all')
     school      = get_current_school()
 
-    query = User.query
+    query = User.query.filter(User.username.notlike('~deleted~%'))
     if search:
         query = query.filter(
             User.full_name.ilike(f'%{search}%') |
@@ -793,6 +798,10 @@ def edit_user(user_id):
     if is_school_manager and user.id == current_user.id:
         abort(403)
 
+    if _is_soft_deleted(user):
+        flash('لا يمكن تعديل هذا الحساب لأنه محذوف.', 'danger')
+        return redirect(url_for('admin.users_list'))
+
     roles = _assignable_roles(existing_role_name=user.role.name if user.role else None)
 
     # Super-admin: full permission list. School managers cannot edit extra
@@ -1036,6 +1045,9 @@ def toggle_user(user_id):
         abort(403)
     if _is_super_admin_account(user) and not current_user.is_super_admin:
         abort(403)
+    if _is_soft_deleted(user):
+        flash('لا يمكن تعديل هذا الحساب لأنه محذوف.', 'danger')
+        return redirect(url_for('admin.users_list'))
     if user.id == current_user.id:
         flash('لا يمكنك تعطيل حسابك الخاص.', 'danger')
     else:
@@ -1051,9 +1063,18 @@ def toggle_user(user_id):
 @admin_required
 def delete_user(user_id):
     from flask import abort
+    from sqlalchemy.exc import SQLAlchemyError
+
     user = db.session.get(User, user_id, execution_options={'bypass_tenant_scope': True})
     if user is None:
         abort(404)
+
+    # Idempotency: already soft-deleted — nothing to do.
+    if _is_soft_deleted(user):
+        flash('هذا الحساب محذوف بالفعل.', 'warning')
+        return redirect(url_for('admin.users_list'))
+
+    # ── Authorization guards ──────────────────────────────────────────────────
     if current_user.is_school_admin and (
             _is_super_admin_account(user)
             or (user.role and user.role.name == SCHOOL_ADMIN_ROLE)
@@ -1061,14 +1082,66 @@ def delete_user(user_id):
         abort(403)
     if _is_super_admin_account(user) and not current_user.is_super_admin:
         abort(403)
+
     if user.id == current_user.id:
         flash('لا يمكنك حذف حسابك الخاص.', 'danger')
-    elif _is_super_admin_account(user) and not current_user.is_super_admin:
+        return redirect(url_for('admin.users_list'))
+
+    if _is_super_admin_account(user) and not current_user.is_super_admin:
         flash('لا يمكنك حذف مسؤول النظام.', 'danger')
-    else:
-        db.session.delete(user)
+        return redirect(url_for('admin.users_list'))
+
+    # Prevent deleting the last active super-admin — would lock the system out.
+    if _is_super_admin_account(user):
+        remaining = (User.query
+                     .execution_options(bypass_tenant_scope=True)
+                     .join(Role)
+                     .filter(Role.name == SUPER_ADMIN_ROLE,
+                             User.id != user.id,
+                             User.username.notlike('~deleted~%'))
+                     .count())
+        if remaining == 0:
+            flash('لا يمكن حذف المسؤول الأخير للنظام — يجب أن يبقى مسؤول واحد على الأقل.', 'danger')
+            return redirect(url_for('admin.users_list'))
+
+    # ── Soft-delete: disable account and scrub credentials ───────────────────
+    # The users row is KEPT so all historical foreign-key references
+    # (audit_logs, attendance, fee records, complaints, leave requests, etc.)
+    # remain intact and no FK constraint is violated.
+    try:
+        # Block all logins (web, mobile JWT, and mobile refresh all check is_active).
+        user.is_active = False
+
+        # Destroy the password — '!' is never produced by bcrypt; ensures login
+        # is impossible even if the is_active check were somehow bypassed.
+        user.password_hash = '!'
+
+        # Clear FCM legacy field so the account no longer receives push notifications.
+        user.device_token = None
+
+        # Free the email address so it can be assigned to a new account.
+        user.email = None
+
+        # Mangle the username so it:
+        #   (a) frees the unique slot for reuse by a new account, and
+        #   (b) acts as a marker that filters this row from the users list.
+        # ~deleted~<id> is always globally unique because id is the PK.
+        user.username = f'~deleted~{user.id}'
+
+        # Remove account-level permission grants (account-only rows, safe to delete).
+        user.extra_permissions.clear()
+
+        # Delete FCM device token rows for this user.
+        MobileDeviceToken.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+
         db.session.commit()
-        flash('تم حذف المستخدم.', 'success')
+        flash('تم حذف حساب الدخول للمستخدم مع الحفاظ على البيانات المرتبطة به.', 'success')
+
+    except SQLAlchemyError as exc:
+        db.session.rollback()
+        logging.exception('delete_user soft-delete failed for user_id=%s: %s', user_id, exc)
+        flash('تعذّر حذف الحساب. يرجى المحاولة مرة أخرى أو التواصل مع الدعم الفني.', 'danger')
+
     return redirect(url_for('admin.users_list'))
 
 
