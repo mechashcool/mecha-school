@@ -109,12 +109,62 @@ def _assert_student_access(emp: Employee, student_id: int) -> Student:
     return student
 
 
+def _teacher_exam_filter(emp: Employee):
+    """Return an ORM WHERE clause restricting exams to this teacher's access set.
+
+    Homeroom sections (Section.teacher_id == emp.id): all exams in the section.
+    Subject-assigned sections (teacher_subjects junction): only exams whose
+    (section_id, subject_id) matches the explicit assignment row.
+    Returns None when the teacher has no access (no sections, no assignments).
+    """
+    homeroom_ids = list({s.id for s in emp.sections_managed})
+    rows = db.session.execute(
+        select(teacher_subjects.c.section_id, teacher_subjects.c.subject_id).where(
+            teacher_subjects.c.employee_id == emp.id
+        )
+    ).fetchall()
+
+    clauses = []
+    homeroom_set = set(homeroom_ids)
+
+    if homeroom_ids:
+        clauses.append(Exam.section_id.in_(homeroom_ids))
+
+    for row in rows:
+        if row.section_id not in homeroom_set:
+            clauses.append(
+                db.and_(Exam.section_id == row.section_id, Exam.subject_id == row.subject_id)
+            )
+
+    return db.or_(*clauses) if clauses else None
+
+
 def _assert_exam_access(emp: Employee, exam_id: int) -> Exam:
-    """Return Exam if it belongs to one of the teacher's sections; abort otherwise."""
+    """Return Exam if teacher is authorized for its (section, subject) pair; abort otherwise.
+
+    Homeroom teachers have access to every exam in their section.
+    Subject-assigned teachers must have an explicit (section_id, subject_id) row in
+    teacher_subjects.  This prevents a teacher who teaches Math in Section 1 from
+    viewing or entering results for English exams in Section 1.
+    """
     exam = db.session.get(Exam, exam_id)
     if not exam or exam.school_id != emp.school_id:
         abort(404)
-    if exam.section_id not in _teacher_section_ids(emp):
+    # Homeroom teacher: full access to all exams in the section.
+    homeroom_ids = {s.id for s in emp.sections_managed}
+    if exam.section_id in homeroom_ids:
+        return exam
+    # Subject-assigned section: require an explicit (section_id, subject_id) pair.
+    row = db.session.execute(
+        select(teacher_subjects.c.employee_id).where(
+            db.and_(
+                teacher_subjects.c.employee_id == emp.id,
+                teacher_subjects.c.section_id  == exam.section_id,
+                teacher_subjects.c.subject_id  == exam.subject_id,
+            )
+        ).limit(1)
+    ).fetchone()
+    if not row:
         abort(403)
     return exam
 
@@ -241,6 +291,7 @@ def teacher_profile():
         return err('employee_profile_not_found', 404)
 
     section_ids = _teacher_section_ids(emp)
+    exam_filter = _teacher_exam_filter(emp)
     today       = date.today()
 
     sections_count = len(section_ids)
@@ -248,11 +299,13 @@ def teacher_profile():
                       .filter(Student.section_id.in_(section_ids))
                       .filter_by(status='active')
                       .count()) if section_ids else 0
-    upcoming_14d   = (Exam.query
-                      .filter(Exam.section_id.in_(section_ids))
-                      .filter(Exam.exam_date >= today)
-                      .filter(Exam.exam_date <= today + timedelta(days=14))
-                      .count()) if section_ids else 0
+    upcoming_14d   = (
+        Exam.query
+        .filter(exam_filter)
+        .filter(Exam.exam_date >= today)
+        .filter(Exam.exam_date <= today + timedelta(days=14))
+        .count()
+    ) if exam_filter is not None else 0
 
     school = emp.school
     return ok(
@@ -723,12 +776,12 @@ def teacher_exams():
     if not emp:
         return err('employee_profile_not_found', 404)
 
-    section_ids = _teacher_section_ids(emp)
-    if not section_ids:
+    exam_filter = _teacher_exam_filter(emp)
+    if exam_filter is None:
         return ok(count=0, exams=[])
 
     today = date.today()
-    q     = Exam.query.filter(Exam.section_id.in_(section_ids))
+    q     = Exam.query.filter(exam_filter)
 
     if request.args.get('upcoming'):
         q = q.filter(Exam.exam_date >= today)
@@ -1023,18 +1076,22 @@ def teacher_create_exam():
         except (TypeError, ValueError):
             return err('duration_minutes must be a positive integer')
 
-    # Security: teacher must have access to the section
-    if section_id not in _teacher_section_ids(emp):
-        return err('forbidden — section not assigned to you', 403)
-
-    # Validate subject is assigned to this teacher
-    allowed_subject_ids = {row.subject_id for row in db.session.execute(
-        select(teacher_subjects.c.subject_id).where(
+    # Validate the (section_id, subject_id) pair against the teacher's assignments.
+    # Homeroom teachers can create exams for any school-scoped subject in their section.
+    # Subject-assigned teachers must have an explicit assignment for the pair.
+    _cr_homeroom_ids = {s.id for s in emp.sections_managed}
+    _cr_subj_rows = db.session.execute(
+        select(teacher_subjects.c.section_id, teacher_subjects.c.subject_id).where(
             teacher_subjects.c.employee_id == emp.id
-        ).distinct()
-    ).fetchall()}
-    if subject_id not in allowed_subject_ids:
-        return err('forbidden — subject not assigned to you', 403)
+        )
+    ).fetchall()
+    _cr_all_sections = _cr_homeroom_ids | {r.section_id for r in _cr_subj_rows}
+
+    if section_id not in _cr_all_sections:
+        return err('forbidden — section not assigned to you', 403)
+    if section_id not in _cr_homeroom_ids:
+        if (section_id, subject_id) not in {(r.section_id, r.subject_id) for r in _cr_subj_rows}:
+            return err('forbidden — subject not assigned to you', 403)
 
     subject = db.session.get(Subject, subject_id)
     if not subject or subject.school_id != emp.school_id:
@@ -1777,13 +1834,16 @@ def teacher_notifications():
     limit  = min(int(request.args.get('limit', 50)), 100)
     offset = max(int(request.args.get('offset', 0)), 0)
 
-    # Explicit school_id guard: notification_visible_to() filters by user/role
-    # but has no school filter. Without this, role-broadcast notifications from
-    # other schools could appear in the feed.
+    # Apply the teacher's account creation datetime as a cutoff for broadcast
+    # notifications (target_user_id IS NULL). This prevents a newly created
+    # teacher from inheriting historical role-broadcast or NULL-target
+    # notifications from before their account existed. Direct notifications
+    # (target_user_id == user.id) are unaffected by the cutoff.
+    # Explicit school_id guard is defence-in-depth alongside the ORM scope.
     q     = (Notification.query
              .filter(
                  Notification.school_id == user.school_id,
-                 notification_visible_to(user),
+                 notification_visible_to(user, cutoff_dt=user.created_at),
              )
              .order_by(Notification.created_at.desc()))
     total = q.count()
@@ -1975,20 +2035,22 @@ def teacher_homework_create():
     if due_dt < pub_dt:
         return err('due_date must not be before publish_date')
 
-    allowed_sec_ids = _teacher_section_ids(emp)
-    if section_id not in allowed_sec_ids:
-        return err('forbidden — section not assigned to you', 403)
+    # Validate the (section_id, subject_id) pair against the teacher's assignments.
+    # Homeroom teachers can create homework for any subject in their section.
+    # Subject-assigned teachers must have an explicit assignment for the pair.
+    _hw_homeroom_ids = {s.id for s in emp.sections_managed}
+    _hw_subj_rows = db.session.execute(
+        select(teacher_subjects.c.section_id, teacher_subjects.c.subject_id).where(
+            teacher_subjects.c.employee_id == emp.id
+        )
+    ).fetchall()
+    _hw_all_sections = _hw_homeroom_ids | {r.section_id for r in _hw_subj_rows}
 
-    allowed_subj_ids = {
-        row.subject_id
-        for row in db.session.execute(
-            select(teacher_subjects.c.subject_id).where(
-                teacher_subjects.c.employee_id == emp.id
-            )
-        ).fetchall()
-    }
-    if subject_id not in allowed_subj_ids:
-        return err('forbidden — subject not assigned to you', 403)
+    if section_id not in _hw_all_sections:
+        return err('forbidden — section not assigned to you', 403)
+    if section_id not in _hw_homeroom_ids:
+        if (section_id, subject_id) not in {(r.section_id, r.subject_id) for r in _hw_subj_rows}:
+            return err('forbidden — subject not assigned to you', 403)
 
     from app.models import AcademicYear
     year = AcademicYear.query.filter_by(school_id=emp.school_id, is_current=True).first()
@@ -2144,20 +2206,22 @@ def teacher_homework_update(homework_id):
     except ValueError:
         return err('invalid due_date — use YYYY-MM-DD')
 
-    allowed_sec_ids = _teacher_section_ids(emp)
-    if section_id not in allowed_sec_ids:
-        return err('forbidden — section not assigned to you', 403)
+    # Validate the (section_id, subject_id) pair against the teacher's assignments.
+    # Homeroom teachers can update homework for any subject in their section.
+    # Subject-assigned teachers must have an explicit assignment for the pair.
+    _upd_homeroom_ids = {s.id for s in emp.sections_managed}
+    _upd_subj_rows = db.session.execute(
+        select(teacher_subjects.c.section_id, teacher_subjects.c.subject_id).where(
+            teacher_subjects.c.employee_id == emp.id
+        )
+    ).fetchall()
+    _upd_all_sections = _upd_homeroom_ids | {r.section_id for r in _upd_subj_rows}
 
-    allowed_subj_ids = {
-        row.subject_id
-        for row in db.session.execute(
-            select(teacher_subjects.c.subject_id).where(
-                teacher_subjects.c.employee_id == emp.id
-            )
-        ).fetchall()
-    }
-    if subject_id not in allowed_subj_ids:
-        return err('forbidden — subject not assigned to you', 403)
+    if section_id not in _upd_all_sections:
+        return err('forbidden — section not assigned to you', 403)
+    if section_id not in _upd_homeroom_ids:
+        if (section_id, subject_id) not in {(r.section_id, r.subject_id) for r in _upd_subj_rows}:
+            return err('forbidden — subject not assigned to you', 403)
 
     # Attachment replacement (multipart only).
     # NOTE: the old file is NOT deleted from Supabase Storage — the project

@@ -103,8 +103,13 @@ def _audience_values(role_name: str) -> tuple:
     return ()
 
 
-def _notification_badge(user) -> int:
-    """Unread notification count for user — single aggregate query."""
+def _notification_badge(user, cutoff_dt=None) -> int:
+    """Unread notification count for user — single aggregate query.
+
+    cutoff_dt: passed through to notification_visible_to() to exclude broadcast
+    notifications created before the user's account (prevents new teachers from
+    counting old broadcast history in their badge).
+    """
     return (
         db.session.query(func.count(Notification.id))
         .execution_options(bypass_tenant_scope=True)
@@ -115,7 +120,7 @@ def _notification_badge(user) -> int:
         )
         .filter(
             Notification.school_id == user.school_id,
-            notification_visible_to(user),
+            notification_visible_to(user, cutoff_dt=cutoff_dt),
             NotificationRead.id.is_(None),
         )
         .scalar() or 0
@@ -228,8 +233,12 @@ def badge_counts():
     }
 
     # ── always-available counts (parent + teacher) ────────────────────────────
-    audiences    = _audience_values(role_name)
-    notif_count  = _notification_badge(user)
+    audiences = _audience_values(role_name)
+    # For teacher accounts, apply the account creation datetime as a cutoff so
+    # that broadcast notifications created before the account existed do not
+    # inflate the badge count. Parent badge counts are not affected.
+    notif_cutoff = user.created_at if role_name == 'teacher' else None
+    notif_count  = _notification_badge(user, cutoff_dt=notif_cutoff)
     msg_count    = _message_badge(user)
     board_count  = _school_board_badge(user, audiences)
 

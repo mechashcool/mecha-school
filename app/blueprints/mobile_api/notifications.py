@@ -39,6 +39,11 @@ def notification_mark_read(notification_id):
     existence is leaked.
     """
     user = g.mobile_user
+    # Apply the same broadcast cutoff as the notification list endpoint so that
+    # a teacher cannot mark a pre-account broadcast notification as read
+    # (it is not visible in their list and should not be addressable here either).
+    role_name = user.role.name if user.role else None
+    cutoff    = user.created_at if role_name == 'teacher' else None
 
     notif = (
         Notification.query
@@ -46,7 +51,7 @@ def notification_mark_read(notification_id):
         .filter(
             Notification.id == notification_id,
             Notification.school_id == user.school_id,
-            notification_visible_to(user),
+            notification_visible_to(user, cutoff_dt=cutoff),
         )
         .first()
     )
@@ -87,6 +92,11 @@ def notification_read_all():
       • LEFT JOIN NotificationRead WHERE user_id = user.id → only rows with no receipt
     """
     user = g.mobile_user
+    # Apply the same broadcast cutoff as the notification list endpoint so that
+    # "read all" does not create read receipts for pre-account broadcast
+    # notifications that are invisible in the teacher's notification list.
+    role_name = user.role.name if user.role else None
+    cutoff    = user.created_at if role_name == 'teacher' else None
 
     # Build a SELECT of (notification_id, user_id) for all unread visible notifications.
     unread_ids_subq = (
@@ -100,7 +110,7 @@ def notification_read_all():
         )
         .where(
             Notification.school_id == user.school_id,
-            notification_visible_to(user),
+            notification_visible_to(user, cutoff_dt=cutoff),
             NotificationRead.id.is_(None),
         )
         .execution_options(bypass_tenant_scope=True)
