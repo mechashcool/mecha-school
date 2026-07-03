@@ -461,13 +461,17 @@ def pdf(record_id):
         id=record_id, school_id=school.id
     ).first_or_404()
 
+    paper = request.args.get('paper', 'a3').lower()
+    if paper not in ('a3', 'a4'):
+        paper = 'a3'
+
     from app.utils.pdf_gen import generate_registration_record_pdf
-    pdf_bytes = generate_registration_record_pdf(record, school)
+    pdf_bytes = generate_registration_record_pdf(record, school, paper=paper)
     if not pdf_bytes:
         flash('تعذّر إنشاء ملف PDF — تحقق من توفر مكتبة ReportLab والخط العربي.', 'danger')
         return redirect(url_for('student_records.view', record_id=record.id))
 
-    fname = f'سجل_قيد_{record.snap_student_number or record.id}.pdf'
+    fname = f'سجل_قيد_{record.snap_student_number or record.id}_{paper.upper()}.pdf'
     buf   = BytesIO(pdf_bytes)
     return send_file(buf, mimetype='application/pdf',
                      as_attachment=False,

@@ -1150,22 +1150,19 @@ def generate_attendance_report_pdf(rows, report_type='detail', date_from='', dat
     return buf.getvalue()
 
 
-def generate_registration_record_pdf(record, school=None) -> bytes | None:
-    """Generate official A3-landscape سجل القيد العام matching the paper form.
+def generate_registration_record_pdf(record, school=None, paper='a3') -> bytes | None:
+    """Generate official سجل القيد العام PDF.
 
-    Layout:
-    1. Title row:  سجل القيد العام (right) | رقم الصحيفة (left)
-    2. School name + optional logo
-    3. Top student-info grid (19 physical columns, RTL)
-    4. Subject×year grade grid (subject rows × 9 year columns)
-    5. Bottom note
+    paper='a3'  Landscape A3 — default; best quality, matches the physical form.
+    paper='a4'  Landscape A4 — all column widths and font sizes scaled
+                proportionally to fit without clipping.
 
     Returns bytes or None if ReportLab is unavailable.
     """
     if not _get_rl():
         return None
 
-    from reportlab.lib.pagesizes import A3, landscape
+    from reportlab.lib.pagesizes import A3, A4, landscape
     from reportlab.lib.units import cm
     from reportlab.lib import colors
     from reportlab.lib.colors import HexColor
@@ -1187,30 +1184,44 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
     NAVY   = HexColor('#1a3a5c')
     LTGREY = HexColor('#f0f0f0')
 
-    buf       = BytesIO()
-    page_size = landscape(A3)
-    pw, ph    = page_size   # ~1190.55 × 841.89 pt
+    # ── Paper size selection ──────────────────────────────────────────────────
+    paper = (paper or 'a3').lower()
+    if paper == 'a4':
+        page_size = landscape(A4)
+        MARG = 0.4 * cm   # tighter margins on A4 to maximise usable width
+    else:
+        page_size = landscape(A3)
+        MARG = 0.8 * cm
 
-    MARG = 0.8 * cm          # uniform margins
-    doc  = SimpleDocTemplate(
+    buf    = BytesIO()
+    pw, ph = page_size
+    doc    = SimpleDocTemplate(
         buf, pagesize=page_size,
         leftMargin=MARG, rightMargin=MARG,
         topMargin=MARG, bottomMargin=MARG,
     )
 
-    AW = pw - 2 * MARG   # available width ≈ 1145 pt
+    AW = pw - 2 * MARG   # available content width in points
 
-    # ── Style helpers ────────────────────────────────────────────────────────
+    # Scale factor: 1.0 for A3, ~0.72 for A4 (A4-landscape AW / A3-landscape AW).
+    # Used to proportionally reduce font sizes, padding, row heights, and column
+    # widths so the full table fits without horizontal clipping on A4.
+    _A3_AW = 1190.55 - 2 * (0.8 * cm)   # ≈ 1145 pt — A3 reference
+    scale  = AW / _A3_AW
+
+    # ── Scaled helpers ────────────────────────────────────────────────────────
+    _pad = max(1, round(2 * scale))
+
     def ps(name, font=fn, size=8, align=1, color=BLACK, **kw):
         return ParagraphStyle(name, fontName=font, fontSize=size,
                                alignment=align, textColor=color, **kw)
 
-    title_s  = ps('T',  fn_b, 14, 1, NAVY)
-    hdr_s    = ps('H',  fn_b,  7, 1, BLACK)
-    shdr_s   = ps('SH', fn_b,  6, 1, BLACK)
-    cell_s   = ps('C',  fn,    7, 1, BLACK)
-    subj_s   = ps('SU', fn_b,  7, 2, BLACK)   # right-aligned subject names
-    foot_s   = ps('F',  fn,    6, 1, HexColor('#666666'))
+    title_s = ps('T',  fn_b, max(8,  round(14 * scale)), 1, NAVY)
+    hdr_s   = ps('H',  fn_b, max(5,  round(7  * scale)), 1, BLACK)
+    shdr_s  = ps('SH', fn_b, max(4,  round(6  * scale)), 1, BLACK)
+    cell_s  = ps('C',  fn,   max(5,  round(7  * scale)), 1, BLACK)
+    subj_s  = ps('SU', fn_b, max(5,  round(7  * scale)), 2, BLACK)
+    foot_s  = ps('F',  fn,   max(4,  round(6  * scale)), 1, HexColor('#666666'))
 
     def p(text, s=cell_s):
         return Paragraph(ar(str(text or '')), s)
@@ -1218,10 +1229,10 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
     def ph_(text, s=hdr_s):
         return Paragraph(ar(str(text or '')), s)
 
-    PAD  = [('TOPPADDING',    (0,0), (-1,-1), 2),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 2),
-            ('LEFTPADDING',   (0,0), (-1,-1), 2),
-            ('RIGHTPADDING',  (0,0), (-1,-1), 2)]
+    PAD  = [('TOPPADDING',    (0,0), (-1,-1), _pad),
+            ('BOTTOMPADDING', (0,0), (-1,-1), _pad),
+            ('LEFTPADDING',   (0,0), (-1,-1), _pad),
+            ('RIGHTPADDING',  (0,0), (-1,-1), _pad)]
     GRID = [('GRID', (0,0), (-1,-1), 0.5, BORDER),
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
             ('ALIGN',  (0,0), (-1,-1), 'CENTER')]
@@ -1232,7 +1243,6 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
     ef  = record.extra_fields   # dict
     gh  = record.academic_history
     sav = gh.get('years', [])
-    # Pad to 9 slots
     while len(sav) < 9:
         sav.append({})
 
@@ -1240,14 +1250,14 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
         record.snap_gender or '', record.snap_gender or '')
 
     # ── 1. TITLE ROW ─────────────────────────────────────────────────────────
-    rec_num  = ef.get('record_number', '')
-    gen_reg  = ef.get('general_registry', '')
+    rec_num = ef.get('record_number', '')
+    gen_reg = ef.get('general_registry', '')
 
     title_row = [[
         Paragraph(ar(f'رقم الصحيفة  :  {rec_num}'),
-                  ps('TL', fn, 10, 0, BLACK)),
+                  ps('TL', fn,   max(6, round(10 * scale)), 0, BLACK)),
         Paragraph(ar(f'سجل القيد العام  :  {gen_reg}'),
-                  ps('TR', fn_b, 13, 2, NAVY)),
+                  ps('TR', fn_b, max(8, round(13 * scale)), 2, NAVY)),
     ]]
     title_tbl = Table(title_row, colWidths=[AW * 0.40, AW * 0.60])
     title_tbl.setStyle(TableStyle([
@@ -1256,177 +1266,138 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
         ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
     ]))
     elements.append(title_tbl)
-    elements.append(Spacer(1, 3))
+    elements.append(Spacer(1, max(1, round(3 * scale))))
 
     # ── 2. TOP STUDENT INFO TABLE ─────────────────────────────────────────────
-    # 19 physical columns (left=0 → right=18).
-    # Rightmost (col 18,17) = الطالب.  Leftmost (col 0) = سبب المغادرة.
-    # Columns with sub-groups: الطالب(17-18), مسكن الأب(14-15), مسكن ولي(10-11)
+    # 19 physical columns (left=0 → right=18), scaled proportionally to AW.
+    _BASE_TOP_CWS = [95, 55, 80, 55, 55, 45, 40, 55, 60, 65,
+                     40, 40, 80, 65, 40, 40, 80, 95, 55]
+    _base_sum = sum(_BASE_TOP_CWS)   # 1140
+    TOP_CWS = [int(w * AW / _base_sum) for w in _BASE_TOP_CWS]
+    TOP_CWS[0] += int(AW) - sum(TOP_CWS)   # absorb integer-division remainder
 
-    TOP_CWS = [
-        95,  # 0  سبب المغادرة والملاحظات
-        55,  # 1  تاريخ المغادرة
-        80,  # 2  آخر مدرسة كان فيها
-        55,  # 3  الصف الذي قبل فيه
-        55,  # 4  تاريخ دخول المدرسة
-        45,  # 5  ديانته
-        40,  # 6  جنسه
-        55,  # 7  تاريخ ولادته
-        60,  # 8  مسقط رأسه
-        65,  # 9  رقم دفتر نفوس
-        40,  # 10 مسكن ولي — المحلة
-        40,  # 11 مسكن ولي — رقم الدار
-        80,  # 12 اسم ولي أمر الطالب
-        65,  # 13 صنعة الأب وعنوانه
-        40,  # 14 مسكن الأب — المحلة
-        40,  # 15 مسكن الأب — رقم الدار
-        80,  # 16 اسم أبيه وشهرته
-        95,  # 17 الطالب — اسمه
-        55,  # 18 الطالب — رقمه
-    ]
-    # Adjust to fill AW exactly
-    diff = int(AW) - sum(TOP_CWS)
-    TOP_CWS[0] += diff  # absorb any rounding into the widest left column
-
-    NC = len(TOP_CWS)  # 19
-
-    # Row 0: main headers (some spanning 2 rows, some spanning 2 cols)
+    # Row 0: main headers
     R0 = [
-        ph_('سبب المغادرة والملاحظات'),     # 0  rowspan 2
-        ph_('تاريخ المغادرة'),              # 1  rowspan 2
-        ph_('آخر مدرسة كان فيها'),          # 2  rowspan 2
-        ph_('الصف الذي قبل فيه'),           # 3  rowspan 2
-        ph_('تاريخ دخول المدرسة'),          # 4  rowspan 2
-        ph_('ديانته'),                      # 5  rowspan 2
-        ph_('جنسيته'),                      # 6  rowspan 2
-        ph_('تاريخ ولادته'),                # 7  rowspan 2
-        ph_('مسقط رأسه'),                   # 8  rowspan 2
-        ph_('رقم دفتر نفوس الطالب'),        # 9  rowspan 2
-        ph_('مسكن ولي أمره'),               # 10 colspan 2
-        '',                                 # 11 spanned by 10
-        ph_('اسم ولي أمر الطالب'),           # 12 rowspan 2
-        ph_('صنعة الأب وعنوانه'),             # 13 rowspan 2
-        ph_('مسكن الأب'),                   # 14 colspan 2
-        '',                                 # 15 spanned by 14
-        ph_('اسم أبيه وشهرته'),              # 16 rowspan 2
-        ph_('الطالب'),                       # 17 colspan 2
-        '',                                 # 18 spanned by 17
+        ph_('سبب المغادرة والملاحظات'),
+        ph_('تاريخ المغادرة'),
+        ph_('آخر مدرسة كان فيها'),
+        ph_('الصف الذي قبل فيه'),
+        ph_('تاريخ دخول المدرسة'),
+        ph_('ديانته'),
+        ph_('جنسيته'),
+        ph_('تاريخ ولادته'),
+        ph_('مسقط رأسه'),
+        ph_('رقم دفتر نفوس الطالب'),
+        ph_('مسكن ولي أمره'),   # colspan 2
+        '',
+        ph_('اسم ولي أمر الطالب'),
+        ph_('صنعة الأب وعنوانه'),
+        ph_('مسكن الأب'),        # colspan 2
+        '',
+        ph_('اسم أبيه وشهرته'),
+        ph_('الطالب'),            # colspan 2
+        '',
     ]
 
-    # Row 1: sub-headers for spanned groups; empty cells for rowspan-2 cols
+    # Row 1: sub-headers for spanned groups
     R1 = [
-        '',        # 0  spanned from R0
-        '',        # 1
-        '',        # 2
-        '',        # 3
-        '',        # 4
-        '',        # 5
-        '',        # 6
-        '',        # 7
-        '',        # 8
-        '',        # 9
-        ph_('المحلة', shdr_s),      # 10
-        ph_('رقم الدار', shdr_s),   # 11
-        '',        # 12 spanned
-        '',        # 13 spanned
-        ph_('المحلة', shdr_s),      # 14
-        ph_('رقم الدار', shdr_s),   # 15
-        '',        # 16 spanned
-        ph_('اسمه', shdr_s),        # 17
-        ph_('رقم قيده', shdr_s),    # 18
+        '', '', '', '', '', '', '', '', '', '',
+        ph_('المحلة',    shdr_s),
+        ph_('رقم الدار', shdr_s),
+        '', '',
+        ph_('المحلة',    shdr_s),
+        ph_('رقم الدار', shdr_s),
+        '',
+        ph_('اسمه',      shdr_s),
+        ph_('رقم قيده',  shdr_s),
     ]
 
     # Row 2: data values
-    dob_str  = str(record.snap_date_of_birth) if record.snap_date_of_birth else ''
-    enr_str  = str(record.snap_enrollment_date) if record.snap_enrollment_date else ''
-    adm_str  = str(record.admission_date) if record.admission_date else ''
+    dob_str = str(record.snap_date_of_birth)   if record.snap_date_of_birth   else ''
+    enr_str = str(record.snap_enrollment_date) if record.snap_enrollment_date else ''
+    adm_str = str(record.admission_date)       if record.admission_date       else ''
     R2 = [
-        p(ef.get('departure_reason', '')),   # 0
-        p(ef.get('departure_date', '')),     # 1
-        p(record.previous_school or ''),     # 2
-        p(record.snap_grade_name or ''),     # 3
-        p(enr_str or adm_str),               # 4
-        p(ef.get('religion', '')),           # 5
-        p(gender_ar),                        # 6
-        p(dob_str),                          # 7
-        p(ef.get('birth_place', '')),        # 8
-        p(ef.get('civil_registry_num', '')), # 9
-        p(ef.get('guardian_mahalla', '')),   # 10
-        p(ef.get('guardian_house_num', '')), # 11
-        p(record.snap_guardian_name or ''),  # 12
-        p(ef.get('father_occupation', '')),  # 13
-        p(ef.get('father_mahalla', '')),     # 14
-        p(ef.get('father_house_num', '')),   # 15
-        p(ef.get('father_name', '')),        # 16
-        p(record.snap_full_name or ''),      # 17
-        p(record.snap_student_number or ''), # 18
+        p(ef.get('departure_reason', '')),
+        p(ef.get('departure_date', '')),
+        p(record.previous_school or ''),
+        p(record.snap_grade_name or ''),
+        p(enr_str or adm_str),
+        p(ef.get('religion', '')),
+        p(gender_ar),
+        p(dob_str),
+        p(ef.get('birth_place', '')),
+        p(ef.get('civil_registry_num', '')),
+        p(ef.get('guardian_mahalla', '')),
+        p(ef.get('guardian_house_num', '')),
+        p(record.snap_guardian_name or ''),
+        p(ef.get('father_occupation', '')),
+        p(ef.get('father_mahalla', '')),
+        p(ef.get('father_house_num', '')),
+        p(ef.get('father_name', '')),
+        p(record.snap_full_name or ''),
+        p(record.snap_student_number or ''),
     ]
 
     top_data  = [R0, R1, R2]
     top_table = Table(top_data, colWidths=TOP_CWS)
 
-    # Build spans list
     rowspan_cols = [0,1,2,3,4,5,6,7,8,9,12,13,16]
     spans = []
     for c in rowspan_cols:
         spans.append(('SPAN', (c, 0), (c, 1)))
     spans += [
-        ('SPAN', (10, 0), (11, 0)),  # مسكن ولي
-        ('SPAN', (14, 0), (15, 0)),  # مسكن الأب
-        ('SPAN', (17, 0), (18, 0)),  # الطالب
+        ('SPAN', (10, 0), (11, 0)),
+        ('SPAN', (14, 0), (15, 0)),
+        ('SPAN', (17, 0), (18, 0)),
     ]
 
+    _fs = max(5, round(7 * scale))
     top_style = TableStyle(
         GRID + PAD + spans + [
             ('BACKGROUND', (0,0), (-1,1), LTGREY),
             ('FONTNAME',   (0,0), (-1,1), fn_b),
-            ('FONTSIZE',   (0,0), (-1,-1), 7),
-            ('ROWHEIGHT',  (0,0), (0,0), 22),
-            ('ROWHEIGHT',  (0,1), (0,1), 14),
-            ('ROWHEIGHT',  (0,2), (0,2), 20),
+            ('FONTSIZE',   (0,0), (-1,-1), _fs),
+            ('ROWHEIGHT',  (0,0), (0,0), max(12, round(22 * scale))),
+            ('ROWHEIGHT',  (0,1), (0,1), max(8,  round(14 * scale))),
+            ('ROWHEIGHT',  (0,2), (0,2), max(12, round(20 * scale))),
         ]
     )
     top_table.setStyle(top_style)
     elements.append(top_table)
-    elements.append(Spacer(1, 4))
+    elements.append(Spacer(1, max(2, round(4 * scale))))
 
     # ── 3. GRADE GRID ────────────────────────────────────────────────────────
     # 20 physical columns:
-    #   col 0: الملاحظات
-    #   cols 1-18: 9 years × 2 sub-cols each
-    #     year_i occupies cols (17 - 2*i) and (18 - 2*i)
-    #     → year 0 (الأول)  = cols 17,18  (rightmost)
-    #     → year 8 (التاسع) = cols  1,2   (leftmost)
-    #   col 19: مواد الدراسة
+    #   col 0:    الملاحظات
+    #   cols 1-18: 9 years × 2 sub-cols each (n=رقماً, t=كتابة)
+    #   col 19:   مواد الدراسة
 
-    NOTES_W  = 80
-    SUBJ_W   = 110
-    YCOL_W   = (int(AW) - NOTES_W - SUBJ_W) // 18   # ≈ 53 pt per sub-col
+    NOTES_W = max(30, round(80  * scale))
+    SUBJ_W  = max(50, round(110 * scale))
+    YCOL_W  = (int(AW) - NOTES_W - SUBJ_W) // 18
 
-    # Re-compute to fill exactly
     remainder = int(AW) - NOTES_W - SUBJ_W - YCOL_W * 18
     NOTES_W  += remainder   # absorb difference
 
-    GC = 20   # 1 + 18 + 1
+    GC   = 20
     GCWS = [NOTES_W] + [YCOL_W] * 18 + [SUBJ_W]
 
-    # Helper: physical col index for year yi's n-sub-col
     def ync(yi):
-        return 17 - 2 * yi   # n-col (number)
+        return 17 - 2 * yi   # n-col (number/رقماً)
+
     def ytc(yi):
-        return 18 - 2 * yi   # t-col (text)
+        return 18 - 2 * yi   # t-col (text/كتابة)
 
     YEAR_LABELS = ['الأول', 'الثاني', 'الثالث', 'الرابع', 'الخامس',
                    'السادس', 'السابع', 'الثامن', 'التاسع']
 
-    # 4 header rows
     def blank_row():
         return [''] * GC
 
-    GHR0 = blank_row()   # الصف
-    GHR1 = blank_row()   # السنة
-    GHR2 = blank_row()   # الدرجة
-    GHR3 = blank_row()   # رقماً / كتابة
+    GHR0 = blank_row()
+    GHR1 = blank_row()
+    GHR2 = blank_row()
+    GHR3 = blank_row()
 
     GHR0[0]  = ph_('الملاحظات')
     GHR0[19] = ph_('مواد\nالدراسة')
@@ -1440,12 +1411,11 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
         GHR0[nc] = ph_(clas or YEAR_LABELS[yi])
         GHR1[nc] = ph_(f'السنة\n{year}' if year else 'السنة')
         GHR2[nc] = ph_('الدرجة')
-        GHR3[tc] = ph_('رقماً', shdr_s)   # tc = higher index = more right = read first in Arabic
-        GHR3[nc] = ph_('كتابة', shdr_s)   # nc = lower index = more left
+        GHR3[tc] = ph_('رقماً', shdr_s)
+        GHR3[nc] = ph_('كتابة', shdr_s)
 
     g_data = [GHR0, GHR1, GHR2, GHR3]
 
-    # Subject rows
     def subj_row(subj_label, key_n, key_t):
         row = blank_row()
         row[19] = Paragraph(ar(subj_label), subj_s)
@@ -1460,22 +1430,20 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
     for j, subj in enumerate(_SUBJECTS):
         g_data.append(subj_row(subj, f's{j}_n', f's{j}_t'))
 
-    # 3 extra subject rows (from saved data or blank)
     for k in range(3):
         row = blank_row()
         for yi in range(9):
-            yr      = sav[yi]
-            extras  = yr.get('extra', [])
-            ex      = extras[k] if k < len(extras) else {}
-            name    = ex.get('name', '')
-            en_val  = ex.get('n', '')
-            et_val  = ex.get('t', '') or num_to_arabic_words(en_val)
+            yr     = sav[yi]
+            extras = yr.get('extra', [])
+            ex     = extras[k] if k < len(extras) else {}
+            name   = ex.get('name', '')
+            en_val = ex.get('n', '')
+            et_val = ex.get('t', '') or num_to_arabic_words(en_val)
             row[19] = Paragraph(ar(name or ''), subj_s) if name else p('')
             row[ytc(yi)] = p(en_val)
             row[ync(yi)] = p(et_val)
         g_data.append(row)
 
-    # Bottom section rows
     def bottom_row(label, key):
         row = blank_row()
         row[19] = Paragraph(ar(label), subj_s)
@@ -1491,11 +1459,10 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
             yr    = sav[yi]
             n_val = yr.get(key_n, '')
             t_val = yr.get(key_t, '') or num_to_arabic_words(n_val)
-            row[ytc(yi)] = p(n_val)   # right (tc) = رقماً
-            row[ync(yi)] = p(t_val)   # left  (nc) = كتابة
+            row[ytc(yi)] = p(n_val)
+            row[ync(yi)] = p(t_val)
         return row
 
-    # المجموع — auto-sum numeric grades; fall back to stored total_n if no numeric entries
     total_row = blank_row()
     total_row[19] = Paragraph(ar('المجموع'), subj_s)
     for yi in range(9):
@@ -1525,7 +1492,6 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
     NROWS = len(g_data)
 
     grid_spans = [
-        # الملاحظات and مواد الدراسة span all 4 header rows
         ('SPAN', (0,  0), (0,  3)),
         ('SPAN', (19, 0), (19, 3)),
     ]
@@ -1533,11 +1499,10 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
         nc = ync(yi)
         tc = ytc(yi)
         grid_spans += [
-            ('SPAN', (nc, 0), (tc, 0)),   # الصف spans n+t
-            ('SPAN', (nc, 1), (tc, 1)),   # السنة spans n+t
-            ('SPAN', (nc, 2), (tc, 2)),   # الدرجة spans n+t
+            ('SPAN', (nc, 0), (tc, 0)),
+            ('SPAN', (nc, 1), (tc, 1)),
+            ('SPAN', (nc, 2), (tc, 2)),
         ]
-        # Bottom rows span both sub-cols except النتيجة النهائية (NROWS-2) which keeps divider
         for roff in [NROWS-5, NROWS-4, NROWS-3, NROWS-1]:
             grid_spans.append(('SPAN', (nc, roff), (tc, roff)))
 
@@ -1546,14 +1511,14 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
         GRID + PAD + grid_spans + [
             ('BACKGROUND',  (0, 0),  (-1, HDR_ROWS-1), LTGREY),
             ('FONTNAME',    (0, 0),  (-1, HDR_ROWS-1), fn_b),
-            ('FONTSIZE',    (0, 0),  (-1, -1),          7),
-            ('BACKGROUND',  (0, 0),  (0,  -1),          HexColor('#e8f0f8')),  # الملاحظات col tint
-            ('BACKGROUND',  (19, 0), (19, -1),          LTGREY),               # مواد col tint
+            ('FONTSIZE',    (0, 0),  (-1, -1),          _fs),
+            ('BACKGROUND',  (0, 0),  (0,  -1),          HexColor('#e8f0f8')),
+            ('BACKGROUND',  (19, 0), (19, -1),          LTGREY),
             ('FONTNAME',    (19, 0), (19, -1),           fn_b),
-            ('ROWHEIGHT',   (0, 0),  (0, 0),             18),
-            ('ROWHEIGHT',   (0, 1),  (0, 1),             14),
-            ('ROWHEIGHT',   (0, 2),  (0, 2),             12),
-            ('ROWHEIGHT',   (0, 3),  (0, 3),             10),
+            ('ROWHEIGHT',   (0, 0),  (0, 0),  max(10, round(18 * scale))),
+            ('ROWHEIGHT',   (0, 1),  (0, 1),  max(8,  round(14 * scale))),
+            ('ROWHEIGHT',   (0, 2),  (0, 2),  max(6,  round(12 * scale))),
+            ('ROWHEIGHT',   (0, 3),  (0, 3),  max(5,  round(10 * scale))),
         ]
     )
     for r in range(HDR_ROWS, NROWS):
@@ -1565,7 +1530,7 @@ def generate_registration_record_pdf(record, school=None) -> bytes | None:
     grade_tbl = Table(g_data, colWidths=GCWS)
     grade_tbl.setStyle(g_style)
     elements.append(grade_tbl)
-    elements.append(Spacer(1, 6))
+    elements.append(Spacer(1, max(3, round(6 * scale))))
 
     # ── 4. BOTTOM NOTE ───────────────────────────────────────────────────────
     note_text = ar(

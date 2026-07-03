@@ -22,9 +22,13 @@
        class="btn btn-outline-primary">
       <i class="bi bi-pencil-fill me-1"></i>تعديل
     </a>
-    <a href="{{ url_for('student_records.pdf', record_id=record.id) }}"
+    <a href="{{ url_for('student_records.pdf', record_id=record.id, paper='a3') }}"
        target="_blank" class="btn btn-danger">
       <i class="bi bi-file-earmark-pdf-fill me-1"></i>طباعة PDF (A3)
+    </a>
+    <a href="{{ url_for('student_records.pdf', record_id=record.id, paper='a4') }}"
+       target="_blank" class="btn btn-outline-danger">
+      <i class="bi bi-file-earmark-pdf me-1"></i>طباعة PDF (A4)
     </a>
   </div>
 </div>
