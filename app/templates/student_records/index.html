@@ -78,11 +78,26 @@
                  class="btn btn-sm btn-outline-secondary me-1" title="تعديل">
                 <i class="bi bi-pencil-fill"></i>
               </a>
-              <a href="{{ url_for('student_records.pdf', record_id=rec.id) }}"
-                 target="_blank"
-                 class="btn btn-sm btn-outline-danger" title="طباعة PDF">
-                <i class="bi bi-file-earmark-pdf-fill"></i>
-              </a>
+              <div class="btn-group btn-group-sm">
+                <button type="button" class="btn btn-sm btn-outline-danger dropdown-toggle"
+                        data-bs-toggle="dropdown" aria-expanded="false" title="طباعة PDF">
+                  <i class="bi bi-file-earmark-pdf-fill"></i>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                  <li>
+                    <a class="dropdown-item" target="_blank"
+                       href="{{ url_for('student_records.pdf', record_id=rec.id, paper='a4') }}">
+                      <i class="bi bi-file-earmark-pdf me-1"></i>طباعة A4
+                    </a>
+                  </li>
+                  <li>
+                    <a class="dropdown-item" target="_blank"
+                       href="{{ url_for('student_records.pdf', record_id=rec.id, paper='a3') }}">
+                      <i class="bi bi-file-earmark-pdf-fill me-1"></i>طباعة A3
+                    </a>
+                  </li>
+                </ul>
+              </div>
             </td>
           </tr>
           {% endfor %}
@@ -189,8 +204,18 @@
             '<i class="bi bi-eye-fill"></i></a>' +
           '<a href="' + r.edit_url + '" class="btn btn-sm btn-outline-secondary me-1" title="تعديل">' +
             '<i class="bi bi-pencil-fill"></i></a>' +
-          '<a href="' + r.pdf_url + '" target="_blank" class="btn btn-sm btn-outline-danger" title="طباعة PDF">' +
-            '<i class="bi bi-file-earmark-pdf-fill"></i></a>' +
+          '<div class="btn-group btn-group-sm">' +
+            '<button type="button" class="btn btn-sm btn-outline-danger dropdown-toggle" ' +
+                    'data-bs-toggle="dropdown" aria-expanded="false" title="طباعة PDF">' +
+              '<i class="bi bi-file-earmark-pdf-fill"></i>' +
+            '</button>' +
+            '<ul class="dropdown-menu dropdown-menu-end">' +
+              '<li><a class="dropdown-item" href="' + r.pdf_url_a4 + '" target="_blank">' +
+                '<i class="bi bi-file-earmark-pdf me-1"></i>طباعة A4</a></li>' +
+              '<li><a class="dropdown-item" href="' + r.pdf_url_a3 + '" target="_blank">' +
+                '<i class="bi bi-file-earmark-pdf-fill me-1"></i>طباعة A3</a></li>' +
+            '</ul>' +
+          '</div>' +
         '</td>' +
       '</tr>';
     }).join('');

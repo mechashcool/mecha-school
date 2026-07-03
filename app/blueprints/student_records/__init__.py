@@ -310,9 +310,10 @@ def search():
             'academic_year':  r.snap_year_name or '—',
             'created_at':     r.created_at.strftime('%Y-%m-%d') if r.created_at else '',
             'updated_at':     r.updated_at.strftime('%Y-%m-%d') if r.updated_at else '',
-            'view_url':  url_for('student_records.view', record_id=r.id),
-            'edit_url':  url_for('student_records.edit', record_id=r.id),
-            'pdf_url':   url_for('student_records.pdf',  record_id=r.id),
+            'view_url':    url_for('student_records.view', record_id=r.id),
+            'edit_url':    url_for('student_records.edit', record_id=r.id),
+            'pdf_url_a3':  url_for('student_records.pdf',  record_id=r.id, paper='a3'),
+            'pdf_url_a4':  url_for('student_records.pdf',  record_id=r.id, paper='a4'),
         } for r in rows],
     })
 
