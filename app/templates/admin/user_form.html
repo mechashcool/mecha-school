@@ -39,10 +39,12 @@
               <label class="form-label">اسم المستخدم <span class="text-danger">*</span></label>
               <input type="text" name="username" class="form-control"
                      value="{{ user.username if user else '' }}"
-                     {{ 'readonly' if user and not current_user.is_super_admin }} required>
+                     {{ 'readonly' if user and not current_user.is_super_admin and not is_school_manager }} required>
               {% if user %}
                 {% if current_user.is_super_admin %}
                 <small class="text-muted"><i class="bi bi-shield-check me-1"></i>يمكن للمشرف العام تعديل اسم المستخدم مع مراعاة عدم التكرار</small>
+                {% elif is_school_manager %}
+                <small class="text-muted"><i class="bi bi-pencil me-1"></i>يمكن تعديل اسم المستخدم — تأكد من عدم التكرار</small>
                 {% else %}
                 <small class="text-muted">لا يمكن تغيير اسم المستخدم</small>
                 {% endif %}

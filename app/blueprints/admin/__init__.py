@@ -847,11 +847,16 @@ def edit_user(user_id):
     if request.method == 'POST':
         user.full_name = request.form.get('full_name', user.full_name).strip()
 
-        # Super admin can change the username
-        if current_user.is_super_admin:
+        # Super admin and school managers can change the username.
+        # School managers are already restricted to same-school non-admin non-deleted
+        # users by the access guards at the top of this function.
+        if current_user.is_super_admin or is_school_manager:
             new_username = request.form.get('username', '').strip()
             if not new_username:
                 flash('اسم المستخدم مطلوب.', 'danger')
+                return redirect(url_for('admin.edit_user', user_id=user.id))
+            if new_username.startswith('~deleted~'):
+                flash('اسم المستخدم غير صالح.', 'danger')
                 return redirect(url_for('admin.edit_user', user_id=user.id))
             if new_username != user.username:
                 clash = (User.query
