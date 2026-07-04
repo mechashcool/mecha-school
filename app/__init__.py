@@ -372,6 +372,43 @@ def create_app(config_name=None):
             return _rt('shared/module_disabled.html',
                        module_label=MODULES[module_key]['label']), 403
 
+    # ── Investor confinement guard ─────────────────────────────────────────────
+    @app.before_request
+    def _confine_investor():
+        """Restrict read-only investor accounts to their own portal.
+
+        The investor role holds no permissions, so permission-gated routes
+        already return 403. This closes the remaining gap: routes protected by
+        @login_required alone (e.g. /notifications/) would otherwise be
+        reachable. Fail-closed — anything outside the investor's allowed surface
+        is redirected (GET) or blocked (403). Only affects investor_viewer; no
+        other role is touched. Web-session only: mobile API paths are skipped so
+        the JWT-authenticated mobile endpoints (with their own role guards) are
+        unaffected.
+        """
+        from flask_login import current_user
+        if not current_user.is_authenticated:
+            return None
+        if not getattr(current_user, 'is_investor', False):
+            return None
+
+        # Mobile API authenticates per-request via JWT and guards its own routes.
+        if request.path.startswith('/api/mobile/v1/'):
+            return None
+
+        endpoint = request.endpoint or ''
+        blueprint = request.blueprint or ''
+
+        # Allowed surface for the investor role.
+        if (blueprint == 'investor'
+                or endpoint in ('static', 'media.serve', 'auth.logout', 'auth.login')):
+            return None
+
+        from flask import redirect as _redirect, url_for as _url_for, abort as _abort
+        if request.method == 'GET':
+            return _redirect(_url_for('investor.dashboard'))
+        _abort(403)
+
     # ── Error handlers ────────────────────────────────────────────────────────
     def _render_error_page(template_name):
         try:

@@ -1,4 +1,4 @@
-{% extends "shared/base.html" %}
+{% extends base_template|default("shared/base.html") %}
 {% block title %}لوحة التحكم{% endblock %}
 {% block page_title %}لوحة التحكم{% endblock %}
 
@@ -752,9 +752,11 @@
       <div class="dash-bottom-header">
         <i class="bi bi-people" style="color:var(--primary)"></i>
         آخر الطلاب المضافين
+        {% if not investor_view %}
         <a href="{{ url_for('students.index') }}"
            class="btn btn-sm btn-outline-secondary me-auto"
            style="font-size:12px;padding:4px 12px;border-radius:8px">عرض الكل</a>
+        {% endif %}
       </div>
       <div class="table-wrapper" style="border:none;border-radius:0">
         <table class="table table-hover mb-0">
@@ -788,8 +790,10 @@
                 </span>
               </td>
               <td>
+                {% if not investor_view %}
                 <a href="{{ url_for('students.view', student_id=student.id) }}"
                    class="btn btn-sm btn-outline-primary">عرض</a>
+                {% endif %}
               </td>
             </tr>
             {% else %}
@@ -808,9 +812,11 @@
       <div class="dash-bottom-header">
         <i class="bi bi-bell-fill" style="color:var(--primary)"></i>
         آخر الإشعارات
+        {% if not investor_view %}
         <a href="{{ url_for('notifications.index') }}"
            class="btn btn-sm btn-outline-secondary me-auto"
            style="font-size:12px;padding:4px 12px;border-radius:8px">عرض الكل</a>
+        {% endif %}
       </div>
       <div>
         {% for n in recent_notifications %}

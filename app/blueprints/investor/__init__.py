@@ -59,71 +59,29 @@ def _school_id():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  DASHBOARD  — finance summary for the investor's school
+#  DASHBOARD  — reuses the school-manager dashboard, read-only
 # ─────────────────────────────────────────────────────────────────────────────
 
 @investor_bp.route('/')
 @login_required
 @investor_required
 def dashboard():
-    from datetime import date
-    today = date.today()
-    year  = request.args.get('year', today.year, type=int)
-    sid   = _school_id()
+    """Render the exact school-manager dashboard for the investor.
 
-    # Totals for the selected calendar year — school-scoped (ORM + explicit filter).
-    rev_total = float(
-        db.session.query(func.coalesce(func.sum(Revenue.amount), 0))
-        .execution_options(include_all_years=True)
-        .filter(Revenue.school_id == sid,
-                extract('year', Revenue.date) == year)
-        .scalar() or 0
-    )
-    exp_total = float(
-        db.session.query(func.coalesce(func.sum(Expense.amount), 0))
-        .execution_options(include_all_years=True)
-        .filter(Expense.school_id == sid,
-                extract('year', Expense.date) == year)
-        .scalar() or 0
-    )
-
-    # Monthly breakdown for the chart.
-    rev_by_month = {
-        int(m): float(t) for m, t in
-        db.session.query(extract('month', Revenue.date), func.sum(Revenue.amount))
-        .execution_options(include_all_years=True)
-        .filter(Revenue.school_id == sid, extract('year', Revenue.date) == year)
-        .group_by(extract('month', Revenue.date)).all()
-    }
-    exp_by_month = {
-        int(m): float(t) for m, t in
-        db.session.query(extract('month', Expense.date), func.sum(Expense.amount))
-        .execution_options(include_all_years=True)
-        .filter(Expense.school_id == sid, extract('year', Expense.date) == year)
-        .group_by(extract('month', Expense.date)).all()
-    }
-    chart_rev = [rev_by_month.get(m, 0) for m in range(1, 13)]
-    chart_exp = [exp_by_month.get(m, 0) for m in range(1, 13)]
-
-    # Recent transactions (read-only), scoped to the investor's school.
-    recent_rev = (Revenue.query.execution_options(include_all_years=True)
-                  .filter(Revenue.school_id == sid, Revenue.amount > 0)
-                  .order_by(Revenue.date.desc(), Revenue.id.desc()).limit(5).all())
-    recent_exp = (Expense.query.execution_options(include_all_years=True)
-                  .filter(Expense.school_id == sid, Expense.amount > 0)
-                  .order_by(Expense.date.desc(), Expense.id.desc()).limit(5).all())
-
+    Reuses admin._build_dashboard_context() (same stats/charts/summaries, all
+    school-scoped via get_current_school() → the investor's own school) and the
+    same admin/dashboard.html template. Only two things differ for the investor:
+      * base_template → investor/base.html (investor-only sidebar)
+      * investor_view=True → template hides "عرض الكل" and restricted links
+    No manager permissions are granted; restricted routes stay guarded server-side.
+    """
+    from app.blueprints.admin import _build_dashboard_context
+    ctx = _build_dashboard_context()
     return render_template(
-        'investor/dashboard.html',
-        year=year,
-        total_rev=rev_total,
-        total_exp=exp_total,
-        balance=rev_total - exp_total,
-        chart_rev=chart_rev,
-        chart_exp=chart_exp,
-        recent_rev=recent_rev,
-        recent_exp=recent_exp,
-        arabic_months=ARABIC_MONTHS,
+        'admin/dashboard.html',
+        base_template='investor/base.html',
+        investor_view=True,
+        **ctx,
     )
 
 

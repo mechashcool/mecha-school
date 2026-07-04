@@ -329,10 +329,14 @@ def _save_user_building_access(user, school_id):
 #  DASHBOARD  (school-scoped)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@admin_bp.route('/dashboard')
-@login_required
-@staff_required
-def dashboard():
+def _build_dashboard_context():
+    """Compute the shared school dashboard context (stats, charts, recent lists).
+
+    School-scoped via get_current_school() (the caller's own school for any
+    non-super-admin, incl. investor_viewer) and the ORM tenant guard. Reused by
+    both the school-manager dashboard and the read-only investor dashboard so
+    the two never diverge. Returns a dict of template variables.
+    """
     today   = date.today()
     school  = get_current_school()
     year    = get_view_year(school.id) if school else None
@@ -537,13 +541,19 @@ def dashboard():
         recent_q = recent_q.filter_by(academic_year_id=year_id)
     recent_students = recent_q.order_by(Student.created_at.desc()).limit(5).all()
 
-    return render_template('admin/dashboard.html',
-                           stats=stats,
-                           recent_notifications=recent_notifications,
-                           recent_students=recent_students,
-                           today=today,
-                           school=school,
-                           active_year=year)
+    return dict(stats=stats,
+                recent_notifications=recent_notifications,
+                recent_students=recent_students,
+                today=today,
+                school=school,
+                active_year=year)
+
+
+@admin_bp.route('/dashboard')
+@login_required
+@staff_required
+def dashboard():
+    return render_template('admin/dashboard.html', **_build_dashboard_context())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
