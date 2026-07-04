@@ -148,6 +148,141 @@
         {% endif %}
       </div>
     </div>
+
+    {# ── Investor account (read-only, school-scoped) — Super Admin only ──────
+       All forms POST to the existing @super_admin_required investor routes in
+       the super_admin blueprint. No investor logic is duplicated here. #}
+    {% if current_user.is_super_admin %}
+    <div class="card mb-4">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <h6 class="mb-0"><i class="bi bi-graph-up-arrow me-1"></i>حساب المستثمر — عرض فقط</h6>
+        {% if investor %}
+        <span class="badge {{ 'bg-success' if investor.is_active else 'bg-secondary' }}">
+          {{ 'نشط' if investor.is_active else 'معطّل' }}
+        </span>
+        {% endif %}
+      </div>
+      <div class="card-body">
+        <p class="text-muted small mb-3">
+          حساب مرتبط بهذه المدرسة فقط، للقراءة فقط (لوحة التحكم والإيرادات والمصروفات).
+          يُدار من قِبل المشرف العام فقط.
+        </p>
+
+        {% if investor %}
+        <div class="d-flex align-items-center gap-3 mb-3">
+          <div style="width:44px;height:44px;border-radius:8px;background:#0c1f38;color:#e8a020;display:flex;align-items:center;justify-content:center;font-weight:700">
+            {{ investor.full_name[0] }}
+          </div>
+          <div>
+            <div class="fw-bold">{{ investor.full_name }}</div>
+            <div class="text-muted small">مستثمر - عرض فقط</div>
+          </div>
+        </div>
+        <div class="small text-muted mb-1">Username</div>
+        <div class="mb-3"><code>{{ investor.username }}</code></div>
+
+        {# Update basic info #}
+        <form method="POST"
+              action="{{ url_for('super_admin.update_investor', school_id=school.id) }}"
+              class="mb-3">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+          <div class="mb-2">
+            <label class="form-label small mb-1">الاسم الكامل *</label>
+            <input type="text" name="full_name" class="form-control form-control-sm"
+                   value="{{ investor.full_name }}" required>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small mb-1">اسم المستخدم</label>
+            <input type="text" name="username" class="form-control form-control-sm"
+                   value="{{ investor.username }}">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small mb-1">البريد الإلكتروني</label>
+            <input type="email" name="email" class="form-control form-control-sm"
+                   value="{{ investor.email or '' }}">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small mb-1">الهاتف</label>
+            <input type="text" name="phone" class="form-control form-control-sm"
+                   value="{{ investor.phone or '' }}">
+          </div>
+          <button type="submit" class="btn btn-sm btn-primary w-100">
+            <i class="bi bi-save me-1"></i>حفظ البيانات
+          </button>
+        </form>
+
+        {# Reset password #}
+        <form method="POST"
+              action="{{ url_for('super_admin.reset_investor_password', school_id=school.id) }}"
+              class="mb-3 border-top pt-3">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+          <label class="form-label small mb-1">إعادة تعيين كلمة المرور</label>
+          <div class="input-group input-group-sm">
+            <input type="text" name="password" class="form-control"
+                   placeholder="6 أحرف على الأقل" minlength="6" required>
+            <button type="submit" class="btn btn-outline-warning">
+              <i class="bi bi-key me-1"></i>تغيير
+            </button>
+          </div>
+        </form>
+
+        {# Toggle + delete #}
+        <div class="d-flex gap-2 border-top pt-3">
+          <form method="POST"
+                action="{{ url_for('super_admin.toggle_investor', school_id=school.id) }}"
+                class="flex-fill">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+            <button type="submit"
+                    class="btn btn-sm w-100 {{ 'btn-outline-warning' if investor.is_active else 'btn-outline-success' }}">
+              <i class="bi {{ 'bi-pause-circle' if investor.is_active else 'bi-play-circle' }} me-1"></i>
+              {{ 'تعطيل' if investor.is_active else 'تفعيل' }}
+            </button>
+          </form>
+          <form method="POST"
+                action="{{ url_for('super_admin.delete_investor', school_id=school.id) }}"
+                class="flex-fill"
+                onsubmit="return confirm('حذف حساب دخول المستثمر لهذه المدرسة؟')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+            <button type="submit" class="btn btn-sm btn-outline-danger w-100">
+              <i class="bi bi-trash me-1"></i>حذف
+            </button>
+          </form>
+        </div>
+
+        {% else %}
+        {# No investor yet — create form #}
+        <form method="POST"
+              action="{{ url_for('super_admin.create_investor', school_id=school.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+          <div class="mb-2">
+            <label class="form-label small mb-1">الاسم الكامل *</label>
+            <input type="text" name="full_name" class="form-control form-control-sm" required>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small mb-1">اسم المستخدم (يُولّد تلقائياً إن تُرك فارغاً)</label>
+            <input type="text" name="username" class="form-control form-control-sm" placeholder="اختياري">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small mb-1">البريد الإلكتروني</label>
+            <input type="email" name="email" class="form-control form-control-sm" placeholder="اختياري">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small mb-1">الهاتف</label>
+            <input type="text" name="phone" class="form-control form-control-sm" placeholder="اختياري">
+          </div>
+          <div class="mb-3">
+            <label class="form-label small mb-1">كلمة المرور *</label>
+            <input type="text" name="password" class="form-control form-control-sm"
+                   minlength="6" required placeholder="6 أحرف على الأقل">
+          </div>
+          <button type="submit" class="btn btn-sm btn-success w-100">
+            <i class="bi bi-person-plus me-1"></i>إنشاء حساب المستثمر
+          </button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

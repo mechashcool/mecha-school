@@ -117,11 +117,17 @@ def detail(school_id):
         bypass_tenant_scope=True
     ).filter_by(school_id=school.id, status='active').count()
 
+    # Reuse the super_admin blueprint's helper so investor lookup logic is not
+    # duplicated. Local import avoids any blueprint import-order/circular issues.
+    from app.blueprints.super_admin import _get_school_investor
+    investor = _get_school_investor(school.id)
+
     return render_template('schools/detail.html',
                            school=school,
                            current_year=current_year,
                            users=users,
                            manager=manager,
+                           investor=investor,
                            student_count=student_count,
                            employee_count=employee_count)
 
