@@ -135,8 +135,8 @@ def login():
         return err('account_disabled', 401)
 
     role_name = user.role.name if user.role else None
-    if role_name not in ('parent', 'teacher'):
-        return err('role_not_supported — mobile API supports parent and teacher roles only', 403)
+    if role_name not in ('parent', 'teacher', 'investor_viewer'):
+        return err('role_not_supported — mobile API supports parent, teacher, and investor roles only', 403)
 
     # Record last login
     user.last_login = datetime.datetime.utcnow()

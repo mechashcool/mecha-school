@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="csrf-token" content="{{ csrf_token() }}" />
+  <title>{% block title %}لوحة المستثمر{% endblock %} — {{ school.school_name_ar or school.school_name if school else 'Mecha-School' }}</title>
+  {% set _favicon_url = resolve_photo_url(school.logo_path) if school and school.logo_path else None %}
+  {% if _favicon_url %}<link rel="icon" type="image/png" href="{{ _favicon_url }}">{% endif %}
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.rtl.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+
+  <style>
+    :root {
+      --primary: #1a3a5c; --accent: {{ school.primary_color if school and school.primary_color else '#e8a020' }};
+      --bg: #f4f6fa; --border: #e6eaf1; --text: #16243a; --text-muted: #64748b;
+      --sidebar-bg: #0c1f38; --sidebar-bg-2: #102844; --sidebar-text: #b9cce0;
+      --sidebar-width: 260px; --topbar-h: 62px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Cairo', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+    #sidebar {
+      position: fixed; top: 0; right: 0; width: var(--sidebar-width); height: 100vh;
+      background: linear-gradient(180deg, var(--sidebar-bg), var(--sidebar-bg-2));
+      display: flex; flex-direction: column; z-index: 1000; transition: transform .3s;
+    }
+    .sidebar-logo { padding: 20px; border-bottom: 1px solid rgba(255,255,255,.07); color: #fff; font-weight: 700; display:flex; gap:10px; align-items:center; }
+    .sidebar-logo .logo-icon { width: 40px; height: 40px; background: linear-gradient(135deg, var(--accent), #d18a10); border-radius: 11px; display:flex; align-items:center; justify-content:center; font-size:18px; }
+    .sidebar-logo small { color: var(--sidebar-text); font-weight: 400; font-size: 11px; display:block; }
+    .sidebar-nav { flex: 1; padding: 14px 12px; list-style: none; }
+    .sidebar-nav a { display: flex; align-items: center; gap: 11px; padding: 10px 13px; margin: 2px 0; color: var(--sidebar-text); text-decoration: none; font-size: 14px; font-weight: 500; border-radius: 10px; transition: background .18s, color .18s; }
+    .sidebar-nav a:hover { background: rgba(255,255,255,.06); color: #fff; }
+    .sidebar-nav a.active { background: linear-gradient(90deg, rgba(232,160,32,.18), rgba(232,160,32,.06)); color: var(--accent); font-weight: 600; box-shadow: inset 3px 0 0 var(--accent); }
+    #topbar { position: fixed; top: 0; left: 0; right: var(--sidebar-width); height: var(--topbar-h); background: rgba(255,255,255,.9); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 26px; gap: 14px; z-index: 900; }
+    .topbar-title { font-size: 15px; font-weight: 700; flex: 1; }
+    #main-content { margin-right: var(--sidebar-width); margin-top: var(--topbar-h); padding: 26px 30px 44px; }
+    .card { background: #fff; border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 1px 2px rgba(16,36,68,.05); overflow: hidden; }
+    .card-header { background: transparent; border-bottom: 1px solid var(--border); padding: 15px 20px; font-weight: 700; }
+    .card-body { padding: 20px; }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+    .stat-card { background: #fff; border: 1px solid var(--border); border-radius: 16px; padding: 20px; display: flex; align-items: center; gap: 16px; }
+    .stat-icon { width: 50px; height: 50px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 23px; color: #fff; flex-shrink: 0; }
+    .stat-value { font-size: 24px; font-weight: 800; line-height: 1.2; }
+    .stat-label { font-size: 12.5px; color: var(--text-muted); }
+    .page-title { font-size: 21px; font-weight: 800; }
+    .table thead th { background: #f8fafc; color: var(--text-muted); font-weight: 700; font-size: 12px; }
+    .badge-ro { background: #eef2f7; color: #64748b; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 20px; }
+    @media (max-width: 768px) {
+      #sidebar { transform: translateX(100%); z-index: 1050; } #sidebar.open { transform: translateX(0); }
+      #topbar { right: 0; left: 0; padding: 0 14px; } #main-content { margin-right: 0; padding: 16px; }
+    }
+  </style>
+  {% block extra_css %}{% endblock %}
+</head>
+<body>
+
+<nav id="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon"><i class="bi bi-graph-up-arrow"></i></div>
+    <div>
+      {{ school.school_name_ar or school.school_name if school else 'Mecha-School' }}
+      <small>بوابة المستثمر — عرض فقط</small>
+    </div>
+  </div>
+  <ul class="sidebar-nav">
+    <li><a href="{{ url_for('investor.dashboard') }}"
+           class="{{ 'active' if request.endpoint == 'investor.dashboard' }}">
+      <i class="bi bi-speedometer2"></i>لوحة التحكم</a></li>
+    <li><a href="{{ url_for('investor.revenues') }}"
+           class="{{ 'active' if request.endpoint == 'investor.revenues' }}">
+      <i class="bi bi-arrow-down-circle"></i>الإيرادات</a></li>
+    <li><a href="{{ url_for('investor.expenses') }}"
+           class="{{ 'active' if request.endpoint == 'investor.expenses' }}">
+      <i class="bi bi-arrow-up-circle"></i>المصروفات</a></li>
+    <li><a href="{{ url_for('auth.logout') }}"><i class="bi bi-box-arrow-right"></i>تسجيل الخروج</a></li>
+  </ul>
+</nav>
+
+<header id="topbar">
+  <button class="btn p-0 border-0 d-md-none" id="sidebarToggle"><i class="bi bi-list" style="font-size:22px"></i></button>
+  <div class="topbar-title">{% block page_title %}{% endblock %}</div>
+  <span class="badge-ro"><i class="bi bi-eye me-1"></i>عرض فقط</span>
+</header>
+
+<main id="main-content">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for cat, msg in messages %}
+    <div class="alert alert-{{ 'danger' if cat == 'error' else cat }} alert-dismissible fade show">{{ msg }}
+      <button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+    {% endfor %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script>
+  document.getElementById('sidebarToggle')?.addEventListener('click', () => {
+    document.getElementById('sidebar').classList.toggle('open');
+  });
+</script>
+{% block extra_js %}{% endblock %}
+</body>
+</html>

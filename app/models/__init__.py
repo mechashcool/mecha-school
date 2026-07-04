@@ -31,6 +31,12 @@ SUPER_ADMIN_ROLE = 'super_admin'
 SCHOOL_ADMIN_ROLE = 'school_admin'
 ADMIN_ROLE_NAMES = frozenset({SUPER_ADMIN_ROLE, SCHOOL_ADMIN_ROLE})
 
+# School-scoped, read-only investor account. NOT an admin role: it never
+# bypasses permission checks and only sees its own school's finance/dashboard
+# data (auto-scoped by school_id through the ORM tenant guard). Managed
+# exclusively by super_admin via the Super Admin portal.
+INVESTOR_ROLE = 'investor_viewer'
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  0. SCHOOL  (multi-tenant root entity)
@@ -553,6 +559,14 @@ class User(UserMixin, db.Model):
     def is_admin_user(self):
         """True for either admin tier, based on explicit role names."""
         return bool(self.is_super_admin or self.is_school_admin)
+
+    @property
+    def is_investor(self):
+        """True for a school-scoped read-only investor account bound to one school."""
+        return bool(
+            self.role and self.role.name == INVESTOR_ROLE
+            and self.school_id is not None
+        )
 
     def __repr__(self):
         return f'<User {self.username}>'

@@ -1,0 +1,61 @@
+{% extends "investor/base.html" %}
+{% block title %}المصروفات{% endblock %}
+{% block page_title %}المصروفات (عرض فقط){% endblock %}
+
+{% block content %}
+{% set cur = school.currency_symbol if school else '' %}
+<div class="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-2">
+  <h1 class="page-title mb-0">المصروفات</h1>
+  <form method="GET" class="d-flex align-items-center gap-2">
+    <select name="year" class="form-select form-select-sm" style="width:auto">
+      {% for y in range(year - 4, year + 2) %}
+      <option value="{{ y }}" {{ 'selected' if y == year }}>{{ y }}</option>
+      {% endfor %}
+    </select>
+    <select name="month" class="form-select form-select-sm" style="width:auto">
+      <option value="">كل الأشهر</option>
+      {% for i in range(1, 13) %}
+      <option value="{{ i }}" {{ 'selected' if month == i }}>{{ arabic_months[i-1] }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn btn-sm btn-primary">تصفية</button>
+  </form>
+</div>
+
+<div class="card mb-3">
+  <div class="card-body d-flex justify-content-between align-items-center">
+    <span class="text-muted">إجمالي المصروفات للفترة المحددة</span>
+    <span class="fs-4 fw-bold text-danger">{{ "{:,.0f}".format(total) }} {{ cur }}</span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body p-0">
+    <table class="table mb-0">
+      <thead><tr><th>التاريخ</th><th>الفئة</th><th>الوصف</th><th class="text-start">المبلغ</th></tr></thead>
+      <tbody>
+        {% for e in items.items %}
+        <tr>
+          <td class="small text-muted">{{ e.date.strftime('%Y-%m-%d') }}</td>
+          <td class="small">{{ e.category.name if e.category else '—' }}</td>
+          <td class="small">{{ e.description or '—' }}</td>
+          <td class="text-start fw-semibold text-danger">{{ "{:,.0f}".format(e.amount) }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="text-center text-muted py-4">لا توجد مصروفات لهذه الفترة</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if items.pages > 1 %}
+<nav class="mt-3"><ul class="pagination justify-content-center">
+  {% for p in range(1, items.pages + 1) %}
+  <li class="page-item {{ 'active' if p == items.page }}">
+    <a class="page-link" href="{{ url_for('investor.expenses', year=year, month=month, page=p) }}">{{ p }}</a>
+  </li>
+  {% endfor %}
+</ul></nav>
+{% endif %}
+{% endblock %}

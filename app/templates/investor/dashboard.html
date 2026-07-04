@@ -1,0 +1,118 @@
+{% extends "investor/base.html" %}
+{% block title %}لوحة التحكم{% endblock %}
+{% block page_title %}لوحة تحكم المستثمر{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-2">
+  <div>
+    <h1 class="page-title mb-1">الملخص المالي</h1>
+    <p class="text-muted mb-0 small">
+      {{ school.school_name_ar or school.school_name if school else '' }} — سنة {{ year }}
+    </p>
+  </div>
+  <form method="GET" class="d-flex align-items-center gap-2">
+    <label class="small text-muted">السنة</label>
+    <select name="year" class="form-select form-select-sm" style="width:auto" onchange="this.form.submit()">
+      {% for y in range(year - 4, year + 2) %}
+      <option value="{{ y }}" {{ 'selected' if y == year }}>{{ y }}</option>
+      {% endfor %}
+    </select>
+  </form>
+</div>
+
+{% set cur = school.currency_symbol if school else '' %}
+
+<div class="stats-grid mb-4">
+  <div class="stat-card">
+    <div class="stat-icon" style="background:#16a06a"><i class="bi bi-arrow-down-circle"></i></div>
+    <div>
+      <div class="stat-value">{{ "{:,.0f}".format(total_rev) }}</div>
+      <div class="stat-label">إجمالي الإيرادات ({{ cur }})</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:#de3d3d"><i class="bi bi-arrow-up-circle"></i></div>
+    <div>
+      <div class="stat-value">{{ "{:,.0f}".format(total_exp) }}</div>
+      <div class="stat-label">إجمالي المصروفات ({{ cur }})</div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" style="background:{{ '#1a3a5c' if balance >= 0 else '#b07410' }}">
+      <i class="bi bi-wallet2"></i>
+    </div>
+    <div>
+      <div class="stat-value">{{ "{:,.0f}".format(balance) }}</div>
+      <div class="stat-label">الصافي ({{ cur }})</div>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header"><i class="bi bi-bar-chart me-2"></i>الإيرادات والمصروفات الشهرية — {{ year }}</div>
+  <div class="card-body"><canvas id="finChart" height="90"></canvas></div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-arrow-down-circle text-success me-2"></i>أحدث الإيرادات</div>
+      <div class="card-body p-0">
+        <table class="table mb-0">
+          <thead><tr><th>التاريخ</th><th>الفئة</th><th class="text-start">المبلغ</th></tr></thead>
+          <tbody>
+            {% for r in recent_rev %}
+            <tr>
+              <td class="small text-muted">{{ r.date.strftime('%Y-%m-%d') }}</td>
+              <td class="small">{{ r.category.name if r.category else '—' }}</td>
+              <td class="text-start fw-semibold text-success">{{ "{:,.0f}".format(r.amount) }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3" class="text-center text-muted py-3 small">لا توجد إيرادات</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-arrow-up-circle text-danger me-2"></i>أحدث المصروفات</div>
+      <div class="card-body p-0">
+        <table class="table mb-0">
+          <thead><tr><th>التاريخ</th><th>الفئة</th><th class="text-start">المبلغ</th></tr></thead>
+          <tbody>
+            {% for e in recent_exp %}
+            <tr>
+              <td class="small text-muted">{{ e.date.strftime('%Y-%m-%d') }}</td>
+              <td class="small">{{ e.category.name if e.category else '—' }}</td>
+              <td class="text-start fw-semibold text-danger">{{ "{:,.0f}".format(e.amount) }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3" class="text-center text-muted py-3 small">لا توجد مصروفات</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  const ctx = document.getElementById('finChart');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: {{ arabic_months|tojson }},
+      datasets: [
+        { label: 'الإيرادات', data: {{ chart_rev|tojson }}, backgroundColor: '#16a06a' },
+        { label: 'المصروفات', data: {{ chart_exp|tojson }}, backgroundColor: '#de3d3d' }
+      ]
+    },
+    options: { responsive: true, plugins: { legend: { position: 'bottom' } },
+               scales: { y: { beginAtZero: true } } }
+  });
+</script>
+{% endblock %}

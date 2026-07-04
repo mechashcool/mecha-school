@@ -92,6 +92,7 @@ def create_app(config_name=None):
     from app.blueprints.schools      import schools_bp
     # Phase 7 — Super Admin portal
     from app.blueprints.super_admin  import super_admin_bp
+    from app.blueprints.investor     import investor_bp
     # Transport routes
     from app.blueprints.transport    import transport_bp
     from app.blueprints.inventory    import inventory_bp
@@ -133,6 +134,7 @@ def create_app(config_name=None):
     app.register_blueprint(teacher_bp,       url_prefix='/teacher')
     app.register_blueprint(schools_bp,       url_prefix='/schools')
     app.register_blueprint(super_admin_bp,   url_prefix='/admin/super')
+    app.register_blueprint(investor_bp,      url_prefix='/investor')
     app.register_blueprint(transport_bp,     url_prefix='/transport')
     app.register_blueprint(inventory_bp,     url_prefix='/inventory')
     app.register_blueprint(mobile_api_bp,          url_prefix='/api/mobile/v1')

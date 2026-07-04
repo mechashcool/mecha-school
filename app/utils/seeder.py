@@ -138,6 +138,15 @@ ROLE_PRESETS = {
         'is_admin':    False,
         'permissions': ['parent_view_child'],
     },
+    # School-scoped, read-only investor account. Managed only by super_admin.
+    # No permissions: its read-only finance/dashboard access is enforced by the
+    # dedicated investor portal (role-based), never by the permission system.
+    'investor_viewer': {
+        'label':       'مستثمر - عرض فقط',
+        'description': 'حساب مستثمر للقراءة فقط — يرى لوحة التحكم والإيرادات والمصروفات لمدرسته فقط',
+        'is_admin':    False,
+        'permissions': [],
+    },
 }
 
 

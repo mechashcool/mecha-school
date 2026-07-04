@@ -27,9 +27,11 @@ from sqlalchemy import func
 from app.models import (db, School, SchoolBilling, AcademicYear,
                          Student, Employee, User, FeeRecord,
                          FeeInstallment, Revenue, Expense,
-                         Grade, Section, Subject, FeeType)
+                         Grade, Section, Subject, FeeType,
+                         Role, MobileDeviceToken, INVESTOR_ROLE)
 from app.utils.decorators import super_admin_required
 from app.utils.audit import log_action
+from app.utils import code_generator
 
 super_admin_bp = Blueprint(
     'super_admin', __name__,
@@ -208,6 +210,8 @@ def school_detail(school_id):
         .filter_by(school_id=school_id)\
         .order_by(AcademicYear.start_date.desc()).all()
 
+    investor = _get_school_investor(school_id)
+
     return render_template(
         'super_admin/school_detail.html',
         school          = school,
@@ -215,9 +219,233 @@ def school_detail(school_id):
         billing_records = billing_records,
         users           = users,
         all_years       = all_years,
+        investor        = investor,
         billing_types   = SchoolBilling.BILLING_TYPES,
         today           = _date.today(),
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  INVESTOR ACCOUNT  — per-school, read-only, managed only by super admin
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_school_investor(school_id):
+    """Return the (single) active investor account for a school, or None.
+
+    Uses bypass_tenant_scope because the super admin operates globally; the
+    query is still explicitly constrained to this school_id and the investor
+    role, and excludes soft-deleted accounts.
+    """
+    return (User.query
+            .execution_options(bypass_tenant_scope=True)
+            .join(Role, User.role_id == Role.id)
+            .filter(User.school_id == school_id,
+                    Role.name == INVESTOR_ROLE,
+                    User.username.notlike('~deleted~%'))
+            .order_by(User.id)
+            .first())
+
+
+def _investor_role():
+    """Return the investor_viewer Role, creating it if the seed has not run yet."""
+    role = Role.query.filter_by(name=INVESTOR_ROLE).first()
+    if role is None:
+        role = Role(
+            name=INVESTOR_ROLE,
+            label='مستثمر - عرض فقط',
+            description='حساب مستثمر للقراءة فقط — يرى لوحة التحكم والإيرادات والمصروفات لمدرسته فقط',
+            is_admin=False,
+        )
+        db.session.add(role)
+        db.session.flush()
+    return role
+
+
+@super_admin_bp.route('/schools/<int:school_id>/investor/create', methods=['POST'])
+@login_required
+@super_admin_required
+def create_investor(school_id):
+    school = School.query.get_or_404(school_id)
+
+    # One active investor per school.
+    if _get_school_investor(school_id):
+        flash('يوجد حساب مستثمر لهذه المدرسة بالفعل.', 'warning')
+        return redirect(url_for('super_admin.school_detail', school_id=school_id))
+
+    full_name = request.form.get('full_name', '').strip()
+    username  = request.form.get('username', '').strip()
+    email     = request.form.get('email', '').strip()
+    phone     = request.form.get('phone', '').strip()
+    password  = request.form.get('password', '')
+
+    errors = []
+    if not full_name:
+        errors.append('الاسم الكامل مطلوب.')
+    if not password or len(password) < 6:
+        errors.append('كلمة المرور يجب أن تكون 6 أحرف على الأقل.')
+    if email and '@' not in email:
+        errors.append('البريد الإلكتروني غير صالح.')
+
+    # Auto-generate a school-scoped username when left blank.
+    if not username and not errors:
+        username = code_generator.generate_username(school_id, INVESTOR_ROLE)
+
+    if username and User.query.execution_options(bypass_tenant_scope=True)\
+            .filter_by(username=username).first():
+        errors.append('اسم المستخدم مستخدم بالفعل.')
+    if email and User.query.execution_options(bypass_tenant_scope=True)\
+            .filter_by(email=email).first():
+        errors.append('البريد الإلكتروني مستخدم بالفعل.')
+
+    if errors:
+        for e in errors:
+            flash(e, 'danger')
+        return redirect(url_for('super_admin.school_detail', school_id=school_id))
+
+    # school_id is bound to the URL path (the school being managed) — never taken
+    # from any client field — so the account is authoritatively tied to this school.
+    user = User(
+        username  = username,
+        email     = email or None,
+        full_name = full_name,
+        phone     = phone or None,
+        role      = _investor_role(),
+        school_id = school_id,
+        is_active = True,
+    )
+    user.set_password(password)
+    db.session.add(user)
+
+    try:
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        flash('تعذر إنشاء حساب المستثمر بسبب تعارض في القيم. حاول مرة أخرى.', 'danger')
+        return redirect(url_for('super_admin.school_detail', school_id=school_id))
+
+    log_action('create', 'user', user.id,
+               details=f'created investor account for school={school_id}')
+    flash(f'تم إنشاء حساب المستثمر. اسم المستخدم: {username}', 'success')
+    return redirect(url_for('super_admin.school_detail', school_id=school_id))
+
+
+@super_admin_bp.route('/schools/<int:school_id>/investor/update', methods=['POST'])
+@login_required
+@super_admin_required
+def update_investor(school_id):
+    School.query.get_or_404(school_id)
+    investor = _get_school_investor(school_id)
+    if not investor:
+        flash('لا يوجد حساب مستثمر لهذه المدرسة.', 'danger')
+        return redirect(url_for('super_admin.school_detail', school_id=school_id))
+
+    full_name = request.form.get('full_name', '').strip()
+    username  = request.form.get('username', '').strip()
+    email     = request.form.get('email', '').strip()
+    phone     = request.form.get('phone', '').strip()
+
+    if not full_name:
+        flash('الاسم الكامل مطلوب.', 'danger')
+        return redirect(url_for('super_admin.school_detail', school_id=school_id))
+
+    if username and username != investor.username:
+        if username.startswith('~deleted~'):
+            flash('اسم المستخدم غير صالح.', 'danger')
+            return redirect(url_for('super_admin.school_detail', school_id=school_id))
+        clash = (User.query.execution_options(bypass_tenant_scope=True)
+                 .filter(User.username == username, User.id != investor.id).first())
+        if clash:
+            flash('اسم المستخدم مستخدم بالفعل.', 'danger')
+            return redirect(url_for('super_admin.school_detail', school_id=school_id))
+        investor.username = username
+
+    if email and '@' not in email:
+        flash('البريد الإلكتروني غير صالح.', 'danger')
+        return redirect(url_for('super_admin.school_detail', school_id=school_id))
+    if email:
+        clash = (User.query.execution_options(bypass_tenant_scope=True)
+                 .filter(User.email == email, User.id != investor.id).first())
+        if clash:
+            flash('البريد الإلكتروني مستخدم بالفعل.', 'danger')
+            return redirect(url_for('super_admin.school_detail', school_id=school_id))
+
+    investor.full_name = full_name
+    investor.email     = email or None
+    investor.phone     = phone or None
+    db.session.commit()
+    log_action('edit', 'user', investor.id,
+               details=f'updated investor account for school={school_id}')
+    flash('تم تحديث بيانات حساب المستثمر.', 'success')
+    return redirect(url_for('super_admin.school_detail', school_id=school_id))
+
+
+@super_admin_bp.route('/schools/<int:school_id>/investor/reset-password', methods=['POST'])
+@login_required
+@super_admin_required
+def reset_investor_password(school_id):
+    School.query.get_or_404(school_id)
+    investor = _get_school_investor(school_id)
+    if not investor:
+        flash('لا يوجد حساب مستثمر لهذه المدرسة.', 'danger')
+        return redirect(url_for('super_admin.school_detail', school_id=school_id))
+
+    password = request.form.get('password', '')
+    if not password or len(password) < 6:
+        flash('كلمة المرور يجب أن تكون 6 أحرف على الأقل.', 'danger')
+        return redirect(url_for('super_admin.school_detail', school_id=school_id))
+
+    investor.set_password(password)
+    db.session.commit()
+    log_action('edit', 'user', investor.id,
+               details=f'reset investor password for school={school_id}')
+    flash('تم تغيير كلمة مرور المستثمر.', 'success')
+    return redirect(url_for('super_admin.school_detail', school_id=school_id))
+
+
+@super_admin_bp.route('/schools/<int:school_id>/investor/toggle', methods=['POST'])
+@login_required
+@super_admin_required
+def toggle_investor(school_id):
+    School.query.get_or_404(school_id)
+    investor = _get_school_investor(school_id)
+    if not investor:
+        flash('لا يوجد حساب مستثمر لهذه المدرسة.', 'danger')
+        return redirect(url_for('super_admin.school_detail', school_id=school_id))
+
+    investor.is_active = not investor.is_active
+    db.session.commit()
+    state = 'تفعيل' if investor.is_active else 'تعطيل'
+    log_action('edit', 'user', investor.id,
+               details=f'{state} investor account for school={school_id}')
+    flash(f'تم {state} حساب المستثمر.', 'success')
+    return redirect(url_for('super_admin.school_detail', school_id=school_id))
+
+
+@super_admin_bp.route('/schools/<int:school_id>/investor/delete', methods=['POST'])
+@login_required
+@super_admin_required
+def delete_investor(school_id):
+    School.query.get_or_404(school_id)
+    investor = _get_school_investor(school_id)
+    if not investor:
+        flash('لا يوجد حساب مستثمر لهذه المدرسة.', 'danger')
+        return redirect(url_for('super_admin.school_detail', school_id=school_id))
+
+    # Soft-delete: mirror admin.delete_user so login is fully disabled and the
+    # username/email slots are freed, while the row is kept for audit integrity.
+    investor.is_active     = False
+    investor.password_hash = '!'
+    investor.device_token  = None
+    investor.email         = None
+    investor.username      = f'~deleted~{investor.id}'
+    investor.extra_permissions.clear()
+    MobileDeviceToken.query.filter_by(user_id=investor.id)\
+        .delete(synchronize_session=False)
+    db.session.commit()
+    log_action('delete', 'user', investor.id,
+               details=f'deleted investor account for school={school_id}')
+    flash('تم حذف حساب دخول المستثمر.', 'success')
+    return redirect(url_for('super_admin.school_detail', school_id=school_id))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -155,9 +155,10 @@ def generate_employee_id(school_id: int) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _ROLE_TYPE_CODES: dict[str, str] = {
-    'parent':       'PAR',
-    'teacher':      'TCH',
-    'school_admin': 'MGR',
+    'parent':          'PAR',
+    'teacher':         'TCH',
+    'school_admin':    'MGR',
+    'investor_viewer': 'INV',
 }
 
 

@@ -102,7 +102,7 @@ def logout():
     return redirect(url_for('auth.login'))
 
 
-_READONLY_ROLES = {'parent', 'teacher'}
+_READONLY_ROLES = {'parent', 'teacher', 'investor_viewer'}
 
 
 @auth_bp.route('/profile', methods=['GET', 'POST'])
@@ -153,6 +153,8 @@ def _role_redirect_url(user):
         return url_for('parent.dashboard')
     if role == 'teacher':
         return url_for('teacher.dashboard')
+    if role == 'investor_viewer':
+        return url_for('investor.dashboard')
     # All staff roles (admin, accountant, hr, reception, …) land on admin dashboard
     return url_for('admin.dashboard')
 

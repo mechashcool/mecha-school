@@ -28,6 +28,12 @@ admin_bp = Blueprint('admin', __name__, template_folder='../../templates/admin')
 SUPER_ADMIN_ROLE = 'super_admin'
 SCHOOL_ADMIN_ROLE = 'school_admin'
 LEGACY_ADMIN_ROLE = 'admin'
+# Investor accounts are managed ONLY from the Super Admin portal
+# (super_admin.school_detail). They must never be creatable or assignable
+# through the normal Create/Edit User screens — not by school managers and
+# not by super admin. Excluded from both the assignable-role check and the
+# role filter/visibility lists below.
+INVESTOR_ROLE = 'investor_viewer'
 
 # Roles hidden from the Create/Edit User form dropdown.
 # Existing users that already hold these roles are unaffected — the backend,
@@ -79,6 +85,11 @@ def _role_name(role):
 
 def _is_role_assignable_by_current_user(role):
     name = _role_name(role)
+    # Investor accounts are never assignable via the generic user forms — for
+    # anyone, including super admin. They are provisioned only from the Super
+    # Admin school-management portal so their school binding stays authoritative.
+    if name == INVESTOR_ROLE:
+        return False
     if current_user.is_super_admin:
         return name != LEGACY_ADMIN_ROLE
     if current_user.is_school_admin:
@@ -106,6 +117,11 @@ def _is_super_admin_account(user):
     return bool(user and user.role and user.role.name == SUPER_ADMIN_ROLE)
 
 
+def _is_investor_account(user):
+    """True for a school-scoped investor account (managed only from the Super Admin portal)."""
+    return bool(user and user.role and user.role.name == INVESTOR_ROLE)
+
+
 def _is_soft_deleted(user):
     """True when the user account has been soft-deleted via delete_user()."""
     return bool(user and user.username and user.username.startswith('~deleted~'))
@@ -113,7 +129,8 @@ def _is_soft_deleted(user):
 
 def _non_super_visible_roles():
     return Role.query.filter(
-        ~Role.name.in_([SUPER_ADMIN_ROLE, SCHOOL_ADMIN_ROLE, LEGACY_ADMIN_ROLE])
+        ~Role.name.in_([SUPER_ADMIN_ROLE, SCHOOL_ADMIN_ROLE, LEGACY_ADMIN_ROLE,
+                        INVESTOR_ROLE])
     ).order_by(Role.id).all()
 
 
@@ -551,11 +568,13 @@ def users_list():
     if role_filter != 'all':
         query = query.filter(User.role_id == int(role_filter))
 
-    # School managers see only non-super-admin users in their own school.
+    # School managers see only non-super-admin, non-investor users in their own
+    # school. Investor accounts are managed exclusively from the Super Admin
+    # portal, so they are hidden from the school-manager user list entirely.
     if current_user.is_school_admin:
         query = (query.join(Role, User.role_id == Role.id)
                  .filter(User.school_id == current_user.school_id,
-                         Role.name != SUPER_ADMIN_ROLE))
+                         Role.name.notin_([SUPER_ADMIN_ROLE, INVESTOR_ROLE])))
 
     users = query.order_by(User.created_at.desc())\
                  .paginate(page=page, per_page=20, error_out=False)
@@ -786,6 +805,16 @@ def edit_user(user_id):
     user = db.session.get(User, user_id, execution_options={'bypass_tenant_scope': True})
     if user is None:
         abort(404)
+
+    # Investor accounts are managed exclusively from the Super Admin portal.
+    # Block the generic edit screen for everyone: school managers get 403;
+    # super admins are redirected to the school's investor section.
+    if _is_investor_account(user):
+        if current_user.is_super_admin:
+            flash('حسابات المستثمر تُدار من بوابة المشرف العام فقط.', 'info')
+            return redirect(url_for('super_admin.school_detail', school_id=user.school_id))
+        abort(403)
+
     is_school_manager = current_user.is_school_admin
 
     # School managers can only edit lower-privilege users from their own school.
@@ -1078,6 +1107,13 @@ def delete_user(user_id):
     if _is_soft_deleted(user):
         flash('هذا الحساب محذوف بالفعل.', 'warning')
         return redirect(url_for('admin.users_list'))
+
+    # Investor accounts are managed exclusively from the Super Admin portal.
+    if _is_investor_account(user):
+        if current_user.is_super_admin:
+            flash('حسابات المستثمر تُدار من بوابة المشرف العام فقط.', 'info')
+            return redirect(url_for('super_admin.school_detail', school_id=user.school_id))
+        abort(403)
 
     # ── Authorization guards ──────────────────────────────────────────────────
     if current_user.is_school_admin and (

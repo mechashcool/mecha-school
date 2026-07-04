@@ -38,6 +38,10 @@ def staff_required(f):
             return redirect(url_for('teacher.dashboard'))
         if role_name == 'parent':
             return redirect(url_for('parent.dashboard'))
+        if role_name == 'investor_viewer':
+            # Read-only investor accounts have their own portal; they must never
+            # reach the shared staff dashboard or any other staff route.
+            return redirect(url_for('investor.dashboard'))
         return f(*args, **kwargs)
     return wrapped
 
@@ -58,6 +62,8 @@ def admin_required(f):
             return redirect(url_for('teacher.dashboard'))
         if current_user.role and current_user.role.name == 'parent':
             return redirect(url_for('parent.dashboard'))
+        if current_user.role and current_user.role.name == 'investor_viewer':
+            return redirect(url_for('investor.dashboard'))
         return redirect(url_for('admin.dashboard'))
     return wrapped
 
@@ -78,6 +84,8 @@ def super_admin_required(f):
             return redirect(url_for('teacher.dashboard'))
         if current_user.role and current_user.role.name == 'parent':
             return redirect(url_for('parent.dashboard'))
+        if current_user.role and current_user.role.name == 'investor_viewer':
+            return redirect(url_for('investor.dashboard'))
         return redirect(url_for('admin.dashboard'))
     return wrapped
 
