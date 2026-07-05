@@ -983,6 +983,25 @@ def pay_installment(inst_id):
                 installment_id=inst.id,
             )
 
+        # Notify investors that a new revenue entry was posted for their school.
+        # school_id comes from inst (server-side); amount from the local Decimal.
+        try:
+            from app.services.fcm_service import notify_investors
+            notify_investors(
+                school_id = inst.school_id,
+                title     = 'إيراد جديد',
+                body      = f'تم تسجيل إيراد جديد بقيمة {float(received)}',
+                data      = {
+                    'type':       'investor_revenue',
+                    'route':      '/investor/revenues',
+                    'school_id':  str(inst.school_id),
+                    'revenue_id': str(revenue.id),
+                    'amount':     str(float(received)),
+                },
+            )
+        except Exception:
+            _log.exception('[fees] investor push failed for inst_id=%s', inst_id)
+
         receipt_url = url_for('fees.generate_receipt', inst_id=inst.id) if inst.receipt_no else None
         return jsonify({
             'status':      'success',

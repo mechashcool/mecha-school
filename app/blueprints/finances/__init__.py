@@ -218,6 +218,23 @@ def create_revenue():
         db.session.commit()
         log_action('create', 'revenue', rev.id,
                    details=f'amount={rev.amount} cat={rev.category_id}')
+        # Notify investors — best-effort; must never fail a committed record.
+        try:
+            from app.services.fcm_service import notify_investors
+            notify_investors(
+                school_id = school.id,
+                title     = 'إيراد جديد',
+                body      = f'تم تسجيل إيراد جديد بقيمة {rev.amount}',
+                data      = {
+                    'type':       'investor_revenue',
+                    'route':      '/investor/revenues',
+                    'school_id':  str(school.id),
+                    'revenue_id': str(rev.id),
+                    'amount':     str(rev.amount),
+                },
+            )
+        except Exception:
+            pass
         flash('تم تسجيل الإيراد بنجاح.', 'success')
         return redirect(url_for('finances.revenues'))
     return render_template('finances/revenue_form.html',
@@ -351,6 +368,23 @@ def create_expense():
         db.session.commit()
         log_action('create', 'expense', exp.id,
                    details=f'amount={exp.amount} cat={exp.category_id}')
+        # Notify investors — best-effort; must never fail a committed record.
+        try:
+            from app.services.fcm_service import notify_investors
+            notify_investors(
+                school_id = school.id,
+                title     = 'مصروف جديد',
+                body      = f'تم تسجيل مصروف جديد بقيمة {exp.amount}',
+                data      = {
+                    'type':       'investor_expense',
+                    'route':      '/investor/expenses',
+                    'school_id':  str(school.id),
+                    'expense_id': str(exp.id),
+                    'amount':     str(exp.amount),
+                },
+            )
+        except Exception:
+            pass
         flash('تم تسجيل المصروف بنجاح.', 'success')
         return redirect(url_for('finances.expenses'))
     return render_template('finances/expense_form.html',

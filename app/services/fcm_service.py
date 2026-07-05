@@ -46,9 +46,11 @@ def _init_firebase() -> None:
     if not json_str and not file_path:
         log.warning(
             '[FCM] DISABLED — push notifications will NOT be sent. '
-            'To enable, set one of: '
-            'FIREBASE_SERVICE_ACCOUNT_JSON (full JSON string, recommended for VPS/Render) '
-            'or GOOGLE_APPLICATION_CREDENTIALS (file path to service-account JSON).'
+            'Neither FIREBASE_SERVICE_ACCOUNT_JSON nor GOOGLE_APPLICATION_CREDENTIALS '
+            'is set in the process environment. '
+            'VPS fix: add one of these to the systemd EnvironmentFile and restart gunicorn. '
+            'Recommended: FIREBASE_SERVICE_ACCOUNT_JSON="$(cat /path/to/firebase-key.json)" '
+            'so no file-permission issues arise.'
         )
         return
 
@@ -198,13 +200,18 @@ def _is_stale_token(error: str) -> bool:
 
 
 def send_push_to_user(user_id: int, title: str, body: str,
-                      data: dict | None = None) -> tuple[int, int]:
+                      data: dict | None = None,
+                      _role: str | None = None) -> tuple[int, int]:
     """
     Send FCM push to every active MobileDeviceToken for this user.
     Stale/invalid tokens are automatically deactivated.
     Returns (success_count, fail_count). Never raises.
+
+    _role is an optional caller hint for log context (e.g. 'parent', 'teacher');
+    it is never used for authorization — identity is always resolved from user_id.
     """
     if not _fcm_enabled:
+        log.warning('[FCM] disabled — push skipped user_id=%s title=%r', user_id, title)
         return 0, 0
 
     # Local import — avoids circular dependency at module load time.
@@ -216,26 +223,31 @@ def send_push_to_user(user_id: int, title: str, body: str,
         log.error('[FCM] failed to query device tokens for user_id=%s: %s', user_id, exc)
         return 0, 0
 
+    role_tag = f'role={_role} ' if _role else ''
     if not tokens:
-        log.warning('[FCM] no active device tokens for user_id=%s — push skipped '
-                    '(parent may need to log in to the mobile app and re-register)',
-                    user_id)
+        log.warning(
+            '[FCM] no active device tokens for user_id=%s %s— push skipped '
+            '(user must log in to the mobile app on the VPS domain and '
+            'call /auth/register-device or /me/device-token to register)',
+            user_id, role_tag,
+        )
         return 0, 0
 
-    log.info('[FCM] pushing to user_id=%s — %d active token(s)', user_id, len(tokens))
+    log.warning('[FCM] pushing to user_id=%s %stokens=%d title=%r',
+                user_id, role_tag, len(tokens), title)
     success_count = fail_count = deactivated = 0
 
     for dt in tokens:
-        ok, msg_id, error = _send_one(dt.fcm_token, title, body, data)
-        if ok:
+        ok_flag, msg_id, error = _send_one(dt.fcm_token, title, body, data)
+        if ok_flag:
             success_count += 1
         else:
             fail_count += 1
             if _is_stale_token(error or ''):
                 dt.is_active = False
                 deactivated += 1
-                log.info('[FCM] deactivated stale token  user_id=%s  token=%.16s…',
-                         user_id, dt.fcm_token)
+                log.warning('[FCM] deactivated stale token  user_id=%s  token=%.16s…',
+                            user_id, dt.fcm_token)
 
     if deactivated:
         try:
@@ -244,6 +256,58 @@ def send_push_to_user(user_id: int, title: str, body: str,
             log.error('[FCM] failed to persist token deactivations: %s', exc)
             db.session.rollback()
 
-    log.warning('[FCM] user_id=%s — sent=%d  failed=%d  deactivated=%d',
-               user_id, success_count, fail_count, deactivated)
+    log.warning('[FCM] RESULT user_id=%s %ssent=%d  failed=%d  deactivated=%d',
+                user_id, role_tag, success_count, fail_count, deactivated)
     return success_count, fail_count
+
+
+def notify_investors(school_id: int, title: str, body: str,
+                     data: dict | None = None) -> tuple[int, int]:
+    """
+    Send FCM push to every active investor_viewer user for the given school.
+
+    school_id MUST come from the server-side Revenue/Expense object — never
+    from client-supplied input.  Never raises.  Returns (success_count, fail_count).
+    """
+    if not _fcm_enabled:
+        log.warning('[FCM] disabled — investor push skipped school_id=%s', school_id)
+        return 0, 0
+
+    from app.models import db, User, Role   # local import — avoids circular dep
+
+    try:
+        investor_role = Role.query.filter_by(name='investor_viewer').first()
+        if not investor_role:
+            log.info('[FCM] investor_viewer role not found — no investor push sent')
+            return 0, 0
+
+        # bypass_tenant_scope + explicit school_id filter: avoids relying on the
+        # request-level ORM school scope, which may differ in some callers.
+        investors = (
+            User.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(
+                role_id   = investor_role.id,
+                school_id = school_id,
+                is_active = True,
+            )
+            .all()
+        )
+    except Exception as exc:
+        log.error('[FCM] investor query failed school_id=%s: %s', school_id, exc)
+        return 0, 0
+
+    if not investors:
+        log.info('[FCM] no active investor_viewer for school_id=%s — push skipped', school_id)
+        return 0, 0
+
+    total_ok = total_fail = 0
+    for user in investors:
+        ok_c, fail_c = send_push_to_user(
+            user.id, title, body, data, _role='investor_viewer')
+        total_ok   += ok_c
+        total_fail += fail_c
+
+    log.warning('[FCM] investor push school_id=%s sent=%d failed=%d',
+                school_id, total_ok, total_fail)
+    return total_ok, total_fail
