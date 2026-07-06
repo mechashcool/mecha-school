@@ -273,7 +273,7 @@
           <td class="text-nowrap small">{{ lr.reviewed_at.strftime('%Y-%m-%d') if lr.reviewed_at else '-' }}</td>
           <td>
             {% if lr.attachment_path %}
-            <a href="{{ resolve_photo_url(lr.attachment_path) or lr.attachment_path }}"
+            <a href="{{ upload_url(lr.attachment_path) }}"
                target="_blank" class="btn btn-xs btn-outline-primary d-print-none" title="عرض المرفق">
               <i class="bi bi-paperclip"></i>
             </a>

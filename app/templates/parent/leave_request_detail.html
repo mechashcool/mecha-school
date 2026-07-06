@@ -37,7 +37,7 @@
         </div>
         {% if leave_request.attachment_path %}
         <hr>
-        <a href="{{ resolve_photo_url(leave_request.attachment_path) or leave_request.attachment_path }}"
+        <a href="{{ upload_url(leave_request.attachment_path) }}"
            target="_blank" class="btn btn-sm btn-outline-primary">
           <i class="bi bi-paperclip me-1"></i>&#1593;&#1585;&#1590; &#1575;&#1604;&#1605;&#1585;&#1601;&#1602;
         </a>

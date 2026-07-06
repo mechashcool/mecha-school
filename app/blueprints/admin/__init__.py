@@ -2563,12 +2563,12 @@ def school_settings():
 
         logo_file = request.files.get('logo')
         if logo_file and logo_file.filename:
-            bucket = current_app.config.get('SUPABASE_STORAGE_BUCKET_MEDIA', 'school-media')
+            from app.utils.helpers import identity_upload_bucket
             result = save_uploaded_file(
                 logo_file,
                 subfolder=f'schools/{school.id}/identity',
                 prefix='logo',
-                bucket=bucket,
+                bucket=identity_upload_bucket(),
                 allowed_exts=LOGO_IMAGE_EXTENSIONS,
                 max_size=LOGO_MAX_BYTES,
             )

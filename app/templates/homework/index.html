@@ -178,7 +178,7 @@
         {# ── Attachment ──────────────────────────────────────────────── #}
         {% if hw.attachment_path %}
         <div class="mb-2">
-          {% set att_url = resolve_photo_url(hw.attachment_path) or hw.attachment_path %}
+          {% set att_url = upload_url(hw.attachment_path) %}
           {% if hw.attachment_type == 'image' %}
           <a href="{{ att_url }}" target="_blank">
             <img src="{{ att_url }}" alt="مرفق" class="img-fluid rounded"

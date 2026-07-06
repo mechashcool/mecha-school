@@ -68,6 +68,79 @@ def _supabase_upload(file_bytes: bytes, object_path: str, content_type: str,
         return None
 
 
+def _supabase_sign(object_path: str, bucket: str | None = None,
+                   ttl: int = 900) -> str | None:
+    """Return a Supabase-native signed URL for a (private) object, or None.
+
+    Used for board media so large videos stream directly from the Supabase CDN
+    without proxying through Flask. Works whether the bucket is public or private.
+    Never raises; never logs the service key.
+    """
+    import requests as _req
+    url = current_app.config.get('SUPABASE_URL', '').rstrip('/')
+    key = current_app.config.get('SUPABASE_SERVICE_KEY', '')
+    if bucket is None:
+        bucket = current_app.config.get('SUPABASE_BUCKET', 'uploads')
+    if not url or not key or not object_path:
+        return None
+    try:
+        resp = _req.post(
+            f"{url}/storage/v1/object/sign/{bucket}/{object_path}",
+            json={'expiresIn': int(ttl)},
+            headers={'Authorization': f'Bearer {key}', 'apikey': key},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            current_app.logger.warning(
+                f"Supabase sign failed {resp.status_code} for object in bucket {bucket}"
+            )
+            return None
+        signed = (resp.json() or {}).get('signedURL') or (resp.json() or {}).get('signedUrl')
+        if not signed:
+            return None
+        # signedURL is returned as a path like '/object/sign/<bucket>/<path>?token=...'
+        return f"{url}/storage/v1{signed}" if signed.startswith('/') else f"{url}/storage/v1/{signed}"
+    except Exception as exc:
+        current_app.logger.warning(f"Supabase sign error: {exc}")
+        return None
+
+
+def _supabase_fetch(object_path: str, bucket: str | None = None):
+    """Fetch a (private) object's bytes via the service key. Returns
+    (bytes, content_type) or (None, None). Used by the Flask media proxy for
+    small private files. Never raises; never logs the service key."""
+    import requests as _req
+    url = current_app.config.get('SUPABASE_URL', '').rstrip('/')
+    key = current_app.config.get('SUPABASE_SERVICE_KEY', '')
+    if bucket is None:
+        bucket = current_app.config.get('SUPABASE_BUCKET', 'uploads')
+    if not url or not key or not object_path:
+        return None, None
+    try:
+        resp = _req.get(
+            f"{url}/storage/v1/object/{bucket}/{object_path}",
+            headers={'Authorization': f'Bearer {key}', 'apikey': key},
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            return None, None
+        return resp.content, resp.headers.get('Content-Type', 'application/octet-stream')
+    except Exception as exc:
+        current_app.logger.warning(f"Supabase fetch error: {exc}")
+        return None, None
+
+
+def identity_upload_bucket() -> str:
+    """Bucket new school-identity/logo uploads should target.
+
+    Stage 2: the public-branding bucket when private uploads are enabled, else
+    the legacy school-media bucket (pre-Stage-2 behaviour).
+    """
+    if current_app.config.get('PRIVATE_UPLOADS_ENABLED'):
+        return current_app.config.get('SUPABASE_PUBLIC_BRANDING_BUCKET', 'public-branding')
+    return current_app.config.get('SUPABASE_STORAGE_BUCKET_MEDIA', 'school-media')
+
+
 def _supabase_delete(object_path: str, bucket: str | None = None) -> bool:
     """Delete an object from Supabase Storage. Returns True on success.
 
@@ -204,6 +277,14 @@ def resolve_photo_url(photo: str | None) -> str | None:
     """
     if not photo:
         return None
+    # Stage 2: when private uploads are enabled, route Supabase objects through
+    # the privacy-aware resolver (public branding → public URL; private → signed
+    # URL). Non-Supabase values fall through to the legacy logic below unchanged.
+    if current_app.config.get('PRIVATE_UPLOADS_ENABLED'):
+        from app.utils.upload_access import supabase_media_url
+        signed = supabase_media_url(photo)
+        if signed is not None:
+            return signed
     if photo.startswith(('http://', 'https://')):
         return photo
     try:

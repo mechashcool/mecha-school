@@ -386,16 +386,15 @@ def edit(school_id):
 
         # Logo upload — stored in Supabase Storage (school-media bucket) in production,
         # or local static/uploads/ in development.
-        from flask import current_app
-        from app.utils.helpers import save_uploaded_file, LOGO_IMAGE_EXTENSIONS, LOGO_MAX_BYTES
+        from app.utils.helpers import (save_uploaded_file, LOGO_IMAGE_EXTENSIONS,
+                                        LOGO_MAX_BYTES, identity_upload_bucket)
         logo_file = request.files.get('logo')
         if logo_file and logo_file.filename:
-            bucket = current_app.config.get('SUPABASE_STORAGE_BUCKET_MEDIA', 'school-media')
             result = save_uploaded_file(
                 logo_file,
                 subfolder=f'schools/{school.id}/identity',
                 prefix='logo',
-                bucket=bucket,
+                bucket=identity_upload_bucket(),
                 allowed_exts=LOGO_IMAGE_EXTENSIONS,
                 max_size=LOGO_MAX_BYTES,
             )

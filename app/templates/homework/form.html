@@ -170,7 +170,7 @@
           {% if hw and hw.attachment_path %}
           <div class="mb-3 p-3 bg-light rounded">
             <p class="small fw-bold mb-2">المرفق الحالي:</p>
-            {% set att_url = resolve_photo_url(hw.attachment_path) or hw.attachment_path %}
+            {% set att_url = upload_url(hw.attachment_path) %}
             {% if hw.attachment_type == 'image' %}
             <img src="{{ att_url }}" alt="مرفق" class="img-fluid rounded mb-2"
                  style="max-height:200px;object-fit:contain"

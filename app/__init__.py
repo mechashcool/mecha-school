@@ -168,9 +168,12 @@ def create_app(config_name=None):
         except (_BuildError, Exception):
             return '#'
 
+    from app.utils.upload_access import protected_upload_url
+
     app.jinja_env.globals.update(enumerate=enumerate, zip=zip, len=len,
                                  resolve_photo_url=resolve_photo_url,
-                                 safe_url_for=_safe_url_for)
+                                 safe_url_for=_safe_url_for,
+                                 upload_url=protected_upload_url)
 
     # ── Jinja2 filters ────────────────────────────────────────────────────────
     from datetime import timezone as _tz, timedelta as _td
