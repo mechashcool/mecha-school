@@ -125,6 +125,19 @@ def serve_remote(bucket, object_path):
     from app.utils.upload_access import verify_remote_token
     from app.utils.helpers import _supabase_fetch
 
+    # Defense-in-depth (the HMAC token already binds bucket+key, but never trust
+    # a URL): only the two known private buckets, and no path traversal / absolute
+    # keys. object_path is the key INSIDE the bucket — it must not start with the
+    # bucket name or contain '..'.
+    allowed_buckets = {
+        current_app.config.get('SUPABASE_BUCKET', 'uploads'),
+        current_app.config.get('SUPABASE_STORAGE_BUCKET_MEDIA', 'school-media'),
+    }
+    if bucket not in allowed_buckets:
+        abort(404)
+    if object_path.startswith('/') or '..' in object_path.split('/'):
+        abort(404)
+
     if not verify_remote_token(bucket, object_path,
                                request.args.get('exp'), request.args.get('sig')):
         abort(403)

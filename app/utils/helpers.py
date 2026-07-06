@@ -106,28 +106,57 @@ def _supabase_sign(object_path: str, bucket: str | None = None,
 
 
 def _supabase_fetch(object_path: str, bucket: str | None = None):
-    """Fetch a (private) object's bytes via the service key. Returns
-    (bytes, content_type) or (None, None). Used by the Flask media proxy for
-    small private files. Never raises; never logs the service key."""
+    """Fetch an object's bytes from Supabase Storage for the media proxy.
+
+    Returns (bytes, content_type) or (None, None). Never raises; never logs the
+    service key.
+
+    ``object_path`` is the key *inside* the bucket (e.g.
+    ``students/documents/<file>.png``) — it must NOT include the bucket name.
+
+    Resilient to both storage states this project passes through:
+      * Private bucket → authenticated download with the service-role key.
+      * Public bucket (current testing state) → the public object endpoint,
+        which succeeds even when no/invalid service key is configured.
+    The authenticated endpoint is tried first when a key is present; the public
+    endpoint is a fallback so existing files still stream while the buckets are
+    Public. After the buckets are made Private the public fallback simply
+    returns non-200 and the authenticated path is authoritative (fail-closed).
+    """
     import requests as _req
     url = current_app.config.get('SUPABASE_URL', '').rstrip('/')
     key = current_app.config.get('SUPABASE_SERVICE_KEY', '')
     if bucket is None:
         bucket = current_app.config.get('SUPABASE_BUCKET', 'uploads')
-    if not url or not key or not object_path:
+    if not url or not object_path:
         return None, None
-    try:
-        resp = _req.get(
+
+    endpoints = []
+    if key:
+        endpoints.append((
             f"{url}/storage/v1/object/{bucket}/{object_path}",
-            headers={'Authorization': f'Bearer {key}', 'apikey': key},
-            timeout=30,
+            {'Authorization': f'Bearer {key}', 'apikey': key},
+        ))
+    # Public fallback — works while the bucket is Public; harmless (non-200) once
+    # it is Private. Server-side fetch only: the raw public URL is never exposed
+    # to the client, which still sees the signed /media-proxy URL.
+    endpoints.append((f"{url}/storage/v1/object/public/{bucket}/{object_path}", {}))
+
+    last_status = None
+    for endpoint, headers in endpoints:
+        try:
+            resp = _req.get(endpoint, headers=headers, timeout=30)
+            if resp.status_code == 200:
+                return resp.content, resp.headers.get('Content-Type',
+                                                      'application/octet-stream')
+            last_status = resp.status_code
+        except Exception as exc:
+            current_app.logger.warning(f"Supabase fetch error: {exc}")
+    if last_status is not None:
+        current_app.logger.warning(
+            f"Supabase fetch failed ({last_status}) for object in bucket {bucket}"
         )
-        if resp.status_code != 200:
-            return None, None
-        return resp.content, resp.headers.get('Content-Type', 'application/octet-stream')
-    except Exception as exc:
-        current_app.logger.warning(f"Supabase fetch error: {exc}")
-        return None, None
+    return None, None
 
 
 def identity_upload_bucket() -> str:
