@@ -34,12 +34,13 @@
       align-items: center;
       justify-content: center;
       /* ── background image ────────────────────────────────────────────
-         url_for() emits the correct /static/... path at render time.
-         background-color is the fallback only; background-image takes
-         precedence whenever the image loads successfully.
+         Loads from the public `public-branding` Supabase bucket (public
+         login/branding assets only). background-color is the fallback and
+         shows if the remote image fails; background-image takes precedence
+         whenever it loads successfully.
       ──────────────────────────────────────────────────────────────── */
       background-color: #061a35;
-      background-image: url("{{ url_for('static', filename='images/core-school-login.png') }}");
+      background-image: url("https://jizrarelapmzrjajrtfo.supabase.co/storage/v1/object/public/public-branding/core-school-background.png");
       background-repeat: no-repeat;
       background-position: center center;
       background-size: cover;
@@ -389,7 +390,7 @@
 
       <!-- Brand -->
       <div class="brand-block">
-        <img src="{{ url_for('static', filename='images/Logo-Core-School-clean.png') }}"
+        <img src="https://jizrarelapmzrjajrtfo.supabase.co/storage/v1/object/public/public-branding/Core-School-logo.jpg"
              alt="Core School"
              class="login-logo">
         <div class="brand-tagline">النواة الذكية للأنظمة والحلول التقنية</div>
