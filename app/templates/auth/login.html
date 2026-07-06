@@ -93,10 +93,13 @@
       margin-bottom: clamp(8px, 1.5vh, 18px);
     }
 
-    /* brightness(0) collapses every colour channel to black while
-       keeping alpha intact; invert(1) then flips black → white.
-       The two drop-shadows provide a soft blue-white glow so the
-       white logo stays clearly visible against the glass card. */
+    /* Display the uploaded logo exactly as-is. The previous
+       brightness(0) invert(1) filter was built for a transparent
+       white-silhouette PNG; the new asset is an opaque JPG, so that
+       filter collapsed the whole image into a solid white box. No
+       filter / invert / brightness / blend / clip is applied, so the
+       real logo is shown; object-fit: contain keeps the full logo
+       visible while width/height auto preserve its aspect ratio. */
     .login-logo {
       display: block;
       margin: 0 auto clamp(10px, 1.4vh, 16px);
@@ -105,10 +108,6 @@
       max-width: clamp(240px, 58vw, 340px);
       max-height: clamp(100px, 14vh, 140px);
       object-fit: contain;
-      filter:
-        brightness(0) invert(1)
-        drop-shadow(0 0 14px rgba(160, 210, 255, 0.52))
-        drop-shadow(0 2px 8px rgba(0, 10, 60, 0.34));
     }
 
     .brand-tagline {
