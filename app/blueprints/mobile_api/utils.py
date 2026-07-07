@@ -133,14 +133,16 @@ def photo_url(photo: str | None) -> str | None:
     """
     if not photo:
         return None
+    # Stage 2: when private uploads are on, resolve any mappable upload (full
+    # Supabase URL OR relative uploads/… path) to a signed URL the app can open
+    # without an auth header; public branding stays a public URL. Non-mappable
+    # values fall through to the legacy local logic unchanged.
+    if current_app.config.get('PRIVATE_UPLOADS_ENABLED'):
+        from app.utils.upload_access import supabase_media_url
+        signed = supabase_media_url(photo)
+        if signed is not None:
+            return signed
     if photo.startswith(('http://', 'https://')):
-        # Stage 2: private Supabase objects resolve to signed URLs the app can
-        # open without an auth header; public branding stays a public URL.
-        if current_app.config.get('PRIVATE_UPLOADS_ENABLED'):
-            from app.utils.upload_access import supabase_media_url
-            signed = supabase_media_url(photo)
-            if signed is not None:
-                return signed
         return photo
     import os
     try:

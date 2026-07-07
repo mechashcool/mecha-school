@@ -312,14 +312,19 @@ def protected_upload_url(value: str | None) -> str | None:
         return url_for('static', filename=(object_path_of(value) or value))
 
     # ── Feature ON → Stage 1/2 privacy behaviour ─────────────────────────────
+    # Route every mappable upload (full Supabase URL OR relative uploads/… path)
+    # through the signed proxy / public-branding resolver so nothing links to the
+    # unsigned /files/ route while the feature is on.
+    signed = supabase_media_url(value)
+    if signed is not None:
+        return signed
     if value.startswith(('http://', 'https://')):
-        signed = supabase_media_url(value)      # signed/proxied private, else None
-        return signed if signed is not None else value
+        return value                            # external non-Supabase URL
     from app.utils.helpers import resolve_photo_url
     op = object_path_of(value)
     if op is None or is_public_upload(op):
-        return resolve_photo_url(value)
-    return url_for('media.serve_protected', stored=op)
+        return resolve_photo_url(value)         # public branding/identity
+    return url_for('media.serve_protected', stored=op)  # last-resort local
 
 
 # ── Stage 2: Supabase object references & privacy-aware signing ────────────────
@@ -408,19 +413,47 @@ def signed_proxy_url(bucket: str, object_path: str, ttl: int = 900) -> str:
                        exp=exp, sig=sig)
 
 
+def _local_ref_of(value: str | None) -> tuple[str, str] | None:
+    """Map a static-relative ``uploads/<key>`` value to ``(uploads_bucket, key)``.
+
+    Legacy rows and Supabase-upload fallbacks store the local static-relative
+    path (``uploads/students/documents/<file>``) rather than a full Supabase URL.
+    The object key *inside* the ``uploads`` bucket is that path with the leading
+    ``uploads/`` static-folder prefix removed. Returns ``None`` for anything that
+    is not an ``uploads/`` value (public identity, external URLs, etc.).
+
+    Only the ``uploads`` bucket is inferred: the local fallback always writes
+    under ``uploads/`` regardless of the target bucket, so a relative value
+    cannot be attributed to ``school-media``; board media is stored as full
+    Supabase URLs and handled by ``storage_ref_of`` instead.
+    """
+    op = object_path_of(value)
+    if op is None or not op.startswith('uploads/'):
+        return None
+    key = op[len('uploads/'):]
+    if not key:
+        return None
+    return current_app.config.get('SUPABASE_BUCKET', 'uploads'), key
+
+
 def supabase_media_url(value: str | None, *, want_video: bool = False) -> str | None:
-    """Privacy-aware URL for a Supabase object, or ``None`` to signal "not a
-    Supabase object / feature disabled — use the caller's legacy path".
+    """Privacy-aware URL for an uploaded object, or ``None`` to signal "not a
+    mappable upload / feature disabled — use the caller's legacy path".
 
     - Feature off (PRIVATE_UPLOADS_ENABLED False) → ``None`` (legacy behaviour).
-    - Non-Supabase / local value                  → ``None``.
+    - Full Supabase URL  → parsed to (bucket, key).
+    - Relative uploads/…  → mapped to the uploads bucket (key without prefix),
+      so legacy/fallback values also stream through the signed proxy.
     - Public branding/identity                     → public URL (public bucket).
     - Board media (school-media, non-identity)     → Supabase-native signed URL.
     - Other private files (uploads bucket, …)      → Flask-HMAC proxy URL.
+    - Non-mappable (external non-Supabase, public local) → ``None``.
     """
     if not current_app.config.get('PRIVATE_UPLOADS_ENABLED'):
         return None
     ref = storage_ref_of(value)
+    if ref is None:
+        ref = _local_ref_of(value)
     if ref is None:
         return None
     bucket, path = ref

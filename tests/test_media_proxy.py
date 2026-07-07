@@ -132,3 +132,43 @@ def test_flag_off_makes_no_proxy_url(monkeypatch):
     from app.utils.upload_access import supabase_media_url
     with app.test_request_context('/'):
         assert supabase_media_url(_PUBLIC + 'students/documents/x.png') is None
+
+
+# ── Mixed URL generation: relative uploads/… values must also become signed ────
+
+def test_relative_uploads_values_become_signed_proxy_not_files():
+    """The reported bug: a relative uploads/… value (legacy row / Supabase-upload
+    fallback) generated /files/uploads/… instead of a signed /media-proxy URL."""
+    app = _app()
+    from app.utils.upload_access import protected_upload_url, supabase_media_url
+    from app.utils.helpers import resolve_photo_url
+    from app.blueprints.mobile_api.utils import photo_url
+    rel = {
+        'student_photo':    'uploads/students/STU-1.png',
+        'student_document': 'uploads/students/documents/SCH001-STU-000007-aaa.png',
+        'employee_photo':   'uploads/employees/EMP-1.png',
+        'employee_document':'uploads/employee_docs/EMP-1.pdf',
+        'homework':         'uploads/homework/hw.pdf',
+        'complaint':        'uploads/complaints/c.png',
+        'leave':            'uploads/schools/1/student-leave-requests/55/l.pdf',
+    }
+    with app.test_request_context('/'):
+        for name, val in rel.items():
+            for gen in (protected_upload_url(val), supabase_media_url(val),
+                        resolve_photo_url(val), photo_url(val)):
+                assert gen is not None, name
+                assert '/files/' not in gen, f'{name}: still legacy /files/ -> {gen}'
+                key = val[len('uploads/'):]
+                assert f'/media-proxy/uploads/{key}' in gen, f'{name}: {gen}'
+                assert 'sig=' in gen and 'exp=' in gen, name
+
+
+def test_public_branding_unaffected_by_relative_mapping():
+    """Full public-branding / identity URLs stay public; not proxied."""
+    app = _app()
+    from app.utils.upload_access import supabase_media_url
+    ident = _SUPA + '/storage/v1/object/public/school-media/schools/3/identity/logo.png'
+    with app.test_request_context('/'):
+        out = supabase_media_url(ident)
+        assert out is not None and '/object/public/public-branding/' in out
+        assert '/media-proxy/' not in out

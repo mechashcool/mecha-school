@@ -98,6 +98,15 @@ def serve_protected(stored):
     if is_public_upload(op):
         return _serve_local(op)
 
+    # Feature ON → upgrade any residual legacy /files/ link (bookmarks, cached
+    # pages, older records) to the signed /media-proxy secure flow, so nothing is
+    # served through this unsigned route while private uploads are enabled.
+    if current_app.config.get('PRIVATE_UPLOADS_ENABLED'):
+        from app.utils.upload_access import supabase_media_url
+        signed = supabase_media_url(op)
+        if signed:
+            return redirect(signed)
+
     # Private — accept a valid signed token first (credential-less clients).
     if verify_signed_token(op, request.args.get('exp'), request.args.get('sig')):
         return _serve_local(op)
@@ -144,6 +153,16 @@ def serve_remote(bucket, object_path):
 
     data, ctype = _supabase_fetch(object_path, bucket=bucket)
     if data is None:
+        # Local-disk fallback: files not (yet) in Supabase — legacy/local rows or
+        # a failed Supabase upload — still stream through this signed, secure
+        # route instead of 404ing. Only the uploads bucket maps to the local
+        # static/uploads tree; safe_join (via _serve_local) blocks traversal.
+        if bucket == current_app.config.get('SUPABASE_BUCKET', 'uploads'):
+            local_rel = f"{_ALLOWED_PREFIX}{object_path}"
+            candidate = os.path.join(current_app.root_path, 'static',
+                                     *local_rel.split('/'))
+            if os.path.isfile(candidate):
+                return _serve_local(local_rel)
         abort(404)
 
     resp = Response(data, mimetype=ctype or 'application/octet-stream')
