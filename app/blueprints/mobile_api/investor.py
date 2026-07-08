@@ -16,18 +16,56 @@ every query. Each query below also filters explicitly on g.mobile_user.school_id
 as a second barrier. There are no write endpoints for this role.
 """
 from datetime import date
+from datetime import datetime as _dt
 
 from flask import g, request
 from sqlalchemy import func, extract
 
-from app.models import db, Revenue, Expense
-from .utils import jwt_required, role_required, ok
+from app.models import db, Revenue, Expense, RevenueCategory, ExpenseCategory
+from .utils import jwt_required, role_required, ok, err
 
 from . import mobile_api_bp
 
 
 def _sid():
     return g.mobile_user.school_id
+
+
+def _parse_int_arg(name):
+    """
+    Read an optional integer query arg.
+    Returns (value, error_response). value is None when the arg is absent/empty.
+    error_response is a Flask response tuple when the supplied value is not a
+    valid integer — caller must return it immediately.
+    """
+    raw = request.args.get(name)
+    if raw is None or raw.strip() == '':
+        return None, None
+    try:
+        return int(raw), None
+    except ValueError:
+        return None, err(f'invalid {name}')
+
+
+def _parse_date_arg(name):
+    """
+    Read an optional yyyy-MM-dd query arg.
+    Returns (value, error_response), mirroring _parse_int_arg().
+    """
+    raw = request.args.get(name)
+    if not raw:
+        return None, None
+    try:
+        return _dt.strptime(raw, '%Y-%m-%d').date(), None
+    except ValueError:
+        return None, err(f'invalid {name} — use yyyy-MM-dd')
+
+
+def _category_options(model, sid):
+    """School-scoped category list for filter_options — never paginated."""
+    rows = (model.query.filter(model.school_id == sid)
+            .order_by(model.name).all())
+    return [{'id': c.id, 'name': c.name} for c in rows]
 
 
 @mobile_api_bp.route('/investor/dashboard', methods=['GET'])
@@ -201,6 +239,7 @@ def _serialize_tx(row):
         'id':          row.id,
         'amount':      float(row.amount or 0),
         'description': row.description or None,
+        'category_id': row.category_id,
         'category':    row.category.name if row.category else None,
         'date':        row.date.isoformat() if row.date else None,
     }
@@ -215,11 +254,33 @@ def investor_revenues():
     page  = request.args.get('page', 1, type=int)
     sid   = _sid()
 
+    category_id, cat_err = _parse_int_arg('category_id')
+    if cat_err:
+        return cat_err
+    date_from, from_err = _parse_date_arg('date_from')
+    if from_err:
+        return from_err
+    date_to, to_err = _parse_date_arg('date_to')
+    if to_err:
+        return to_err
+
     query = (Revenue.query.execution_options(include_all_years=True)
-             .filter(Revenue.school_id == sid,
-                     extract('year', Revenue.date) == year))
-    if month:
-        query = query.filter(extract('month', Revenue.date) == month)
+             .filter(Revenue.school_id == sid))
+
+    if date_from or date_to:
+        # Explicit date range replaces the year/month default so ranges that
+        # cross a calendar-year boundary are not clipped.
+        if date_from:
+            query = query.filter(Revenue.date >= date_from)
+        if date_to:
+            query = query.filter(Revenue.date <= date_to)
+    else:
+        query = query.filter(extract('year', Revenue.date) == year)
+        if month:
+            query = query.filter(extract('month', Revenue.date) == month)
+
+    if category_id is not None:
+        query = query.filter(Revenue.category_id == category_id)
 
     total = float(query.with_entities(func.sum(Revenue.amount)).scalar() or 0)
     pagination = (query.order_by(Revenue.date.desc(), Revenue.id.desc())
@@ -229,6 +290,7 @@ def investor_revenues():
         year=year, month=month, total=total,
         page=pagination.page, pages=pagination.pages,
         items=[_serialize_tx(r) for r in pagination.items],
+        filter_options={'categories': _category_options(RevenueCategory, sid)},
     )
 
 
@@ -241,11 +303,33 @@ def investor_expenses():
     page  = request.args.get('page', 1, type=int)
     sid   = _sid()
 
+    category_id, cat_err = _parse_int_arg('category_id')
+    if cat_err:
+        return cat_err
+    date_from, from_err = _parse_date_arg('date_from')
+    if from_err:
+        return from_err
+    date_to, to_err = _parse_date_arg('date_to')
+    if to_err:
+        return to_err
+
     query = (Expense.query.execution_options(include_all_years=True)
-             .filter(Expense.school_id == sid,
-                     extract('year', Expense.date) == year))
-    if month:
-        query = query.filter(extract('month', Expense.date) == month)
+             .filter(Expense.school_id == sid))
+
+    if date_from or date_to:
+        # Explicit date range replaces the year/month default so ranges that
+        # cross a calendar-year boundary are not clipped.
+        if date_from:
+            query = query.filter(Expense.date >= date_from)
+        if date_to:
+            query = query.filter(Expense.date <= date_to)
+    else:
+        query = query.filter(extract('year', Expense.date) == year)
+        if month:
+            query = query.filter(extract('month', Expense.date) == month)
+
+    if category_id is not None:
+        query = query.filter(Expense.category_id == category_id)
 
     total = float(query.with_entities(func.sum(Expense.amount)).scalar() or 0)
     pagination = (query.order_by(Expense.date.desc(), Expense.id.desc())
@@ -255,4 +339,5 @@ def investor_expenses():
         year=year, month=month, total=total,
         page=pagination.page, pages=pagination.pages,
         items=[_serialize_tx(e) for e in pagination.items],
+        filter_options={'categories': _category_options(ExpenseCategory, sid)},
     )
