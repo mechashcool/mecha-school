@@ -163,12 +163,49 @@ def test_relative_uploads_values_become_signed_proxy_not_files():
                 assert 'sig=' in gen and 'exp=' in gen, name
 
 
-def test_public_branding_unaffected_by_relative_mapping():
-    """Full public-branding / identity URLs stay public; not proxied."""
+def test_public_branding_url_unaffected():
+    """A URL that genuinely lives in the public-branding bucket (global login
+    assets) still resolves to a public URL, not proxied."""
     app = _app()
     from app.utils.upload_access import supabase_media_url
-    ident = _SUPA + '/storage/v1/object/public/school-media/schools/3/identity/logo.png'
+    asset = _SUPA + '/storage/v1/object/public/public-branding/Core-School-logo.jpg'
     with app.test_request_context('/'):
-        out = supabase_media_url(ident)
+        out = supabase_media_url(asset)
         assert out is not None and '/object/public/public-branding/' in out
         assert '/media-proxy/' not in out
+
+
+def test_school_identity_never_maps_to_public_branding(monkeypatch):
+    """Regression guard for the reported 404: a school logo/identity object
+    physically stored in the private school-media bucket must resolve to a
+    signed school-media URL, never to a guessed public-branding URL (that
+    bucket never contains it, so the guess 404s)."""
+    app = _app()
+    app.config.update(SUPABASE_SERVICE_KEY='test-key')
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        class _R:
+            status_code = 200
+            def json(self):
+                return {'signedURL': '/object/sign/school-media/schools/2/identity/logo.jpg?token=abc'}
+        return _R()
+
+    monkeypatch.setattr(requests, 'post', fake_post)
+    ident = _SUPA + '/storage/v1/object/public/school-media/schools/2/identity/logo.jpg'
+    from app.utils.upload_access import supabase_media_url
+    with app.test_request_context('/'):
+        out = supabase_media_url(ident)
+    assert out is not None
+    assert 'public-branding' not in out
+    assert '/storage/v1/object/sign/school-media/' in out
+
+
+def test_identity_upload_bucket_is_always_school_media(monkeypatch):
+    """New school-logo uploads must target school-media (private), never
+    public-branding, regardless of PRIVATE_UPLOADS_ENABLED."""
+    from app.utils.helpers import identity_upload_bucket
+    app = _app()
+    for flag in (True, False):
+        app.config.update(PRIVATE_UPLOADS_ENABLED=flag)
+        with app.test_request_context('/'):
+            assert identity_upload_bucket() == 'school-media'

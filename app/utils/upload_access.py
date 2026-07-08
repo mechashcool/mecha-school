@@ -352,25 +352,24 @@ def storage_ref_of(value: str | None) -> tuple[str, str] | None:
 
 
 def is_public_ref(bucket: str, object_path: str) -> bool:
-    """True when a Supabase object is public branding/identity.
+    """True only when a Supabase object actually resides in the dedicated
+    public-branding bucket (the fixed, global, pre-login assets).
 
-    Public = the dedicated public-branding bucket, or a ``…/identity/…`` object
-    still residing in the legacy school-media bucket. Everything else (including
-    school-media board media) is private.
+    School identity/logo objects are private school data and live in the
+    school-media bucket regardless of path — they must resolve to a signed
+    URL, never to a public-branding URL (that bucket never contains them,
+    so guessing that mapping 404s). See ``supabase_media_url`` for how
+    school-media objects — identity included — are signed.
     """
     pub = current_app.config.get('SUPABASE_PUBLIC_BRANDING_BUCKET', 'public-branding')
-    media = current_app.config.get('SUPABASE_STORAGE_BUCKET_MEDIA', 'school-media')
-    if bucket == pub:
-        return True
-    if bucket == media and '/identity/' in ('/' + object_path.lower()):
-        return True
-    return False
+    return bucket == pub
 
 
 def _public_branding_url(object_path: str) -> str | None:
-    """Public URL for a branding/identity object, always against the public
-    branding bucket (so identity resolves correctly after school-media is made
-    private and its identity objects have been copied across)."""
+    """Public URL for an object that already resides in the public-branding
+    bucket (the fixed global login assets). Only called when ``is_public_ref``
+    confirmed the object's own bucket is public-branding — never guessed for
+    objects that live elsewhere (e.g. school-media identity)."""
     base = (current_app.config.get('SUPABASE_URL', '') or '').rstrip('/')
     pub = current_app.config.get('SUPABASE_PUBLIC_BRANDING_BUCKET', 'public-branding')
     if not base:
@@ -444,8 +443,10 @@ def supabase_media_url(value: str | None, *, want_video: bool = False) -> str | 
     - Full Supabase URL  → parsed to (bucket, key).
     - Relative uploads/…  → mapped to the uploads bucket (key without prefix),
       so legacy/fallback values also stream through the signed proxy.
-    - Public branding/identity                     → public URL (public bucket).
-    - Board media (school-media, non-identity)     → Supabase-native signed URL.
+    - Public branding (fixed global login assets, public-branding bucket)
+      → public URL (public bucket).
+    - School-media (board media AND school identity/logo alike) → Supabase-
+      native signed URL. Identity is private school data, not global branding.
     - Other private files (uploads bucket, …)      → Flask-HMAC proxy URL.
     - Non-mappable (external non-Supabase, public local) → ``None``.
     """

@@ -162,11 +162,11 @@ def _supabase_fetch(object_path: str, bucket: str | None = None):
 def identity_upload_bucket() -> str:
     """Bucket new school-identity/logo uploads should target.
 
-    Stage 2: the public-branding bucket when private uploads are enabled, else
-    the legacy school-media bucket (pre-Stage-2 behaviour).
+    Per-school identity/logo files are private school data — they always
+    belong in the school-media bucket (Private), never in public-branding.
+    public-branding is reserved for the fixed, global, pre-login assets
+    (Core-School-logo.jpg, core-school-background.png).
     """
-    if current_app.config.get('PRIVATE_UPLOADS_ENABLED'):
-        return current_app.config.get('SUPABASE_PUBLIC_BRANDING_BUCKET', 'public-branding')
     return current_app.config.get('SUPABASE_STORAGE_BUCKET_MEDIA', 'school-media')
 
 

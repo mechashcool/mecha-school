@@ -56,12 +56,13 @@ class Config:
     # When FALSE (default) every media URL resolves exactly as before Stage 2:
     # the stored public CDN URL is returned unchanged. When TRUE, private files
     # (student/employee photos & documents, receipts, homework/leave/complaint
-    # attachments) resolve to short-lived signed URLs — Flask-HMAC proxy for
-    # small files, Supabase-native signed URLs for board media — and school
-    # identity resolves against SUPABASE_PUBLIC_BRANDING_BUCKET.
+    # attachments, and school identity/logo) resolve to short-lived signed URLs
+    # — Flask-HMAC proxy for small files, Supabase-native signed URLs for
+    # school-media (board media AND school identity/logo). public-branding only
+    # ever holds the fixed global login assets (Core-School-logo.jpg,
+    # core-school-background.png) and is never used for per-school identity.
     #
-    # Flip this to 'true' ONLY AFTER the public-branding bucket exists and the
-    # identity objects have been copied into it (see the Stage 2 cutover steps).
+    # Flip this to 'true' once the public-branding bucket exists.
     # Unsetting it is an instant, code-level rollback independent of bucket state.
     PRIVATE_UPLOADS_ENABLED = (
         os.environ.get('PRIVATE_UPLOADS_ENABLED', 'false').lower() == 'true'
