@@ -49,9 +49,38 @@ def serve(stored):
     e.g. ``uploads/schools/3/board/media/<uuid>.mp4``. Only the ``uploads/``
     subtree is exposed; everything else returns 404. ``conditional=True`` enables
     ETag / HTTP Range support so video players can seek.
+
+    Security (H-2): this route is unauthenticated. When ``PRIVATE_UPLOADS_ENABLED``
+    is on it must NOT stream private local uploads (student/employee photos &
+    documents, homework, complaint/leave attachments, board media) straight off
+    the local disk — that would bypass ``/files`` and ``/media-proxy``. Instead
+    each private value is upgraded to the same signed ``/media-proxy`` flow those
+    routes already use, so access requires a valid short-lived HMAC token. Public
+    branding/identity assets are non-personal and required before login, so they
+    stay directly servable (identical to ``serve_protected``). When the flag is
+    off, legacy direct local serving is preserved byte-for-byte.
     """
     if not stored.startswith(_ALLOWED_PREFIX):
         abort(404)
+
+    # ── H-2: close the unauthenticated private-file hole when the feature is on ──
+    if current_app.config.get('PRIVATE_UPLOADS_ENABLED'):
+        from app.utils.upload_access import (
+            object_path_of, is_public_upload, supabase_media_url,
+        )
+        op = object_path_of(stored) or stored
+        if not is_public_upload(op):
+            # Route through the signed proxy / public-branding resolver — same
+            # protected model as /files/ and /media-proxy/. supabase_media_url
+            # returns a signed /media-proxy URL for private local uploads and a
+            # public URL for identity objects that live in a public bucket.
+            signed = supabase_media_url(op)
+            if signed:
+                return redirect(signed)
+            # A private value that cannot be turned into a signed URL must be
+            # denied rather than streamed unauthenticated from local disk.
+            abort(404)
+
     static_root = os.path.join(current_app.root_path, 'static')
     # send_from_directory raises 404 (NotFound) if the file does not exist and
     # blocks traversal via safe_join.

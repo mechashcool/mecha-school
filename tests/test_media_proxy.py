@@ -209,3 +209,94 @@ def test_identity_upload_bucket_is_always_school_media(monkeypatch):
         app.config.update(PRIVATE_UPLOADS_ENABLED=flag)
         with app.test_request_context('/'):
             assert identity_upload_bucket() == 'school-media'
+
+
+# ── H-2: the unauthenticated /media/<path> route must not stream private files ──
+#
+# Before the fix, GET /media/uploads/<key> streamed any local file under
+# app/static/uploads with no auth, signed token, or school check — bypassing
+# /files and /media-proxy. With PRIVATE_UPLOADS_ENABLED=true it must upgrade
+# private values to the signed /media-proxy flow (or deny), while public
+# branding/identity and the flag-off legacy path stay unchanged.
+
+_PRIVATE_MEDIA_KEYS = [
+    'students/STU-1.png',                                   # student photo
+    'students/documents/SCH001-STU-000007-aaa.png',         # student document
+    'employees/EMP-1.png',                                  # employee photo
+    'employee_docs/EMP-1.pdf',                              # employee document
+    'homework/hw.pdf',                                      # homework attachment
+    'complaints/c.png',                                     # complaint attachment
+    'schools/1/student-leave-requests/55/l.pdf',            # leave attachment
+    'schools/3/board/media/vid.mp4',                        # school board media
+]
+
+
+def test_media_route_redirects_private_local_files_when_private_enabled():
+    """H-2 core: unauthenticated GET /media/uploads/<private-key> must NOT stream
+    the local file — it redirects (302) to a signed /media-proxy URL instead."""
+    app = _app()
+    client = app.test_client()
+    for key in _PRIVATE_MEDIA_KEYS:
+        resp = client.get('/media/uploads/' + key)          # no redirect follow
+        assert resp.status_code in (301, 302), f'{key}: not redirected -> {resp.status_code}'
+        loc = resp.headers.get('Location', '')
+        assert f'/media-proxy/uploads/{key}' in loc, f'{key}: bad Location {loc}'
+        assert 'sig=' in loc and 'exp=' in loc, f'{key}: unsigned redirect {loc}'
+        # It must not have directly returned file bytes.
+        assert resp.status_code != 200, key
+
+
+def test_media_route_private_redirect_then_streams_via_signed_proxy(monkeypatch):
+    """Following the /media redirect lands on /media-proxy, which streams only
+    after HMAC verification — i.e. access is now authorised, not anonymous."""
+    app = _app()
+    _install_capture(monkeypatch)                            # stub Supabase fetch
+    client = app.test_client()
+    resp = client.get('/media/uploads/students/documents/x.png',
+                      follow_redirects=True)
+    assert resp.status_code == 200                           # signed proxy served it
+    assert resp.data == b'DATA'
+
+
+def test_media_route_traversal_blocked_when_private_enabled(monkeypatch):
+    """A '..' path must never yield a local file: the /media redirect targets
+    /media-proxy, whose allowlist + traversal guard reject it (403/404)."""
+    app = _app()
+    _install_capture(monkeypatch)
+    client = app.test_client()
+    resp = client.get('/media/uploads/../../etc/passwd', follow_redirects=True)
+    assert resp.status_code in (403, 404)
+    assert b'root:' not in resp.data
+
+
+def test_media_route_public_identity_not_proxied_when_private_enabled():
+    """Public branding/identity stays directly servable (never proxied) so
+    login-page / pre-auth branding keeps working. Missing file → 404, but the
+    key assertion is that it is NOT redirected into /media-proxy."""
+    app = _app()
+    client = app.test_client()
+    resp = client.get('/media/uploads/schools/2/identity/logo.png')
+    if resp.status_code in (301, 302):
+        assert '/media-proxy/' not in resp.headers.get('Location', '')
+    else:
+        assert resp.status_code == 404                       # fell through to local serve (missing)
+
+
+def test_media_route_legacy_direct_serve_when_private_disabled():
+    """Flag off → legacy behaviour unchanged: no signed-proxy redirect is
+    injected; the request goes straight to the local send_from_directory path
+    (404 here only because the sentinel file is absent in the test tree)."""
+    app = create_app('testing')
+    app.config.update(PRIVATE_UPLOADS_ENABLED=False,
+                      SERVER_NAME='localhost', PREFERRED_URL_SCHEME='http')
+    client = app.test_client()
+    resp = client.get('/media/uploads/students/documents/x.png')
+    assert resp.status_code not in (301, 302)                # no redirect injected
+    assert resp.status_code == 404
+
+
+def test_media_route_rejects_paths_outside_uploads_prefix():
+    """Only the uploads/ subtree is ever addressable via /media/."""
+    app = _app()
+    client = app.test_client()
+    assert client.get('/media/images/login_hero.png').status_code == 404
