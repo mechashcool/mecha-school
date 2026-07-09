@@ -425,6 +425,58 @@ def create_app(config_name=None):
             return _redirect(_url_for('investor.dashboard'))
         _abort(403)
 
+    # ── Accountant confinement guard ───────────────────────────────────────────
+    # Blueprints/endpoints the finance-scoped accountant role may reach. Anything
+    # else (dashboard, students, academic, HR list, employee manual attendance /
+    # settings, evaluations, users, settings, notifications, reports, …) is
+    # blocked below — independent of whatever permissions the role carries.
+    _ACCOUNTANT_ALLOWED_BLUEPRINTS = frozenset({'fees', 'finances', 'salaries', 'auth'})
+    _ACCOUNTANT_ALLOWED_ENDPOINTS = frozenset({
+        'static', 'media.serve',
+        'admin.switch_year',                              # year-switcher widget
+        'employees.attendance_report',                    # employee attendance REPORT only
+        'employees.attendance_report_detail',
+        'employees.attendance_report_export_excel',
+        'employees.attendance_report_export_pdf',
+        'employees.attendance_report_employee_excel',
+        'employees.attendance_report_employee_pdf',
+    })
+
+    @app.before_request
+    def _confine_accountant():
+        """Restrict the accountant role to accounting surfaces only.
+
+        The accountant role is finance-scoped: fees/installments, revenues &
+        expenses, payroll, and the employee-attendance REPORT (read-only). Every
+        other staff surface is blocked here — independent of the role's
+        permissions, so broad legacy permissions cannot be abused to reach the
+        admin dashboard, employee management, manual attendance, settings, etc.
+        Fail-closed: redirect (GET) or 403 (write/JSON). Only affects the
+        accountant role; no other role is touched. Mobile API paths are skipped
+        (they authenticate per-request via JWT with their own role guards).
+        """
+        from flask_login import current_user
+        if not current_user.is_authenticated:
+            return None
+        if not getattr(current_user, 'is_accountant', False):
+            return None
+
+        if request.path.startswith('/api/mobile/v1/'):
+            return None
+
+        endpoint = request.endpoint or ''
+        blueprint = request.blueprint or ''
+
+        if blueprint in _ACCOUNTANT_ALLOWED_BLUEPRINTS:
+            return None
+        if endpoint in _ACCOUNTANT_ALLOWED_ENDPOINTS:
+            return None
+
+        from flask import redirect as _redirect, url_for as _url_for, abort as _abort
+        if request.method == 'GET':
+            return _redirect(_url_for('fees.index'))
+        _abort(403)
+
     # ── Error handlers ────────────────────────────────────────────────────────
     def _render_error_page(template_name):
         try:

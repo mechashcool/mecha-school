@@ -155,7 +155,12 @@ def _role_redirect_url(user):
         return url_for('teacher.dashboard')
     if role == 'investor_viewer':
         return url_for('investor.dashboard')
-    # All staff roles (admin, accountant, hr, reception, …) land on admin dashboard
+    if role == 'accountant':
+        # Finance-scoped role: no access to the admin dashboard. Land on the
+        # first allowed accounting surface. Confinement is enforced by
+        # _confine_accountant in app/__init__.py.
+        return url_for('fees.index')
+    # All remaining staff roles (admin, hr, reception, …) land on admin dashboard
     return url_for('admin.dashboard')
 
 

@@ -27,7 +27,8 @@ from sqlalchemy.orm import contains_eager
 
 from app.models import (db, SalaryRecord, Employee, PayrollItem,
                         PayrollSettings, SalaryComponent)
-from app.utils.decorators import (permission_required, get_current_school,
+from app.utils.decorators import (permission_required, accountant_or_permission,
+                                   get_current_school,
                                    get_active_year, historical_guard)
 from app.utils.audit import log_action
 from app.services.payroll import (post_salary_expense, unpost_salary_expense,
@@ -230,7 +231,7 @@ def _filters_label(filters) -> str:
 
 @salaries_bp.route('/')
 @login_required
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def index():
     school, school_id = _school_or_redirect()
 
@@ -289,7 +290,7 @@ def index():
 @salaries_bp.route('/generate', methods=['POST'])
 @login_required
 @historical_guard
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def generate_month():
     school, school_id = _school_or_redirect()
     active_year = get_active_year(school_id) if school_id else None
@@ -333,7 +334,7 @@ def generate_month():
 @salaries_bp.route('/create', methods=['GET', 'POST'])
 @login_required
 @historical_guard
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def create():
     school, school_id = _school_or_redirect()
     active_year = get_active_year(school_id) if school_id else None
@@ -397,7 +398,7 @@ def create():
 
 @salaries_bp.route('/<int:rec_id>')
 @login_required
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def detail(rec_id):
     # Read-only view reachable from the multi-year report — allow cross-year.
     record = _owned_record(rec_id, include_all_years=True)
@@ -414,7 +415,7 @@ def detail(rec_id):
 @salaries_bp.route('/<int:rec_id>/item/add', methods=['POST'])
 @login_required
 @historical_guard
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def add_item(rec_id):
     record = _owned_record(rec_id)
     settings = get_settings(record.school_id)
@@ -463,7 +464,7 @@ def add_item(rec_id):
 @salaries_bp.route('/<int:rec_id>/item/<int:item_id>/delete', methods=['POST'])
 @login_required
 @historical_guard
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def delete_item(rec_id, item_id):
     record = _owned_record(rec_id)
     if record.is_locked:
@@ -483,7 +484,7 @@ def delete_item(rec_id, item_id):
 @salaries_bp.route('/<int:rec_id>/recalculate', methods=['POST'])
 @login_required
 @historical_guard
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def recalculate(rec_id):
     record = _owned_record(rec_id)
     if record.is_locked:
@@ -500,7 +501,7 @@ def recalculate(rec_id):
 @salaries_bp.route('/<int:rec_id>/notes', methods=['POST'])
 @login_required
 @historical_guard
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def update_notes(rec_id):
     record = _owned_record(rec_id)
     record.notes = (request.form.get('notes') or '').strip()
@@ -515,7 +516,7 @@ def update_notes(rec_id):
 @salaries_bp.route('/<int:rec_id>/approve', methods=['POST'])
 @login_required
 @historical_guard
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def approve(rec_id):
     record = _owned_record(rec_id)
     if record.status not in ('draft', 'pending'):
@@ -534,7 +535,7 @@ def approve(rec_id):
 @salaries_bp.route('/<int:rec_id>/pay', methods=['POST'])
 @login_required
 @historical_guard
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def mark_paid(rec_id):
     record = _owned_record(rec_id)
     if record.status == 'paid':
@@ -558,7 +559,7 @@ def mark_paid(rec_id):
 @salaries_bp.route('/<int:rec_id>/cancel', methods=['POST'])
 @login_required
 @historical_guard
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def cancel(rec_id):
     record = _owned_record(rec_id)
     if record.status == 'paid':
@@ -579,7 +580,7 @@ def cancel(rec_id):
 @salaries_bp.route('/<int:rec_id>/unpay', methods=['POST'])
 @login_required
 @historical_guard
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def unpay(rec_id):
     record = _owned_record(rec_id)
     if record.status != 'paid':
@@ -600,7 +601,7 @@ def unpay(rec_id):
 @salaries_bp.route('/approve-all', methods=['POST'])
 @login_required
 @historical_guard
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def approve_all():
     month = request.form.get('month', type=int)
     year  = request.form.get('year',  type=int)
@@ -626,7 +627,7 @@ def approve_all():
 @salaries_bp.route('/pay-all', methods=['POST'])
 @login_required
 @historical_guard
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def pay_all():
     month  = request.form.get('month', type=int)
     year   = request.form.get('year',  type=int)
@@ -656,7 +657,7 @@ def pay_all():
 @salaries_bp.route('/<int:rec_id>/delete', methods=['POST'])
 @login_required
 @historical_guard
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def delete(rec_id):
     record = _owned_record(rec_id)
     if record.status in ('approved', 'paid'):
@@ -676,7 +677,7 @@ def delete(rec_id):
 @salaries_bp.route('/settings', methods=['GET', 'POST'])
 @login_required
 @historical_guard
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def settings():
     school, school_id = _school_or_redirect()
     if not school_id:
@@ -721,7 +722,7 @@ def settings():
 
 @salaries_bp.route('/components')
 @login_required
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def components():
     school, school_id = _school_or_redirect()
     q = SalaryComponent.query
@@ -742,7 +743,7 @@ def components():
 @salaries_bp.route('/components/save', methods=['POST'])
 @login_required
 @historical_guard
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def component_save():
     school, school_id = _school_or_redirect()
     if not school_id:
@@ -788,7 +789,7 @@ def component_save():
 @salaries_bp.route('/components/<int:comp_id>/delete', methods=['POST'])
 @login_required
 @historical_guard
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def component_delete(comp_id):
     comp = SalaryComponent.query.get_or_404(comp_id)
     _, school_id = _school_or_redirect()
@@ -806,7 +807,7 @@ def component_delete(comp_id):
 
 @salaries_bp.route('/employee/<int:emp_id>')
 @login_required
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def employee_history(emp_id):
     employee = Employee.query.get_or_404(emp_id)
     _, school_id = _school_or_redirect()
@@ -832,7 +833,7 @@ def employee_history(emp_id):
 
 @salaries_bp.route('/employee/<int:emp_id>/statement/pdf')
 @login_required
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def employee_statement_pdf(emp_id):
     from app.utils.pdf_gen import generate_employee_statement_pdf
     employee = Employee.query.get_or_404(emp_id)
@@ -854,7 +855,7 @@ def employee_statement_pdf(emp_id):
 
 @salaries_bp.route('/employee/<int:emp_id>/statement/excel')
 @login_required
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def employee_statement_excel(emp_id):
     from app.utils.excel_export import export_employee_statement
     employee = Employee.query.get_or_404(emp_id)
@@ -881,7 +882,7 @@ def employee_statement_excel(emp_id):
 
 @salaries_bp.route('/report')
 @login_required
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def report():
     school, school_id = _school_or_redirect()
     records, totals, filters = _collect_report(request.args, school_id)
@@ -908,7 +909,7 @@ def report():
 
 @salaries_bp.route('/report/export/excel')
 @login_required
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def report_export_excel():
     from app.utils.excel_export import export_salary_report
     _, school_id = _school_or_redirect()
@@ -927,7 +928,7 @@ def report_export_excel():
 
 @salaries_bp.route('/report/export/pdf')
 @login_required
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def report_export_pdf():
     from app.utils.pdf_gen import generate_payroll_report_pdf
     school, school_id = _school_or_redirect()
@@ -948,7 +949,7 @@ def report_export_pdf():
 
 @salaries_bp.route('/<int:rec_id>/slip')
 @login_required
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def slip(rec_id):
     record = _owned_record(rec_id, include_all_years=True)
     return render_template('salaries/slip.html',
@@ -958,7 +959,7 @@ def slip(rec_id):
 
 @salaries_bp.route('/<int:rec_id>/slip/pdf')
 @login_required
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def slip_pdf(rec_id):
     from app.utils.pdf_gen import generate_salary_pdf
     record = _owned_record(rec_id, include_all_years=True)
@@ -977,7 +978,7 @@ def slip_pdf(rec_id):
 
 @salaries_bp.route('/export/excel')
 @login_required
-@permission_required('manage_salaries')
+@accountant_or_permission('manage_salaries')
 def export_excel():
     from app.utils.excel_export import export_salary_month
     _, school_id = _school_or_redirect()

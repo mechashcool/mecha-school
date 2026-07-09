@@ -230,6 +230,50 @@
       </a>
     </li>
 
+    {# ── Accountant sidebar (finance-scoped) ────────────────────────────── #}
+    {# Only the accounting surfaces. Backend confinement is enforced by
+       _confine_accountant in app/__init__.py — this is the matching UI. #}
+    {% elif current_user.is_authenticated and current_user.is_accountant %}
+    <li class="nav-section-label">المالية</li>
+    {% if 'fees' in enabled_modules %}
+    <li class="nav-item">
+      <a href="{{ url_for('fees.index') }}"
+         class="{{ 'active' if request.blueprint == 'fees' }}">
+        <i class="bi bi-cash-stack"></i> الرسوم والأقساط
+      </a>
+    </li>
+    {% endif %}
+    {% if 'finances' in enabled_modules %}
+    <li class="nav-item">
+      <a href="{{ url_for('finances.index') }}"
+         class="{{ 'active' if request.blueprint == 'finances' }}">
+        <i class="bi bi-graph-up-arrow"></i> الإيرادات والمصروفات
+      </a>
+    </li>
+    {% endif %}
+    {% if 'salaries' in enabled_modules %}
+    <li class="nav-item">
+      <a href="{{ url_for('salaries.index') }}"
+         class="{{ 'active' if request.blueprint == 'salaries' }}">
+        <i class="bi bi-wallet2"></i> الرواتب
+      </a>
+    </li>
+    {% endif %}
+    {% if 'employees' in enabled_modules and school_cfg.action_enabled('employee_attendance', 'view_report') %}
+    <li class="nav-section-label">الحضور</li>
+    <li class="nav-item">
+      <a href="{{ url_for('employees.attendance_report') }}"
+         class="{{ 'active' if request.endpoint in ['employees.attendance_report', 'employees.attendance_report_detail'] }}">
+        <i class="bi bi-calendar-check"></i> حضور الموظفين
+      </a>
+    </li>
+    {% endif %}
+    <li class="nav-item" style="margin-top:8px">
+      <a href="{{ url_for('auth.logout') }}" style="color:#e07070">
+        <i class="bi bi-box-arrow-right"></i> تسجيل الخروج
+      </a>
+    </li>
+
     {# ── Admin / staff sidebar (grouped) ────────────────────────────────── #}
     {% else %}
 

@@ -568,6 +568,16 @@ class User(UserMixin, db.Model):
             and self.school_id is not None
         )
 
+    @property
+    def is_accountant(self):
+        """True for a finance-scoped accountant account.
+
+        Role-name based (not permission based) so the accountant confinement
+        guard always confines these accounts regardless of any legacy
+        permissions the role may carry.
+        """
+        return bool(self.role and self.role.name == 'accountant')
+
     def __repr__(self):
         return f'<User {self.username}>'
 

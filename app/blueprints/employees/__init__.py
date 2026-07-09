@@ -8,7 +8,8 @@ from datetime import datetime as dt, date
 from app.models import (db, Employee, User, Role, teacher_subjects,
                         Subject, Section, Grade, DeviceEmployeeMapping,
                         EmployeeAttendance)
-from app.utils.decorators import (permission_required, get_current_school,
+from app.utils.decorators import (permission_required, accountant_or_permission,
+                                   get_current_school,
                                    historical_guard, get_active_year, action_required)
 from app.utils.helpers import save_uploaded_file
 from app.utils import code_generator
@@ -691,7 +692,7 @@ def _all_employees(school):
 
 @employees_bp.route('/attendance-report')
 @login_required
-@permission_required('manage_employees')
+@accountant_or_permission('manage_employees')
 @action_required('employee_attendance', 'view_report')
 def attendance_report():
     from app.utils.employee_attendance_helper import (
@@ -750,7 +751,7 @@ def attendance_report():
 
 @employees_bp.route('/attendance-report/<int:emp_id>')
 @login_required
-@permission_required('manage_employees')
+@accountant_or_permission('manage_employees')
 @action_required('employee_attendance', 'view_detail')
 def attendance_report_detail(emp_id):
     from app.utils.employee_attendance_helper import (
@@ -791,7 +792,7 @@ def attendance_report_detail(emp_id):
 
 @employees_bp.route('/attendance-report/export/excel')
 @login_required
-@permission_required('manage_employees')
+@accountant_or_permission('manage_employees')
 @action_required('employee_attendance', 'export_excel')
 def attendance_report_export_excel():
     from flask import Response
@@ -828,7 +829,7 @@ def attendance_report_export_excel():
 
 @employees_bp.route('/attendance-report/export/pdf')
 @login_required
-@permission_required('manage_employees')
+@accountant_or_permission('manage_employees')
 @action_required('employee_attendance', 'export_pdf')
 def attendance_report_export_pdf():
     from flask import Response
@@ -865,7 +866,7 @@ def attendance_report_export_pdf():
 
 @employees_bp.route('/attendance-report/<int:emp_id>/export/excel')
 @login_required
-@permission_required('manage_employees')
+@accountant_or_permission('manage_employees')
 @action_required('employee_attendance', 'employee_excel')
 def attendance_report_employee_excel(emp_id):
     from flask import Response
@@ -904,7 +905,7 @@ def attendance_report_employee_excel(emp_id):
 
 @employees_bp.route('/attendance-report/<int:emp_id>/export/pdf')
 @login_required
-@permission_required('manage_employees')
+@accountant_or_permission('manage_employees')
 @action_required('employee_attendance', 'employee_pdf')
 def attendance_report_employee_pdf(emp_id):
     from flask import Response

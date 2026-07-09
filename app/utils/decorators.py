@@ -122,6 +122,30 @@ def any_permission_required(*perm_names):
     return decorator
 
 
+def accountant_or_permission(*perm_names):
+    """Authorize the accountant role by role, OR any user holding one of perm_names.
+
+    Used for accounting surfaces (payroll, the employee-attendance report) whose
+    existing guard is a broad permission the accountant role must NOT be granted
+    (e.g. manage_employees also unlocks the employee list / evaluations). This
+    lets the accountant reach only these specific routes by role, without
+    granting the broad permission. Behaviour for every other role is unchanged:
+    they still pass only via the listed permission(s) (admins short-circuit).
+    """
+    def decorator(f):
+        @wraps(f)
+        def wrapped(*args, **kwargs):
+            if not current_user.is_authenticated:
+                return redirect(url_for('auth.login'))
+            if getattr(current_user, 'is_accountant', False):
+                return f(*args, **kwargs)
+            if any(current_user.has_permission(p) for p in perm_names):
+                return f(*args, **kwargs)
+            abort(403)
+        return wrapped
+    return decorator
+
+
 def _wants_json():
     """True when the caller expects a JSON response (AJAX / JSON body / JSON Accept)."""
     if request.is_json:
