@@ -141,7 +141,7 @@
 {% block extra_js %}
 <script>
 (function () {
-  var GRADES = {{ grades_json | safe }};
+  var GRADES = {{ grades_data | tojson }};
 
   var stageEl   = document.getElementById('stageSelect');
   var gradeEl   = document.getElementById('gradeSelect');

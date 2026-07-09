@@ -27,6 +27,19 @@ def create_app(config_name=None):
     app.config.from_object(config[config_name])
     config[config_name].init_app(app)
 
+    # ── Trusted reverse proxy (Nginx) ─────────────────────────────────────────
+    # The app runs behind exactly ONE trusted proxy (Nginx / Render) that appends
+    # the real client IP to X-Forwarded-For and sets X-Forwarded-Proto=$scheme.
+    # ProxyFix rewrites request.remote_addr and request.scheme from the rightmost
+    # (proxy-appended) values so per-IP rate limiting, login throttling, audit
+    # logging, and HTTPS detection are accurate. x_for/x_proto=1 only — one hop.
+    # x_host/x_port are intentionally left 0: Nginx delivers the real Host via the
+    # standard Host header and does NOT emit X-Forwarded-Host, so trusting one
+    # would let a client spoof it (Host-header injection). Do not raise the hop
+    # counts unless the proxy topology actually changes.
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=0, x_port=0)
+
     # ── Extensions ────────────────────────────────────────────────────────────
     db.init_app(app)
     bcrypt.init_app(app)
@@ -471,11 +484,46 @@ def create_app(config_name=None):
         response.headers.setdefault('X-Content-Type-Options', 'nosniff')
         response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
         response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+        # Disable browser features the app never uses. Conservative and safe: it
+        # does not restrict scripts/styles/CDN/inline handlers (that would be CSP),
+        # so it cannot break the UI. No Content-Security-Policy is set here — a
+        # strict CSP needs template work and is left as a deliberate follow-up.
+        response.headers.setdefault(
+            'Permissions-Policy',
+            'camera=(), microphone=(), geolocation=(), payment=()',
+        )
         if not app.debug and config_name == 'production':
             response.headers.setdefault(
                 'Strict-Transport-Security',
                 'max-age=31536000; includeSubDomains',
             )
+        return response
+
+    # ── No-store for authenticated, sensitive responses ───────────────────────
+    @app.after_request
+    def _no_store_for_authenticated(response):
+        # Keep browsers and shared/proxy caches from retaining authenticated pages
+        # that carry student / employee / attendance / finance / grades / fees /
+        # reports / payroll / admin data. Tightly scoped so it never touches
+        # cacheable public content:
+        #   • only when the current user is authenticated,
+        #   • never for /static or the 'static' endpoint,
+        #   • never for the 'media' blueprint (public branding + signed private
+        #     media set their own cache policy and must not be disturbed).
+        # Public/login pages are served to anonymous users and are unaffected.
+        try:
+            from flask_login import current_user
+            if not current_user.is_authenticated:
+                return response
+        except Exception:
+            return response
+        if request.endpoint == 'static' or request.path.startswith('/static/'):
+            return response
+        if request.blueprint == 'media':
+            return response
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, private'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
         return response
 
     # ── Badge cache invalidation on state-changing requests ───────────────────

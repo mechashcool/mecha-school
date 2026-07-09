@@ -660,8 +660,8 @@ def create_user():
             errors.append('Invalid email address.')
         if email and User.query.execution_options(bypass_tenant_scope=True).filter_by(email=email).first():
             errors.append('البريد الإلكتروني مستخدم بالفعل.')
-        if not password or len(password) < 6:
-            errors.append('كلمة المرور يجب أن تكون 6 أحرف على الأقل.')
+        if not password or len(password) < 8:
+            errors.append('كلمة المرور يجب أن تكون 8 أحرف على الأقل.')
         if not role_id: errors.append('الدور مطلوب.')
 
         if role_obj.name != SUPER_ADMIN_ROLE and not assigned_school_id:
@@ -949,8 +949,15 @@ def edit_user(user_id):
 
         user_year = get_active_year(user.school_id) if user.school_id else None
 
+        # Blank → keep the current password (unchanged behaviour). A supplied
+        # password must meet the same >= 8 minimum as self-service changes; a
+        # too-short value is rejected with a clear error rather than silently
+        # ignored (the old `>= 6` check dropped 6–7 char inputs without warning).
         new_password = request.form.get('new_password', '')
-        if new_password and len(new_password) >= 6:
+        if new_password:
+            if len(new_password) < 8:
+                flash('كلمة المرور الجديدة يجب أن تكون 8 أحرف على الأقل.', 'danger')
+                return redirect(url_for('admin.edit_user', user_id=user.id))
             user.set_password(new_password)
 
         # Super admin: full permission control
@@ -1785,7 +1792,11 @@ def leave_request_create_admin():
 
     grades = []
     stages = []
-    grades_json = '[]'
+    # Plain Python list rendered in the template with Jinja's |tojson, which
+    # HTML-escapes </script>, <, >, & for safe embedding inside <script>. (An
+    # earlier json.dumps + |safe allowed a crafted grade name to break out of
+    # the script tag — stored XSS.)
+    grades_data = []
     if active_year:
         grades = (Grade.query
                   .execution_options(include_all_years=True)
@@ -1793,10 +1804,10 @@ def leave_request_create_admin():
                   .order_by(Grade.stage, Grade.name)
                   .all())
         stages = sorted(set(g.stage for g in grades if g.stage))
-        grades_json = json.dumps([
+        grades_data = [
             {'id': g.id, 'name': g.name, 'stage': g.stage or ''}
             for g in grades
-        ])
+        ]
 
     if request.method == 'POST':
         stage_val   = request.form.get('stage', '').strip()
@@ -1873,7 +1884,7 @@ def leave_request_create_admin():
                 flash(err, 'danger')
             return render_template('admin/leave_request_create_admin.html',
                                    stages=stages,
-                                   grades_json=grades_json,
+                                   grades_data=grades_data,
                                    type_labels=LEAVE_TYPES,
                                    status_labels=LEAVE_STATUS,
                                    form_data=request.form), 422
@@ -1923,7 +1934,7 @@ def leave_request_create_admin():
 
     return render_template('admin/leave_request_create_admin.html',
                            stages=stages,
-                           grades_json=grades_json,
+                           grades_data=grades_data,
                            type_labels=LEAVE_TYPES,
                            status_labels=LEAVE_STATUS,
                            form_data={})
