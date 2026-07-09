@@ -39,7 +39,7 @@ INVESTOR_ROLE = 'investor_viewer'
 # Existing users that already hold these roles are unaffected — the backend,
 # permission system, and APIs treat these roles normally.
 # To re-enable a role in the dropdown, remove its name from this set.
-HIDDEN_FROM_CREATE_FORM_ROLES = {'accountant', 'hr', 'reception'}
+HIDDEN_FROM_CREATE_FORM_ROLES = {'hr', 'reception'}
 
 COMPLAINT_TYPES = {
     'academic': '\u0623\u0643\u0627\u062f\u064a\u0645\u064a\u0629',
