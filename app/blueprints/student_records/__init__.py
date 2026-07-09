@@ -44,6 +44,26 @@ def _school_or_404():
     return school
 
 
+def _records_query(school, q):
+    """School-scoped registration-records query, optionally filtered by the same
+    name/number search used on the index page. Ordered newest-updated first.
+    Shared by the index list and the bulk export routes so they stay consistent.
+    """
+    query = StudentRegistrationRecord.query.filter(
+        StudentRegistrationRecord.school_id == school.id
+    )
+    if q:
+        query = query.join(Student).filter(
+            db.or_(
+                Student.full_name.ilike(f'%{q}%'),
+                Student.student_id.ilike(f'%{q}%'),
+                StudentRegistrationRecord.snap_full_name.ilike(f'%{q}%'),
+                StudentRegistrationRecord.snap_student_number.ilike(f'%{q}%'),
+            )
+        )
+    return query.order_by(StudentRegistrationRecord.updated_at.desc())
+
+
 def _build_autofill(student: Student, school: School) -> dict:
     """Return a dict of all auto-fill values for the form."""
     section = student.section
@@ -328,23 +348,7 @@ def index():
     q      = request.args.get('q', '').strip()
     page   = request.args.get('page', 1, type=int)
 
-    query = (
-        StudentRegistrationRecord.query
-        .options(joinedload(StudentRegistrationRecord.student)
-                 .joinedload(Student.section)
-                 .joinedload(Section.grade))
-        .filter(StudentRegistrationRecord.school_id == school.id)
-    )
-    if q:
-        query = query.join(Student).filter(
-            db.or_(
-                Student.full_name.ilike(f'%{q}%'),
-                Student.student_id.ilike(f'%{q}%'),
-                StudentRegistrationRecord.snap_full_name.ilike(f'%{q}%'),
-                StudentRegistrationRecord.snap_student_number.ilike(f'%{q}%'),
-            )
-        )
-    records = query.order_by(StudentRegistrationRecord.updated_at.desc()).paginate(
+    records = _records_query(school, q).paginate(
         page=page, per_page=25, error_out=False
     )
     return render_template('student_records/index.html',
@@ -477,3 +481,58 @@ def pdf(record_id):
     return send_file(buf, mimetype='application/pdf',
                      as_attachment=False,
                      download_name=fname)
+
+
+# ─── BULK EXPORT: PDF (all records, one per page) ─────────────────────────────
+
+@student_records_bp.route('/export/pdf')
+@login_required
+@permission_required('view_students')
+def export_pdf():
+    school = _school_or_404()
+    q      = request.args.get('q', '').strip()
+
+    paper = request.args.get('paper', 'a4').lower()
+    if paper not in ('a3', 'a4'):
+        paper = 'a4'
+
+    records = _records_query(school, q).all()
+    if not records:
+        flash('لا توجد سجلات قيد للتصدير.', 'warning')
+        return redirect(url_for('student_records.index', q=q or None))
+
+    from app.utils.pdf_gen import generate_registration_records_bulk_pdf
+    pdf_bytes = generate_registration_records_bulk_pdf(records, school, paper=paper)
+    if not pdf_bytes:
+        flash('تعذّر إنشاء ملف PDF — تحقق من توفر مكتبة ReportLab والخط العربي.', 'danger')
+        return redirect(url_for('student_records.index', q=q or None))
+
+    fname = f'سجلات_القيد_{paper.upper()}.pdf'
+    return send_file(BytesIO(pdf_bytes), mimetype='application/pdf',
+                     as_attachment=True, download_name=fname)
+
+
+# ─── BULK EXPORT: Excel (all records, one row each) ───────────────────────────
+
+@student_records_bp.route('/export/excel')
+@login_required
+@permission_required('view_students')
+def export_excel():
+    school = _school_or_404()
+    q      = request.args.get('q', '').strip()
+
+    records = _records_query(school, q).all()
+    if not records:
+        flash('لا توجد سجلات قيد للتصدير.', 'warning')
+        return redirect(url_for('student_records.index', q=q or None))
+
+    from app.utils.excel_export import export_registration_records
+    xlsx_bytes = export_registration_records(records)
+    if not xlsx_bytes:
+        flash('تعذّر إنشاء ملف Excel — تحقق من توفر مكتبة openpyxl.', 'danger')
+        return redirect(url_for('student_records.index', q=q or None))
+
+    return send_file(
+        BytesIO(xlsx_bytes),
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True, download_name='سجلات_القيد.xlsx')

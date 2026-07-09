@@ -1150,18 +1150,14 @@ def generate_attendance_report_pdf(rows, report_type='detail', date_from='', dat
     return buf.getvalue()
 
 
-def generate_registration_record_pdf(record, school=None, paper='a3') -> bytes | None:
-    """Generate official سجل القيد العام PDF.
+def _build_registration_flowables(record, school=None, paper='a3'):
+    """Build the ReportLab flowables for a single سجل القيد العام record.
 
-    paper='a3'  Landscape A3 — default; best quality, matches the physical form.
-    paper='a4'  Landscape A4 — all column widths and font sizes scaled
-                proportionally to fit without clipping.
-
-    Returns bytes or None if ReportLab is unavailable.
+    Returns ``(elements, page_size, MARG)``. Registering the Arabic fonts is a
+    side effect. Callers must guarantee ReportLab is available (guard with
+    ``_get_rl()``). Shared by the single-record and bulk export helpers so the
+    per-record layout is byte-for-byte identical in both.
     """
-    if not _get_rl():
-        return None
-
     from reportlab.lib.pagesizes import A3, A4, landscape
     from reportlab.lib.units import cm
     from reportlab.lib import colors
@@ -1193,13 +1189,7 @@ def generate_registration_record_pdf(record, school=None, paper='a3') -> bytes |
         page_size = landscape(A3)
         MARG = 0.8 * cm
 
-    buf    = BytesIO()
     pw, ph = page_size
-    doc    = SimpleDocTemplate(
-        buf, pagesize=page_size,
-        leftMargin=MARG, rightMargin=MARG,
-        topMargin=MARG, bottomMargin=MARG,
-    )
 
     AW = pw - 2 * MARG   # available content width in points
 
@@ -1539,7 +1529,65 @@ def generate_registration_record_pdf(record, school=None, paper='a3') -> bytes |
     )
     elements.append(Paragraph(note_text, foot_s))
 
+    return elements, page_size, MARG
+
+
+def generate_registration_record_pdf(record, school=None, paper='a3') -> bytes | None:
+    """Generate the official سجل القيد العام PDF for a single record.
+
+    paper='a3'  Landscape A3 — default; best quality, matches the physical form.
+    paper='a4'  Landscape A4 — all column widths and font sizes scaled
+                proportionally to fit without clipping.
+
+    Returns bytes or None if ReportLab is unavailable.
+    """
+    if not _get_rl():
+        return None
+    from reportlab.platypus import SimpleDocTemplate
+
+    elements, page_size, MARG = _build_registration_flowables(record, school, paper)
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=page_size,
+        leftMargin=MARG, rightMargin=MARG,
+        topMargin=MARG, bottomMargin=MARG,
+    )
     doc.build(elements)
+    return buf.getvalue()
+
+
+def generate_registration_records_bulk_pdf(records, school=None, paper='a3') -> bytes | None:
+    """Generate one PDF containing every record in ``records`` — one record per
+    page — reusing the exact single-record layout via
+    ``_build_registration_flowables``.
+
+    paper='a3' | 'a4'  Landscape A3/A4, same paper handling as the single-record
+    export. ``records`` must already be scoped/ordered by the caller.
+
+    Returns bytes, or None if ReportLab is unavailable or ``records`` is empty.
+    """
+    if not _get_rl():
+        return None
+    from reportlab.platypus import SimpleDocTemplate, PageBreak
+
+    all_elements = []
+    page_size = MARG = None
+    for idx, record in enumerate(records):
+        elements, page_size, MARG = _build_registration_flowables(record, school, paper)
+        if idx:
+            all_elements.append(PageBreak())   # force a new page before each record
+        all_elements.extend(elements)
+
+    if not all_elements:
+        return None
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=page_size,
+        leftMargin=MARG, rightMargin=MARG,
+        topMargin=MARG, bottomMargin=MARG,
+    )
+    doc.build(all_elements)
     return buf.getvalue()
 
 

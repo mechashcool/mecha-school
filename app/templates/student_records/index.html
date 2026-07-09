@@ -8,9 +8,38 @@
     <h1 class="page-title">سجل قيد الطالب</h1>
     <p class="page-subtitle">السجلات الرسمية لقيد الطلاب في المدرسة</p>
   </div>
-  <a href="{{ url_for('student_records.new') }}" class="btn btn-primary">
-    <i class="bi bi-plus-circle-fill me-1"></i>إضافة سجل جديد
-  </a>
+  <div class="d-flex gap-2">
+    <div class="btn-group">
+      <button type="button" class="btn btn-outline-success dropdown-toggle"
+              data-bs-toggle="dropdown" aria-expanded="false">
+        <i class="bi bi-download me-1"></i>تصدير الكل
+      </button>
+      <ul class="dropdown-menu dropdown-menu-end">
+        <li>
+          <a class="dropdown-item" target="_blank"
+             href="{{ url_for('student_records.export_pdf', paper='a4', q=q or None) }}">
+            <i class="bi bi-file-earmark-pdf me-1"></i>تصدير PDF A4
+          </a>
+        </li>
+        <li>
+          <a class="dropdown-item" target="_blank"
+             href="{{ url_for('student_records.export_pdf', paper='a3', q=q or None) }}">
+            <i class="bi bi-file-earmark-pdf-fill me-1"></i>تصدير PDF A3
+          </a>
+        </li>
+        <li><hr class="dropdown-divider"></li>
+        <li>
+          <a class="dropdown-item"
+             href="{{ url_for('student_records.export_excel', q=q or None) }}">
+            <i class="bi bi-file-earmark-excel me-1"></i>تصدير Excel
+          </a>
+        </li>
+      </ul>
+    </div>
+    <a href="{{ url_for('student_records.new') }}" class="btn btn-primary">
+      <i class="bi bi-plus-circle-fill me-1"></i>إضافة سجل جديد
+    </a>
+  </div>
 </div>
 
 {# ── Search ── #}

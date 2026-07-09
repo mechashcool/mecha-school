@@ -925,3 +925,59 @@ def export_employee_statement(employee, statement, arabic_months=None,
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# ─── STUDENT REGISTRATION RECORDS (سجل القيد العام) ────────────────────────────
+
+def export_registration_records(records) -> bytes | None:
+    """Export the student registration records list to Excel — one row per
+    record, using the snapshot fields shown on the index/details pages.
+
+    ``records`` must already be scoped/ordered by the caller (school-scoped).
+    Returns bytes or None if openpyxl is unavailable.
+    """
+    wb = _wb()
+    if not wb:
+        return None
+    from openpyxl.styles import PatternFill, Alignment
+
+    GENDER_AR = {'male': 'ذكر', 'female': 'أنثى'}
+
+    ws = wb.active
+    ws.title = 'سجلات القيد'
+    ws.sheet_view.rightToLeft = True
+
+    headers = ['#', 'رقم الطالب', 'اسم الطالب', 'الجنس', 'تاريخ الميلاد',
+               'الصف', 'الشعبة', 'العام الدراسي', 'ولي الأمر', 'هاتف ولي الأمر',
+               'تاريخ الإنشاء', 'آخر تحديث']
+    hs = _header_style()
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = hs['font']; cell.fill = hs['fill']; cell.alignment = hs['alignment']
+    ws.row_dimensions[1].height = 22
+
+    for i, r in enumerate(records, 1):
+        row = [
+            i,
+            r.snap_student_number or '',
+            r.snap_full_name or '',
+            GENDER_AR.get(r.snap_gender or '', r.snap_gender or ''),
+            r.snap_date_of_birth.strftime('%Y-%m-%d') if r.snap_date_of_birth else '',
+            r.snap_grade_name or '',
+            r.snap_section_name or '',
+            r.snap_year_name or '',
+            r.snap_guardian_name or '',
+            r.snap_guardian_phone or '',
+            r.created_at.strftime('%Y-%m-%d') if r.created_at else '',
+            r.updated_at.strftime('%Y-%m-%d') if r.updated_at else '',
+        ]
+        for col, val in enumerate(row, 1):
+            cell = ws.cell(row=i+1, column=col, value=val)
+            cell.alignment = Alignment(vertical='center')
+            if i % 2 == 0:
+                cell.fill = PatternFill('solid', fgColor='F0F4F8')
+
+    _autowidth(ws)
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
