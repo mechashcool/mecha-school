@@ -1,0 +1,110 @@
+{# Shared review styling — used by both the wizard Review step (create_wizard.html)
+   and the post-creation success page (create_success.html) so both render the
+   same visual review, and both print the same way. #}
+<style>
+  /* ── Professional Review ── */
+  .rv-header {
+    background: var(--primary); border-radius: 14px; padding: 20px 24px;
+    margin-bottom: 20px; display: flex; align-items: center; gap: 16px; color: #fff; flex-wrap: wrap;
+  }
+  .rv-header-avatar {
+    width: 64px; height: 64px; border-radius: 12px; background: rgba(255,255,255,.2);
+    display: flex; align-items: center; justify-content: center; font-size: 28px; flex-shrink: 0;
+  }
+  .rv-header-info { flex: 1; min-width: 0; }
+  .rv-header-name { font-size: 18px; font-weight: 800; margin-bottom: 4px; }
+  .rv-header-sub { font-size: 13px; opacity: .85; }
+  .rv-header-badge {
+    background: rgba(255,255,255,.2); border-radius: 20px;
+    padding: 5px 14px; font-size: 12px; font-weight: 700;
+  }
+  .rv-section { border: 1.5px solid var(--border); border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
+  .rv-section-hd {
+    padding: 11px 16px; font-size: 13px; font-weight: 800;
+    display: flex; align-items: center; gap: 8px;
+    background: var(--bg); border-bottom: 1.5px solid var(--border); color: var(--primary);
+  }
+  .rv-edit-link {
+    margin-right: auto; font-size: 11.5px; font-weight: 600;
+    color: var(--text-muted); cursor: pointer; user-select: none;
+  }
+  .rv-edit-link:hover { color: var(--primary); }
+  .rv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+  .rv-field { padding: 10px 16px; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); }
+  .rv-field-label { font-size: 11px; font-weight: 700; color: var(--text-muted); margin-bottom: 3px; }
+  .rv-field-value { font-size: 13.5px; font-weight: 700; color: var(--text); line-height: 1.5; }
+  .rv-field-value.highlight { color: var(--primary); }
+  .rv-doc-list { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .rv-doc-item {
+    display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+    border-radius: 8px; background: var(--bg); border: 1px solid var(--border); font-size: 12.5px;
+  }
+  .rv-doc-item i { font-size: 18px; flex-shrink: 0; }
+  .rv-doc-item .doc-name { font-weight: 700; }
+  .rv-doc-item .doc-type { color: var(--text-muted); font-size: 11.5px; }
+  .rv-inst-grid {
+    padding: 12px 16px; display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(185px, 1fr)); gap: 10px;
+  }
+  .rv-inst-card { border: 1.5px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .rv-inst-card.paid { border-color: var(--success); background: rgba(25,135,84,.04); }
+  .rv-inst-card-num {
+    font-size: 11px; font-weight: 700; color: var(--text-muted);
+    margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between;
+  }
+  .rv-inst-due { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+  .rv-inst-base { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+  .rv-inst-pay { font-size: 13px; font-weight: 800; color: var(--success); }
+  .rv-inst-pay-detail { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .rv-photo-wrap {
+    padding: 14px 16px; display: flex; align-items: center; gap: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .rv-photo-thumb {
+    width: 64px; height: 64px; border-radius: 10px; object-fit: cover;
+    border: 2px solid var(--border); flex-shrink: 0;
+  }
+  .rv-photo-info .name { font-weight: 700; font-size: 13.5px; }
+  .rv-photo-info .sub { font-size: 12px; color: var(--text-muted); }
+  .rv-fee-summary { display: flex; border-bottom: 1.5px solid var(--border); }
+  .rv-fee-stat { flex: 1; padding: 14px 16px; text-align: center; border-inline-start: 1px solid var(--border); }
+  .rv-fee-stat:first-child { border-inline-start: none; }
+  .rv-fee-stat .fs-label { font-size: 11px; color: var(--text-muted); font-weight: 600; }
+  .rv-fee-stat .fs-value { font-size: 16px; font-weight: 800; color: var(--primary); margin-top: 2px; }
+  .rv-fee-stat .fs-value.text-success { color: var(--success) !important; }
+  .rv-empty {
+    padding: 14px 16px; color: var(--text-muted); font-size: 12.5px;
+    display: flex; align-items: center; gap: 8px; font-style: italic;
+  }
+  @media (max-width: 575px) {
+    .rv-fee-summary { flex-direction: column; }
+    .rv-fee-stat { border-inline-start: none; border-bottom: 1px solid var(--border); }
+    .rv-inst-grid { grid-template-columns: 1fr; }
+    .rv-grid { grid-template-columns: 1fr; }
+  }
+
+  /* ── Print branding header (screen-hidden, print-only) ── */
+  .rv-print-header { display: none; align-items: center; gap: 14px;
+    padding-bottom: 12px; margin-bottom: 16px; border-bottom: 2px solid var(--primary); }
+  .rv-print-header img { height: 54px; width: auto; object-fit: contain; }
+  .rv-print-header .ph-name { font-size: 18px; font-weight: 800; color: var(--primary); }
+  .rv-print-header .ph-sub  { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+  .rv-print-header .ph-date { margin-inline-start: auto; font-size: 12px; color: var(--text-muted); }
+
+  /* ── Print (A4, RTL) — show only the review, hide app chrome & buttons ── */
+  @media print {
+    @page { size: A4 portrait; margin: 12mm; }
+    body { background: #fff !important; }
+    body * { visibility: hidden !important; }
+    .print-area, .print-area * { visibility: visible !important; }
+    .print-area { position: absolute; inset: 0; width: 100%; padding: 0; }
+    .no-print, .no-print * { display: none !important; }
+    .rv-print-header { display: flex !important; }
+    .rv-edit-link { display: none !important; }
+    .rv-header, .rv-section { break-inside: avoid; page-break-inside: avoid; }
+    .rv-header, .rv-section-hd, .rv-inst-card.paid, .rv-fee-stat .fs-value,
+    .rv-header-badge, .rv-header-avatar {
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
+  }
+</style>

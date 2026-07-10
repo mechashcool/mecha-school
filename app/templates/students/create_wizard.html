@@ -77,87 +77,9 @@
     background: var(--bg); border: 1px solid var(--border);
     direction: rtl; text-align: right; word-break: break-word; line-height: 1.6;
   }
-  /* ── Professional Review ── */
-  .rv-header {
-    background: var(--primary); border-radius: 14px; padding: 20px 24px;
-    margin-bottom: 20px; display: flex; align-items: center; gap: 16px; color: #fff; flex-wrap: wrap;
-  }
-  .rv-header-avatar {
-    width: 64px; height: 64px; border-radius: 12px; background: rgba(255,255,255,.2);
-    display: flex; align-items: center; justify-content: center; font-size: 28px; flex-shrink: 0;
-  }
-  .rv-header-info { flex: 1; min-width: 0; }
-  .rv-header-name { font-size: 18px; font-weight: 800; margin-bottom: 4px; }
-  .rv-header-sub { font-size: 13px; opacity: .85; }
-  .rv-header-badge {
-    background: rgba(255,255,255,.2); border-radius: 20px;
-    padding: 5px 14px; font-size: 12px; font-weight: 700;
-  }
-  .rv-section { border: 1.5px solid var(--border); border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
-  .rv-section-hd {
-    padding: 11px 16px; font-size: 13px; font-weight: 800;
-    display: flex; align-items: center; gap: 8px;
-    background: var(--bg); border-bottom: 1.5px solid var(--border); color: var(--primary);
-  }
-  .rv-edit-link {
-    margin-right: auto; font-size: 11.5px; font-weight: 600;
-    color: var(--text-muted); cursor: pointer; user-select: none;
-  }
-  .rv-edit-link:hover { color: var(--primary); }
-  .rv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
-  .rv-field { padding: 10px 16px; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); }
-  .rv-field-label { font-size: 11px; font-weight: 700; color: var(--text-muted); margin-bottom: 3px; }
-  .rv-field-value { font-size: 13.5px; font-weight: 700; color: var(--text); line-height: 1.5; }
-  .rv-field-value.highlight { color: var(--primary); }
-  .rv-doc-list { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
-  .rv-doc-item {
-    display: flex; align-items: center; gap: 10px; padding: 8px 12px;
-    border-radius: 8px; background: var(--bg); border: 1px solid var(--border); font-size: 12.5px;
-  }
-  .rv-doc-item i { font-size: 18px; flex-shrink: 0; }
-  .rv-doc-item .doc-name { font-weight: 700; }
-  .rv-doc-item .doc-type { color: var(--text-muted); font-size: 11.5px; }
-  .rv-inst-grid {
-    padding: 12px 16px; display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(185px, 1fr)); gap: 10px;
-  }
-  .rv-inst-card { border: 1.5px solid var(--border); border-radius: 10px; padding: 10px 12px; }
-  .rv-inst-card.paid { border-color: var(--success); background: rgba(25,135,84,.04); }
-  .rv-inst-card-num {
-    font-size: 11px; font-weight: 700; color: var(--text-muted);
-    margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between;
-  }
-  .rv-inst-due { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
-  .rv-inst-base { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
-  .rv-inst-pay { font-size: 13px; font-weight: 800; color: var(--success); }
-  .rv-inst-pay-detail { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-  .rv-photo-wrap {
-    padding: 14px 16px; display: flex; align-items: center; gap: 14px;
-    border-bottom: 1px solid var(--border);
-  }
-  .rv-photo-thumb {
-    width: 64px; height: 64px; border-radius: 10px; object-fit: cover;
-    border: 2px solid var(--border); flex-shrink: 0;
-  }
-  .rv-photo-info .name { font-weight: 700; font-size: 13.5px; }
-  .rv-photo-info .sub { font-size: 12px; color: var(--text-muted); }
-  .rv-fee-summary { display: flex; border-bottom: 1.5px solid var(--border); }
-  .rv-fee-stat { flex: 1; padding: 14px 16px; text-align: center; border-inline-start: 1px solid var(--border); }
-  .rv-fee-stat:first-child { border-inline-start: none; }
-  .rv-fee-stat .fs-label { font-size: 11px; color: var(--text-muted); font-weight: 600; }
-  .rv-fee-stat .fs-value { font-size: 16px; font-weight: 800; color: var(--primary); margin-top: 2px; }
-  .rv-fee-stat .fs-value.text-success { color: var(--success) !important; }
-  .rv-empty {
-    padding: 14px 16px; color: var(--text-muted); font-size: 12.5px;
-    display: flex; align-items: center; gap: 8px; font-style: italic;
-  }
-  @media (max-width: 575px) {
-    .rv-fee-summary { flex-direction: column; }
-    .rv-fee-stat { border-inline-start: none; border-bottom: 1px solid var(--border); }
-    .rv-inst-grid { grid-template-columns: 1fr; }
-    .rv-grid { grid-template-columns: 1fr; }
-  }
+  /* Review + print styling is shared with the success page — see partial below. */
 </style>
+{% include 'students/_review_styles.html' %}
 {% endblock %}
 
 {% block content %}
@@ -504,12 +426,14 @@
       <div class="card-body">
         <p class="text-muted small mb-3">
           <i class="bi bi-info-circle me-1"></i>
-          يتم توليد اسم المستخدم وكلمة المرور تلقائياً. فعّل الخيار أدناه لإنشاء حساب ولي الأمر
-          بهذه البيانات، واحفظ نسخة منها لتسليمها لولي الأمر.
+          يتم توليد اسم المستخدم وكلمة المرور تلقائياً وإنشاء الحساب افتراضياً.
+          احفظ نسخة من البيانات لتسليمها لولي الأمر. إذا اخترت ربط ولي أمر موجود بالأعلى،
+          فلن يُنشأ حساب جديد.
         </p>
         <div class="form-check form-switch mb-3">
           <input class="form-check-input" type="checkbox" name="create_parent_account" value="1"
-                 id="createParentToggle" {{ 'checked' if sf.get('create_parent_account') == '1' }}>
+                 id="createParentToggle"
+                 {{ 'checked' if request.method == 'GET' or sf.get('create_parent_account') == '1' }}>
           <label class="form-check-label fw-600" for="createParentToggle">
             إنشاء حساب ولي أمر بهذه البيانات
           </label>
@@ -670,9 +594,28 @@
   <!-- ════════════ STEP 6 — Review ════════════ -->
   <section class="wizard-step" data-step-key="review" data-step-title="المراجعة">
     <div class="card">
-      <div class="card-header"><i class="bi bi-clipboard-check-fill text-accent"></i>مراجعة البيانات قبل الحفظ</div>
-      <div class="card-body" id="reviewContent">
-        <!-- filled by JS on entering this step -->
+      <div class="card-header d-flex align-items-center">
+        <i class="bi bi-clipboard-check-fill text-accent"></i>مراجعة البيانات قبل الحفظ
+        <button type="button" class="btn btn-outline-secondary btn-sm ms-auto no-print"
+                onclick="window.print()">
+          <i class="bi bi-printer me-1"></i>طباعة
+        </button>
+      </div>
+      <div class="card-body">
+        <div id="reviewPrintArea" class="print-area">
+          <div class="rv-print-header">
+            <div>
+              <div class="ph-name">
+                {{ (current_user.school.school_name_ar or current_user.school.school_name)
+                   if current_user.school else 'المدرسة' }}
+              </div>
+              <div class="ph-sub">مراجعة بيانات تسجيل طالب</div>
+            </div>
+          </div>
+          <div id="reviewContent">
+            <!-- filled by JS on entering this step -->
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -803,6 +746,20 @@
     opts.forEach(o => { if (!q || o.text.toLowerCase().includes(q)) sel.appendChild(o.cloneNode(true)); });
     sel.value = keep;
   });
+})();
+
+/* ════════════ Parent account: create vs link mutual exclusivity ════════════ */
+(function () {
+  const toggle  = document.getElementById('createParentToggle');
+  const linkSel = document.getElementById('parentSelectAdd');
+  if (!toggle) return;
+  // Selecting an existing parent turns off "create new" (backend also enforces
+  // this, so no duplicate account is ever created).
+  if (linkSel) {
+    linkSel.addEventListener('change', () => { if (linkSel.value) toggle.checked = false; });
+    // Enabling "create new" clears any existing-parent selection.
+    toggle.addEventListener('change', () => { if (toggle.checked) linkSel.value = ''; });
+  }
 })();
 
 /* ════════════ Copy generated parent credentials ════════════ */

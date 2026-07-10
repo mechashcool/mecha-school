@@ -2,7 +2,7 @@
 from decimal import Decimal, InvalidOperation
 
 from flask import (Blueprint, render_template, redirect, url_for,
-                   flash, request, abort, jsonify)
+                   flash, request, abort, jsonify, session)
 from flask_login import login_required, current_user
 from sqlalchemy.orm import joinedload
 from app.models import (db, Student, Section, Grade, AcademicYear, StudentDocument,
@@ -11,7 +11,7 @@ from app.models import (db, Student, Section, Grade, AcademicYear, StudentDocume
 from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    get_current_school, get_active_year, get_view_year,
                                    historical_guard)
-from app.utils.helpers import save_uploaded_file, generate_receipt_no
+from app.utils.helpers import save_uploaded_file, generate_receipt_no, resolve_photo_url
 from app.utils import code_generator
 from app.utils.features import feature_required, is_feature_enabled
 from app.utils.student_form_config import get_student_form_config
@@ -387,8 +387,11 @@ def create():
     if request.method == 'POST':
         # ── Pre-validate parent account and device mapping fields ────────────
         # Parent credentials are auto-generated (see below); the manager only
-        # chooses whether to create the account via this toggle.
+        # chooses whether to create the account via this toggle. Selecting an
+        # existing parent to link takes precedence, so the two paths are mutually
+        # exclusive and a duplicate account is never created.
         create_parent_account   = request.form.get('create_parent_account') == '1'
+        link_existing_parent_id = request.form.get('link_existing_parent_id', type=int)
         employee_no_string      = request.form.get('employee_no_string', '').strip()
         _dev_id_raw             = request.form.get('device_id', '').strip()
         device_id               = int(_dev_id_raw) if _dev_id_raw.isdigit() else None
@@ -568,10 +571,12 @@ def create():
                         ))
 
         # ── Create parent user account (auto-generated credentials) ──────────
+        # Skipped when the manager linked an existing parent instead — the two
+        # are mutually exclusive so no duplicate account is ever created.
         parent_created  = False
         parent_username = ''
         parent_password = ''
-        if create_parent_account:
+        if create_parent_account and not link_existing_parent_id:
             parent_role = Role.query.filter_by(name='parent').first()
             if parent_role:
                 # Trust the read-only credentials generated in the wizard, but
@@ -626,10 +631,10 @@ def create():
                 ))
 
         # ── Link to existing parent account ──────────────────────────────────
-        _link_parent_id = request.form.get('link_existing_parent_id', type=int)
+        # School-scoped lookup — an id from another school resolves to None.
         _linked_parent_name = None
-        if _link_parent_id and not parent_created:
-            _ep = User.query.filter_by(id=_link_parent_id, school_id=school.id,
+        if link_existing_parent_id and not parent_created:
+            _ep = User.query.filter_by(id=link_existing_parent_id, school_id=school.id,
                                        role_id=parent_role.id if parent_role else 0).first()
             if _ep:
                 db.session.execute(
@@ -760,6 +765,15 @@ def create():
                 f'اسم المستخدم: {parent_username} — كلمة المرور: {parent_password}. '
                 'يرجى حفظ هذه البيانات وتسليمها لولي الأمر.',
                 'success')
+            # One-time payload for the success page. The plaintext password is
+            # held only in the server-side session and is shown once on the
+            # immediate success view, then removed — it is never stored in the
+            # database and cannot be retrieved after that view.
+            session['new_parent_credentials'] = {
+                'student_id': student.id,
+                'username':   parent_username,
+                'password':   parent_password,
+            }
         if _linked_parent_name:
             flash(f'تم ربط الطالب بولي الأمر {_linked_parent_name} بنجاح.', 'success')
         if _fee_created:
@@ -790,15 +804,93 @@ def create():
 @login_required
 @permission_required('add_student')
 def create_success(student_id):
-    """Success landing page shown immediately after a new student is created."""
+    """Success landing page shown immediately after a new student is created.
+
+    Renders the same review sections as the wizard's Review step (from the saved
+    record) so they can be printed. The generated parent password is shown only
+    on the immediate post-creation view: it lives in the server-side session for
+    a single view and is popped here — never stored in the database.
+    """
+    from datetime import date
     school = get_current_school()
     student = (Student.query
+               .options(joinedload(Student.section).joinedload(Section.grade))
                .execution_options(include_all_years=True)
                .filter_by(id=student_id)
                .first_or_404())
     if school and student.school_id != school.id:
         abort(403)
-    return render_template('students/create_success.html', student=student)
+    # Building scope — a restricted user cannot view students outside their buildings.
+    if not user_can_access_student(current_user, school, student):
+        flash('ليس لديك صلاحية الوصول إلى بيانات هذه البناية', 'danger')
+        return redirect(url_for('students.index'))
+
+    # ── Parent account credentials (one-time password) ───────────────────────
+    parent_creds = None
+    payload = session.get('new_parent_credentials')
+    if payload and payload.get('student_id') == student.id:
+        parent_creds = {
+            'username':           payload.get('username'),
+            'password':           payload.get('password'),
+            'password_available': True,
+        }
+        # Show once, then discard so the plaintext password is not retrievable
+        # again on refresh or re-open.
+        session.pop('new_parent_credentials', None)
+    else:
+        # Refreshed/reopened later — surface the linked parent username from the
+        # database but never the password.
+        _linked = student.parents.order_by(User.id.desc()).first()
+        if _linked:
+            parent_creds = {
+                'username':           _linked.username,
+                'password':           None,
+                'password_available': False,
+            }
+
+    docs = student.documents.order_by(StudentDocument.uploaded_at.desc()).all()
+    device_mappings = student.device_mappings.all()
+
+    # ── Fees (same scoping as students.view) — only for fee-authorised users ──
+    fee_records_with_inst = []
+    if current_user.has_permission('manage_fees'):
+        _fee_records = (
+            FeeRecord.query
+            .execution_options(include_all_years=True)
+            .filter_by(student_id=student.id, school_id=student.school_id)
+            .options(joinedload(FeeRecord.fee_type),
+                     joinedload(FeeRecord.academic_year))
+            .order_by(FeeRecord.created_at.desc())
+            .all()
+        )
+        if _fee_records:
+            _fee_ids = [fr.id for fr in _fee_records]
+            _all_inst = (
+                FeeInstallment.query
+                .execution_options(include_all_years=True)
+                .filter(FeeInstallment.fee_record_id.in_(_fee_ids),
+                        FeeInstallment.school_id == student.school_id)
+                .order_by(FeeInstallment.installment_no)
+                .all()
+            )
+            _inst_map = {}
+            for _inst in _all_inst:
+                _inst_map.setdefault(_inst.fee_record_id, []).append(_inst)
+            fee_records_with_inst = [(fr, _inst_map.get(fr.id, [])) for fr in _fee_records]
+
+    logo_url = None
+    if school and getattr(school, 'logo_path', None):
+        logo_url = resolve_photo_url(school.logo_path)
+
+    return render_template('students/create_success.html',
+                           student=student,
+                           school=school,
+                           logo_url=logo_url,
+                           print_date=date.today(),
+                           parent_creds=parent_creds,
+                           docs=docs,
+                           device_mappings=device_mappings,
+                           fee_records_with_inst=fee_records_with_inst)
 
 
 @students_bp.route('/<int:student_id>/edit', methods=['GET', 'POST'])

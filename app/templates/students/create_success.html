@@ -2,25 +2,53 @@
 {% block title %}تم إضافة الطالب{% endblock %}
 {% block page_title %}تم إضافة الطالب{% endblock %}
 
+{# Shares the exact review styling used by the wizard's Review step. #}
+{% block extra_css %}{% include 'students/_review_styles.html' %}{% endblock %}
+
+{# Renders one field, omitting it when empty — mirrors the wizard's fld() helper. #}
+{% macro rvf(label, value, cls='') %}
+  {%- if value %}
+  <div class="rv-field"><div class="rv-field-label">{{ label }}</div>
+    <div class="rv-field-value {{ cls }}">{{ value }}</div></div>
+  {%- endif %}
+{% endmacro %}
+
+{% set gender_map = {'male': 'ذكر', 'female': 'أنثى'} %}
+{% set grade_name = student.section.grade.name if student.section and student.section.grade else '' %}
+{% set section_name = ('شعبة ' ~ student.section.name) if student.section else '' %}
+{% set device_no = (device_mappings | map(attribute='employee_no_string') | select | list | join('، ')) %}
+
 {% block content %}
-<div class="page-header">
+<div class="page-header no-print">
   <div>
     <h1 class="page-title">تم إضافة الطالب</h1>
   </div>
 </div>
 
-<div class="row justify-content-center mt-4">
-  <div class="col-md-6">
-    <div class="card text-center py-5">
+<!-- ── Success card + actions (screen only) ── -->
+<div class="row justify-content-center mt-2 mb-4 no-print">
+  <div class="col-md-8">
+    <div class="card text-center py-4">
       <div class="card-body">
-        <div style="font-size:60px;color:var(--success);margin-bottom:14px;line-height:1">
+        <div style="font-size:56px;color:var(--success);margin-bottom:10px;line-height:1">
           <i class="bi bi-check-circle-fill"></i>
         </div>
         <h4 class="mb-1 fw-800">تمت إضافة الطالب بنجاح</h4>
         <p class="mb-1" style="font-size:16px;font-weight:700">{{ student.full_name }}</p>
         <p class="text-muted mb-4"><i class="bi bi-hash"></i>{{ student.student_id }}</p>
 
-        <div class="d-flex flex-column flex-sm-row gap-3 justify-content-center">
+        {% if parent_creds and parent_creds.password_available %}
+        <div class="alert alert-warning text-start mx-auto" style="max-width:520px">
+          <div class="fw-700 mb-1"><i class="bi bi-exclamation-triangle-fill me-1"></i>
+            بيانات دخول ولي الأمر — تظهر الآن فقط</div>
+          <div class="small">كلمة المرور تُعرض لمرة واحدة عند الإنشاء فقط. اطبع الصفحة أو انسخ البيانات الآن.</div>
+        </div>
+        {% endif %}
+
+        <div class="d-flex flex-column flex-sm-row gap-3 justify-content-center flex-wrap">
+          <button type="button" class="btn btn-outline-secondary px-4" onclick="window.print()">
+            <i class="bi bi-printer me-2"></i>طباعة
+          </button>
           <a href="{{ url_for('students.view', student_id=student.id) }}"
              class="btn btn-outline-primary px-4">
             <i class="bi bi-person-lines-fill me-2"></i>عرض الطالب
@@ -41,5 +69,168 @@
       </div>
     </div>
   </div>
+</div>
+
+<!-- ── Printable review (same sections/order as the wizard Review step) ── -->
+<div id="successReview" class="print-area">
+
+  <div class="rv-print-header">
+    {% if logo_url %}<img src="{{ logo_url }}" alt="شعار المدرسة">{% endif %}
+    <div>
+      <div class="ph-name">
+        {{ (school.school_name_ar or school.school_name) if school else 'المدرسة' }}
+      </div>
+      <div class="ph-sub">سجل تسجيل طالب</div>
+    </div>
+    <div class="ph-date">تاريخ الإصدار: {{ print_date.strftime('%Y-%m-%d') }}</div>
+  </div>
+
+  <!-- Header -->
+  <div class="rv-header">
+    {% if resolve_photo_url(student.photo) %}
+    <img style="width:64px;height:64px;border-radius:12px;object-fit:cover;border:2px solid rgba(255,255,255,.35);flex-shrink:0"
+         src="{{ resolve_photo_url(student.photo) }}" alt="">
+    {% else %}
+    <div class="rv-header-avatar"><i class="bi bi-person-fill"></i></div>
+    {% endif %}
+    <div class="rv-header-info">
+      <div class="rv-header-name">{{ student.full_name }}</div>
+      <div class="rv-header-sub">
+        {{ [grade_name, (student.section.name if student.section else '')] | select | join(' — ') or 'بدون تعيين صفي' }}
+        · {{ student.student_id }}
+      </div>
+    </div>
+    <div class="rv-header-badge"><i class="bi bi-check-circle me-1"></i>تم الحفظ</div>
+  </div>
+
+  <!-- Section 1: Student info -->
+  <div class="rv-section">
+    <div class="rv-section-hd"><i class="bi bi-person-fill"></i>بيانات الطالب</div>
+    <div class="rv-grid">
+      {{ rvf('الاسم الكامل', student.full_name, 'highlight') }}
+      {{ rvf('رقم الطالب', student.student_id) }}
+      {{ rvf('تاريخ الميلاد', student.date_of_birth.strftime('%Y-%m-%d') if student.date_of_birth) }}
+      {{ rvf('الجنس', gender_map.get(student.gender, '')) }}
+      {{ rvf('الجنسية', student.nationality) }}
+      {{ rvf('رقم الهاتف', student.phone) }}
+      {{ rvf('العنوان', student.address) }}
+      {{ rvf('ملاحظات', student.notes) }}
+    </div>
+  </div>
+
+  <!-- Section 2: Academic placement -->
+  {% if grade_name or section_name or student.building or device_no %}
+  <div class="rv-section">
+    <div class="rv-section-hd"><i class="bi bi-mortarboard-fill"></i>التعيين الأكاديمي</div>
+    <div class="rv-grid">
+      {{ rvf('الصف', grade_name) }}
+      {{ rvf('الشعبة', section_name) }}
+      {{ rvf('البناية', student.building.name if student.building) }}
+      {{ rvf('رقم في جهاز الحضور', device_no) }}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Section 3: Photo & documents -->
+  {% if resolve_photo_url(student.photo) or docs %}
+  <div class="rv-section">
+    <div class="rv-section-hd"><i class="bi bi-folder-fill"></i>الصورة والمستندات</div>
+    {% if resolve_photo_url(student.photo) %}
+    <div class="rv-photo-wrap">
+      <img class="rv-photo-thumb" src="{{ resolve_photo_url(student.photo) }}" alt="">
+      <div class="rv-photo-info"><div class="name">صورة الطالب</div></div>
+    </div>
+    {% endif %}
+    {% if docs %}
+    <div class="rv-doc-list">
+      {% for d in docs %}
+      <div class="rv-doc-item">
+        <i class="bi bi-file-earmark-text-fill text-primary"></i>
+        <div><div class="doc-name">{{ d.document_type }}</div></div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- Section 4: Guardian -->
+  {% if student.guardian_name or student.guardian_phone or student.guardian_email or student.guardian_relation %}
+  <div class="rv-section">
+    <div class="rv-section-hd"><i class="bi bi-people-fill"></i>بيانات ولي الأمر</div>
+    <div class="rv-grid">
+      {{ rvf('الاسم', student.guardian_name) }}
+      {{ rvf('صلة القرابة', student.guardian_relation) }}
+      {{ rvf('الهاتف', student.guardian_phone) }}
+      {{ rvf('البريد الإلكتروني', student.guardian_email) }}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Section 5: Parent account -->
+  <div class="rv-section">
+    <div class="rv-section-hd"><i class="bi bi-person-badge-fill"></i>حساب ولي الأمر</div>
+    {% if parent_creds %}
+    <div class="rv-grid">
+      {{ rvf('اسم المستخدم', parent_creds.username, 'highlight') }}
+      {% if parent_creds.password_available %}
+        {{ rvf('كلمة المرور', parent_creds.password, 'highlight') }}
+      {% else %}
+      <div class="rv-field"><div class="rv-field-label">كلمة المرور</div>
+        <div class="rv-field-value" style="color:var(--text-muted);font-style:italic">
+          عُرضت مرة واحدة عند الإنشاء فقط
+        </div></div>
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="rv-empty"><i class="bi bi-person-x"></i>لم يُنشأ حساب ولي أمر.</div>
+    {% endif %}
+  </div>
+
+  <!-- Section 6: Fees & installments -->
+  {% if fee_records_with_inst %}
+  {% for rec, insts in fee_records_with_inst %}
+  {% set net = (rec.total_amount | float) - (rec.discount | float if rec.discount else 0) %}
+  {% set paid = insts | map(attribute='received_amount') | select | map('float') | sum %}
+  <div class="rv-section">
+    <div class="rv-section-hd"><i class="bi bi-cash-coin"></i>
+      سجل الرسوم{% if rec.fee_type %} — {{ rec.fee_type.name }}{% endif %}</div>
+    <div class="rv-fee-summary">
+      <div class="rv-fee-stat"><div class="fs-label">الإجمالي</div>
+        <div class="fs-value">{{ '{:,.0f}'.format(rec.total_amount) }}</div></div>
+      <div class="rv-fee-stat"><div class="fs-label">الخصم</div>
+        <div class="fs-value">{{ '{:,.0f}'.format(rec.discount) if rec.discount else '—' }}</div></div>
+      <div class="rv-fee-stat"><div class="fs-label">الصافي</div>
+        <div class="fs-value text-success">{{ '{:,.0f}'.format(net) }}</div></div>
+      <div class="rv-fee-stat"><div class="fs-label">المدفوع</div>
+        <div class="fs-value">{{ '{:,.0f}'.format(paid) }}</div></div>
+    </div>
+    {% if insts %}
+    <div class="rv-inst-grid">
+      {% for inst in insts %}
+      {% set inst_paid = inst.received_amount | float if inst.received_amount else 0 %}
+      <div class="rv-inst-card {{ 'paid' if inst_paid > 0 }}">
+        <div class="rv-inst-card-num">
+          <span>قسط {{ inst.installment_no }}</span>
+          <span class="badge {{ 'bg-success' if inst_paid > 0 else 'bg-secondary' }}">
+            {{ 'مدفوع' if inst_paid > 0 else 'معلّق' }}</span>
+        </div>
+        <div class="rv-inst-due"><i class="bi bi-calendar3 me-1"></i>
+          {{ inst.due_date.strftime('%Y-%m-%d') if inst.due_date else '—' }}</div>
+        <div class="rv-inst-base">{{ '{:,.0f}'.format(inst.amount) }} د.ع</div>
+        {% if inst_paid > 0 %}
+        <div class="rv-inst-pay"><i class="bi bi-check-circle-fill me-1"></i>
+          {{ '{:,.0f}'.format(inst_paid) }} د.ع</div>
+        <div class="rv-inst-pay-detail">
+          {{ inst.paid_date.strftime('%Y-%m-%d') if inst.paid_date else '' }}</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% endif %}
+
 </div>
 {% endblock %}
