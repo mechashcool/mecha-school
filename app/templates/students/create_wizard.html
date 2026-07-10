@@ -594,28 +594,9 @@
   <!-- ════════════ STEP 6 — Review ════════════ -->
   <section class="wizard-step" data-step-key="review" data-step-title="المراجعة">
     <div class="card">
-      <div class="card-header d-flex align-items-center">
-        <i class="bi bi-clipboard-check-fill text-accent"></i>مراجعة البيانات قبل الحفظ
-        <button type="button" class="btn btn-outline-secondary btn-sm ms-auto no-print"
-                onclick="window.print()">
-          <i class="bi bi-printer me-1"></i>طباعة
-        </button>
-      </div>
-      <div class="card-body">
-        <div id="reviewPrintArea" class="print-area">
-          <div class="rv-print-header">
-            <div>
-              <div class="ph-name">
-                {{ (current_user.school.school_name_ar or current_user.school.school_name)
-                   if current_user.school else 'المدرسة' }}
-              </div>
-              <div class="ph-sub">مراجعة بيانات تسجيل طالب</div>
-            </div>
-          </div>
-          <div id="reviewContent">
-            <!-- filled by JS on entering this step -->
-          </div>
-        </div>
+      <div class="card-header"><i class="bi bi-clipboard-check-fill text-accent"></i>مراجعة البيانات قبل الحفظ</div>
+      <div class="card-body" id="reviewContent">
+        <!-- filled by JS on entering this step -->
       </div>
     </div>
   </section>
