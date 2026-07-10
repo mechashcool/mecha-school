@@ -376,11 +376,19 @@ def create():
     can_manage_fees = current_user.has_permission('manage_fees')
     fee_types = FeeType.query.all() if can_manage_fees else []
 
+    # ── Auto-generated parent credentials (shown read-only in the wizard) ─────
+    # A fresh pair is produced on each page load, so cancelling and re-opening a
+    # new student always yields new credentials. On a re-render after a
+    # validation error the submitted values take precedence in the template, so
+    # the same credentials persist through the wizard until save.
+    gen_parent_username = code_generator.generate_parent_username()
+    gen_parent_password = code_generator.generate_parent_password()
+
     if request.method == 'POST':
         # ── Pre-validate parent account and device mapping fields ────────────
-        parent_username         = request.form.get('parent_username', '').strip()
-        parent_password         = request.form.get('parent_password', '').strip()
-        parent_password_confirm = request.form.get('parent_password_confirm', '').strip()
+        # Parent credentials are auto-generated (see below); the manager only
+        # chooses whether to create the account via this toggle.
+        create_parent_account   = request.form.get('create_parent_account') == '1'
         employee_no_string      = request.form.get('employee_no_string', '').strip()
         _dev_id_raw             = request.form.get('device_id', '').strip()
         device_id               = int(_dev_id_raw) if _dev_id_raw.isdigit() else None
@@ -402,6 +410,8 @@ def create():
                                    active_year=year,
                                    can_manage_fees=can_manage_fees,
                                    fee_types=fee_types,
+                                   gen_parent_username=gen_parent_username,
+                                   gen_parent_password=gen_parent_password,
                                    error_step=error_step)
 
         # ── Backend enforcement of required fields per school config ─────────
@@ -411,17 +421,10 @@ def create():
                 flash(_err, 'danger')
             return _re_render('')
 
-        # Auto-generate parent username when password is supplied but username is blank
-        if parent_password and not parent_username:
-            parent_username = code_generator.generate_username(school.id, 'parent')
-
-        if parent_username:
-            if not parent_password:
-                return _re_render('يجب إدخال كلمة المرور لإنشاء حساب ولي الأمر', error_step=4)
-            if parent_password != parent_password_confirm:
-                return _re_render('كلمة المرور غير متطابقة', error_step=4)
-            if User.query.filter_by(username=parent_username).first():
-                return _re_render('اسم المستخدم مستخدم مسبقاً، يرجى اختيار اسم مستخدم آخر', error_step=4)
+        # Parent credentials are generated automatically — nothing the manager
+        # typed is validated here. The unique username is produced (and its
+        # global uniqueness guaranteed) in the account-creation block below, so
+        # a duplicate-username error can never be surfaced.
 
         if employee_no_string:
             if not employee_no_string.isdigit():
@@ -564,11 +567,26 @@ def create():
                             file_path=saved,
                         ))
 
-        # ── Create parent user account ───────────────────────────────────────
-        parent_created = False
-        if parent_username:
+        # ── Create parent user account (auto-generated credentials) ──────────
+        parent_created  = False
+        parent_username = ''
+        parent_password = ''
+        if create_parent_account:
             parent_role = Role.query.filter_by(name='parent').first()
             if parent_role:
+                # Trust the read-only credentials generated in the wizard, but
+                # regenerate server-side if they are missing, malformed, or (very
+                # rarely) already taken globally by a concurrent request. This
+                # guarantees a unique, policy-compliant username right before the
+                # insert without ever surfacing a duplicate-username error.
+                parent_username = request.form.get('parent_username', '').strip()
+                parent_password = request.form.get('parent_password', '').strip()
+                if not (code_generator.is_valid_parent_username(parent_username)
+                        and code_generator.parent_username_available(parent_username)):
+                    parent_username = code_generator.generate_parent_username()
+                if not code_generator.is_valid_parent_password(parent_password):
+                    parent_password = code_generator.generate_parent_password()
+
                 _parent_email = None
                 if student.guardian_email:
                     if not User.query.filter_by(email=student.guardian_email).first():
@@ -737,7 +755,11 @@ def create():
         db.session.commit()
         flash(f'تم إضافة الطالب {student.full_name} برقم {student.student_id}.', 'success')
         if parent_created:
-            flash(f'تم إنشاء حساب ولي الأمر بنجاح. اسم المستخدم: {parent_username}', 'success')
+            flash(
+                'تم إنشاء حساب ولي الأمر بنجاح. '
+                f'اسم المستخدم: {parent_username} — كلمة المرور: {parent_password}. '
+                'يرجى حفظ هذه البيانات وتسليمها لولي الأمر.',
+                'success')
         if _linked_parent_name:
             flash(f'تم ربط الطالب بولي الأمر {_linked_parent_name} بنجاح.', 'success')
         if _fee_created:
@@ -759,6 +781,8 @@ def create():
                            active_year=year,
                            can_manage_fees=can_manage_fees,
                            fee_types=fee_types,
+                           gen_parent_username=gen_parent_username,
+                           gen_parent_password=gen_parent_password,
                            error_step=1)
 
 

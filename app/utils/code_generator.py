@@ -22,6 +22,7 @@ Rules
     * concurrent requests (optimistic – DB constraint is still the final guard)
 """
 import re
+import secrets
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -198,3 +199,81 @@ def generate_username(school_id: int, role_name: str) -> str:
         f'generate_username: could not find a free slot after 200 attempts '
         f'(school_id={school_id}, role={role_name})'
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Parent login credentials (short, human-friendly, globally unique)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The student-creation wizard generates the parent's login username and password
+# automatically so the school manager never types them (and can never hit a
+# global-uniqueness error). These are deliberately short and easy to read.
+#
+# Alphabets exclude visually ambiguous characters (0/O, 1/I/L) so the credentials
+# are easy to read aloud and type.
+
+_PARENT_USERNAME_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'   # no I, L, O, 0, 1
+_PARENT_PASSWORD_LETTERS  = 'ABCDEFGHJKMNPQRSTUVWXYZ'           # no I, L, O
+_PARENT_PASSWORD_DIGITS   = '0123456789'
+
+# Validators for values that came back from the wizard form — used to decide
+# whether the submitted value can be trusted or must be regenerated server-side.
+_PARENT_USERNAME_RE = re.compile(r'^[A-Z0-9]{6}$')
+_PARENT_PASSWORD_RE = re.compile(r'^[A-Za-z]{2}\d{6}$')
+
+
+def is_valid_parent_username(value: str) -> bool:
+    """True if *value* matches the required parent-username format: exactly
+    6 uppercase English letters/digits, no spaces or symbols."""
+    return bool(value) and bool(_PARENT_USERNAME_RE.match(value))
+
+
+def is_valid_parent_password(value: str) -> bool:
+    """True if *value* matches the required parent-password format: exactly
+    2 English letters followed by 6 digits (8 characters total)."""
+    return bool(value) and bool(_PARENT_PASSWORD_RE.match(value))
+
+
+def parent_username_available(username: str) -> bool:
+    """True if *username* is free across the ENTIRE platform (all schools, all
+    years). Uses the global check so a cross-school collision is detected before
+    the DB unique constraint fires."""
+    from app.models import User
+    return not _globally_taken(User, 'username', username)
+
+
+def generate_parent_username() -> str:
+    """
+    Generate a globally-unique parent login username.
+
+    Format: exactly 6 characters, uppercase English letters + digits only,
+    no spaces, no symbols, drawn from an unambiguous alphabet (no 0/O/1/I/L).
+    Example: A7KD9Q
+
+    Uniqueness is guaranteed across the whole platform by checking each
+    candidate against the users table (bypassing tenant scope) before returning
+    it, so the caller can never receive a duplicate-username error.
+    """
+    from app.models import User
+    for _ in range(200):
+        candidate = ''.join(
+            secrets.choice(_PARENT_USERNAME_ALPHABET) for _ in range(6)
+        )
+        if not _globally_taken(User, 'username', candidate):
+            return candidate
+
+    raise RuntimeError(
+        'generate_parent_username: could not find a free username after 200 attempts'
+    )
+
+
+def generate_parent_password() -> str:
+    """
+    Generate a parent password: exactly 8 characters — 2 English letters
+    followed by 6 digits. Example: AB482951
+
+    Passwords are not required to be unique.
+    """
+    letters = ''.join(secrets.choice(_PARENT_PASSWORD_LETTERS) for _ in range(2))
+    digits  = ''.join(secrets.choice(_PARENT_PASSWORD_DIGITS)  for _ in range(6))
+    return letters + digits

@@ -504,23 +504,40 @@
       <div class="card-body">
         <p class="text-muted small mb-3">
           <i class="bi bi-info-circle me-1"></i>
-          أدخل كلمة المرور فقط وسيتم توليد اسم المستخدم تلقائياً بصيغة <code>XXX-PAR-000001</code>.
-          يمكنك أيضاً كتابة اسم مستخدم مخصص. إذا تركت كلمة المرور فارغة، لن يُنشأ الحساب.
+          يتم توليد اسم المستخدم وكلمة المرور تلقائياً. فعّل الخيار أدناه لإنشاء حساب ولي الأمر
+          بهذه البيانات، واحفظ نسخة منها لتسليمها لولي الأمر.
         </p>
+        <div class="form-check form-switch mb-3">
+          <input class="form-check-input" type="checkbox" name="create_parent_account" value="1"
+                 id="createParentToggle" {{ 'checked' if sf.get('create_parent_account') == '1' }}>
+          <label class="form-check-label fw-600" for="createParentToggle">
+            إنشاء حساب ولي أمر بهذه البيانات
+          </label>
+        </div>
         <div class="row g-3">
-          <div class="col-md-4">
-            <label class="form-label">اسم المستخدم <span class="text-muted fw-400">(اختياري — يُولَّد تلقائياً)</span></label>
-            <input type="text" name="parent_username" class="form-control"
-                   placeholder="اتركه فارغاً للتوليد التلقائي" autocomplete="off"
-                   value="{{ sf.get('parent_username', '') }}">
+          <div class="col-md-6">
+            <label class="form-label">اسم المستخدم <span class="text-muted fw-400">(يُولَّد تلقائياً)</span></label>
+            <div class="input-group">
+              <input type="text" name="parent_username" id="genParentUsername"
+                     class="form-control" readonly autocomplete="off"
+                     value="{{ sf.get('parent_username') or gen_parent_username }}">
+              <button type="button" class="btn btn-outline-secondary copy-cred"
+                      data-target="genParentUsername" title="نسخ">
+                <i class="bi bi-clipboard"></i>
+              </button>
+            </div>
           </div>
-          <div class="col-md-4">
-            <label class="form-label">كلمة المرور</label>
-            <input type="password" name="parent_password" class="form-control" autocomplete="new-password">
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">تأكيد كلمة المرور</label>
-            <input type="password" name="parent_password_confirm" class="form-control" autocomplete="new-password">
+          <div class="col-md-6">
+            <label class="form-label">كلمة المرور <span class="text-muted fw-400">(تُولَّد تلقائياً)</span></label>
+            <div class="input-group">
+              <input type="text" name="parent_password" id="genParentPassword"
+                     class="form-control" readonly autocomplete="off"
+                     value="{{ sf.get('parent_password') or gen_parent_password }}">
+              <button type="button" class="btn btn-outline-secondary copy-cred"
+                      data-target="genParentPassword" title="نسخ">
+                <i class="bi bi-clipboard"></i>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -785,6 +802,30 @@
     sel.innerHTML = '';
     opts.forEach(o => { if (!q || o.text.toLowerCase().includes(q)) sel.appendChild(o.cloneNode(true)); });
     sel.value = keep;
+  });
+})();
+
+/* ════════════ Copy generated parent credentials ════════════ */
+(function () {
+  document.querySelectorAll('.copy-cred').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const target = document.getElementById(btn.dataset.target);
+      if (!target) return;
+      const done = () => {
+        const icon = btn.querySelector('i');
+        if (!icon) return;
+        const prev = icon.className;
+        icon.className = 'bi bi-check-lg text-success';
+        setTimeout(() => { icon.className = prev; }, 1200);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(target.value).then(done).catch(() => {
+          target.select(); document.execCommand('copy'); done();
+        });
+      } else {
+        target.select(); document.execCommand('copy'); done();
+      }
+    });
   });
 })();
 
@@ -1158,21 +1199,24 @@ calcNet();
     // ── Section 5: Parent Account ──
     const accountStep = document.querySelector('[data-step-key="account"]');
     if (accountStep) {
-      const linkSel  = document.getElementById('parentSelectAdd');
-      const linkName = (linkSel && linkSel.value) ? linkSel.selectedOptions[0].textContent.trim() : '';
-      const newUser  = txt('parent_username');
-      const newPass  = txt('parent_password');
+      const linkSel   = document.getElementById('parentSelectAdd');
+      const linkName  = (linkSel && linkSel.value) ? linkSel.selectedOptions[0].textContent.trim() : '';
+      const createTog = document.getElementById('createParentToggle');
+      const willCreate = !!(createTog && createTog.checked);
+      const newUser   = txt('parent_username');
+      const newPass   = txt('parent_password');
       let s5 = '';
-      if (linkName) {
+      if (willCreate) {
+        // Create takes precedence over linking — same as the backend.
+        s5 = '<div class="rv-grid">';
+        s5 += fld('نوع الحساب', '<span class="badge bg-success">إنشاء حساب جديد</span>');
+        s5 += fld('اسم المستخدم', newUser, 'highlight');
+        s5 += fld('كلمة المرور', newPass, 'highlight');
+        s5 += '</div>';
+      } else if (linkName) {
         s5 = '<div class="rv-grid">';
         s5 += fld('نوع الحساب', '<span class="badge bg-info text-dark">ربط بحساب موجود</span>');
         s5 += fld('حساب ولي الأمر', linkName);
-        s5 += '</div>';
-      } else if (newPass) {
-        s5 = '<div class="rv-grid">';
-        s5 += fld('نوع الحساب', '<span class="badge bg-success">إنشاء حساب جديد</span>');
-        s5 += fld('اسم المستخدم', newUser || '(يُولَّد تلقائياً)');
-        s5 += fld('كلمة المرور', '••••••••');
         s5 += '</div>';
       } else {
         s5 = '<div class="rv-empty"><i class="bi bi-person-x"></i>لن يُنشأ حساب ولي أمر.</div>';
