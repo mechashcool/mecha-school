@@ -163,6 +163,49 @@ def test_relative_uploads_values_become_signed_proxy_not_files():
                 assert 'sig=' in gen and 'exp=' in gen, name
 
 
+def test_homework_full_supabase_url_is_signed_when_private_enabled():
+    """Regression: homework attachments stored as a full public Supabase URL must
+    be re-signed to a /media-proxy URL when PRIVATE_UPLOADS_ENABLED is on. The
+    teacher/parent endpoints previously returned the raw URL, which 400s against
+    the now-private bucket → the app's 'image loading error'."""
+    app = _app()
+    from app.blueprints.mobile_api.teacher import _hw_attachment_url
+    from app.blueprints.mobile_api.utils import photo_url
+
+    class _HW:
+        attachment_path = _PUBLIC + 'homework/abc123.png'
+
+    with app.test_request_context('/'):
+        # Teacher endpoint helper.
+        teacher_url = _hw_attachment_url(_HW())
+        # Parent endpoint resolves identically via photo_url on the stored value.
+        parent_url = photo_url(_HW.attachment_path)
+
+    for name, gen in (('teacher', teacher_url), ('parent', parent_url)):
+        assert gen is not None, name
+        assert '/media-proxy/uploads/homework/abc123.png' in gen, f'{name}: {gen}'
+        assert 'sig=' in gen and 'exp=' in gen, name
+        assert gen != _HW.attachment_path, f'{name}: returned raw URL'
+
+
+def test_homework_full_supabase_url_unchanged_when_private_disabled():
+    """Flag off → homework attachment URL behaviour is unchanged: the stored full
+    Supabase (public bucket) URL is returned as-is, no proxy injected."""
+    app = create_app('testing')
+    app.config.update(PRIVATE_UPLOADS_ENABLED=False, SUPABASE_URL=_SUPA,
+                      SERVER_NAME='localhost', PREFERRED_URL_SCHEME='http')
+    from app.blueprints.mobile_api.teacher import _hw_attachment_url
+    from app.blueprints.mobile_api.utils import photo_url
+    raw = _PUBLIC + 'homework/abc123.png'
+
+    class _HW:
+        attachment_path = raw
+
+    with app.test_request_context('/'):
+        assert _hw_attachment_url(_HW()) == raw
+        assert photo_url(raw) == raw
+
+
 def test_public_branding_url_unaffected():
     """A URL that genuinely lives in the public-branding bucket (global login
     assets) still resolves to a public URL, not proxied."""

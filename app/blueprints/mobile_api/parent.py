@@ -541,10 +541,12 @@ def parent_child_homework(student_id):
     def _hw_url(hw):
         if not hw.attachment_path:
             return None
-        path = hw.attachment_path
-        if path.startswith(('http://', 'https://')):
-            return path
-        return photo_url(path)
+        # Always resolve through photo_url so that when PRIVATE_UPLOADS_ENABLED is
+        # on a stored full Supabase URL (private bucket) is re-signed to a
+        # /media-proxy URL the app can open. Returning it raw would 400 against
+        # the private bucket. photo_url returns http(s) values unchanged when the
+        # feature is off, so behaviour is unchanged in that mode.
+        return photo_url(hw.attachment_path)
 
     def _hw_file_name(path):
         if not path:

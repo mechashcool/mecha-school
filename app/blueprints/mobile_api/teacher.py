@@ -1877,8 +1877,10 @@ def teacher_notifications():
 def _hw_attachment_url(hw: Homework) -> str | None:
     if not hw.attachment_path:
         return None
-    if hw.attachment_path.startswith(('http://', 'https://')):
-        return hw.attachment_path
+    # Always resolve through photo_url so that when PRIVATE_UPLOADS_ENABLED is on
+    # a stored full Supabase URL (private bucket) is re-signed to a /media-proxy
+    # URL the app can open. Returning it raw would 400 against the private bucket.
+    # photo_url still returns http(s) values unchanged when the feature is off.
     return photo_url(hw.attachment_path)
 
 
