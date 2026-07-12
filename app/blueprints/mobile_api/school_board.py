@@ -28,7 +28,7 @@ from flask import g, request
 from sqlalchemy.exc import IntegrityError
 
 from app.models import db, SchoolVideo, SchoolAnnouncement, SchoolContentRead
-from .utils import jwt_required, role_required, ok, err
+from .utils import jwt_required, role_required, ok, err, photo_url
 from . import mobile_api_bp
 
 
@@ -110,14 +110,18 @@ def _fmt_dt(dt):
 
 def _video_dict(v, is_read=False):
     mt = getattr(v, 'media_type', None) or 'video'
+    # Video media → native CDN signed URL (Range/seek support); image → normal
+    # signed/proxied URL. Thumbnails are always images.
+    resolved_url   = photo_url(v.video_url, want_video=(mt == 'video'))
+    resolved_thumb = photo_url(v.thumbnail_url)
     return {
         'id':            v.id,
         'title':         v.title,
         'description':   v.description,
         'media_type':    mt,
-        'media_url':     v.video_url,   # canonical field for both images and videos
-        'video_url':     v.video_url,   # kept for Flutter backward compatibility
-        'thumbnail_url': v.thumbnail_url,
+        'media_url':     resolved_url,   # canonical field for both images and videos
+        'video_url':     resolved_url,   # kept for Flutter backward compatibility
+        'thumbnail_url': resolved_thumb,
         'audience':      v.audience,
         'is_featured':   bool(v.is_featured),
         'is_published':  True,
@@ -135,9 +139,9 @@ def _ann_dict(a, is_read=False):
         'title':         a.title,
         'body':          a.body,
         'description':   a.body,        # alias for body — Flutter-friendly field name
-        'media_url':     a.media_url,
+        'media_url':     photo_url(a.media_url, want_video=(a.media_type == 'video')),
         'media_type':    a.media_type,
-        'thumbnail_url': a.thumbnail_url,
+        'thumbnail_url': photo_url(a.thumbnail_url),
         'audience':      a.audience,
         'is_featured':   bool(a.is_featured),
         'is_published':  True,

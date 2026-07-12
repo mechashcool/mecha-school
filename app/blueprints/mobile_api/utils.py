@@ -115,7 +115,7 @@ def role_required(*roles: str):
 
 # ─── Photo URL helper ─────────────────────────────────────────────────────────
 
-def photo_url(photo: str | None) -> str | None:
+def photo_url(photo: str | None, *, want_video: bool = False) -> str | None:
     """
     Return an absolute URL for a stored photo / media value, safe for JSON.
 
@@ -126,6 +126,12 @@ def photo_url(photo: str | None) -> str | None:
       the proxy maps the /static/ location, so newly uploaded files load even
       when nginx's /static/ alias does not point at app/static/uploads/.
     - None / empty / missing file → None (mobile client shows local placeholder).
+
+    ``want_video``: when the value is a private Supabase upload, mint a
+    Supabase-native signed CDN URL (which supports HTTP Range/seeking) instead of
+    the Flask /media-proxy URL (which streams the whole file with no Range). Set
+    it for video media so mobile players can seek; leave it False for images and
+    thumbnails. Has no effect on external or public-branding URLs.
 
     The scheme is taken from PREFERRED_URL_SCHEME (config) — 'https' in
     production, 'http' in local dev — so the URL is HTTPS behind the VPS proxy
@@ -139,7 +145,7 @@ def photo_url(photo: str | None) -> str | None:
     # values fall through to the legacy local logic unchanged.
     if current_app.config.get('PRIVATE_UPLOADS_ENABLED'):
         from app.utils.upload_access import supabase_media_url
-        signed = supabase_media_url(photo)
+        signed = supabase_media_url(photo, want_video=want_video)
         if signed is not None:
             return signed
     if photo.startswith(('http://', 'https://')):
