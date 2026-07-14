@@ -181,15 +181,51 @@ def _member_can_send(membership: ChatRoomMember, room: ChatRoom) -> tuple[bool, 
 
 # ─── FCM push for new message ─────────────────────────────────────────────────
 
-def _push_new_message(room: ChatRoom, msg: ChatMessage, sender_name: str) -> None:
-    """Send FCM push to all non-blocked, non-muted, non-sender members of the room."""
+def _send_room_pushes(room_id: int, sender_user_id: int,
+                      title: str, body: str, data: dict) -> None:
+    """Background task: push to every non-blocked, non-muted member of a room.
+
+    Runs on the async_dispatch thread pool — NO request context and NO implicit
+    ORM tenant scope. Isolation is explicit: members are selected by room_id
+    with is_blocked=False / is_muted=False, the sender is excluded, and the
+    room's school ownership was already verified by the API route BEFORE the
+    message committed (this task is only ever queued after that check). Device
+    delivery is per-user isolated inside send_push_to_user(). Never raises.
+    """
+    from app.services.fcm_service import send_push_to_user
     try:
-        from app.services.fcm_service import is_enabled, send_push_to_user
+        member_ids = [
+            m.user_id
+            for m in (ChatRoomMember.query
+                      .filter_by(room_id=room_id, is_blocked=False, is_muted=False)
+                      .with_entities(ChatRoomMember.user_id)
+                      .all())
+        ]
+        for uid in member_ids:
+            if uid == sender_user_id:
+                continue
+            try:
+                send_push_to_user(uid, title, body, data)
+            except Exception as exc:
+                _log.warning('[chat_api] FCM push failed user_id=%s: %s', uid, exc)
+    except Exception as exc:
+        _log.error('[chat_api] _send_room_pushes error room_id=%s: %s', room_id, exc)
+
+
+def _push_new_message(room: ChatRoom, msg: ChatMessage, sender_name: str) -> None:
+    """Queue FCM pushes to all non-blocked, non-muted, non-sender room members.
+
+    P0: the member query and every FCM HTTPS round-trip now run on the
+    background dispatcher, so sending a message is no longer blocked by the
+    fan-out size. Only primitives cross the thread boundary — the ORM room and
+    message objects never leave this request. Called only AFTER the message
+    commit, so a push failure can never affect the stored message.
+    """
+    try:
+        from app.services import async_dispatch
+        from app.services.fcm_service import is_enabled
         if not is_enabled():
             return
-        members = (ChatRoomMember.query
-                   .filter_by(room_id=room.id, is_blocked=False, is_muted=False)
-                   .all())
         ntype  = 'school_announcement' if room.is_announcement_only else 'chat_message'
         title  = (f'رسالة جديدة في {room.name}'
                   if room.type in ('group', 'announcement')
@@ -204,13 +240,9 @@ def _push_new_message(room: ChatRoom, msg: ChatMessage, sender_name: str) -> Non
             'room_type':   room.type,    # helps Flutter choose private vs group view
             'sender_name': sender_name,  # display name for Flutter notification tap
         }
-        for mem in members:
-            if mem.user_id == msg.sender_user_id:
-                continue
-            try:
-                send_push_to_user(mem.user_id, title, body, data)
-            except Exception as exc:
-                _log.warning('[chat_api] FCM push failed user_id=%s: %s', mem.user_id, exc)
+        async_dispatch.submit(
+            _send_room_pushes, room.id, msg.sender_user_id, title, body, data,
+        )
     except Exception as exc:
         _log.error('[chat_api] _push_new_message error: %s', exc)
 

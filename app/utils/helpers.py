@@ -194,6 +194,13 @@ def _supabase_delete(object_path: str, bucket: str | None = None) -> bool:
                 f"{bucket}"
             )
             return False
+        # Drop any cached signed URLs for the deleted object so a stale
+        # (now-404) URL is never handed out for the remainder of its cache TTL.
+        try:
+            from app.utils import signed_url_cache
+            signed_url_cache.invalidate(bucket, object_path)
+        except Exception:
+            pass
         return True
     except Exception as exc:
         current_app.logger.warning(f"Supabase delete error: {exc}")

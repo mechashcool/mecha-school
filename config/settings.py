@@ -71,6 +71,26 @@ class Config:
     SIGNED_FILE_TTL_SECONDS  = int(os.environ.get('SIGNED_FILE_TTL_SECONDS',  900))     # 15 min
     SIGNED_VIDEO_TTL_SECONDS = int(os.environ.get('SIGNED_VIDEO_TTL_SECONDS', 21600))   # 6 h
 
+    # ── /media-proxy direct-delivery redirect (P0) ─────────────────────────────
+    # When TRUE (default), /media-proxy verifies the HMAC token and then 302s to
+    # a short-lived Supabase-native signed URL so the object streams from the
+    # Supabase CDN instead of being buffered whole through a Flask worker thread.
+    # Authorization is unchanged: the HMAC token is still required, and it is
+    # only ever minted after route-level ownership checks. If native signing is
+    # unavailable (no service key, Supabase error, legacy local-only file) the
+    # route falls back to the previous authenticated streaming behaviour — never
+    # to a raw or public URL. Set to 'false' for an instant rollback to the
+    # pre-P0 proxy-streaming behaviour.
+    MEDIA_PROXY_REDIRECT_ENABLED = (
+        os.environ.get('MEDIA_PROXY_REDIRECT_ENABLED', 'true').lower() == 'true'
+    )
+    # Lifetime of the Supabase-native signed URL minted for a /media-proxy
+    # redirect. Longer than SIGNED_FILE_TTL_SECONDS so the redirect target (and
+    # its in-process cache entry) can be reused across many proxy hits.
+    MEDIA_REDIRECT_SIGN_TTL_SECONDS = int(
+        os.environ.get('MEDIA_REDIRECT_SIGN_TTL_SECONDS', 3600)
+    )
+
     @staticmethod
     def init_app(app):
         pass

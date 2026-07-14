@@ -465,12 +465,26 @@ def supabase_media_url(value: str | None, *, want_video: bool = False) -> str | 
     media = current_app.config.get('SUPABASE_STORAGE_BUCKET_MEDIA', 'school-media')
     if want_video or bucket == media:
         # Board media → Supabase-native signed URL (streams from the CDN).
+        # P0: the sign call is a network round-trip, so successful results are
+        # cached per (bucket, object_path, ttl) — the URL is object-scoped and
+        # authorization for the owning record was already enforced by the
+        # serializer that called us (see signed_url_cache module docstring).
+        from app.utils import signed_url_cache
         from app.utils.helpers import _supabase_sign
         ttl = current_app.config.get('SIGNED_VIDEO_TTL_SECONDS', 21600)
-        signed = _supabase_sign(path, bucket=bucket, ttl=ttl)
-        # Fail-safe: keep the original URL if signing is momentarily unavailable
-        # (harmless while the bucket is still public; closed after the flip).
-        return signed if signed is not None else value
+        signed = signed_url_cache.get(bucket, path, ttl)
+        if signed is None:
+            signed = _supabase_sign(path, bucket=bucket, ttl=ttl)
+            if signed is not None:
+                signed_url_cache.put(bucket, path, ttl, signed)
+        if signed is not None:
+            return signed
+        # Fail closed-but-working: NEVER return the raw stored value (a private
+        # bucket URL that 400s, or a bare relative path). Degrade to the
+        # authenticated Flask HMAC proxy instead — access stays authorized and
+        # the URL always resolves (no Range/seek, but secure and functional).
+        file_ttl = current_app.config.get('SIGNED_FILE_TTL_SECONDS', 900)
+        return signed_proxy_url(bucket, path, ttl=file_ttl)
 
     # Small private file → Flask-HMAC proxy.
     ttl = current_app.config.get('SIGNED_FILE_TTL_SECONDS', 900)

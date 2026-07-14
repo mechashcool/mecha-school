@@ -261,6 +261,31 @@ def send_push_to_user(user_id: int, title: str, body: str,
     return success_count, fail_count
 
 
+def send_push_batch(items) -> tuple[int, int]:
+    """Send a batch of pushes. ``items`` is a list of primitive tuples
+    ``(user_id, title, body, data)`` — never ORM objects.
+
+    Designed to run on the async_dispatch background thread (P0): each element
+    resolves the target's own active MobileDeviceToken rows via
+    send_push_to_user(), so delivery is always per-user isolated — a token can
+    never receive another user's notification. Never raises.
+    Returns (success_count, fail_count).
+    """
+    sent = failed = 0
+    for item in items:
+        try:
+            user_id, title, body, data = item
+            ok_n, fail_n = send_push_to_user(user_id, title, body, data)
+            sent   += ok_n
+            failed += fail_n
+        except Exception as exc:
+            failed += 1
+            log.error('[FCM] batch item failed item=%r error=%s', item[:1], exc)
+    log.warning('[FCM] BATCH RESULT items=%d sent=%d failed=%d',
+                len(items), sent, failed)
+    return sent, failed
+
+
 def notify_investors(school_id: int, title: str, body: str,
                      data: dict | None = None) -> tuple[int, int]:
     """

@@ -180,6 +180,31 @@ def serve_remote(bucket, object_path):
                                request.args.get('exp'), request.args.get('sig')):
         abort(403)
 
+    # ── P0: secure DIRECT delivery ────────────────────────────────────────────
+    # Authorization is complete at this point: the HMAC token (minted only after
+    # route-level ownership/role/school checks) has just been verified for this
+    # exact bucket+object. Instead of buffering the whole object through this
+    # worker thread, redirect to a short-lived Supabase-native signed URL so the
+    # bytes stream from the Supabase CDN (with Range support). The signed URL is
+    # object-scoped; successful signs are cached per (bucket, object_path, ttl).
+    # If signing is unavailable (no service key, Supabase error, legacy
+    # local-only file) we fall through to the previous authenticated streaming
+    # path below — never to a raw or public URL (fail closed).
+    if current_app.config.get('MEDIA_PROXY_REDIRECT_ENABLED', True):
+        from app.utils import signed_url_cache
+        from app.utils.helpers import _supabase_sign
+        sign_ttl = int(current_app.config.get('MEDIA_REDIRECT_SIGN_TTL_SECONDS', 3600))
+        target = signed_url_cache.get(bucket, object_path, sign_ttl)
+        if target is None:
+            target = _supabase_sign(object_path, bucket=bucket, ttl=sign_ttl)
+            if target:
+                signed_url_cache.put(bucket, object_path, sign_ttl, target)
+        if target:
+            resp = redirect(target, code=302)
+            # The redirect target rotates with the signature — never share/cache it.
+            resp.headers['Cache-Control'] = 'private, no-store'
+            return resp
+
     data, ctype = _supabase_fetch(object_path, bucket=bucket)
     if data is None:
         # Local-disk fallback: files not (yet) in Supabase — legacy/local rows or

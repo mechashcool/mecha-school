@@ -1144,19 +1144,21 @@ def teacher_create_exam():
     db.session.commit()
 
     # In-app Notification + FCM push to parents of active students in this section.
-    # Delegates to _notify_new_exam() which is fully context-independent:
-    # it uses bypass_tenant_scope=True + explicit school_id so it works correctly
-    # regardless of the ORM tenant scope (which, for authenticated mobile
-    # requests, is set to the teacher's school by set_mobile_request_scope).
+    # P0: queued to the background dispatcher — the fan-out (per-parent rows +
+    # FCM HTTPS calls) no longer blocks this request. _notify_new_exam() is
+    # documented context-independent (bypass_tenant_scope=True + explicit
+    # school_id on every query), so it is safe in a background thread where no
+    # ORM tenant scope exists. Only primitives cross the thread boundary; the
+    # Exam is re-loaded inside the task with an explicit school_id equality.
     # Best-effort: a notification failure must never fail the API response.
     _exam_id_for_log = new_exam.id  # PK retained after commit — safe to read
     try:
-        from app.blueprints.grades import _notify_new_exam
-        _notify_new_exam(new_exam)
+        from app.services import async_dispatch
+        async_dispatch.submit(_notify_new_exam_bg, _exam_id_for_log, emp.school_id)
     except Exception:
         import logging as _mlog
         _mlog.getLogger('mecha.mobile').exception(
-            '[mobile-exam] _notify_new_exam import or invocation error '
+            '[mobile-exam] _notify_new_exam dispatch error '
             'exam_id=%s school_id=%s section_id=%s',
             _exam_id_for_log,
             getattr(new_exam, 'school_id', None),
@@ -1266,6 +1268,54 @@ def teacher_exam_detail(exam_id):
     )
 
 
+# ─── Background notification wrappers (P0) ────────────────────────────────────
+#
+# Both wrappers run on the async_dispatch background thread pool, where there is
+# NO request context and therefore NO implicit ORM tenant scope. They must never
+# trust an id alone: the source record is re-loaded with an explicit school_id
+# equality filter (bypass_tenant_scope=True + include_all_years=True so the
+# lookup is deterministic in the scope-less thread), and the delegated helpers
+# are the existing context-independent implementations whose queries all carry
+# their own explicit school/ownership filters.
+
+def _notify_new_exam_bg(exam_id: int, school_id: int) -> None:
+    """Background wrapper for grades._notify_new_exam(). Never raises."""
+    import logging as _mlog
+    try:
+        from app.blueprints.grades import _notify_new_exam
+        exam = (Exam.query
+                .execution_options(bypass_tenant_scope=True, include_all_years=True)
+                .filter_by(id=exam_id, school_id=school_id)
+                .first())
+        if exam is None:
+            return
+        _notify_new_exam(exam)
+    except Exception:
+        _mlog.getLogger('mecha.mobile').exception(
+            '[mobile-exam] background _notify_new_exam failed exam_id=%s school_id=%s',
+            exam_id, school_id,
+        )
+
+
+def _notify_homework_bg(homework_id: int, school_id: int) -> None:
+    """Background wrapper for homework._notify_section_parents(). Never raises."""
+    import logging as _mlog
+    try:
+        from app.blueprints.homework import _notify_section_parents
+        hw = (Homework.query
+              .execution_options(bypass_tenant_scope=True, include_all_years=True)
+              .filter_by(id=homework_id, school_id=school_id)
+              .first())
+        if hw is None:
+            return
+        _notify_section_parents(hw, school_id)
+    except Exception:
+        _mlog.getLogger('mecha.mobile').exception(
+            '[mobile-hw] background _notify_section_parents failed hw_id=%s school_id=%s',
+            homework_id, school_id,
+        )
+
+
 # ─── Grade notification helper ───────────────────────────────────────────────
 
 def _notify_grade_results_mobile(
@@ -1275,41 +1325,55 @@ def _notify_grade_results_mobile(
     exam_name: str,
     students: list,
 ) -> tuple[int, int]:
-    """Create in-app Notification row + FCM push for each parent of every graded student.
+    """Create in-app Notification rows + queue FCM pushes for each parent of
+    every graded student.
 
-    Mirrors _notify_new_exam() from grades/__init__.py.
+    P0 restructure — the previous version committed one Notification row per
+    parent and performed every FCM HTTPS round-trip inline, blocking the
+    request thread for the whole fan-out. Now:
+      1. Parent links are resolved with the same explicit ownership filters as
+         before (parent_students junction + User.school_id equality + is_active).
+      2. ALL Notification rows are inserted in ONE commit — in-request,
+         DB-local, fast — so the in-app feed is durable before the response.
+         This commit runs AFTER the grade commit and can never roll it back.
+      3. FCM delivery is handed to the background dispatcher
+         (app/services/async_dispatch.py) as primitive tuples only. Background
+         threads have NO request context and therefore no implicit ORM tenant
+         scope — per-user isolation is enforced inside send_push_to_user()
+         (device tokens are resolved by user_id).
 
-    Design:
-    - All ORM queries use bypass_tenant_scope=True + explicit school_id so the
-      function works correctly from the mobile API context.
+    Isolation guarantees (unchanged from the previous version):
+    - bypass_tenant_scope=True + explicit school_id equality on the User query;
+      a parent from another school can never be targeted.
     - parent_students is queried with Core SELECT (not ORM) to avoid scope issues.
-    - Notification commits are per-parent so one DB error does not block others.
-    - Scalar attributes (IDs) are captured before the first commit to avoid
-      expired-object lazy-load failures on subsequent iterations.
-    - Logs at WARNING level so output appears regardless of logger config.
-    - Never raises.
+    - Each Notification row carries the parent's own school_id + target_user_id.
 
-    Returns (fcm_sent_total, fcm_failed_total).
+    Never raises. Returns (fcm_queued_count, 0) — delivery results are logged
+    asynchronously by the FCM batch task, not returned here.
     """
     import logging as _logging
     _log = _logging.getLogger('mecha.mobile.grade_notify')
 
     try:
+        from app.services import async_dispatch
         from app.services.fcm_service import (
             is_enabled as _fcm_enabled,
-            send_push_to_user,
+            send_push_batch,
         )
 
-        if not students:
+        # Primitive capture first — never carry ORM objects past a commit or
+        # into the background task.
+        student_ids = [s.id for s in (students or [])]
+        if not student_ids:
             return 0, 0
 
         title = 'درجة جديدة'
-        fcm_sent_total = fcm_failed_total = 0
+        body  = f'تم رصد درجة جديدة في {exam_name}.'
 
-        for student in students:
-            student_id = student.id  # PK — never expired by SQLAlchemy
-            body = f'تم رصد درجة جديدة في {exam_name}.'
+        notif_rows: list[Notification] = []
+        push_items: list[tuple] = []
 
+        for student_id in student_ids:
             # Resolve linked parent user IDs via the junction table.
             # Core SELECT — not affected by ORM with_loader_criteria.
             raw_rows = db.session.execute(
@@ -1328,12 +1392,11 @@ def _notify_grade_results_mobile(
 
             # Only active parents who belong to this school.
             # bypass_tenant_scope=True + explicit school_id guard — cross-school
-            # notifications are prevented by the school_id equality filter, not
-            # the ORM scope (which may be set to the teacher's school_id, matching
-            # parent school_id anyway, but we be explicit here).
-            parents = (
+            # notifications are prevented by the school_id equality filter.
+            parent_records = (
                 User.query
                 .execution_options(bypass_tenant_scope=True)
+                .with_entities(User.id, User.school_id)
                 .filter(
                     User.id.in_(raw_parent_ids),
                     User.school_id == school_id,
@@ -1342,15 +1405,11 @@ def _notify_grade_results_mobile(
                 .all()
             )
 
-            # Capture primitive tuples before any per-parent commit expires objects.
-            parent_records = [(p.id, p.school_id) for p in parents]
-
             _log.warning(
                 '[grade-notify] exam_id=%s student_id=%s '
                 'linked_parents=%d active_in_school=%d',
                 exam_id, student_id, len(raw_parent_ids), len(parent_records),
             )
-
             if not parent_records:
                 continue
 
@@ -1365,52 +1424,42 @@ def _notify_grade_results_mobile(
             }
 
             for parent_id, parent_school_id in parent_records:
-                # 1. In-app Notification row (parent notification feed)
-                try:
-                    notif = Notification(
-                        school_id      = parent_school_id,
-                        title          = title,
-                        body           = body,
-                        ntype          = 'grade',
-                        target_user_id = parent_id,
-                        created_by     = None,
-                    )
-                    db.session.add(notif)
-                    db.session.commit()
-                except Exception:
-                    _log.exception(
-                        '[grade-notify] Notification commit FAILED '
-                        'exam_id=%s parent_id=%s',
-                        exam_id, parent_id,
-                    )
-                    db.session.rollback()
+                notif_rows.append(Notification(
+                    school_id      = parent_school_id,
+                    title          = title,
+                    body           = body,
+                    ntype          = 'grade',
+                    target_user_id = parent_id,
+                    created_by     = None,
+                ))
+                push_items.append((parent_id, title, body, fcm_data))
 
-                # 2. FCM push to all active device tokens for this parent
-                if _fcm_enabled():
-                    try:
-                        ok_n, fail_n = send_push_to_user(
-                            parent_id, title, body, fcm_data,
-                        )
-                        fcm_sent_total   += ok_n
-                        fcm_failed_total += fail_n
-                        _log.warning(
-                            '[grade-notify] FCM exam_id=%s parent_id=%s '
-                            'sent=%d failed=%d',
-                            exam_id, parent_id, ok_n, fail_n,
-                        )
-                    except Exception:
-                        _log.exception(
-                            '[grade-notify] FCM EXCEPTION exam_id=%s parent_id=%s',
-                            exam_id, parent_id,
-                        )
-                else:
-                    _log.warning(
-                        '[grade-notify] FCM disabled — no push '
-                        'exam_id=%s parent_id=%s',
-                        exam_id, parent_id,
-                    )
+        if not notif_rows:
+            return 0, 0
 
-        return fcm_sent_total, fcm_failed_total
+        # Single batch commit for the in-app feed rows. The grades commit
+        # already happened in the caller — a failure here is logged and never
+        # affects it; FCM pushes are still queued (device notification is
+        # independent of the in-app row).
+        try:
+            db.session.add_all(notif_rows)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            _log.exception(
+                '[grade-notify] Notification batch commit FAILED exam_id=%s '
+                'rows=%d — rolled back (grades unaffected)',
+                exam_id, len(notif_rows),
+            )
+
+        if push_items and _fcm_enabled():
+            async_dispatch.submit(send_push_batch, push_items)
+
+        _log.warning(
+            '[grade-notify] exam_id=%s school_id=%s notif_rows=%d fcm_queued=%d',
+            exam_id, school_id, len(notif_rows), len(push_items),
+        )
+        return len(push_items), 0
 
     except Exception:
         import logging as _fallback_log
@@ -1756,15 +1805,16 @@ def teacher_enter_results(exam_id):
                 exam_id_val,
             )
 
-    # Send in-app Notification + FCM for students whose results actually changed.
+    # Write in-app Notification rows (single commit) and QUEUE the FCM pushes to
+    # the background dispatcher — the fan-out no longer blocks this request.
     # Best-effort — a notification failure must never fail the API response.
-    fcm_sent = fcm_failed = 0
+    fcm_queued = 0
     if graded_student_ids:
         try:
             graded_students = [
                 student_by_id[s] for s in graded_student_ids if s in student_by_id
             ]
-            fcm_sent, fcm_failed = _notify_grade_results_mobile(
+            fcm_queued, _ = _notify_grade_results_mobile(
                 exam_id_val,
                 exam_school_id,
                 exam_subject_id,
@@ -1780,10 +1830,10 @@ def teacher_enter_results(exam_id):
     _logger.warning(
         '[mobile-grades] DONE exam_id=%s '
         'created=%d updated=%d unchanged=%d rejected=%d '
-        'notified_students=%d fcm_sent=%d fcm_failed=%d',
+        'notified_students=%d fcm_queued=%d',
         exam_id_val,
         created, updated, unchanged, len(errors),
-        len(graded_student_ids), fcm_sent, fcm_failed,
+        len(graded_student_ids), fcm_queued,
     )
 
     # Return the full current results list so Flutter can refresh immediately
@@ -2096,11 +2146,13 @@ def teacher_homework_create():
     db.session.commit()
 
     # FCM + in-app Notification rows to parents of students in this section.
-    # Mirrors the web route behaviour in homework/__init__.py.
+    # P0: queued to the background dispatcher — the per-parent fan-out no longer
+    # blocks this request. The Homework row is re-loaded inside the task with an
+    # explicit school_id equality; only primitives cross the thread boundary.
     # Best-effort: a notification failure must never fail the API response.
     try:
-        from app.blueprints.homework import _notify_section_parents
-        _notify_section_parents(hw, emp.school_id)
+        from app.services import async_dispatch
+        async_dispatch.submit(_notify_homework_bg, hw.id, emp.school_id)
     except Exception:
         import logging as _log
         _log.getLogger('mecha.mobile').exception(
