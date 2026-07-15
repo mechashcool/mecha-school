@@ -11,6 +11,13 @@ workers = int(os.environ.get('WEB_CONCURRENCY', 1))
 threads = int(os.environ.get('GUNICORN_THREADS', 4))
 timeout = int(os.environ.get('GUNICORN_TIMEOUT', 120))
 
+# Push fix: background FCM dispatch threads (app/services/async_dispatch.py)
+# drain their queue during interpreter shutdown when a worker recycles
+# (max_requests below). The default graceful_timeout of 30 s could SIGKILL the
+# worker mid-drain and drop queued pushes; 90 s gives the drain room while
+# staying under the master's hard timeout above.
+graceful_timeout = int(os.environ.get('GUNICORN_GRACEFUL_TIMEOUT', 90))
+
 accesslog = '-'
 errorlog  = '-'
 preload_app = False

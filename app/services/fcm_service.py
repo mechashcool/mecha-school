@@ -186,17 +186,29 @@ def _send_one(token: str, title: str, body: str,
 
 
 def _is_stale_token(error: str) -> bool:
+    """True only for errors that UNAMBIGUOUSLY identify the registration token
+    itself as dead/invalid — those rows are safe to deactivate.
+
+    Push fix: bare 'INVALID_ARGUMENT' was previously in this list, but FCM
+    returns that code for many non-token problems (payload shape/size, field
+    errors, request issues). Treating it as "stale token" mass-deactivated
+    VALID device rows on transient payload/API errors, and — because the app
+    only re-registered tokens at login — those devices went permanently
+    silent. INVALID_ARGUMENT now deactivates only when the error text also
+    names the token as the problem (firebase-admin: "The registration token
+    is not a valid FCM registration token").
+    """
     if not error:
         return False
     markers = (
         'registration-token-not-registered',
         'invalid-registration-token',
-        'UNREGISTERED',
-        'INVALID_ARGUMENT',
-        'Requested entity was not found',
+        'unregistered',
+        'requested entity was not found',
+        'not a valid fcm registration token',
     )
     el = error.lower()
-    return any(m.lower() in el for m in markers)
+    return any(m in el for m in markers)
 
 
 def send_push_to_user(user_id: int, title: str, body: str,
@@ -221,7 +233,10 @@ def send_push_to_user(user_id: int, title: str, body: str,
         tokens = MobileDeviceToken.query.filter_by(user_id=user_id, is_active=True).all()
     except Exception as exc:
         log.error('[FCM] failed to query device tokens for user_id=%s: %s', user_id, exc)
-        return 0, 0
+        # Count as a delivery failure — nothing reached this user. Returning
+        # (0, 0) here made batch logs read "failed=0" while delivery silently
+        # failed, hiding DB problems from the delivery accounting.
+        return 0, 1
 
     role_tag = f'role={_role} ' if _role else ''
     if not tokens:
