@@ -18,8 +18,12 @@ log = logging.getLogger('aiface_sync')
 
 def prepare_photo_for_device(photo, label: str = '') -> tuple:
     """
-    Load a photo (local path or URL), EXIF-rotate, resize ≤ 640 px, return
-    (jpeg_bytes_or_None, info_dict).  info_dict always has diagnostic keys.
+    Load a photo (Supabase object URL, external URL, or local path),
+    EXIF-rotate, resize ≤ 640 px, return (jpeg_bytes_or_None, info_dict).
+    info_dict always has diagnostic keys.
+
+    Supabase-stored values are fetched server-side with the service key
+    (private buckets reject plain GETs of the stored public-shaped URL).
 
     `label` is an optional string used only in log messages.
     """
@@ -32,7 +36,29 @@ def prepare_photo_for_device(photo, label: str = '') -> tuple:
 
     raw_bytes: bytes | None = None
 
-    if photo.startswith(('http://', 'https://')):
+    # Supabase-stored values first: production rows hold full URLs shaped
+    # .../storage/v1/object/public/<bucket>/<key>. Since the private-bucket
+    # cutover a plain GET of that stored URL returns 400, so the object must
+    # be fetched server-side with the service key. _supabase_fetch tries the
+    # authenticated endpoint first and falls back to the public endpoint, so
+    # it works in both bucket states.
+    from app.utils.upload_access import storage_ref_of, _local_ref_of
+    from app.utils.helpers import _supabase_fetch
+
+    ref = storage_ref_of(photo)
+    if ref is not None:
+        bucket, object_path = ref
+        info['source'] = 'supabase'
+        info['resolved'] = f'{bucket}/{object_path}'
+        raw_bytes, _ = _supabase_fetch(object_path, bucket=bucket)
+        if raw_bytes:
+            log.info('[aiface_sync] %s: fetched supabase object %s/%s %d bytes',
+                     label, bucket, object_path, len(raw_bytes))
+        else:
+            log.warning('[aiface_sync] %s: supabase fetch failed for %s/%s — '
+                        'falling back to direct URL', label, bucket, object_path)
+
+    if raw_bytes is None and photo.startswith(('http://', 'https://')):
         info['source'] = 'url'
         try:
             import requests as _req
@@ -52,18 +78,31 @@ def prepare_photo_for_device(photo, label: str = '') -> tuple:
             info['error'] = f'fetch_failed:{exc}'
             log.warning('[aiface_sync] %s: fetch failed: %s', label, exc)
             return None, info
-    else:
+    elif raw_bytes is None:
         info['source'] = 'local'
         from flask import current_app
         full_path = os.path.join(current_app.root_path, 'static', photo)
         info['resolved'] = full_path
-        if not os.path.isfile(full_path):
-            info['error'] = 'file_not_found'
-            log.warning('[aiface_sync] %s: file not found: %s', label, full_path)
-            return None, info
-        with open(full_path, 'rb') as fh:
-            raw_bytes = fh.read()
-        log.info('[aiface_sync] %s: read local file %d bytes', label, len(raw_bytes))
+        if os.path.isfile(full_path):
+            with open(full_path, 'rb') as fh:
+                raw_bytes = fh.read()
+            log.info('[aiface_sync] %s: read local file %d bytes', label, len(raw_bytes))
+        else:
+            # Local file missing (ephemeral fs after redeploy): legacy relative
+            # rows keep their bytes in the uploads bucket under the same key.
+            lref = _local_ref_of(photo)
+            if lref is not None:
+                bucket, object_path = lref
+                raw_bytes, _ = _supabase_fetch(object_path, bucket=bucket)
+            if raw_bytes:
+                info['source'] = 'supabase_uploads_fallback'
+                info['resolved'] = f'{lref[0]}/{lref[1]}'
+                log.info('[aiface_sync] %s: local file missing — fetched supabase '
+                         'object %s/%s %d bytes', label, lref[0], lref[1], len(raw_bytes))
+            else:
+                info['error'] = 'file_not_found'
+                log.warning('[aiface_sync] %s: file not found: %s', label, full_path)
+                return None, info
 
     # ── Pillow normalisation ──────────────────────────────────────────────────
     try:
