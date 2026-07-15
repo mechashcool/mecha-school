@@ -133,6 +133,53 @@ class Config:
         os.environ.get('MOBILE_BADGE_CACHE_TTL_SECONDS', 45)
     )
 
+    # ── Observability (P3) ─────────────────────────────────────────────────────
+    # Master switch for the in-process metrics layer: request timing,
+    # slow-request / slow-query logging, and external-service (Supabase/FCM)
+    # latency accounting. Aggregates only — no request bodies, no query
+    # parameters, no tenant data are ever recorded. Set to 'false' for an
+    # instant, behaviour-identical rollback.
+    OBSERVABILITY_ENABLED = (
+        os.environ.get('OBSERVABILITY_ENABLED', 'true').lower() == 'true'
+    )
+    # A request slower than this is logged once at WARNING (method, path
+    # WITHOUT the query string, status, duration). 0 disables the log line.
+    SLOW_REQUEST_MS = int(os.environ.get('SLOW_REQUEST_MS', 1500))
+    # A single SQL statement slower than this is logged once at WARNING with
+    # the statement truncated and WITHOUT bind parameters (no tenant data).
+    # 0 disables the log line.
+    SLOW_QUERY_MS = int(os.environ.get('SLOW_QUERY_MS', 500))
+    # Shared secret for GET /ops/metrics and /ops/health/deep via the
+    # X-Ops-Token header (for external monitoring agents). When unset, those
+    # endpoints are reachable only by an authenticated super admin session —
+    # fail closed, never open.
+    OPS_METRICS_TOKEN = os.environ.get('OPS_METRICS_TOKEN', '')
+
+    # ── Redis coordination (P3) — OPTIONAL ────────────────────────────────────
+    # When REDIS_URL is unset (the default) every Redis-backed feature silently
+    # degrades to the existing in-process behaviour: pushes use the P0 thread
+    # pool, caches stay per-process with their TTL staleness bound, rate
+    # limiting stays per-worker. Core academic/financial/attendance operations
+    # never depend on Redis availability.
+    REDIS_URL = os.environ.get('REDIS_URL', '')
+    # Namespace prefix so several environments (staging/prod) can share one
+    # Redis instance without key collisions.
+    REDIS_KEY_PREFIX = os.environ.get('REDIS_KEY_PREFIX', 'mecha')
+
+    # ── Durable push queue (P3) ────────────────────────────────────────────────
+    # When TRUE *and* REDIS_URL is configured, background push tasks
+    # (send_push_batch and the registered notification fan-out tasks) are
+    # enqueued as JSON jobs in a Redis list instead of the in-process thread
+    # pool, so queued pushes survive Gunicorn worker recycling and restarts.
+    # Payloads are primitives only; every consumer-side DB query keeps its
+    # explicit ownership filters. Without Redis this flag has no effect.
+    DURABLE_PUSH_QUEUE_ENABLED = (
+        os.environ.get('DURABLE_PUSH_QUEUE_ENABLED', 'true').lower() == 'true'
+    )
+    # A job that raises (infra/DB failure — FCM per-item failures never raise)
+    # is re-queued up to this many total attempts, then dropped with an ERROR log.
+    DURABLE_QUEUE_MAX_ATTEMPTS = int(os.environ.get('DURABLE_QUEUE_MAX_ATTEMPTS', 3))
+
     @staticmethod
     def init_app(app):
         pass

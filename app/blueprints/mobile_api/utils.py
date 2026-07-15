@@ -173,6 +173,33 @@ def photo_url(photo: str | None, *, want_video: bool = False) -> str | None:
         return None
 
 
+# ─── Pagination helper (P3) ───────────────────────────────────────────────────
+
+def page_args(default_limit: int = 50, max_limit: int = 100):
+    """Parse ?limit= and ?offset= safely: bounded and crash-proof.
+
+    Replaces the raw ``int(request.args.get(...))`` pattern, which returned a
+    500 on non-numeric input and let a negative limit reach Postgres (SQL
+    error → 500). Behaviour for well-formed input is unchanged:
+      * valid 0 ≤ limit ≤ max_limit → used as-is (limit=0 still means "empty
+        page", preserving the existing contract),
+      * limit > max_limit → clamped to max_limit (as before),
+      * non-numeric / negative limit → default_limit,
+      * non-numeric / negative offset → 0.
+    """
+    try:
+        limit = int(request.args.get('limit', default_limit))
+    except (TypeError, ValueError):
+        limit = default_limit
+    if limit < 0:
+        limit = default_limit
+    try:
+        offset = int(request.args.get('offset', 0))
+    except (TypeError, ValueError):
+        offset = 0
+    return min(limit, max_limit), max(offset, 0)
+
+
 # ─── Response helpers ─────────────────────────────────────────────────────────
 
 def ok(**kwargs):

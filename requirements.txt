@@ -20,3 +20,8 @@ PyJWT>=2.8.0
 requests>=2.31.0
 websockets>=12.0
 tzdata==2026.2
+# P3: optional Redis coordination (durable push queue, shared rate-limit
+# storage). The app runs fully without a Redis server — features activate
+# only when REDIS_URL is configured.
+redis>=5.0
+

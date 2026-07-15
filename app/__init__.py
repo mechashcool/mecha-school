@@ -49,6 +49,13 @@ def create_app(config_name=None):
     limiter.init_app(app)
     register_tenant_guards(app)
 
+    # ── Observability (P3) ────────────────────────────────────────────────────
+    # Request timing + slow-request/slow-query WARNING logs + external-service
+    # latency aggregates. Aggregates only — never bodies, query strings, bind
+    # parameters, or tenant data. No-op when OBSERVABILITY_ENABLED=false.
+    from app.utils.observability import init_app as init_observability
+    init_observability(app)
+
     login_manager.login_view = 'auth.login'
     login_manager.login_message = 'يرجى تسجيل الدخول للوصول إلى هذه الصفحة.'
     login_manager.login_message_category = 'warning'
@@ -124,6 +131,8 @@ def create_app(config_name=None):
     from app.blueprints.media             import media_bp
     # Public pages — no authentication required (e.g. /privacy)
     from app.blueprints.public_pages      import public_pages_bp
+    # Ops — /ops/health liveness + guarded /ops/metrics & /ops/health/deep (P3)
+    from app.blueprints.ops               import ops_bp
 
     app.register_blueprint(auth_bp,          url_prefix='/auth')
     app.register_blueprint(admin_bp,         url_prefix='/admin')
@@ -161,6 +170,7 @@ def create_app(config_name=None):
     app.register_blueprint(live_bp,                url_prefix='/live')
     app.register_blueprint(media_bp)          # route already includes the /media prefix
     app.register_blueprint(public_pages_bp)   # public routes — no login required
+    app.register_blueprint(ops_bp)            # routes already include the /ops prefix
 
     # ── CSRF exemptions ───────────────────────────────────────────────────────
     # These blueprints authenticate via request headers (JWT bearer token or a
@@ -643,5 +653,15 @@ def create_app(config_name=None):
 
         from app.services.fee_reminder import start_fee_reminder_scheduler
         start_fee_reminder_scheduler(app)
+
+        # Durable push-queue consumer (P3) — no-op unless REDIS_URL is set and
+        # DURABLE_PUSH_QUEUE_ENABLED is true. Never blocks startup.
+        try:
+            from app.services.durable_queue import start_consumer
+            start_consumer(app)
+        except Exception:
+            _logging.getLogger('mecha.durable_queue').exception(
+                '[durable] consumer failed to start — pushes fall back to the '
+                'in-process thread pool')
 
     return app

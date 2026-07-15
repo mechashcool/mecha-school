@@ -51,7 +51,7 @@ from app.utils.helpers import save_uploaded_file, delete_uploaded_file
 from app.utils.notification_visibility import notification_visible_to
 
 from . import mobile_api_bp
-from .utils import jwt_required, role_required, ok, ok_etag, err, photo_url
+from .utils import jwt_required, role_required, ok, ok_etag, err, photo_url, page_args
 
 
 # ─── Ownership guard ──────────────────────────────────────────────────────────
@@ -500,8 +500,7 @@ def parent_notifications():
     Query params: limit (default 50, max 100), offset (default 0).
     """
     user   = g.mobile_user
-    limit  = min(int(request.args.get('limit', 50)),  100)
-    offset = max(int(request.args.get('offset', 0)),  0)
+    limit, offset = page_args(default_limit=50, max_limit=100)
 
     # Explicit school_id guard: notification_visible_to() filters by user/role
     # but has no school filter. Without this, role-broadcast notifications from

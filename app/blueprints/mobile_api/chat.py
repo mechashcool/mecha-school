@@ -46,7 +46,7 @@ from app.utils.modules import is_module_enabled
 from app.utils.features import is_feature_enabled
 
 from . import mobile_api_bp
-from .utils import jwt_required, role_required, ok, err, photo_url
+from .utils import jwt_required, role_required, ok, err, photo_url, page_args
 
 # Mobile chat is restricted to parent and teacher roles, matching the login
 # restriction.  The individual endpoints also call _check_chat_access() for
@@ -276,6 +276,10 @@ def _member_can_send(membership: ChatRoomMember, room: ChatRoom) -> tuple[bool, 
 
 # ─── FCM push for new message ─────────────────────────────────────────────────
 
+from app.services.durable_queue import durable_task
+
+
+@durable_task('chat.send_room_pushes')
 def _send_room_pushes(room_id: int, sender_user_id: int,
                       title: str, body: str, data: dict) -> None:
     """Background task: push to every non-blocked, non-muted member of a room.
@@ -353,8 +357,7 @@ def chat_rooms():
         return guard
 
     user = g.mobile_user
-    limit  = min(int(request.args.get('limit',  50)), 100)
-    offset = max(int(request.args.get('offset',  0)),  0)
+    limit, offset = page_args(default_limit=50, max_limit=100)
     type_f = request.args.get('type', '').strip()
 
     memberships = (ChatRoomMember.query
@@ -518,7 +521,7 @@ def chat_room_messages(room_id):
     if not room:
         return err('المحادثة غير موجودة.', 404)
 
-    limit    = min(int(request.args.get('limit', 50)), 100)
+    limit, _ = page_args(default_limit=50, max_limit=100)
     before_id = request.args.get('before')
 
     q = ChatMessage.query.filter_by(room_id=room.id)

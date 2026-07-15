@@ -157,6 +157,7 @@ def _send_one(token: str, title: str, body: str,
     if not _fcm_enabled or not token:
         return False, None, 'fcm-disabled-or-missing-token'
     try:
+        from app.utils.observability import observe_external
         str_data = {k: str(v) for k, v in (data or {}).items()}
         msg = _messaging.Message(
             token=token,
@@ -177,8 +178,12 @@ def _send_one(token: str, title: str, body: str,
             ),
             data=str_data,
         )
-        msg_id = _messaging.send(msg)
-        log.info('[FCM] ✓ sent  token=%.16s…  msg_id=%s  title=%r', token, msg_id, title)
+        with observe_external('fcm'):
+            msg_id = _messaging.send(msg)
+        # P3: DEBUG — one line per DEVICE was hot-path log noise at INFO, and
+        # the notification title (private school/student content) does not
+        # belong in production logs. Failures below stay at ERROR.
+        log.debug('[FCM] ✓ sent  token=%.16s…  msg_id=%s', token, msg_id)
         return True, msg_id, None
     except Exception as exc:
         log.error('[FCM] ✗ send failed  token=%.16s…  error=%s', token, exc)
@@ -240,7 +245,10 @@ def send_push_to_user(user_id: int, title: str, body: str,
 
     role_tag = f'role={_role} ' if _role else ''
     if not tokens:
-        log.warning(
+        # P3: INFO — a device-less user is a normal state (app not installed /
+        # not yet re-registered), and in school-wide fan-outs this fired once
+        # per user at WARNING. Still visible under the gunicorn 'mecha' logger.
+        log.info(
             '[FCM] no active device tokens for user_id=%s %s— push skipped '
             '(user must log in to the mobile app on the VPS domain and '
             'call /auth/register-device or /me/device-token to register)',
@@ -248,8 +256,8 @@ def send_push_to_user(user_id: int, title: str, body: str,
         )
         return 0, 0
 
-    log.warning('[FCM] pushing to user_id=%s %stokens=%d title=%r',
-                user_id, role_tag, len(tokens), title)
+    log.debug('[FCM] pushing to user_id=%s %stokens=%d',
+              user_id, role_tag, len(tokens))
     success_count = fail_count = deactivated = 0
 
     for dt in tokens:
@@ -271,14 +279,27 @@ def send_push_to_user(user_id: int, title: str, body: str,
             log.error('[FCM] failed to persist token deactivations: %s', exc)
             db.session.rollback()
 
-    log.warning('[FCM] RESULT user_id=%s %ssent=%d  failed=%d  deactivated=%d',
-                user_id, role_tag, success_count, fail_count, deactivated)
+    # P3: per-user RESULT stays at WARNING only when something went wrong
+    # (failure/deactivation visibility is a hard requirement); clean sends log
+    # at DEBUG — the per-batch BATCH RESULT line remains the INFO-level signal.
+    if fail_count or deactivated:
+        log.warning('[FCM] RESULT user_id=%s %ssent=%d  failed=%d  deactivated=%d',
+                    user_id, role_tag, success_count, fail_count, deactivated)
+    else:
+        log.debug('[FCM] RESULT user_id=%s %ssent=%d', user_id, role_tag, success_count)
     return success_count, fail_count
 
 
+from app.services.durable_queue import durable_task
+
+
+@durable_task('fcm.send_push_batch')
 def send_push_batch(items) -> tuple[int, int]:
     """Send a batch of pushes. ``items`` is a list of primitive tuples
-    ``(user_id, title, body, data)`` — never ORM objects.
+    ``(user_id, title, body, data)`` — never ORM objects. P3: registered as a
+    durable task, so with Redis configured the batch survives worker
+    recycling; the JSON round trip turns tuples into lists, which the
+    per-item unpacking below accepts unchanged.
 
     Designed to run on the async_dispatch background thread (P0): each element
     resolves the target's own active MobileDeviceToken rows via

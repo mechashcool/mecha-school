@@ -66,7 +66,7 @@ from app.utils.helpers import calculate_grade_letter
 from app.utils.notification_visibility import notification_visible_to
 
 from . import mobile_api_bp
-from .utils import jwt_required, role_required, ok, ok_etag, err, photo_url
+from .utils import jwt_required, role_required, ok, ok_etag, err, photo_url, page_args
 
 
 # ─── Shared helpers ───────────────────────────────────────────────────────────
@@ -829,8 +829,7 @@ def teacher_exams():
     elif request.args.get('past'):
         q = q.filter(Exam.exam_date < today)
 
-    limit  = min(int(request.args.get('limit', 50)), 100)
-    offset = max(int(request.args.get('offset', 0)), 0)
+    limit, offset = page_args(default_limit=50, max_limit=100)
     # P1: eager-load the relationships the serializer touches in the same
     # statement (school criteria still applies to every joined entity), and
     # compute all result counts in ONE grouped query instead of one COUNT per
@@ -1339,6 +1338,14 @@ def teacher_exam_detail(exam_id):
 # are the existing context-independent implementations whose queries all carry
 # their own explicit school/ownership filters.
 
+# NOTE (P3): _notify_new_exam_bg and _notify_homework_bg are deliberately NOT
+# registered as durable-queue tasks. They create in-app Notification rows, and
+# the durable queue's crash-reclaim path is at-least-once — a worker dying
+# mid-job could re-run the task and duplicate those rows for parents already
+# processed. They stay on the in-process thread pool (at-most-once), where the
+# only loss window is a queued task at worker recycle. Pure-push tasks
+# (fcm.send_push_batch, chat.send_room_pushes) ARE durable: re-delivering a
+# tray notification is harmless, losing it is not.
 def _notify_new_exam_bg(exam_id: int, school_id: int) -> None:
     """Background wrapper for grades._notify_new_exam(). Never raises."""
     import logging as _mlog
@@ -1942,8 +1949,7 @@ def teacher_notifications():
     Query params: limit (default 50, max 100), offset (default 0).
     """
     user   = g.mobile_user
-    limit  = min(int(request.args.get('limit', 50)), 100)
-    offset = max(int(request.args.get('offset', 0)), 0)
+    limit, offset = page_args(default_limit=50, max_limit=100)
 
     # Apply the teacher's account creation datetime as a cutoff for broadcast
     # notifications (target_user_id IS NULL). This prevents a newly created
@@ -2030,8 +2036,7 @@ def teacher_homework_list():
     if not year:
         return ok(count=0, homework=[])
 
-    limit  = min(int(request.args.get('limit', 50)), 100)
-    offset = max(int(request.args.get('offset', 0)), 0)
+    limit, offset = page_args(default_limit=50, max_limit=100)
 
     q = (Homework.query
          .filter_by(teacher_id=emp.id, academic_year_id=year.id, is_active=True)

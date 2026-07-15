@@ -59,25 +59,30 @@ class _Resp:
         return self._json
 
 
+# P3: Supabase HTTP now goes through the shared pooled session returned by
+# app.utils.helpers._http() (connection reuse), so the stubs patch the
+# Session class methods — the boundary production code actually calls —
+# instead of the module-level requests.get/post functions.
+
 def _stub_fetch(monkeypatch):
-    """requests.get stub: public endpoint streams, everything else 400s."""
+    """Session.get stub: public endpoint streams, everything else 400s."""
     calls = []
 
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(self, url, headers=None, timeout=None):
         calls.append(url)
         if '/object/public/' in url:
             return _Resp(200)
         return _Resp(400)
 
-    monkeypatch.setattr(requests, 'get', fake_get)
+    monkeypatch.setattr(requests.Session, 'get', fake_get)
     return calls
 
 
 def _stub_sign(monkeypatch, ok=True):
-    """requests.post stub for the Supabase sign endpoint; records object URLs."""
+    """Session.post stub for the Supabase sign endpoint; records object URLs."""
     calls = []
 
-    def fake_post(url, json=None, headers=None, timeout=None):
+    def fake_post(self, url, json=None, headers=None, timeout=None):
         calls.append(url)
         if not ok:
             return _Resp(status=500)
@@ -86,7 +91,7 @@ def _stub_sign(monkeypatch, ok=True):
         rel = url[url.find(marker) + len('/storage/v1'):]
         return _Resp(json_body={'signedURL': f'{rel}?token=sig-{len(calls)}'})
 
-    monkeypatch.setattr(requests, 'post', fake_post)
+    monkeypatch.setattr(requests.Session, 'post', fake_post)
     return calls
 
 

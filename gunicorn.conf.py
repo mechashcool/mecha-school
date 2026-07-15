@@ -26,9 +26,39 @@ max_requests        = int(os.environ.get('GUNICORN_MAX_REQUESTS', 500))
 max_requests_jitter = int(os.environ.get('GUNICORN_MAX_REQUESTS_JITTER', 50))
 
 
+# ── Multi-worker scaling notes (P3) ─────────────────────────────────────────
+# Before raising WEB_CONCURRENCY above 1, align ALL of the following:
+#   * DB connections: each worker holds up to
+#       SQLALCHEMY_POOL_SIZE + SQLALCHEMY_MAX_OVERFLOW (default 5+10)
+#     connections. Total = workers × 15 must stay under the Postgres/Supabase
+#     connection budget (Supabase free tier: 60 direct).
+#   * Schedulers (auto-attendance, fee-reminder, hikvision) start in EVERY
+#     worker process — with 2+ workers they would tick twice. Keep them in one
+#     worker only: run the extra workers with ATTENDANCE_SCHEDULER_DISABLED=
+#     true / FEE_REMINDER_SCHEDULER_DISABLED=true, or move schedulers to a
+#     dedicated process before scaling.
+#   * Rate limiting: Flask-Limiter storage defaults to per-worker memory://.
+#     Set RATELIMIT_STORAGE_URI to the Redis URL so login throttling is
+#     enforced globally, not per worker.
+#   * In-process caches (badges, branding, active year, signed URLs) are
+#     per-worker; their short TTLs are the documented cross-worker staleness
+#     bound and the explicit invalidation hooks stay correct per worker.
+#   * Push queue: with REDIS_URL set, queued pushes live in Redis and any
+#     worker's consumer can process them — multi-worker safe by design.
+# The on_starting hook below logs a WARNING when workers > 1 so a scale-up
+# without this alignment is visible immediately in the logs.
+
+
 def on_starting(server):
     """Log key env vars once when the Gunicorn master starts."""
     import logging
+    if workers > 1:
+        logging.getLogger('gunicorn.error').warning(
+            '[startup] WEB_CONCURRENCY=%s (>1): verify DB pool budget '
+            '(workers × (pool_size+max_overflow) connections), disable the '
+            'attendance/fee-reminder schedulers in all but one worker, and set '
+            'RATELIMIT_STORAGE_URI to Redis for global rate limits. '
+            'See the P3 scaling notes in gunicorn.conf.py.', workers)
     logging.getLogger('gunicorn.error').info(
         '[startup] Gunicorn master starting — '
         'PORT=%s  WEB_CONCURRENCY=%s (effective workers=%s)  '

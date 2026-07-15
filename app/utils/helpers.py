@@ -35,10 +35,41 @@ def allowed_file(filename, extensions=None):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in extensions
 
 
+# ── Shared outbound HTTP session (P3) ─────────────────────────────────────────
+# Every Supabase call previously used module-level requests.get/post/put/delete,
+# which opens a fresh TCP+TLS connection per call. A process-wide Session with
+# a pooled HTTPAdapter reuses connections to the Supabase host across requests
+# and threads (requests.Session/urllib3 pools are thread-safe). No retries are
+# configured — retry semantics stay exactly as before (none), so uploads can
+# never be duplicated by a transport-level retry.
+import threading as _threading
+
+_http_session = None
+_http_session_lock = _threading.Lock()
+
+
+def _http():
+    global _http_session
+    if _http_session is None:
+        with _http_session_lock:
+            if _http_session is None:
+                import requests as _req
+                from requests.adapters import HTTPAdapter
+                s = _req.Session()
+                adapter = HTTPAdapter(
+                    pool_connections=int(os.environ.get('OUTBOUND_POOL_CONNECTIONS', 4)),
+                    pool_maxsize=int(os.environ.get('OUTBOUND_POOL_MAXSIZE', 16)),
+                )
+                s.mount('https://', adapter)
+                s.mount('http://', adapter)
+                _http_session = s
+    return _http_session
+
+
 def _supabase_upload(file_bytes: bytes, object_path: str, content_type: str,
                      bucket: str | None = None) -> str | None:
     """Upload bytes to Supabase Storage; return the public URL or None on failure."""
-    import requests as _req
+    from app.utils.observability import observe_external
     url = current_app.config.get('SUPABASE_URL', '').rstrip('/')
     key = current_app.config.get('SUPABASE_SERVICE_KEY', '')
     if bucket is None:
@@ -46,17 +77,18 @@ def _supabase_upload(file_bytes: bytes, object_path: str, content_type: str,
     if not url or not key:
         return None
     try:
-        resp = _req.put(
-            f"{url}/storage/v1/object/{bucket}/{object_path}",
-            data=file_bytes,
-            headers={
-                'Authorization': f'Bearer {key}',
-                'apikey': key,
-                'Content-Type': content_type,
-                'x-upsert': 'true',
-            },
-            timeout=30,
-        )
+        with observe_external('supabase.upload'):
+            resp = _http().put(
+                f"{url}/storage/v1/object/{bucket}/{object_path}",
+                data=file_bytes,
+                headers={
+                    'Authorization': f'Bearer {key}',
+                    'apikey': key,
+                    'Content-Type': content_type,
+                    'x-upsert': 'true',
+                },
+                timeout=30,
+            )
         if resp.status_code not in (200, 201):
             current_app.logger.error(
                 f"Supabase upload failed {resp.status_code}: {resp.text[:300]}"
@@ -76,7 +108,7 @@ def _supabase_sign(object_path: str, bucket: str | None = None,
     without proxying through Flask. Works whether the bucket is public or private.
     Never raises; never logs the service key.
     """
-    import requests as _req
+    from app.utils.observability import observe_external
     url = current_app.config.get('SUPABASE_URL', '').rstrip('/')
     key = current_app.config.get('SUPABASE_SERVICE_KEY', '')
     if bucket is None:
@@ -84,12 +116,13 @@ def _supabase_sign(object_path: str, bucket: str | None = None,
     if not url or not key or not object_path:
         return None
     try:
-        resp = _req.post(
-            f"{url}/storage/v1/object/sign/{bucket}/{object_path}",
-            json={'expiresIn': int(ttl)},
-            headers={'Authorization': f'Bearer {key}', 'apikey': key},
-            timeout=15,
-        )
+        with observe_external('supabase.sign'):
+            resp = _http().post(
+                f"{url}/storage/v1/object/sign/{bucket}/{object_path}",
+                json={'expiresIn': int(ttl)},
+                headers={'Authorization': f'Bearer {key}', 'apikey': key},
+                timeout=15,
+            )
         if resp.status_code != 200:
             current_app.logger.warning(
                 f"Supabase sign failed {resp.status_code} for object in bucket {bucket}"
@@ -123,7 +156,7 @@ def _supabase_fetch(object_path: str, bucket: str | None = None):
     Public. After the buckets are made Private the public fallback simply
     returns non-200 and the authenticated path is authoritative (fail-closed).
     """
-    import requests as _req
+    from app.utils.observability import observe_external
     url = current_app.config.get('SUPABASE_URL', '').rstrip('/')
     key = current_app.config.get('SUPABASE_SERVICE_KEY', '')
     if bucket is None:
@@ -145,7 +178,8 @@ def _supabase_fetch(object_path: str, bucket: str | None = None):
     last_status = None
     for endpoint, headers in endpoints:
         try:
-            resp = _req.get(endpoint, headers=headers, timeout=30)
+            with observe_external('supabase.fetch'):
+                resp = _http().get(endpoint, headers=headers, timeout=30)
             if resp.status_code == 200:
                 return resp.content, resp.headers.get('Content-Type',
                                                       'application/octet-stream')
@@ -175,7 +209,7 @@ def _supabase_delete(object_path: str, bucket: str | None = None) -> bool:
 
     Never raises and never logs the service key or full credentials.
     """
-    import requests as _req
+    from app.utils.observability import observe_external
     url = current_app.config.get('SUPABASE_URL', '').rstrip('/')
     key = current_app.config.get('SUPABASE_SERVICE_KEY', '')
     if bucket is None:
@@ -183,11 +217,12 @@ def _supabase_delete(object_path: str, bucket: str | None = None) -> bool:
     if not url or not key:
         return False
     try:
-        resp = _req.delete(
-            f"{url}/storage/v1/object/{bucket}/{object_path}",
-            headers={'Authorization': f'Bearer {key}', 'apikey': key},
-            timeout=30,
-        )
+        with observe_external('supabase.delete'):
+            resp = _http().delete(
+                f"{url}/storage/v1/object/{bucket}/{object_path}",
+                headers={'Authorization': f'Bearer {key}', 'apikey': key},
+                timeout=30,
+            )
         if resp.status_code not in (200, 204):
             current_app.logger.warning(
                 f"Supabase delete failed {resp.status_code} for object in bucket "

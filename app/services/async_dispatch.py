@@ -60,8 +60,18 @@ def _get_executor() -> ThreadPoolExecutor:
     return _executor
 
 
+def _inc(name: str) -> None:
+    """Best-effort observability counter (P3) — never affects dispatch."""
+    try:
+        from app.utils.observability import inc
+        inc(name)
+    except Exception:
+        pass
+
+
 def _run_inline(fn, args, kwargs) -> bool:
     """Execute fn synchronously in the caller's context (pre-P0 behaviour)."""
+    _inc('dispatch.inline')
     try:
         fn(*args, **kwargs)
     except Exception:
@@ -85,7 +95,19 @@ def submit(fn, *args, **kwargs) -> bool:
     if app.testing or app.config.get('ASYNC_DISPATCH_SYNC'):
         return _run_inline(fn, args, kwargs)
 
+    # P3: registered tasks go to the durable Redis queue when available, so
+    # queued work survives worker recycling/restarts. Falls through to the P0
+    # thread pool on ANY durable-path miss (not registered, Redis off/down,
+    # serialization failure) — behaviour then identical to pre-P3.
+    try:
+        from app.services import durable_queue
+        if durable_queue.try_enqueue(app, fn, args, kwargs):
+            return True
+    except Exception:
+        log.exception('[dispatch] durable enqueue path failed — using thread pool')
+
     if not _pending.acquire(blocking=False):
+        _inc('dispatch.saturated')
         log.warning('[dispatch] queue saturated (%d pending) — running %s inline',
                     _MAX_PENDING, getattr(fn, '__name__', repr(fn)))
         return _run_inline(fn, args, kwargs)
@@ -111,6 +133,7 @@ def submit(fn, *args, **kwargs) -> bool:
 
     try:
         _get_executor().submit(_task)
+        _inc('dispatch.queued')
         return True
     except Exception:
         # Interpreter shutting down / executor unavailable — last-resort inline.

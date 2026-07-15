@@ -28,7 +28,7 @@ from flask import g, request
 from sqlalchemy.exc import IntegrityError
 
 from app.models import db, SchoolVideo, SchoolAnnouncement, SchoolContentRead
-from .utils import jwt_required, role_required, ok, err, photo_url
+from .utils import jwt_required, role_required, ok, err, photo_url, page_args
 from . import mobile_api_bp
 
 
@@ -175,8 +175,7 @@ def _ann_dict(a, is_read=False):
 @role_required('parent', 'teacher')
 def school_videos_list():
     user   = g.mobile_user
-    limit  = min(int(request.args.get('limit',  20)), 100)
-    offset = max(int(request.args.get('offset',  0)),   0)
+    limit, offset = page_args(default_limit=20, max_limit=100)
 
     q     = _visible_videos(user).order_by(SchoolVideo.created_at.desc())
     total = q.count()
@@ -237,8 +236,7 @@ def school_video_mark_read(video_id):
 @role_required('parent', 'teacher')
 def school_announcements_list():
     user   = g.mobile_user
-    limit  = min(int(request.args.get('limit',  20)), 100)
-    offset = max(int(request.args.get('offset',  0)),   0)
+    limit, offset = page_args(default_limit=20, max_limit=100)
 
     q     = _visible_announcements(user).order_by(SchoolAnnouncement.created_at.desc())
     total = q.count()
