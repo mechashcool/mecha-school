@@ -603,6 +603,9 @@ def activate_year(school_id, year_id):
         .filter_by(school_id=school_id).update({'is_current': False})
     year.is_current = True
     db.session.commit()
+    # P2: active year changed — drop this school's cached context immediately.
+    from app.utils.context_cache import invalidate_school_context
+    invalidate_school_context(school_id)
     log_action('edit', 'academic_year', year_id,
                details=f'تفعيل العام "{year.name}" للمدرسة {school_id}')
     flash(f'تم تعيين "{year.name}" كالعام الدراسي الحالي.', 'success')

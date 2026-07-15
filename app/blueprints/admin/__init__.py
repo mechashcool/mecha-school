@@ -2492,6 +2492,10 @@ def edit_academic_year(year_id):
         year.is_current = False
 
     db.session.commit()
+    # P2: the active year may have changed — drop this school's cached context
+    # so subsequent requests scope against the new year immediately.
+    from app.utils.context_cache import invalidate_school_context
+    invalidate_school_context(year.school_id)
     log_action('edit', 'academic_year', year.id,
                details=f'renamed "{old_name}" → "{new_name}"')
     flash(f'تم تحديث العام الدراسي "{new_name}".', 'success')
@@ -2589,6 +2593,10 @@ def school_settings():
                 flash('فشل رفع الشعار. تأكد من أن الملف صورة صالحة (PNG/JPG/WEBP/SVG) ولا يتجاوز 2 ميغابايت.', 'warning')
 
         db.session.commit()
+        # P2: identity/branding changed — drop the cached branding block served
+        # by the mobile /me endpoint for this school.
+        from app.utils.context_cache import invalidate_school_context
+        invalidate_school_context(school.id)
         log_action('edit', 'school', school.id, details='white-label identity updated')
         flash('تم حفظ هوية المدرسة بنجاح.', 'success')
         return redirect(url_for('admin.school_settings'))

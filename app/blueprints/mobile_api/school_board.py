@@ -111,6 +111,9 @@ def _mark_read(user, content_type, content_id):
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
+    # P2: refresh this user's cached badge counts immediately.
+    from .badges import invalidate_user_badges
+    invalidate_user_badges(user.id)
 
 
 def _fmt_dt(dt):

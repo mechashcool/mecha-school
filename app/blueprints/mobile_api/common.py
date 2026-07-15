@@ -9,8 +9,7 @@ import logging
 from flask import g, request
 
 from app.models import db, MobileDeviceToken
-from app.utils.helpers import resolve_photo_url
-from .utils import jwt_required, role_required, ok, err
+from .utils import jwt_required, role_required, ok, err, photo_url
 from . import mobile_api_bp
 
 log = logging.getLogger('mecha.mobile.common')
@@ -24,21 +23,12 @@ def me():
     user      = g.mobile_user
     role_name = user.role.name if user.role else None
 
-    school_data = None
-    if user.school:
-        s = user.school
-        school_data = {
-            'id':            s.id,
-            'name':          s.school_name,
-            'name_ar':       s.school_name_ar,
-            'logo':          resolve_photo_url(s.logo_path),
-            'primary_color': s.primary_color,
-            'currency':      s.currency_symbol,
-            'currency_code': s.currency_code,
-            'phone':         s.phone,
-            'email':         s.email,
-            'address':       s.address,
-        }
+    # P2: the school block is served from the per-school branding cache
+    # (identical field-for-field payload, built by context_cache from the
+    # user's OWN server-side school_id; invalidated on school-settings save,
+    # 300 s TTL). Cache off/miss → same School query as before.
+    from app.utils.context_cache import get_school_branding
+    school_data = get_school_branding(user.school_id)
 
     children = None
     if role_name == 'parent':
@@ -47,7 +37,7 @@ def me():
                 'id':         c.id,
                 'student_id': c.student_id,
                 'name':       c.full_name,
-                'photo':      c.photo,
+                'photo':      photo_url(c.photo),
                 'section':    c.section.name if c.section else None,
                 'grade':      c.section.grade.name if c.section and c.section.grade else None,
                 'status':     c.status,

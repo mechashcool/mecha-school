@@ -46,7 +46,6 @@ from sqlalchemy import func
 
 from app.models import (
     db,
-    AcademicYear,
     ChatMessage,
     ChatMessageRead,
     ChatRoom,
@@ -68,6 +67,7 @@ from app.models import (
     SchoolVideo,
     StudentAttendance,
 )
+from app.utils import badge_cache
 from app.utils.notification_visibility import notification_visible_to
 
 from . import mobile_api_bp
@@ -84,14 +84,26 @@ ALLOWED_MODULES = frozenset({
 # ── Private helpers ───────────────────────────────────────────────────────────
 
 def _active_year_id(school_id: int) -> int | None:
-    """Return the id of the currently active academic year, or None."""
-    return (
-        AcademicYear.query
-        .execution_options(bypass_tenant_scope=True)
-        .with_entities(AcademicYear.id)
-        .filter_by(school_id=school_id, is_current=True)
-        .scalar()
-    )
+    """Return the id of the currently active academic year, or None.
+
+    P2: delegates to the per-school context cache (same query on a miss;
+    invalidated by year-activation routes, 60 s TTL bound)."""
+    from app.utils.context_cache import get_active_year_id
+    return get_active_year_id(school_id)
+
+
+def invalidate_user_badges(user_id: int) -> None:
+    """Drop the cached badge-counts response for ONE user (every school/role/
+    year variant of their key). Called after the user's own read/mark-viewed
+    actions so their badges refresh immediately instead of waiting out the
+    TTL. Other users' entries are never touched. Never raises."""
+    try:
+        badge_cache.invalidate(
+            lambda k: isinstance(k, tuple) and len(k) >= 3
+            and k[0] == 'mobile_badges' and k[2] == user_id
+        )
+    except Exception:
+        pass
 
 
 def _audience_values(role_name: str) -> tuple:
@@ -218,14 +230,44 @@ def badge_counts():
 
     All counts are derived from the authenticated user's school and identity.
     No client-supplied IDs are trusted.
+
+    P2 caching: the full badge payload (a dict of small ints) is cached for
+    MOBILE_BADGE_CACHE_TTL_SECONDS under a key carrying EVERY dimension the
+    counts depend on — school_id, user_id, role, active-year id — so no entry
+    can ever be served to another school, user, role, or year context. The
+    user's own read/mark-viewed actions call invalidate_user_badges() so their
+    badges refresh immediately; counts driven by OTHER actors (new messages,
+    admin status changes) may lag up to the TTL, matching the web sidebar's
+    documented badge window. BACKEND_CACHE_ENABLED=false restores per-request
+    computation exactly.
     """
+    from flask import current_app
+
     user      = g.mobile_user
     role_name = user.role.name if user.role else None
     school_id = user.school_id
 
-    # ── resolve current academic year once ────────────────────────────────────
+    # ── resolve current academic year once (per-school cached lookup) ─────────
     year_id = _active_year_id(school_id)
 
+    if current_app.config.get('BACKEND_CACHE_ENABLED', True):
+        ttl = current_app.config.get('MOBILE_BADGE_CACHE_TTL_SECONDS', 45)
+        key = ('mobile_badges', school_id, user.id, role_name, year_id)
+        badges = badge_cache.get_or_set(
+            key,
+            lambda: _compute_badge_payload(user, role_name, school_id, year_id),
+            ttl,
+        )
+    else:
+        badges = _compute_badge_payload(user, role_name, school_id, year_id)
+
+    return ok(badges=badges)
+
+
+def _compute_badge_payload(user, role_name, school_id, year_id) -> dict:
+    """Compute the badge dict — unchanged pre-P2 logic, extracted so the
+    caching wrapper above can reuse it as a loader. Every query below carries
+    its own explicit school/user/year filters exactly as before."""
     # ── fetch all per-user module views in one query ──────────────────────────
     views: dict[str, datetime] = {
         v.module: v.last_viewed_at
@@ -394,7 +436,7 @@ def badge_counts():
                     .scalar() or 0
                 )
 
-    return ok(badges={
+    return {
         'notifications':  notif_count,
         'messages':       msg_count,
         'grades':         grades_count,
@@ -405,7 +447,7 @@ def badge_counts():
         'school_board':   board_count,
         'leave_requests': leave_count,
         'complaints':     complaint_count,
-    })
+    }
 
 
 @mobile_api_bp.route('/me/mark-module-viewed/<module>', methods=['POST'])
@@ -438,4 +480,7 @@ def mark_module_viewed(module):
         db.session.add(view)
 
     db.session.commit()
+    # P2: the user just reset a module — drop their cached badge payload so the
+    # next /me/badge-counts reflects it immediately instead of after the TTL.
+    invalidate_user_badges(user.id)
     return ok(module=module, last_viewed_at=now.strftime('%Y-%m-%dT%H:%M:%S') + '+00:00')

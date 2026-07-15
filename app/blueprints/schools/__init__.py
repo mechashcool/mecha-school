@@ -404,6 +404,10 @@ def edit(school_id):
                 flash('فشل رفع الشعار. تأكد من أن الملف صورة صالحة (PNG/JPG/WEBP/SVG) ولا يتجاوز 2 ميغابايت.', 'warning')
 
         db.session.commit()
+        # P2: name/logo/identity may have changed — drop the cached branding
+        # block served by the mobile /me endpoint for this school.
+        from app.utils.context_cache import invalidate_school_context
+        invalidate_school_context(school.id)
         log_action('edit', 'school', school.id,
                    details=f'updated school "{old_name}" → "{name}", capacity={new_capacity}')
         flash(f'تم تحديث بيانات المدرسة "{name}".', 'success')
@@ -541,6 +545,9 @@ def activate_year(school_id, year_id):
     AcademicYear.query.filter_by(school_id=school_id).update({'is_current': False})
     year.is_current = True
     db.session.commit()
+    # P2: active year changed — drop this school's cached context immediately.
+    from app.utils.context_cache import invalidate_school_context
+    invalidate_school_context(school_id)
     log_action('edit', 'academic_year', year_id,
                details=f'activated year "{year.name}" for school {school_id}')
     flash(f'تم تفعيل العام الدراسي "{year.name}" كالعام الحالي.', 'success')

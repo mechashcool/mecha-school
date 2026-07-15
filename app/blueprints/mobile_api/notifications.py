@@ -72,6 +72,9 @@ def notification_mark_read(notification_id):
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
+        # P2: refresh this user's cached badge counts immediately.
+        from .badges import invalidate_user_badges
+        invalidate_user_badges(user.id)
 
     return ok(notification_id=notif.id)
 
@@ -130,5 +133,9 @@ def notification_read_all():
     except IntegrityError:
         db.session.rollback()
         # A concurrent request won the race — that is acceptable; all were marked.
+
+    # P2: refresh this user's cached badge counts immediately.
+    from .badges import invalidate_user_badges
+    invalidate_user_badges(user.id)
 
     return ok(marked=len(rows))

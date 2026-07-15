@@ -104,6 +104,35 @@ class Config:
         os.environ.get('SIGNED_URL_STABLE_WINDOWS', 'true').lower() == 'true'
     )
 
+    # ── Backend read-cache layer (P2) ──────────────────────────────────────────
+    # Master switch for the in-process TTL caches added in P2 (active academic
+    # year id, school branding payload, mobile badge counts). When FALSE every
+    # cached code path falls straight through to the previous per-request
+    # database queries — an instant, behaviour-identical rollback. All caches
+    # are per-process, keyed by their full isolation dimensions, and backed by
+    # explicit invalidation hooks at the relevant write sites plus short TTLs
+    # as the cross-worker staleness bound.
+    BACKEND_CACHE_ENABLED = (
+        os.environ.get('BACKEND_CACHE_ENABLED', 'true').lower() == 'true'
+    )
+    # Active-year id per school. Short: this value participates in tenant/year
+    # scoping, so staleness after a rollover must stay tightly bounded even on
+    # workers that missed the in-process invalidation hook.
+    ACTIVE_YEAR_CACHE_TTL_SECONDS = int(
+        os.environ.get('ACTIVE_YEAR_CACHE_TTL_SECONDS', 60)
+    )
+    # Serialized school branding block returned by /me (name, logo URL, colors,
+    # contact). Display-only data; invalidated on school-settings save.
+    SCHOOL_BRANDING_CACHE_TTL_SECONDS = int(
+        os.environ.get('SCHOOL_BRANDING_CACHE_TTL_SECONDS', 300)
+    )
+    # Mobile badge-counts response. Matches the approved 30-60 s badge window
+    # already used by the web sidebar badge cache; the user's own read/view
+    # actions invalidate immediately.
+    MOBILE_BADGE_CACHE_TTL_SECONDS = int(
+        os.environ.get('MOBILE_BADGE_CACHE_TTL_SECONDS', 45)
+    )
+
     @staticmethod
     def init_app(app):
         pass

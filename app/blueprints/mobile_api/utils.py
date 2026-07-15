@@ -180,6 +180,31 @@ def ok(**kwargs):
     return jsonify({'ok': True, **kwargs})
 
 
+def ok_etag(**kwargs):
+    """Standard success JSON response with HTTP validation (P2).
+
+    Computes a strong ETag over the exact response bytes and answers 304 (no
+    body) when the client's If-None-Match matches. Because the payload is
+    built AFTER authentication/authorization and the ETag is derived from that
+    per-user payload, a 304 can never disclose anything the 200 would not.
+    Cache-Control is ``private, no-cache``: shared caches must not store it,
+    and clients must revalidate every time — clients that never send
+    If-None-Match (the current app) get a normal 200, byte-identical to ok().
+    """
+    import hashlib
+
+    resp = jsonify({'ok': True, **kwargs})
+    etag = hashlib.sha256(resp.get_data()).hexdigest()[:32]
+    resp.set_etag(etag)
+    resp.headers['Cache-Control'] = 'private, no-cache'
+    resp = resp.make_conditional(request)
+    if resp.status_code == 304:
+        # Werkzeug strips the entity only at WSGI send time; drop it here too
+        # so the saved retransmission is guaranteed at every layer.
+        resp.set_data(b'')
+    return resp
+
+
 def err(message: str, status: int = 400):
     """Return a standard error JSON response."""
     return jsonify({'ok': False, 'error': message}), status

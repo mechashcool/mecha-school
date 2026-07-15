@@ -224,13 +224,12 @@ def _set_request_scope():
 
     if sid and sid > 0:
         from app.models import AcademicYear
+        # P2: cached per-school active-year lookup (same query on miss); the
+        # historical view-year validation below stays a direct query because
+        # it depends on the per-session selection.
+        from app.utils.context_cache import get_active_year_id
 
-        active_year_id = (
-            AcademicYear.query.execution_options(bypass_tenant_scope=True)
-            .with_entities(AcademicYear.id)
-            .filter_by(school_id=sid, is_current=True)
-            .scalar()
-        )
+        active_year_id = get_active_year_id(sid)
         g.tenant_scope_academic_year_id = active_year_id
 
         # Check whether the user has selected a historical view year in the session.
@@ -306,15 +305,13 @@ def set_mobile_request_scope(user) -> None:
     g.tenant_scope_view_year_id = None
 
     if sid and sid > 0:
-        from app.models import AcademicYear
+        # P2: cached per-school active-year lookup (same query on miss).
+        # Keyed by school_id only — the active year is a per-school fact.
+        # Year-activation routes invalidate it explicitly; a 60 s TTL bounds
+        # staleness on workers that missed the in-process invalidation.
+        from app.utils.context_cache import get_active_year_id
 
-        active_year_id = (
-            AcademicYear.query
-            .execution_options(bypass_tenant_scope=True)
-            .with_entities(AcademicYear.id)
-            .filter_by(school_id=sid, is_current=True)
-            .scalar()
-        )
+        active_year_id = get_active_year_id(sid)
         g.tenant_scope_academic_year_id = active_year_id
         g.tenant_scope_view_year_id = active_year_id  # mobile always uses the current active year
 

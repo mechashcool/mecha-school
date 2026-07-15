@@ -659,6 +659,9 @@ def chat_mark_read(room_id):
         except IntegrityError:
             db.session.rollback()
             # A concurrent mark-read won the race — receipts exist; acceptable.
+        # P2: refresh this user's cached badge counts immediately.
+        from .badges import invalidate_user_badges
+        invalidate_user_badges(user.id)
 
     return ok(marked=len(unread_ids))
 

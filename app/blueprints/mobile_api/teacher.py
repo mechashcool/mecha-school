@@ -66,7 +66,7 @@ from app.utils.helpers import calculate_grade_letter
 from app.utils.notification_visibility import notification_visible_to
 
 from . import mobile_api_bp
-from .utils import jwt_required, role_required, ok, err, photo_url
+from .utils import jwt_required, role_required, ok, ok_etag, err, photo_url
 
 
 # ─── Shared helpers ───────────────────────────────────────────────────────────
@@ -672,7 +672,10 @@ def teacher_schedule():
             return sch.section.grade.name
         return None
 
-    return ok(
+    # P2: ok_etag adds HTTP validation — clients that send If-None-Match get a
+    # bodyless 304 when the timetable is unchanged; all others receive the
+    # exact same 200 payload as before.
+    return ok_etag(
         schedule=[
             {
                 'id':           sch.id,

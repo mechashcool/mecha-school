@@ -51,7 +51,7 @@ from app.utils.helpers import save_uploaded_file, delete_uploaded_file
 from app.utils.notification_visibility import notification_visible_to
 
 from . import mobile_api_bp
-from .utils import jwt_required, role_required, ok, err, photo_url
+from .utils import jwt_required, role_required, ok, ok_etag, err, photo_url
 
 
 # ─── Ownership guard ──────────────────────────────────────────────────────────
@@ -465,7 +465,10 @@ def parent_child_schedule(student_id):
                      .order_by(Schedule.day_of_week, Schedule.start_time)
                      .all())
 
-    return ok(
+    # P2: ok_etag adds HTTP validation — clients that send If-None-Match get a
+    # bodyless 304 when the weekly schedule is unchanged; all others receive
+    # the exact same 200 payload as before.
+    return ok_etag(
         student_id=s.id,
         section=s.section.name if s.section else None,
         grade=s.section.grade.name if s.section and s.section.grade else None,
