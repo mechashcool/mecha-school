@@ -26,11 +26,13 @@ from datetime import datetime as _dt
 
 from flask import abort, g, request
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 from app.models import (
     db,
     AcademicYear,
     Complaint,
+    FeeInstallment,
     FeeRecord,
     Exam,
     ExamResult,
@@ -39,6 +41,7 @@ from app.models import (
     Notification,
     NotificationRead,
     Schedule,
+    Section,
     Student,
     StudentAttendance,
     StudentTransport,
@@ -263,15 +266,35 @@ def parent_child_fees(student_id):
 
     records = (FeeRecord.query
                .execution_options(include_all_years=True)
+               .options(joinedload(FeeRecord.fee_type),
+                        joinedload(FeeRecord.academic_year))
                .filter_by(student_id=s.id)
                .order_by(FeeRecord.id.desc())
                .all())
 
+    # P1: one batched installment query for the student's records instead of a
+    # separate query per record per access (FeeRecord.installments is
+    # lazy='dynamic', so every `rec.installments` iteration AND every
+    # `rec.total_paid` re-ran its own SELECT). The batch is scoped by the
+    # already-ownership-verified fee_record ids; the ORM tenant scope applies
+    # to it exactly as it did to the dynamic relationship queries (same school
+    # + view-year criteria — intentionally NOT include_all_years, preserving
+    # the previous per-record query semantics byte-for-byte).
+    inst_by_record: dict[int, list] = {}
+    rec_ids = [r.id for r in records]
+    if rec_ids:
+        for inst in (FeeInstallment.query
+                     .filter(FeeInstallment.fee_record_id.in_(rec_ids))
+                     .order_by(FeeInstallment.id)
+                     .all()):
+            inst_by_record.setdefault(inst.fee_record_id, []).append(inst)
+
     grand_total = grand_paid = 0.0
     records_out = []
     for rec in records:
+        rec_installments = inst_by_record.get(rec.id, [])
         net  = float(rec.net_amount)
-        paid = float(rec.total_paid)
+        paid = float(sum((i.received_amount or 0) for i in rec_installments))
         grand_total += net
         grand_paid  += paid
 
@@ -287,7 +310,7 @@ def parent_child_fees(student_id):
                 'status':          i.status,
                 'receipt_no':      i.receipt_no,
             }
-            for i in rec.installments
+            for i in rec_installments
         ]
 
         records_out.append({
@@ -322,8 +345,23 @@ def parent_child_grades(student_id):
     """All exam results across all academic years, newest first."""
     s = _assert_owns_student(student_id)
 
+    # P1: eager-load the relationships the serializer touches (exam → subject /
+    # section → grade / exam_type, and the result's academic_year) in the SAME
+    # statement instead of ~5 lazy queries per row. Loader criteria semantics
+    # are unchanged: the school filter still applies to every joined entity
+    # (with_loader_criteria, include_aliases=True) and include_all_years on
+    # this statement governs the joined loads exactly as it governed the lazy
+    # loads it replaces.
     results = (ExamResult.query
                .execution_options(include_all_years=True)
+               .options(
+                   joinedload(ExamResult.exam).joinedload(Exam.subject),
+                   joinedload(ExamResult.exam)
+                       .joinedload(Exam.section)
+                       .joinedload(Section.grade),
+                   joinedload(ExamResult.exam).joinedload(Exam.exam_type),
+                   joinedload(ExamResult.academic_year),
+               )
                .filter_by(student_id=s.id)
                .order_by(ExamResult.id.desc())
                .all())
@@ -475,10 +513,18 @@ def parent_notifications():
     total = q.count()
     rows  = q.offset(offset).limit(limit).all()
 
+    # P1: read receipts for THIS PAGE only (was: every receipt the user ever
+    # created — unbounded growth). Scope: this user's receipts, this page's
+    # notification ids.
+    page_ids = [n.id for n in rows]
     read_ids = {
-        nr.notification_id
-        for nr in NotificationRead.query.filter_by(user_id=user.id).all()
-    }
+        r[0]
+        for r in NotificationRead.query
+        .with_entities(NotificationRead.notification_id)
+        .filter(NotificationRead.user_id == user.id,
+                NotificationRead.notification_id.in_(page_ids))
+        .all()
+    } if page_ids else set()
 
     return ok(
         total=total,

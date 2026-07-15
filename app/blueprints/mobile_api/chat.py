@@ -33,7 +33,9 @@ import logging
 from datetime import datetime, timezone
 
 from flask import g, request
-from sqlalchemy import select
+from sqlalchemy import and_, func, insert, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import joinedload
 
 from app.models import (
     db, ChatRoom, ChatRoomMember, ChatMessage, ChatMessageRead,
@@ -72,7 +74,27 @@ def _get_membership(room_id: int, user_id: int) -> ChatRoomMember | None:
     return ChatRoomMember.query.filter_by(room_id=room_id, user_id=user_id).first()
 
 
-def _can_send_now(room: ChatRoom, school) -> tuple[bool, str]:
+_UNSET = object()   # sentinel: "no prefetched schedule supplied" (None is meaningful)
+
+
+def _local_now_for(school, room_id=None):
+    """School-local now, falling back to Asia/Baghdad — shared by the per-room
+    check and the batched room-list path so both use identical day/time logic."""
+    try:
+        from app.utils.attendance_helpers import get_local_now
+        return get_local_now(school)
+    except Exception:
+        # Fall back to Iraq local time rather than raw UTC.
+        # UTC gives the wrong weekday between 21:00–24:00 UTC (midnight–03:00 Iraq).
+        import pytz as _pytz
+        _log.warning(
+            '[chat_api] _local_now_for: get_local_now failed for room_id=%s — '
+            'falling back to Asia/Baghdad', room_id,
+        )
+        return datetime.now(_pytz.timezone('Asia/Baghdad')).replace(tzinfo=None)
+
+
+def _can_send_now(room: ChatRoom, school, today_sch=_UNSET) -> tuple[bool, str]:
     """
     Per-day independent schedule check.
 
@@ -82,26 +104,20 @@ def _can_send_now(room: ChatRoom, school) -> tuple[bool, str]:
     - Today's row is enabled but current time is outside the range  → blocked.
 
     Other days' enabled/disabled state never affects today's result.
+
+    ``today_sch``: optional prefetched ChatRoomSchedule row for (room, today) —
+    the room-list endpoint loads all rooms' rows in one query (P1) and passes
+    each room's row (or None) here so the decision logic stays in one place.
     """
-    try:
-        from app.utils.attendance_helpers import get_local_now
-        local_now = get_local_now(school)
-    except Exception:
-        # Fall back to Iraq local time rather than raw UTC.
-        # UTC gives the wrong weekday between 21:00–24:00 UTC (midnight–03:00 Iraq).
-        import pytz as _pytz
-        _log.warning(
-            '[chat_api] _can_send_now: get_local_now failed for room_id=%s — '
-            'falling back to Asia/Baghdad', room.id,
-        )
-        local_now = datetime.now(_pytz.timezone('Asia/Baghdad')).replace(tzinfo=None)
+    local_now = _local_now_for(school, room_id=room.id)
     dow = (local_now.weekday() + 1) % 7  # Sun=0 scheme
     now_t = local_now.time()
 
-    # Look up ONLY today's row — other days are irrelevant
-    today_sch = (ChatRoomSchedule.query
-                 .filter_by(room_id=room.id, day_of_week=dow)
-                 .first())
+    if today_sch is _UNSET:
+        # Look up ONLY today's row — other days are irrelevant
+        today_sch = (ChatRoomSchedule.query
+                     .filter_by(room_id=room.id, day_of_week=dow)
+                     .first())
 
     if today_sch is None or not today_sch.is_enabled:
         # No schedule configured for today, or today is disabled → no restriction
@@ -133,21 +149,63 @@ def _serialize_message(msg: ChatMessage, current_user_id: int) -> dict:
 
 
 def _unread_count(room_id: int, user_id: int) -> int:
-    read_msg_ids = db.session.scalars(
-        select(ChatMessageRead.message_id).where(
-            ChatMessageRead.user_id == user_id
+    """Unread messages in one room for one user — single aggregate anti-join.
+
+    P1: the previous version loaded EVERY ChatMessageRead id the user had ever
+    written (unbounded growth over account lifetime) and ran a giant NOT IN.
+    Semantics are identical: messages in this room, not deleted, not sent by
+    this user, with no read receipt BY THIS USER. Isolation: both room_id and
+    user_id are bound in the query — another user's receipts can never satisfy
+    the join, and other rooms' messages can never be counted.
+    """
+    return (
+        db.session.query(func.count(ChatMessage.id))
+        .outerjoin(
+            ChatMessageRead,
+            (ChatMessageRead.message_id == ChatMessage.id) &
+            (ChatMessageRead.user_id == user_id),
         )
-    ).all()
-    q = (ChatMessage.query
-         .filter_by(room_id=room_id, is_deleted=False)
-         .filter(ChatMessage.sender_user_id != user_id))
-    if read_msg_ids:
-        q = q.filter(ChatMessage.id.notin_(read_msg_ids))
-    return q.count()
+        .filter(
+            ChatMessage.room_id == room_id,
+            ChatMessage.is_deleted == False,
+            ChatMessage.sender_user_id != user_id,
+            ChatMessageRead.id.is_(None),
+        )
+        .scalar() or 0
+    )
+
+
+def _unread_counts_for_rooms(room_ids: list[int], user_id: int) -> dict[int, int]:
+    """Unread counts for a page of rooms in ONE grouped query (P1).
+
+    Same anti-join semantics as _unread_count, grouped by room. Keys carry the
+    caller's room ids only (already membership-verified) and the user_id bound
+    into the join — per-user, per-room isolation is structural.
+    """
+    if not room_ids:
+        return {}
+    rows = (
+        db.session.query(ChatMessage.room_id, func.count(ChatMessage.id))
+        .outerjoin(
+            ChatMessageRead,
+            (ChatMessageRead.message_id == ChatMessage.id) &
+            (ChatMessageRead.user_id == user_id),
+        )
+        .filter(
+            ChatMessage.room_id.in_(room_ids),
+            ChatMessage.is_deleted == False,
+            ChatMessage.sender_user_id != user_id,
+            ChatMessageRead.id.is_(None),
+        )
+        .group_by(ChatMessage.room_id)
+        .all()
+    )
+    return {room_id: count for room_id, count in rows}
 
 
 def _last_message_payload(room_id: int) -> dict | None:
     msg = (ChatMessage.query
+           .options(joinedload(ChatMessage.sender))
            .filter_by(room_id=room_id, is_deleted=False)
            .order_by(ChatMessage.created_at.desc())
            .first())
@@ -158,6 +216,43 @@ def _last_message_payload(room_id: int) -> dict | None:
         'sender_name': msg.sender.full_name if msg.sender else None,
         'created_at': (msg.created_at.replace(tzinfo=timezone.utc).isoformat()
                        if msg.created_at else None),
+    }
+
+
+def _last_messages_for_rooms(room_ids: list[int]) -> dict[int, dict]:
+    """Last-message payloads for a page of rooms in TWO queries (P1).
+
+    Picks max(id) per room among non-deleted messages (ids are insert-ordered,
+    matching the created_at ordering used by _last_message_payload — chat
+    messages are never backdated), then loads those rows with their senders in
+    one joined query. Only the caller's membership-verified room ids are ever
+    queried.
+    """
+    if not room_ids:
+        return {}
+    last_ids = [
+        r[0] for r in (
+            db.session.query(func.max(ChatMessage.id))
+            .filter(ChatMessage.room_id.in_(room_ids),
+                    ChatMessage.is_deleted == False)
+            .group_by(ChatMessage.room_id)
+            .all()
+        )
+    ]
+    if not last_ids:
+        return {}
+    msgs = (ChatMessage.query
+            .options(joinedload(ChatMessage.sender))
+            .filter(ChatMessage.id.in_(last_ids))
+            .all())
+    return {
+        m.room_id: {
+            'body':        m.body,
+            'sender_name': m.sender.full_name if m.sender else None,
+            'created_at':  (m.created_at.replace(tzinfo=timezone.utc).isoformat()
+                            if m.created_at else None),
+        }
+        for m in msgs
     }
 
 
@@ -284,13 +379,30 @@ def chat_rooms():
     rooms = q.offset(offset).limit(limit).all()
     mem_map = {m.room_id: m for m in memberships}
 
+    # P1: batch the per-room lookups for this page — one grouped unread query,
+    # two queries for all last messages, and one query for today's schedules —
+    # instead of 3+ queries per room. All batches are keyed strictly by this
+    # page's membership-verified room ids and the authenticated user id.
+    page_room_ids = [room.id for room in rooms]
+    unread_map = _unread_counts_for_rooms(page_room_ids, user.id)
+    last_map   = _last_messages_for_rooms(page_room_ids)
+    today_dow  = (_local_now_for(user.school).weekday() + 1) % 7  # Sun=0 scheme
+    sched_map  = {
+        s.room_id: s
+        for s in ChatRoomSchedule.query
+        .filter(ChatRoomSchedule.room_id.in_(page_room_ids),
+                ChatRoomSchedule.day_of_week == today_dow)
+        .all()
+    } if page_room_ids else {}
+
     rooms_out = []
     for room in rooms:
         mem = mem_map.get(room.id)
         can_send_flag = False
         if mem and not mem.is_blocked and not room.is_closed and room.allow_replies:
             if not room.is_announcement_only or mem.role in ('owner', 'admin'):
-                sched_ok, _ = _can_send_now(room, user.school)
+                sched_ok, _ = _can_send_now(room, user.school,
+                                            today_sch=sched_map.get(room.id))
                 can_send_flag = sched_ok
 
         rooms_out.append({
@@ -304,8 +416,8 @@ def chat_rooms():
             'my_role':             mem.role if mem else 'member',
             'is_blocked':          mem.is_blocked if mem else False,
             'is_muted':            mem.is_muted if mem else False,
-            'unread_count':        _unread_count(room.id, user.id),
-            'last_message':        _last_message_payload(room.id),
+            'unread_count':        unread_map.get(room.id, 0),
+            'last_message':        last_map.get(room.id),
         })
 
     return ok(rooms=rooms_out, total=total, limit=limit, offset=offset)
@@ -517,23 +629,38 @@ def chat_mark_read(room_id):
     if not room:
         return err('المحادثة غير موجودة.', 404)
 
-    already_read = {
-        r.message_id
-        for r in ChatMessageRead.query.filter_by(user_id=user.id).all()
-    }
-    messages = (ChatMessage.query
-                .filter_by(room_id=room.id, is_deleted=False)
-                .filter(ChatMessage.sender_user_id != user.id)
-                .all())
-    marked = 0
-    for msg in messages:
-        if msg.id not in already_read:
-            db.session.add(ChatMessageRead(message_id=msg.id, user_id=user.id))
-            marked += 1
-    if marked:
-        db.session.commit()
+    # P1: one anti-join SELECT for the missing receipt ids + one bulk INSERT —
+    # replaces loading the user's entire read history plus every room message.
+    # Scope: this room's messages only, receipts for this user only.
+    unread_ids = db.session.execute(
+        select(ChatMessage.id)
+        .outerjoin(
+            ChatMessageRead,
+            and_(
+                ChatMessageRead.message_id == ChatMessage.id,
+                ChatMessageRead.user_id == user.id,
+            ),
+        )
+        .where(
+            ChatMessage.room_id == room.id,
+            ChatMessage.is_deleted == False,
+            ChatMessage.sender_user_id != user.id,
+            ChatMessageRead.id.is_(None),
+        )
+    ).scalars().all()
 
-    return ok(marked=marked)
+    if unread_ids:
+        try:
+            db.session.execute(
+                insert(ChatMessageRead),
+                [{'message_id': mid, 'user_id': user.id} for mid in unread_ids],
+            )
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            # A concurrent mark-read won the race — receipts exist; acceptable.
+
+    return ok(marked=len(unread_ids))
 
 
 # ─── Mute / unmute room ──────────────────────────────────────────────────────
@@ -631,21 +758,42 @@ def chat_contacts():
                              .all())
                 for (eid,) in subj_rows:
                     emp_ids.add(eid)
-                for eid in emp_ids:
-                    emp = db.session.get(Employee, eid)
-                    if emp and emp.user_id and emp.school_id == school_id:
-                        u = db.session.get(User, emp.user_id)
-                        # Validate the linked User's school too — an
-                        # Employee.school_id / User.school_id mismatch must never
-                        # surface a teacher from another school as a contact.
-                        if u and u.is_active and u.school_id == school_id:
-                            contacts.append({
-                                'user_id':  u.id,
-                                'name':     u.full_name,
-                                'role':     'teacher',
-                                'job_title': emp.job_title,
-                                'photo':    photo_url(emp.photo),
-                            })
+                # P1: two batched queries instead of 2 lookups per employee.
+                # Same guards as before, now as explicit SQL filters:
+                # Employee.school_id == school AND the linked User is active
+                # and in the SAME school — an Employee/User school mismatch
+                # must never surface a teacher from another school as a contact.
+                emp_rows = (
+                    Employee.query
+                    .execution_options(bypass_tenant_scope=True)
+                    .filter(
+                        Employee.id.in_(emp_ids),
+                        Employee.school_id == school_id,
+                        Employee.user_id.isnot(None),
+                    )
+                    .all()
+                ) if emp_ids else []
+                teacher_users = {
+                    u.id: u
+                    for u in User.query
+                    .execution_options(bypass_tenant_scope=True)
+                    .filter(
+                        User.id.in_([e.user_id for e in emp_rows]),
+                        User.school_id == school_id,
+                        User.is_active.is_(True),
+                    )
+                    .all()
+                } if emp_rows else {}
+                for emp_row in emp_rows:
+                    u = teacher_users.get(emp_row.user_id)
+                    if u:
+                        contacts.append({
+                            'user_id':  u.id,
+                            'name':     u.full_name,
+                            'role':     'teacher',
+                            'job_title': emp_row.job_title,
+                            'photo':    photo_url(emp_row.photo),
+                        })
 
         # School admins
         admins = (User.query
@@ -683,16 +831,27 @@ def chat_contacts():
                                    .filter(parent_students.c.student_id.in_(student_ids))
                                    .all())
                     parent_ids = {row[0] for row in parent_rows}
-                    for pid in parent_ids:
-                        p = db.session.get(User, pid)
-                        if p and p.is_active and p.school_id == school_id:
-                            contacts.append({
-                                'user_id':  p.id,
-                                'name':     p.full_name,
-                                'role':     'parent',
-                                'job_title': None,
-                                'photo':    photo_url(p.avatar),
-                            })
+                    # P1: one batched query instead of one lookup per parent.
+                    # Same guards as before as explicit filters: active users
+                    # in the teacher's OWN school only.
+                    parents_batch = (
+                        User.query
+                        .execution_options(bypass_tenant_scope=True)
+                        .filter(
+                            User.id.in_(parent_ids),
+                            User.school_id == school_id,
+                            User.is_active.is_(True),
+                        )
+                        .all()
+                    ) if parent_ids else []
+                    for p in parents_batch:
+                        contacts.append({
+                            'user_id':  p.id,
+                            'name':     p.full_name,
+                            'role':     'parent',
+                            'job_title': None,
+                            'photo':    photo_url(p.avatar),
+                        })
 
         # School admins
         admins = (User.query

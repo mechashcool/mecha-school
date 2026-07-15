@@ -40,7 +40,8 @@ from datetime import datetime as _dt
 from decimal import Decimal, InvalidOperation
 
 from flask import abort, g, jsonify, request
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.orm import joinedload
 
 from app.models import (
     db,
@@ -350,9 +351,46 @@ def teacher_sections():
     section_ids  = _teacher_section_ids(emp)
     homeroom_ids = {s.id for s in emp.sections_managed}
     sections     = (Section.query
+                    .options(joinedload(Section.grade))
                     .filter(Section.id.in_(section_ids))
                     .order_by(Section.id)
                     .all()) if section_ids else []
+
+    # P1: batch what was 3 queries per section (student count, subject-pair
+    # lookup, subject rows) into 3 queries total for the whole list. Every
+    # batch is bound to this teacher's OWN section ids (server-derived) and,
+    # for subjects, to this teacher's OWN teacher_subjects assignment rows —
+    # identical scope to the per-section queries replaced.
+    student_counts: dict[int, int] = {}
+    subs_by_section: dict[int, list[dict]] = {}
+    if sections:
+        sec_ids = [sec.id for sec in sections]
+        student_counts = dict(
+            db.session.query(Student.section_id, func.count(Student.id))
+            .filter(Student.section_id.in_(sec_ids), Student.status == 'active')
+            .group_by(Student.section_id)
+            .all()
+        )
+        pair_rows = db.session.execute(
+            select(teacher_subjects.c.section_id, teacher_subjects.c.subject_id)
+            .where(
+                teacher_subjects.c.employee_id == emp.id,
+                teacher_subjects.c.section_id.in_(sec_ids),
+            )
+            .distinct()
+        ).fetchall()
+        subj_ids = {r.subject_id for r in pair_rows}
+        subj_map = {
+            subj.id: subj
+            for subj in Subject.query.filter(Subject.id.in_(subj_ids)).all()
+        } if subj_ids else {}
+        for r in pair_rows:
+            subj = subj_map.get(r.subject_id)
+            if subj is not None:
+                subs_by_section.setdefault(r.section_id, []).append(
+                    {'id': subj.id, 'name': subj.name})
+        for subj_list in subs_by_section.values():
+            subj_list.sort(key=lambda d: d['name'])   # same order as _section_subjects
 
     return ok(
         sections=[
@@ -364,9 +402,9 @@ def teacher_sections():
                 'stage':         sec.grade.stage if sec.grade else None,
                 'display_name':  f"{sec.grade.name} - شعبة {sec.name}" if sec.grade else sec.name,
                 'capacity':      sec.capacity,
-                'student_count': Student.query.filter_by(section_id=sec.id, status='active').count(),
+                'student_count': student_counts.get(sec.id, 0),
                 'is_homeroom':   sec.id in homeroom_ids,
-                'subjects':      _section_subjects(emp.id, sec.id),
+                'subjects':      subs_by_section.get(sec.id, []),
             }
             for sec in sections
         ],
@@ -790,7 +828,27 @@ def teacher_exams():
 
     limit  = min(int(request.args.get('limit', 50)), 100)
     offset = max(int(request.args.get('offset', 0)), 0)
-    exams  = q.order_by(Exam.exam_date.desc()).offset(offset).limit(limit).all()
+    # P1: eager-load the relationships the serializer touches in the same
+    # statement (school criteria still applies to every joined entity), and
+    # compute all result counts in ONE grouped query instead of one COUNT per
+    # exam. The grouped query runs under the same ORM tenant scope as the
+    # per-exam counts it replaces, restricted to this page's exam ids — which
+    # already passed the teacher's section/subject access filter.
+    exams = (q.options(
+                 joinedload(Exam.subject),
+                 joinedload(Exam.section).joinedload(Section.grade),
+                 joinedload(Exam.exam_type),
+             )
+             .order_by(Exam.exam_date.desc())
+             .offset(offset).limit(limit).all())
+
+    exam_ids = [e.id for e in exams]
+    result_counts = dict(
+        db.session.query(ExamResult.exam_id, func.count(ExamResult.id))
+        .filter(ExamResult.exam_id.in_(exam_ids))
+        .group_by(ExamResult.exam_id)
+        .all()
+    ) if exam_ids else {}
 
     return ok(
         count=len(exams),
@@ -815,7 +873,7 @@ def teacher_exams():
                 'pass_marks':      float(e.pass_marks),
                 'notes':           None,
                 'is_upcoming':     e.exam_date >= today if e.exam_date else None,
-                'result_count':    ExamResult.query.filter_by(exam_id=e.id).count(),
+                'result_count':    result_counts.get(e.id, 0),
                 'created_at':      e.created_at.isoformat() if e.created_at else None,
             }
             for e in exams
@@ -1899,10 +1957,18 @@ def teacher_notifications():
     total = q.count()
     rows  = q.offset(offset).limit(limit).all()
 
+    # P1: read receipts for THIS PAGE only (was: every receipt the user ever
+    # created — unbounded growth). Scope: this user's receipts, this page's
+    # notification ids.
+    page_ids = [n.id for n in rows]
     read_ids = {
-        nr.notification_id
-        for nr in NotificationRead.query.filter_by(user_id=user.id).all()
-    }
+        r[0]
+        for r in NotificationRead.query
+        .with_entities(NotificationRead.notification_id)
+        .filter(NotificationRead.user_id == user.id,
+                NotificationRead.notification_id.in_(page_ids))
+        .all()
+    } if page_ids else set()
 
     return ok(
         total=total,

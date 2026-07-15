@@ -91,6 +91,19 @@ class Config:
         os.environ.get('MEDIA_REDIRECT_SIGN_TTL_SECONDS', 3600)
     )
 
+    # ── Stable HMAC signed-URL windows (P1) ────────────────────────────────────
+    # When TRUE (default), the exp embedded in /media-proxy HMAC URLs is
+    # quantised to fixed windows (window = the URL's TTL) so repeated mints for
+    # the same object inside one window produce a byte-identical URL. Stable
+    # URLs let browser HTTP caches and the Flutter image cache actually hit
+    # instead of re-downloading every photo on each request. Remaining validity
+    # stays within [TTL, 2×TTL). Authorization is unchanged — the token still
+    # grants exactly one (bucket, object) and is only minted after ownership
+    # checks. Set to 'false' to restore per-request expiries (instant rollback).
+    SIGNED_URL_STABLE_WINDOWS = (
+        os.environ.get('SIGNED_URL_STABLE_WINDOWS', 'true').lower() == 'true'
+    )
+
     @staticmethod
     def init_app(app):
         pass

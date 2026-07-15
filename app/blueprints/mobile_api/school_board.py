@@ -74,11 +74,23 @@ def _visible_announcements(user):
     )
 
 
-def _read_set(user_id, content_type):
-    """Return the set of content_ids already read by this user."""
+def _read_set(user_id, content_type, content_ids):
+    """Return which of ``content_ids`` this user has already read.
+
+    P1: scoped to the ids actually being serialised (was: every read receipt
+    the user ever created — unbounded growth). Isolation unchanged: receipts
+    are filtered by this user_id and content_type; the ids come from queries
+    already filtered by school + audience + active/publish window.
+    """
+    if not content_ids:
+        return set()
     rows = (
         SchoolContentRead.query
-        .filter_by(user_id=user_id, content_type=content_type)
+        .filter(
+            SchoolContentRead.user_id == user_id,
+            SchoolContentRead.content_type == content_type,
+            SchoolContentRead.content_id.in_(content_ids),
+        )
         .with_entities(SchoolContentRead.content_id)
         .all()
     )
@@ -167,7 +179,7 @@ def school_videos_list():
     total = q.count()
     items = q.offset(offset).limit(limit).all()
 
-    read_ids = _read_set(user.id, 'video')
+    read_ids = _read_set(user.id, 'video', [v.id for v in items])
     return ok(
         total=total, limit=limit, offset=offset,
         videos=[_video_dict(v, v.id in read_ids) for v in items],
@@ -187,7 +199,7 @@ def school_videos_featured():
     )
     if not video:
         return ok(video=None)
-    read_ids = _read_set(user.id, 'video')
+    read_ids = _read_set(user.id, 'video', [video.id])
     return ok(video=_video_dict(video, video.id in read_ids))
 
 
@@ -229,7 +241,7 @@ def school_announcements_list():
     total = q.count()
     items = q.offset(offset).limit(limit).all()
 
-    read_ids = _read_set(user.id, 'announcement')
+    read_ids = _read_set(user.id, 'announcement', [a.id for a in items])
     return ok(
         total=total, limit=limit, offset=offset,
         announcements=[_ann_dict(a, a.id in read_ids) for a in items],
@@ -249,7 +261,7 @@ def school_announcements_featured():
     )
     if not ann:
         return ok(announcement=None)
-    read_ids = _read_set(user.id, 'announcement')
+    read_ids = _read_set(user.id, 'announcement', [ann.id])
     return ok(announcement=_ann_dict(ann, ann.id in read_ids))
 
 
@@ -309,8 +321,14 @@ def school_board():
         .limit(5).all()
     )
 
-    read_video_ids = _read_set(user.id, 'video')
-    read_ann_ids   = _read_set(user.id, 'announcement')
+    video_ids = [v.id for v in videos]
+    if featured_video:
+        video_ids.append(featured_video.id)
+    ann_ids = [a.id for a in announcements]
+    if featured_ann:
+        ann_ids.append(featured_ann.id)
+    read_video_ids = _read_set(user.id, 'video', video_ids)
+    read_ann_ids   = _read_set(user.id, 'announcement', ann_ids)
 
     return ok(
         featured_video=(

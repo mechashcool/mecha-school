@@ -378,8 +378,28 @@ def _public_branding_url(object_path: str) -> str | None:
 
 
 def make_remote_token(bucket: str, object_path: str, ttl: int = 900) -> tuple[str, str]:
-    """HMAC token authorising proxy access to a private Supabase object."""
-    exp = str(int(time.time()) + int(ttl))
+    """HMAC token authorising proxy access to a private Supabase object.
+
+    P1 — stable windows: the expiry is quantised to fixed windows (window =
+    ``ttl``) so every mint for the same object inside one window yields the
+    SAME ``exp``/``sig`` and therefore a byte-identical URL. This is what lets
+    client-side HTTP/image caches hit instead of re-downloading the same photo
+    on every API response. Remaining validity is always within [ttl, 2*ttl);
+    ``verify_remote_token`` is unchanged.
+
+    Security: quantisation changes WHEN the token expires, never WHAT it
+    authorises — the signature still binds exactly one (bucket, object_path)
+    and callers still mint it only AFTER route-level ownership checks. Set
+    SIGNED_URL_STABLE_WINDOWS=false to restore per-request expiries.
+    """
+    now = int(time.time())
+    ttl = int(ttl)
+    if ttl >= 60 and current_app.config.get('SIGNED_URL_STABLE_WINDOWS', True):
+        window = ttl
+        exp_val = ((now // window) + 1) * window + ttl
+    else:
+        exp_val = now + ttl
+    exp = str(exp_val)
     return exp, _sign(f'{bucket}|{object_path}|{exp}')
 
 
