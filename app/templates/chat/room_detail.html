@@ -213,6 +213,16 @@
                     </button>
                   </form>
                   {% endif %}
+                  {% if room.type != 'private' and mem.user_id != current_user.id %}
+                  {% set _mname = member_display_names.get(mem.user_id) or '—' %}
+                  <form method="POST"
+                        action="{{ url_for('chat.remove_member', room_id=room.id, user_id=mem.user_id) }}"
+                        onsubmit='return confirm("هل أنت متأكد من طرد " + {{ _mname | tojson }} + " من المجموعة " + {{ room.name | tojson }} + "؟\nسيفقد العضو الوصول إلى المجموعة ورسائلها المستقبلية، ويمكن إضافته مرة أخرى لاحقاً.");'>
+                    <button class="btn btn-xs btn-outline-danger" title="طرد من المجموعة">
+                      <i class="bi bi-box-arrow-left" style="font-size:11px"></i>
+                    </button>
+                  </form>
+                  {% endif %}
                 {% endif %}
               </div>
             </li>

@@ -211,6 +211,18 @@ var SECTIONS_PREVIEW_URL = "{{ url_for('chat.sections_preview') }}";
                       <button class="btn btn-xs btn-outline-danger">حظر</button>
                     </form>
                     {% endif %}
+                    {% if room.type != 'private' and mem.user_id != current_user.id %}
+                    {% set _mname = mem.user.full_name if mem.user else '—' %}
+                    <form method="POST"
+                          action="{{ url_for('chat.remove_member', room_id=room.id, user_id=mem.user_id) }}"
+                          class="d-inline"
+                          onsubmit='return confirm("هل أنت متأكد من طرد " + {{ _mname | tojson }} + " من المجموعة " + {{ room.name | tojson }} + "؟\nسيفقد العضو الوصول إلى المجموعة ورسائلها المستقبلية، ويمكن إضافته مرة أخرى لاحقاً.");'>
+                      <input type="hidden" name="next" value="edit">
+                      <button class="btn btn-xs btn-outline-danger" title="طرد من المجموعة">
+                        <i class="bi bi-box-arrow-left"></i>
+                      </button>
+                    </form>
+                    {% endif %}
                   {% endif %}
                 </td>
               </tr>

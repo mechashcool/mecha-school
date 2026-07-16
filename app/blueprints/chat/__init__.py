@@ -14,6 +14,7 @@ POST /chat/rooms/<id>/reopen                       – reopen room
 POST /chat/rooms/<id>/delete                       – permanently delete group room
 POST /chat/rooms/<id>/members/<uid>/block          – block member
 POST /chat/rooms/<id>/members/<uid>/unblock        – unblock member
+POST /chat/rooms/<id>/members/<uid>/remove         – remove member from group
 POST /chat/rooms/<id>/members/<uid>/make-admin     – promote to admin
 POST /chat/rooms/<id>/members/<uid>/remove-admin   – demote to member
 POST /chat/rooms/<id>/messages/<mid>/delete        – soft-delete message
@@ -1773,6 +1774,77 @@ def unblock_member(room_id, user_id):
     db.session.commit()
     flash('تم إلغاء حظر العضو.', 'success')
     return redirect(url_for('chat.room_detail', room_id=room.id))
+
+
+# ─── Remove member from group ─────────────────────────────────────────────────
+
+@chat_bp.route('/rooms/<int:room_id>/members/<int:user_id>/remove', methods=['POST'])
+@login_required
+@admin_required
+def remove_member(room_id, user_id):
+    """
+    Remove (kick) a member from a group/announcement room.
+
+    Deletes ONLY the ChatRoomMember row for (room, user):
+    - The user account and school records are untouched.
+    - Historical messages and their read receipts remain intact.
+    - Memberships in other rooms are unaffected.
+    - Any room-level moderator role disappears with the membership row.
+    - The user may be re-added later via add_member / rebuild_members.
+
+    Security:
+    - Admin only (@admin_required) — enforced server-side regardless of
+      whether the button is visible in any UI.
+    - Room lookup is scoped by the authenticated school context; the
+      client-supplied room_id/user_id are never trusted on their own.
+    - Private rooms are rejected (403) — removal is for groups only.
+    - The acting user cannot remove themselves.
+    - The room owner cannot be removed.
+    """
+    _require_chat_module()
+    school = get_current_school()
+    if not school:
+        abort(404)
+    room = (ChatRoom.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(id=room_id, school_id=school.id)
+            .first_or_404())
+
+    if room.type == 'private':
+        abort(403)
+
+    member = ChatRoomMember.query.filter_by(
+        room_id=room.id, user_id=user_id).first_or_404()
+
+    # Allow-listed redirect target — the action exists on both the room page
+    # and the edit page; anything other than 'edit' falls back to room_detail.
+    _dest = (url_for('chat.edit_room', room_id=room.id)
+             if request.form.get('next') == 'edit'
+             else url_for('chat.room_detail', room_id=room.id))
+
+    if member.user_id == current_user.id:
+        flash('لا يمكنك طرد نفسك من المجموعة.', 'warning')
+        return redirect(_dest)
+
+    if member.role == 'owner':
+        flash('لا يمكن طرد منشئ المجموعة.', 'warning')
+        return redirect(_dest)
+
+    target = (User.query
+              .execution_options(bypass_tenant_scope=True)
+              .filter_by(id=member.user_id)
+              .first())
+    target_name = ((target.full_name or target.username)
+                   if target else f'#{user_id}')
+    member_role = member.role
+
+    db.session.delete(member)
+    db.session.commit()
+    _log.info('[chat] remove_member room_id=%s removed user_id=%s role=%s '
+              'by user=%s school=%s',
+              room.id, user_id, member_role, current_user.id, school.id)
+    flash(f'تم طرد {target_name} من المجموعة "{room.name}".', 'success')
+    return redirect(_dest)
 
 
 # ─── Assign / remove room admin ───────────────────────────────────────────────
