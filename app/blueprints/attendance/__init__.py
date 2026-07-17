@@ -1218,7 +1218,7 @@ def _suspension_student_payload(student):
 
 @attendance_bp.route('/suspensions/api/stages')
 @login_required
-@admin_required
+@permission_required('manage_suspensions')
 def suspension_api_stages():
     school = get_current_school()
     year = get_active_year(school.id) if school else None
@@ -1241,7 +1241,7 @@ def suspension_api_stages():
 
 @attendance_bp.route('/suspensions/api/grades')
 @login_required
-@admin_required
+@permission_required('manage_suspensions')
 def suspension_api_grades():
     school = get_current_school()
     year = get_active_year(school.id) if school else None
@@ -1259,7 +1259,7 @@ def suspension_api_grades():
 
 @attendance_bp.route('/suspensions/api/sections')
 @login_required
-@admin_required
+@permission_required('manage_suspensions')
 def suspension_api_sections():
     school = get_current_school()
     year = get_active_year(school.id) if school else None
@@ -1281,7 +1281,7 @@ def suspension_api_sections():
 
 @attendance_bp.route('/suspensions/students/search')
 @login_required
-@admin_required
+@permission_required('manage_suspensions')
 def suspension_search_students():
     school = get_current_school()
     if not school:
@@ -1322,7 +1322,7 @@ def suspension_search_students():
 
 @attendance_bp.route('/suspensions')
 @login_required
-@admin_required
+@permission_required('manage_suspensions')
 def suspensions():
     school = get_current_school()
 
@@ -1340,7 +1340,7 @@ def suspensions():
 @attendance_bp.route('/suspensions/create', methods=['POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_suspensions')
 def create_suspension():
     school = get_current_school()
     year   = get_active_year(school.id) if school else None
@@ -1395,7 +1395,7 @@ def create_suspension():
 @attendance_bp.route('/suspensions/<int:susp_id>/delete', methods=['POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_suspensions')
 def delete_suspension(susp_id):
     school = get_current_school()
     # Scope the lookup to the current school so an admin cannot delete another

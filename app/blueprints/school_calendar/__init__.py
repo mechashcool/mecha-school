@@ -22,7 +22,8 @@ from flask import (Blueprint, flash, redirect, render_template,
 from flask_login import current_user, login_required
 
 from app.models import (db, School, SchoolHoliday, AcademicYear)
-from app.utils.decorators import admin_required, get_current_school, get_active_year
+from app.utils.decorators import (admin_required, permission_required,
+                                   get_current_school, get_active_year)
 
 school_calendar_bp = Blueprint(
     'school_calendar', __name__,
@@ -95,7 +96,7 @@ def _parse_weekly_off_days():
 
 @school_calendar_bp.route('/')
 @login_required
-@admin_required
+@permission_required('manage_calendar')
 def index():
     school = _school_or_abort()
     if not school:
@@ -135,7 +136,7 @@ def index():
 
 @school_calendar_bp.route('/weekly', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_calendar')
 def save_weekly():
     school = _school_or_abort()
     if not school:
@@ -154,7 +155,7 @@ def save_weekly():
 
 @school_calendar_bp.route('/add', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_calendar')
 def add():
     school = _school_or_abort()
     if not school:
@@ -206,7 +207,7 @@ def add():
 
 @school_calendar_bp.route('/<int:holiday_id>/edit', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_calendar')
 def edit(holiday_id):
     school = _school_or_abort()
     if not school:
@@ -277,7 +278,7 @@ def edit(holiday_id):
 
 @school_calendar_bp.route('/<int:holiday_id>/toggle', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_calendar')
 def toggle(holiday_id):
     school = _school_or_abort()
     if not school:
@@ -301,7 +302,7 @@ def toggle(holiday_id):
 
 @school_calendar_bp.route('/<int:holiday_id>/delete', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_calendar')
 def delete(holiday_id):
     school = _school_or_abort()
     if not school:

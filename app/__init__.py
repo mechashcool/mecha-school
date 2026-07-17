@@ -220,7 +220,17 @@ def create_app(config_name=None):
                 return redirect(url_for('parent.dashboard'))
             if _cu.role and _cu.role.name == 'teacher':
                 return redirect(url_for('teacher.dashboard'))
-            return redirect(url_for('admin.dashboard'))
+            if _cu.role and _cu.role.name == 'investor_viewer':
+                return redirect(url_for('investor.dashboard'))
+            if _cu.role and _cu.role.name == 'accountant':
+                return redirect(url_for('fees.index'))
+            # Staff land on the FIRST page their role's permissions authorize.
+            # Admin tiers always resolve to the dashboard (has_permission
+            # bypass); other roles get the dashboard only when view_dashboard
+            # is granted, otherwise their first authorized page.
+            from app.utils.permissions_catalog import get_landing_endpoint
+            landing = get_landing_endpoint(_cu)
+            return redirect(url_for(landing or 'auth.profile'))
         return redirect(url_for('auth.login'))
 
     # ── Context processors ────────────────────────────────────────────────────

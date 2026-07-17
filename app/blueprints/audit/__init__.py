@@ -4,7 +4,7 @@ Al-Muhandis – Audit Log Blueprint
 from flask import Blueprint, render_template, request
 from flask_login import login_required
 from app.models import AuditLog, User
-from app.utils.decorators import admin_required
+from app.utils.decorators import admin_required, permission_required
 
 audit_bp = Blueprint('audit', __name__,
                       template_folder='../../templates/audit')
@@ -12,7 +12,7 @@ audit_bp = Blueprint('audit', __name__,
 
 @audit_bp.route('/')
 @login_required
-@admin_required
+@permission_required('view_audit_log')
 def index():
     page    = request.args.get('page', 1, type=int)
     user_id = request.args.get('user_id', type=int)

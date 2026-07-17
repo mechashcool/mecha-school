@@ -57,14 +57,15 @@ def _attachment_type(filename: str) -> str:
 # ── Access guard ──────────────────────────────────────────────────────────────
 
 def homework_access_required(f):
-    """Allow teachers AND admins; block everyone else."""
+    """Allow teachers, admins, and any role granted manage_homework."""
     @wraps(f)
     @login_required
     def wrapper(*args, **kwargs):
         if not current_user.role:
             abort(403)
         role_name = current_user.role.name
-        if not (current_user.is_admin_user or role_name == 'teacher'):
+        if not (current_user.is_admin_user or role_name == 'teacher'
+                or current_user.has_permission('manage_homework')):
             flash('هذه الصفحة مخصصة للمعلمين والمسؤولين فقط.', 'warning')
             return redirect(url_for('admin.dashboard'))
         return f(*args, **kwargs)
@@ -110,7 +111,14 @@ def _teacher_grades(sections: list) -> list:
 
 
 def _is_admin() -> bool:
-    return current_user.is_admin_user
+    if current_user.is_admin_user:
+        return True
+    # Teachers keep their own (assignment-scoped) branch even if a permission
+    # is ever added to their role; any OTHER role granted manage_homework gets
+    # the admin-side behaviour — still strictly school-scoped by every query.
+    if current_user.role and current_user.role.name == 'teacher':
+        return False
+    return current_user.has_permission('manage_homework')
 
 
 def _hw_exists(school_id: int, year_id: int, teacher_id, subject_id,

@@ -34,6 +34,8 @@
           <span class="badge bg-warning text-dark ms-auto">مسؤول كامل الصلاحيات</span>
           {% elif role.name == 'school_admin' %}
           <span class="badge bg-success ms-auto">School Manager</span>
+          {% elif role.name not in builtin_role_names %}
+          <span class="badge ms-auto" style="background:#1a3a5c">دور مخصص</span>
           {% endif %}
         </div>
       </div>
@@ -70,13 +72,24 @@
       <div class="card-footer d-flex justify-content-between align-items-center">
         <small class="text-muted">
           <i class="bi bi-people me-1"></i>
-          {{ role.users.count() }} مستخدم
+          {{ user_counts.get(role.id, 0) }} مستخدم
         </small>
         {% if not protected_role %}
-        <a href="{{ url_for('admin.edit_role', role_id=role.id) }}"
-           class="btn btn-sm btn-outline-primary">
-          <i class="bi bi-pencil me-1"></i>تعديل الصلاحيات
-        </a>
+        <div class="d-flex gap-2">
+          <a href="{{ url_for('admin.edit_role', role_id=role.id) }}"
+             class="btn btn-sm btn-outline-primary">
+            <i class="bi bi-pencil me-1"></i>تعديل الصلاحيات
+          </a>
+          {% if role.name not in builtin_role_names and user_counts.get(role.id, 0) == 0 %}
+          <form method="POST" action="{{ url_for('admin.delete_role', role_id=role.id) }}"
+                onsubmit="return confirm('هل أنت متأكد من حذف هذا الدور نهائياً؟')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-sm btn-outline-danger">
+              <i class="bi bi-trash me-1"></i>حذف
+            </button>
+          </form>
+          {% endif %}
+        </div>
         {% else %}
         <span class="badge bg-light text-muted border">System role</span>
         {% endif %}

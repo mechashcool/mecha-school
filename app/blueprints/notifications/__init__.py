@@ -163,6 +163,17 @@ _ADMIN_NTYPES      = frozenset({'announcement'})
 @notifications_bp.route('/')
 @login_required
 def index():
+    # Staff need the view/manage notification permission to open the inbox
+    # (admin tiers pass via the has_permission bypass). Parents, teachers and
+    # investors keep their portal access by role — their own notification
+    # feed predates the permission and must not depend on a reseed.
+    _role = current_user.role.name if current_user.role else ''
+    if _role not in ('parent', 'teacher', 'investor_viewer') and not (
+            current_user.has_permission('view_notifications')
+            or current_user.has_permission('manage_notifications')):
+        from flask import abort
+        abort(403)
+
     school = get_current_school()
     school_id = school.id if school else None
 

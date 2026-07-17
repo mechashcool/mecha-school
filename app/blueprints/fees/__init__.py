@@ -1330,7 +1330,7 @@ def student_statement(student_id):
 
 @fees_bp.route('/reminder-settings', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_fees')
 def reminder_settings():
     # Resolve school_id explicitly — do NOT rely on get_current_school() because
     # it can return a SchoolSettings fallback object for super_admin without an

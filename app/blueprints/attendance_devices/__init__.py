@@ -45,7 +45,9 @@ from app.models import (db, AttendanceDevice, DeviceEventLog,
                         DeviceStudentMapping, DeviceEmployeeMapping,
                         Student, Employee)
 from app.services.hikvision import sync_device, test_connection
-from app.utils.decorators import (admin_required, get_active_year, get_current_school,
+from app.utils.decorators import (admin_required, permission_required,
+                                   any_permission_required,
+                                   get_active_year, get_current_school,
                                    action_required, section_required)
 
 attendance_devices_bp = Blueprint('attendance_devices', __name__)
@@ -159,7 +161,7 @@ def _form_to_device(dev: AttendanceDevice):
 
 @attendance_devices_bp.route('/', methods=['GET'])
 @login_required
-@admin_required
+@any_permission_required('view_attendance_devices', 'manage_attendance_devices')
 def index():
     school  = _school_or_abort()
     devices = (AttendanceDevice.query
@@ -171,7 +173,7 @@ def index():
 
 @attendance_devices_bp.route('/aiface-live-status', methods=['GET'])
 @login_required
-@admin_required
+@any_permission_required('view_attendance_devices', 'manage_attendance_devices')
 def aiface_live_status():
     """
     JSON endpoint: returns live WebSocket status for all AI Face devices
@@ -261,7 +263,7 @@ def aiface_live_status():
 
 @attendance_devices_bp.route('/<int:device_id>/aiface-pull-logs', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_attendance_devices')
 def ajax_aiface_pull_logs(device_id):
     """
     AJAX: manually trigger a log pull from an AI Face device.
@@ -365,7 +367,7 @@ def ajax_aiface_pull_logs(device_id):
 
 @attendance_devices_bp.route('/new', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_attendance_devices')
 @action_required('attendance_devices', 'add_device')
 def new_device():
     school = _school_or_abort()
@@ -390,7 +392,7 @@ def new_device():
 
 @attendance_devices_bp.route('/<int:device_id>/edit', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_attendance_devices')
 @action_required('attendance_devices', 'edit_device')
 def edit_device(device_id):
     school = _school_or_abort()
@@ -409,7 +411,7 @@ def edit_device(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/delete', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_attendance_devices')
 @action_required('attendance_devices', 'delete_device')
 def delete_device(device_id):
     school = _school_or_abort()
@@ -422,7 +424,7 @@ def delete_device(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/toggle', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_attendance_devices')
 def toggle_device(device_id):
     school = _school_or_abort()
     dev    = _get_device_or_404(device_id, school)
@@ -439,7 +441,7 @@ def toggle_device(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/test-connection', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_attendance_devices')
 @action_required('attendance_devices', 'test_connection')
 def ajax_test_connection(device_id):
     """
@@ -550,7 +552,7 @@ def ajax_test_connection(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/sync', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_attendance_devices')
 @action_required('attendance_devices', 'sync')
 def ajax_sync(device_id):
     school = _school_or_abort()
@@ -577,7 +579,7 @@ def ajax_sync(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/logs', methods=['GET'])
 @login_required
-@admin_required
+@any_permission_required('view_attendance_devices', 'manage_attendance_devices')
 @action_required('attendance_devices', 'view_logs')
 def logs(device_id):
     school = _school_or_abort()
@@ -601,7 +603,7 @@ def logs(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/mappings', methods=['GET'])
 @login_required
-@admin_required
+@any_permission_required('view_attendance_devices', 'manage_attendance_devices')
 def mappings(device_id):
     school = _school_or_abort()
     dev    = _get_device_or_404(device_id, school)
@@ -668,7 +670,7 @@ def mappings(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/mappings/add', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_attendance_devices')
 def add_mapping(device_id):
     school = _school_or_abort()
     dev    = _get_device_or_404(device_id, school)
@@ -739,7 +741,7 @@ def add_mapping(device_id):
 
 @attendance_devices_bp.route('/mappings/<int:mapping_id>/delete', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_attendance_devices')
 @section_required('attendance_devices', 'student_mappings')
 def delete_mapping(mapping_id):
     school  = _school_or_abort()
@@ -755,7 +757,7 @@ def delete_mapping(mapping_id):
 
 @attendance_devices_bp.route('/emp-mappings/<int:mapping_id>/delete', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_attendance_devices')
 def delete_emp_mapping(mapping_id):
     school  = _school_or_abort()
     mapping = DeviceEmployeeMapping.query.filter_by(
@@ -801,7 +803,7 @@ def _do_copy_mappings(source_dev, target_dev, school):
 
 @attendance_devices_bp.route('/<int:device_id>/mappings/copy-from', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_attendance_devices')
 def copy_mappings(device_id):
     school     = _school_or_abort()
     target_dev = _get_device_or_404(device_id, school)
@@ -829,7 +831,7 @@ def copy_mappings(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/mappings/copy-to', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_attendance_devices')
 def copy_mappings_to(device_id):
     school     = _school_or_abort()
     source_dev = _get_device_or_404(device_id, school)
@@ -864,7 +866,7 @@ def copy_mappings_to(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/status-check', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_attendance_devices')
 def ajax_status_check(device_id):
     """
     AJAX: return connection status, SN match, and last sync info for this device.
@@ -963,7 +965,7 @@ def ajax_status_check(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/aiface-sync-student', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_attendance_devices')
 @action_required('attendance_devices', 'sync')
 def ajax_aiface_sync_student(device_id):
     """AJAX: push a single student mapping to the AI Face device."""
@@ -1009,7 +1011,7 @@ def ajax_aiface_sync_student(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/aiface-sync-employee', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_attendance_devices')
 @action_required('attendance_devices', 'sync')
 def ajax_aiface_sync_employee(device_id):
     """AJAX: push a single employee mapping to the AI Face device."""
@@ -1055,7 +1057,7 @@ def ajax_aiface_sync_employee(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/aiface-sync-all', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_attendance_devices')
 @action_required('attendance_devices', 'sync')
 def ajax_aiface_sync_all(device_id):
     """AJAX: push all active mappings for this device (scope-aware)."""
@@ -1127,7 +1129,7 @@ def ajax_aiface_sync_all(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/aiface-delete-from-device', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_attendance_devices')
 @action_required('attendance_devices', 'delete_device')
 def ajax_aiface_delete_from_device(device_id):
     """

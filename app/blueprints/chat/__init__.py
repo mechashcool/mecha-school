@@ -45,7 +45,8 @@ from app.models import (
     User, Employee, Student, Role,
     parent_students, teacher_subjects,
 )
-from app.utils.decorators import admin_required, get_current_school, get_active_year
+from app.utils.decorators import (admin_required, permission_required,
+                                   get_current_school, get_active_year)
 from app.utils.modules import is_module_enabled
 
 _log = logging.getLogger('mecha.chat')
@@ -713,8 +714,11 @@ def _is_room_admin(room: ChatRoom) -> bool:
     if current_user.is_super_admin:
         s = get_current_school()
         return s is not None and s.id == room.school_id
+    # School manager, or any role granted manage_chat — in BOTH cases the
+    # room must belong to the user's own school (unchanged school binding).
     return (
-        current_user.is_school_admin
+        (current_user.is_school_admin
+         or current_user.has_permission('manage_chat'))
         and current_user.school_id == room.school_id
     )
 
@@ -804,7 +808,7 @@ def _mark_all_room_messages_read(room_id: int, user_id: int, label: str = '') ->
 
 @chat_bp.route('/')
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def index():
     _require_chat_module()
     school = get_current_school()
@@ -908,7 +912,7 @@ def index():
 
 @chat_bp.route('/rooms/create', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def create_room():
     _require_chat_module()
     school = get_current_school()
@@ -1123,7 +1127,7 @@ def create_room():
 
 @chat_bp.route('/rooms/<int:room_id>', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def room_detail(room_id):
     _require_chat_module()
     school = get_current_school()
@@ -1294,7 +1298,7 @@ def room_detail(room_id):
 
 @chat_bp.route('/rooms/<int:room_id>/edit', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def edit_room(room_id):
     _require_chat_module()
     school = get_current_school()
@@ -1387,7 +1391,7 @@ def edit_room(room_id):
 
 @chat_bp.route('/rooms/<int:room_id>/close', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def close_room(room_id):
     _require_chat_module()
     school = get_current_school()
@@ -1404,7 +1408,7 @@ def close_room(room_id):
 
 @chat_bp.route('/rooms/<int:room_id>/reopen', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def reopen_room(room_id):
     _require_chat_module()
     school = get_current_school()
@@ -1421,7 +1425,7 @@ def reopen_room(room_id):
 
 @chat_bp.route('/rooms/<int:room_id>/delete', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def delete_room(room_id):
     """
     Permanently delete a group or announcement chat room together with all its
@@ -1488,7 +1492,7 @@ def delete_room(room_id):
 
 @chat_bp.route('/rooms/<int:room_id>/members/add', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def add_member(room_id):
     """
     GET  — show a same-school user picker (excludes existing members).
@@ -1626,7 +1630,7 @@ def add_member(room_id):
 
 @chat_bp.route('/rooms/<int:room_id>/rebuild-members', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def rebuild_members(room_id):
     """Re-derive auto-members from room scope without removing existing members."""
     _require_chat_module()
@@ -1677,7 +1681,7 @@ def rebuild_members(room_id):
 
 @chat_bp.route('/ajax/sections-preview')
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def sections_preview():
     """
     AJAX: given section_ids[], return deduplicated member list for preview.
@@ -1740,7 +1744,7 @@ def sections_preview():
 
 @chat_bp.route('/rooms/<int:room_id>/members/<int:user_id>/block', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def block_member(room_id, user_id):
     _require_chat_module()
     school = get_current_school()
@@ -1759,7 +1763,7 @@ def block_member(room_id, user_id):
 
 @chat_bp.route('/rooms/<int:room_id>/members/<int:user_id>/unblock', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def unblock_member(room_id, user_id):
     _require_chat_module()
     school = get_current_school()
@@ -1780,7 +1784,7 @@ def unblock_member(room_id, user_id):
 
 @chat_bp.route('/rooms/<int:room_id>/members/<int:user_id>/remove', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def remove_member(room_id, user_id):
     """
     Remove (kick) a member from a group/announcement room.
@@ -1851,7 +1855,7 @@ def remove_member(room_id, user_id):
 
 @chat_bp.route('/rooms/<int:room_id>/members/<int:user_id>/make-admin', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def make_room_admin(room_id, user_id):
     _require_chat_module()
     school = get_current_school()
@@ -1869,7 +1873,7 @@ def make_room_admin(room_id, user_id):
 
 @chat_bp.route('/rooms/<int:room_id>/members/<int:user_id>/remove-admin', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def remove_room_admin(room_id, user_id):
     _require_chat_module()
     school = get_current_school()
@@ -1889,7 +1893,7 @@ def remove_room_admin(room_id, user_id):
 
 @chat_bp.route('/rooms/<int:room_id>/messages/<int:msg_id>/delete', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def delete_message(room_id, msg_id):
     _require_chat_module()
     school = get_current_school()
@@ -1916,7 +1920,7 @@ _DAY_NAMES = {
 
 @chat_bp.route('/rooms/<int:room_id>/schedule', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def room_schedule(room_id):
     _require_chat_module()
     school = get_current_school()
@@ -1957,7 +1961,7 @@ def room_schedule(room_id):
 
 @chat_bp.route('/settings', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def settings():
     _require_chat_module()
     from app.utils.school_config import get_school_config, save_module_config
@@ -2351,7 +2355,7 @@ def user_room(room_id):
 
 @chat_bp.route('/rooms/<int:room_id>/events')
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def room_events(room_id: int):
     """SSE stream of new messages for school-admin room view."""
     _require_chat_module()
@@ -2369,7 +2373,7 @@ def room_events(room_id: int):
 
 @chat_bp.route('/rooms/<int:room_id>/poll')
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def room_poll(room_id: int):
     """JSON polling fallback for school-admin room view.
 
@@ -2389,7 +2393,7 @@ def room_poll(room_id: int):
 
 @chat_bp.route('/rooms/<int:room_id>/messages/older')
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def room_older_messages(room_id: int):
     """Return a JSON batch of messages older than ``before_id`` for the admin room view.
 
@@ -2509,7 +2513,7 @@ def user_room_poll(room_id: int):
 
 @chat_bp.route('/direct')
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def direct_new():
     """
     User-picker page: choose a same-school user to start a private chat with.
@@ -2593,7 +2597,7 @@ def direct_new():
 
 @chat_bp.route('/direct/<int:target_user_id>')
 @login_required
-@admin_required
+@permission_required('manage_chat')
 def direct_chat(target_user_id):
     """
     Find or create a private 1-to-1 room between the admin and a school user.

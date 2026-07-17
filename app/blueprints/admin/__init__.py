@@ -19,6 +19,7 @@ from app.models import (db, User, Role, Permission, Employee, Student, Subject,
                          SchoolVideo, SchoolAnnouncement, SchoolContentRead,
                          SchoolBuilding, UserBuildingAccess, MobileDeviceToken)
 from app.utils.decorators import (admin_required, staff_required,
+                                   permission_required, any_permission_required,
                                    get_current_school,
                                    get_active_year, get_view_year, super_admin_required)
 from app.utils import code_generator
@@ -94,7 +95,26 @@ def _is_role_assignable_by_current_user(role):
         return name != LEGACY_ADMIN_ROLE
     if current_user.is_school_admin:
         return name not in {SUPER_ADMIN_ROLE, SCHOOL_ADMIN_ROLE, LEGACY_ADMIN_ROLE}
+    # Any other role granted manage_users may assign only non-privileged
+    # roles — never an admin tier (no privilege-escalation path), never
+    # investor. Same restriction set as a school manager.
+    if current_user.has_permission('manage_users'):
+        return name not in {SUPER_ADMIN_ROLE, SCHOOL_ADMIN_ROLE, LEGACY_ADMIN_ROLE}
     return False
+
+
+def _is_school_scoped_manager():
+    """True for any non-super-admin user allowed into user management:
+    the school manager role, or any other role granted manage_users.
+
+    Both get IDENTICAL school-scoped restrictions in the user routes —
+    a permission-granted role must never see or modify accounts outside its
+    own school, exactly like a school manager."""
+    if current_user.is_super_admin:
+        return False
+    if current_user.is_school_admin:
+        return True
+    return current_user.has_permission('manage_users')
 
 
 def _assignable_roles(existing_role_name=None):
@@ -552,6 +572,7 @@ def _build_dashboard_context():
 @admin_bp.route('/dashboard')
 @login_required
 @staff_required
+@permission_required('view_dashboard')
 def dashboard():
     return render_template('admin/dashboard.html', **_build_dashboard_context())
 
@@ -562,7 +583,7 @@ def dashboard():
 
 @admin_bp.route('/users')
 @login_required
-@admin_required
+@permission_required('manage_users')
 def users_list():
     page        = request.args.get('page', 1, type=int)
     search      = request.args.get('q', '')
@@ -578,10 +599,11 @@ def users_list():
     if role_filter != 'all':
         query = query.filter(User.role_id == int(role_filter))
 
-    # School managers see only non-super-admin, non-investor users in their own
-    # school. Investor accounts are managed exclusively from the Super Admin
-    # portal, so they are hidden from the school-manager user list entirely.
-    if current_user.is_school_admin:
+    # School managers (and custom roles granted manage_users) see only
+    # non-super-admin, non-investor users in their own school. Investor
+    # accounts are managed exclusively from the Super Admin portal, so they
+    # are hidden from the school-scoped user list entirely.
+    if _is_school_scoped_manager():
         query = (query.join(Role, User.role_id == Role.id)
                  .filter(User.school_id == current_user.school_id,
                          Role.name.notin_([SUPER_ADMIN_ROLE, INVESTOR_ROLE])))
@@ -600,9 +622,9 @@ def users_list():
 
 @admin_bp.route('/users/create', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_users')
 def create_user():
-    is_school_manager = current_user.is_school_admin
+    is_school_manager = _is_school_scoped_manager()
     school = get_current_school()
 
     roles = _assignable_roles()
@@ -808,7 +830,7 @@ def create_user():
 
 @admin_bp.route('/users/<int:user_id>/edit', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_users')
 def edit_user(user_id):
     from flask import abort
     # Bypass tenant scope so cross-school access raises 403 (not silently 404)
@@ -825,7 +847,7 @@ def edit_user(user_id):
             return redirect(url_for('super_admin.school_detail', school_id=user.school_id))
         abort(403)
 
-    is_school_manager = current_user.is_school_admin
+    is_school_manager = _is_school_scoped_manager()
 
     # School managers can only edit lower-privilege users from their own school.
     if is_school_manager and _is_super_admin_account(user):
@@ -1083,13 +1105,13 @@ def edit_user(user_id):
 
 @admin_bp.route('/users/<int:user_id>/toggle', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_users')
 def toggle_user(user_id):
     from flask import abort
     user = db.session.get(User, user_id, execution_options={'bypass_tenant_scope': True})
     if user is None:
         abort(404)
-    if current_user.is_school_admin and (
+    if _is_school_scoped_manager() and (
             _is_super_admin_account(user)
             or (user.role and user.role.name == SCHOOL_ADMIN_ROLE)
             or user.school_id != current_user.school_id):
@@ -1111,7 +1133,7 @@ def toggle_user(user_id):
 
 @admin_bp.route('/users/<int:user_id>/delete', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_users')
 def delete_user(user_id):
     from flask import abort
     from sqlalchemy.exc import SQLAlchemyError
@@ -1133,7 +1155,7 @@ def delete_user(user_id):
         abort(403)
 
     # ── Authorization guards ──────────────────────────────────────────────────
-    if current_user.is_school_admin and (
+    if _is_school_scoped_manager() and (
             _is_super_admin_account(user)
             or (user.role and user.role.name == SCHOOL_ADMIN_ROLE)
             or user.school_id != current_user.school_id):
@@ -1209,7 +1231,7 @@ def delete_user(user_id):
 
 @admin_bp.route('/complaints')
 @login_required
-@admin_required
+@permission_required('manage_complaints')
 def complaints_list():
     school_id = _admin_scope_id()
     query = Complaint.query.execution_options(include_all_years=True)
@@ -1224,7 +1246,7 @@ def complaints_list():
 
 @admin_bp.route('/complaints/<int:complaint_id>', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_complaints')
 def complaint_detail(complaint_id):
     school_id = _admin_scope_id()
     query = Complaint.query.execution_options(include_all_years=True).filter_by(id=complaint_id)
@@ -1273,7 +1295,7 @@ def complaint_detail(complaint_id):
 
 @admin_bp.route('/complaints/<int:complaint_id>/status', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_complaints')
 def complaint_quick_status(complaint_id):
     """AJAX endpoint: update complaint status only (from list view)."""
     school_id = _admin_scope_id()
@@ -1311,7 +1333,7 @@ def complaint_quick_status(complaint_id):
 
 @admin_bp.route('/leave-requests')
 @login_required
-@admin_required
+@permission_required('manage_leave_requests')
 def leave_requests_list():
     """Pending-first unified leave requests page: student and employee leaves."""
     school_id = _admin_scope_id()
@@ -1367,7 +1389,7 @@ def leave_requests_list():
 
 @admin_bp.route('/leave-records')
 @login_required
-@admin_required
+@permission_required('manage_leave_requests')
 def leave_records():
     """Leave records: show all leave requests newest-first, with optional filters."""
     school_id = _admin_scope_id()
@@ -1496,7 +1518,7 @@ def leave_records():
 
 @admin_bp.route('/leave-requests/<int:request_id>', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_leave_requests')
 def leave_request_detail(request_id):
     school_id = _admin_scope_id()
     query = LeaveRequest.query.execution_options(include_all_years=True).filter_by(id=request_id)
@@ -1564,7 +1586,7 @@ def leave_request_detail(request_id):
 
 @admin_bp.route('/leave-requests/<int:request_id>/edit-dates', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_leave_requests')
 def leave_request_edit_dates(request_id):
     """Edit the date range of a student leave request.
 
@@ -1637,7 +1659,7 @@ def _notify_employee_user(user_id, school_id, title, body, fcm_data=None):
 
 @admin_bp.route('/employee-leave-requests')
 @login_required
-@admin_required
+@permission_required('manage_leave_requests')
 def employee_leave_requests_list():
     school_id = _admin_scope_id()
     status_filter = request.args.get('status', '').strip()
@@ -1666,7 +1688,7 @@ def employee_leave_requests_list():
 
 @admin_bp.route('/employee-leave-requests/<int:request_id>', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_leave_requests')
 def employee_leave_request_detail(request_id):
     school_id = _admin_scope_id()
     query = EmployeeLeaveRequest.query.filter_by(id=request_id)
@@ -1727,7 +1749,7 @@ def employee_leave_request_detail(request_id):
 
 @admin_bp.route('/employee-leave-requests/<int:request_id>/edit-dates', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_leave_requests')
 def employee_leave_request_edit_dates(request_id):
     """Edit the date range of an employee leave request.
 
@@ -1780,7 +1802,7 @@ def employee_leave_request_edit_dates(request_id):
 
 @admin_bp.route('/leave-requests/create', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_leave_requests')
 def leave_request_create_admin():
     """Admin creates a leave request on behalf of a student."""
     school_id = _admin_scope_id()
@@ -1942,7 +1964,7 @@ def leave_request_create_admin():
 
 @admin_bp.route('/students/<int:student_id>/leave-archive')
 @login_required
-@admin_required
+@permission_required('manage_leave_requests')
 def student_leave_archive(student_id):
     """Complete leave history for one student — scoped by school."""
     school_id = _admin_scope_id()
@@ -1991,7 +2013,7 @@ def student_leave_archive(student_id):
 
 @admin_bp.route('/employee-leave-requests/create', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_leave_requests')
 def employee_leave_request_create_admin():
     """Admin creates a leave request on behalf of an employee."""
     school_id = _admin_scope_id()
@@ -2096,7 +2118,7 @@ def employee_leave_request_create_admin():
 
 @admin_bp.route('/employees/<int:employee_id>/leave-archive')
 @login_required
-@admin_required
+@permission_required('manage_leave_requests')
 def employee_leave_archive(employee_id):
     """Complete leave history for one employee — scoped by school."""
     school_id = _admin_scope_id()
@@ -2147,7 +2169,7 @@ def employee_leave_archive(employee_id):
 
 @admin_bp.route('/api/leave/grades-for-stage')
 @login_required
-@admin_required
+@permission_required('manage_leave_requests')
 def api_leave_grades_for_stage():
     """Return grades for a stage (JSON) — scoped by school + active year."""
     school_id = _admin_scope_id()
@@ -2168,7 +2190,7 @@ def api_leave_grades_for_stage():
 
 @admin_bp.route('/api/leave/sections-for-grade')
 @login_required
-@admin_required
+@permission_required('manage_leave_requests')
 def api_leave_sections_for_grade():
     """Return sections for a grade (JSON) — scoped by school + active year."""
     school_id = _admin_scope_id()
@@ -2196,7 +2218,7 @@ def api_leave_sections_for_grade():
 
 @admin_bp.route('/api/leave/students-for-section')
 @login_required
-@admin_required
+@permission_required('manage_leave_requests')
 def api_leave_students_for_section():
     """Return students in a section (JSON) — scoped by school."""
     school_id = _admin_scope_id()
@@ -2222,7 +2244,7 @@ def api_leave_students_for_section():
 
 @admin_bp.route('/api/leave/students-search')
 @login_required
-@admin_required
+@permission_required('manage_leave_requests')
 def api_leave_students_search():
     """Search active students by name or code (JSON) — scoped by school."""
     school_id = _admin_scope_id()
@@ -2274,77 +2296,192 @@ def backfill_leave_attendance():
     return render_template('admin/backfill_leave_attendance.html', result=result)
 
 
+import re as _re
+
+_ROLE_NAME_RE = _re.compile(r'^[a-z][a-z0-9_]{1,60}$')
+
+
+def _role_form_context(role=None):
+    """Build the organized permission catalog for the role editor.
+
+    Ensures every catalog permission exists in the DB (idempotent sync), then
+    groups Permission rows in catalog order. Legacy permissions that are not
+    part of the catalog (e.g. parent_view_child) are listed separately and
+    only offered for built-in roles.
+    """
+    from app.utils.permissions_catalog import (
+        PERMISSION_GROUPS, CATALOG_PERMISSION_NAMES, BUILTIN_ROLE_NAMES,
+        sync_catalog_permissions,
+    )
+    try:
+        sync_catalog_permissions()
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    perms_by_name = {p.name: p for p in Permission.query.all()}
+    catalog_groups = [
+        (category, [perms_by_name[n] for n, _lbl in items if n in perms_by_name])
+        for category, items in PERMISSION_GROUPS
+    ]
+    other_permissions = sorted(
+        (p for p in perms_by_name.values()
+         if p.name not in CATALOG_PERMISSION_NAMES),
+        key=lambda p: (p.category or '', p.name),
+    )
+    return dict(role=role, catalog_groups=catalog_groups,
+                other_permissions=other_permissions,
+                is_builtin_role=bool(role and role.name in BUILTIN_ROLE_NAMES))
+
+
+def _selected_permissions_for_role(role):
+    """Resolve the posted permission ids, restricted to the grantable set.
+
+    Roles created from role management may only hold catalog permissions —
+    legacy/portal permissions (e.g. parent_view_child) stay reserved for the
+    built-in roles that already use them.
+    """
+    from app.utils.permissions_catalog import (
+        CATALOG_PERMISSION_NAMES, BUILTIN_ROLE_NAMES,
+    )
+    perm_ids = request.form.getlist('permissions', type=int)
+    perms = Permission.query.filter(Permission.id.in_(perm_ids)).all() if perm_ids else []
+    if role is None or role.name not in BUILTIN_ROLE_NAMES:
+        perms = [p for p in perms if p.name in CATALOG_PERMISSION_NAMES]
+    return perms
+
+
 @admin_bp.route('/roles')
 @login_required
 @super_admin_required
 def roles_list():
+    # Keep the permission catalog in sync so production picks up newly added
+    # catalog entries without a manual reseed.
+    from app.utils.permissions_catalog import sync_catalog_permissions
+    try:
+        sync_catalog_permissions()
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
     roles = (Role.query
              .filter(Role.name != LEGACY_ADMIN_ROLE)
              .order_by(Role.id)
              .all())
-    return render_template('admin/roles_list.html', roles=roles)
+    # Global (all-schools) counts — roles are system-wide, so the count must
+    # not shrink when the super admin has switched into one school's context.
+    user_counts = dict(
+        db.session.query(User.role_id, func.count(User.id))
+        .execution_options(bypass_tenant_scope=True)
+        .filter(User.username.notlike('~deleted~%'))
+        .group_by(User.role_id)
+        .all()
+    )
+    from app.utils.permissions_catalog import BUILTIN_ROLE_NAMES
+    return render_template('admin/roles_list.html', roles=roles,
+                           user_counts=user_counts,
+                           builtin_role_names=BUILTIN_ROLE_NAMES)
 
 
 @admin_bp.route('/roles/create', methods=['GET', 'POST'])
 @login_required
 @super_admin_required
 def create_role():
-    all_permissions = Permission.query.order_by(Permission.category, Permission.name).all()
+    from app.utils.audit import log_action
+
     if request.method == 'POST':
-        name        = request.form.get('name', '').strip()
+        name        = request.form.get('name', '').strip().lower()
         label       = request.form.get('label', '').strip()
         description = request.form.get('description', '').strip()
-        perm_ids    = request.form.getlist('permissions', type=int)
-        protected_names = {SUPER_ADMIN_ROLE, SCHOOL_ADMIN_ROLE, LEGACY_ADMIN_ROLE}
 
+        error = None
         if not name or not label:
-            flash('الاسم والتسمية مطلوبان.', 'danger')
-            return render_template('admin/role_form.html',
-                                   all_permissions=all_permissions)
+            error = 'الاسم والتسمية مطلوبان.'
+        elif not _ROLE_NAME_RE.match(name):
+            error = 'المعرّف يجب أن يبدأ بحرف إنجليزي صغير ويحتوي حروفاً صغيرة وأرقاماً وشرطات سفلية فقط.'
+        else:
+            from app.utils.permissions_catalog import BUILTIN_ROLE_NAMES
+            if name in BUILTIN_ROLE_NAMES:
+                error = 'هذا المعرّف محجوز لأدوار النظام.'
+            elif Role.query.filter_by(name=name).first():
+                error = 'اسم الدور مستخدم بالفعل.'
 
-        if name in protected_names:
-            flash('This role name is reserved by the system.', 'danger')
+        if error:
+            flash(error, 'danger')
             return render_template('admin/role_form.html',
-                                   all_permissions=all_permissions)
+                                   **_role_form_context(None))
 
-        if Role.query.filter_by(name=name).first():
-            flash('اسم الدور مستخدم بالفعل.', 'danger')
-            return render_template('admin/role_form.html',
-                                   all_permissions=all_permissions)
-
-        role = Role(name=name, label=label, description=description)
-        role.permissions = Permission.query.filter(Permission.id.in_(perm_ids)).all()
+        role = Role(name=name, label=label, description=description,
+                    is_admin=False)
+        role.permissions = _selected_permissions_for_role(None)
         db.session.add(role)
         db.session.commit()
+        log_action('create', 'role', role.id,
+                   f'Created custom role {name} with '
+                   f'{len(role.permissions)} permissions')
         flash('تم إنشاء الدور بنجاح.', 'success')
         return redirect(url_for('admin.roles_list'))
 
-    return render_template('admin/role_form.html',
-                           all_permissions=all_permissions, role=None)
+    return render_template('admin/role_form.html', **_role_form_context(None))
 
 
 @admin_bp.route('/roles/<int:role_id>/edit', methods=['GET', 'POST'])
 @login_required
 @super_admin_required
 def edit_role(role_id):
+    from app.utils.audit import log_action
+
     role = Role.query.get_or_404(role_id)
     if role.name in {SUPER_ADMIN_ROLE, SCHOOL_ADMIN_ROLE, LEGACY_ADMIN_ROLE}:
         flash('System roles cannot be edited from role management.', 'warning')
         return redirect(url_for('admin.roles_list'))
 
-    all_permissions = Permission.query.order_by(Permission.category, Permission.name).all()
-
     if request.method == 'POST':
-        role.label       = request.form.get('label', role.label).strip()
+        role.label       = request.form.get('label', role.label).strip() or role.label
         role.description = request.form.get('description', '').strip()
-        perm_ids         = request.form.getlist('permissions', type=int)
-        role.permissions = Permission.query.filter(Permission.id.in_(perm_ids)).all()
+        role.permissions = _selected_permissions_for_role(role)
         db.session.commit()
+        log_action('edit', 'role', role.id,
+                   f'Updated role {role.name}; now holds '
+                   f'{len(role.permissions)} permissions')
+        # Permission changes take effect immediately for every assigned user:
+        # has_permission() reads role_permissions from the DB on each request.
         flash('تم تحديث الدور بنجاح.', 'success')
         return redirect(url_for('admin.roles_list'))
 
-    return render_template('admin/role_form.html',
-                           role=role, all_permissions=all_permissions)
+    return render_template('admin/role_form.html', **_role_form_context(role))
+
+
+@admin_bp.route('/roles/<int:role_id>/delete', methods=['POST'])
+@login_required
+@super_admin_required
+def delete_role(role_id):
+    from app.utils.audit import log_action
+
+    from app.utils.permissions_catalog import BUILTIN_ROLE_NAMES
+
+    role = Role.query.get_or_404(role_id)
+    if role.name in BUILTIN_ROLE_NAMES:
+        flash('لا يمكن حذف أدوار النظام.', 'danger')
+        return redirect(url_for('admin.roles_list'))
+
+    # Must count across ALL schools — deleting a role still assigned to users
+    # of another school would orphan their accounts.
+    assigned = (User.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter_by(role_id=role.id)
+                .count())
+    if assigned:
+        flash(f'لا يمكن حذف الدور — يوجد {assigned} مستخدم مرتبط به. '
+              'انقل المستخدمين إلى دور آخر أولاً.', 'danger')
+        return redirect(url_for('admin.roles_list'))
+
+    role.permissions = []
+    db.session.delete(role)
+    db.session.commit()
+    log_action('delete', 'role', role_id, f'Deleted custom role {role.name}')
+    flash('تم حذف الدور بنجاح.', 'success')
+    return redirect(url_for('admin.roles_list'))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2544,7 +2681,7 @@ def settings():
 
 @admin_bp.route('/school-settings', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@any_permission_required('manage_white_label', 'manage_settings')
 def school_settings():
     from flask import current_app
     from app.utils.audit import log_action
@@ -2876,7 +3013,7 @@ def debug_school_board():
 
 @admin_bp.route('/school-board/videos')
 @login_required
-@admin_required
+@permission_required('manage_school_board')
 def school_board_videos():
     _sb_log.info('school_board_videos | user=%s role=%s school_id=%s',
                  current_user.id,
@@ -2904,7 +3041,7 @@ def school_board_videos():
 
 @admin_bp.route('/school-board/videos/create', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_school_board')
 def school_board_video_create():
     _sb_log.info('school_board_video_create | user=%s role=%s school_id=%s method=%s',
                  current_user.id,
@@ -3025,7 +3162,7 @@ def school_board_video_create():
 
 @admin_bp.route('/school-board/videos/<int:video_id>/edit', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_school_board')
 def school_board_video_edit(video_id):
     school_id = _admin_scope_id()
     q = SchoolVideo.query.execution_options(bypass_tenant_scope=True).filter_by(id=video_id)
@@ -3134,7 +3271,7 @@ def school_board_video_edit(video_id):
 
 @admin_bp.route('/school-board/videos/<int:video_id>/toggle', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_school_board')
 def school_board_video_toggle(video_id):
     school_id = _admin_scope_id()
     q = SchoolVideo.query.execution_options(bypass_tenant_scope=True).filter_by(id=video_id)
@@ -3155,7 +3292,7 @@ def school_board_video_toggle(video_id):
 
 @admin_bp.route('/school-board/videos/<int:video_id>/delete', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_school_board')
 def school_board_video_delete(video_id):
     school_id = _admin_scope_id()
     q = SchoolVideo.query.execution_options(bypass_tenant_scope=True).filter_by(id=video_id)
@@ -3178,7 +3315,7 @@ def school_board_video_delete(video_id):
 
 @admin_bp.route('/school-board/announcements')
 @login_required
-@admin_required
+@permission_required('manage_school_board')
 def school_board_announcements():
     _sb_log.info('school_board_announcements | user=%s role=%s school_id=%s',
                  current_user.id,
@@ -3206,7 +3343,7 @@ def school_board_announcements():
 
 @admin_bp.route('/school-board/announcements/create', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_school_board')
 def school_board_announcement_create():
     _sb_log.info('school_board_announcement_create | user=%s role=%s school_id=%s method=%s',
                  current_user.id,
@@ -3286,7 +3423,7 @@ def school_board_announcement_create():
 
 @admin_bp.route('/school-board/announcements/<int:ann_id>/edit', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_school_board')
 def school_board_announcement_edit(ann_id):
     school_id = _admin_scope_id()
     q = SchoolAnnouncement.query.execution_options(bypass_tenant_scope=True).filter_by(id=ann_id)
@@ -3356,7 +3493,7 @@ def school_board_announcement_edit(ann_id):
 
 @admin_bp.route('/school-board/announcements/<int:ann_id>/toggle', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_school_board')
 def school_board_announcement_toggle(ann_id):
     school_id = _admin_scope_id()
     q = SchoolAnnouncement.query.execution_options(bypass_tenant_scope=True).filter_by(id=ann_id)
@@ -3377,7 +3514,7 @@ def school_board_announcement_toggle(ann_id):
 
 @admin_bp.route('/school-board/announcements/<int:ann_id>/delete', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_school_board')
 def school_board_announcement_delete(ann_id):
     school_id = _admin_scope_id()
     q = SchoolAnnouncement.query.execution_options(bypass_tenant_scope=True).filter_by(id=ann_id)

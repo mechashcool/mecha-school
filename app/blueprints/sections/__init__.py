@@ -9,7 +9,9 @@ from app.models import (
     db, Grade, Section, Subject, AcademicYear, Employee, Student,
     Exam, Schedule, teacher_subjects, AttendanceShift, Homework,
 )
-from app.utils.decorators import (admin_required, get_current_school, get_active_year,
+from app.utils.decorators import (admin_required, permission_required,
+                                   any_permission_required,
+                                   get_current_school, get_active_year,
                                    historical_guard, module_required, action_required)
 
 sections_bp = Blueprint('sections', __name__,
@@ -52,7 +54,7 @@ def _section_block_message(counts):
 
 @sections_bp.route('/')
 @login_required
-@admin_required
+@any_permission_required('view_sections', 'manage_sections')
 def index():
     school   = get_current_school()
     years_q  = AcademicYear.query
@@ -99,7 +101,7 @@ def index():
 @sections_bp.route('/grades/create', methods=['POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_sections')
 def create_grade():
     name     = request.form.get('name', '').strip()
     stage    = request.form.get('stage', '').strip() or None
@@ -118,7 +120,7 @@ def create_grade():
 @sections_bp.route('/grades/<int:grade_id>/edit', methods=['POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_sections')
 def edit_grade(grade_id):
     grade   = Grade.query.execution_options(include_all_years=True).get_or_404(grade_id)
     year_id = grade.academic_year_id
@@ -152,7 +154,7 @@ def edit_grade(grade_id):
 @sections_bp.route('/grades/<int:grade_id>/delete', methods=['POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_sections')
 def delete_grade(grade_id):
     grade = Grade.query.execution_options(include_all_years=True).get_or_404(grade_id)
     year_id = grade.academic_year_id
@@ -183,7 +185,7 @@ def delete_grade(grade_id):
 @sections_bp.route('/grades/setup-iraqi', methods=['POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_sections')
 def setup_iraqi_grades():
     """Create missing standard Iraqi grades for the selected academic year."""
     from app.utils.iraqi_grades import ensure_iraqi_standard_grades
@@ -212,7 +214,7 @@ def setup_iraqi_grades():
 @sections_bp.route('/subjects/setup-standard', methods=['POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_subjects')
 def setup_standard_subjects():
     """Create missing standard subjects for the active academic year of the current school."""
     from app.utils.iraqi_subjects import ensure_standard_subjects
@@ -258,7 +260,7 @@ def setup_standard_subjects():
 @sections_bp.route('/grades/<int:grade_id>/sections/create', methods=['POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_sections')
 def create_section(grade_id):
     grade      = Grade.query.execution_options(include_all_years=True).get_or_404(grade_id)
     name       = request.form.get('name', '').strip()
@@ -280,7 +282,7 @@ def create_section(grade_id):
 @sections_bp.route('/sections/<int:sec_id>/edit', methods=['GET', 'POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_sections')
 def edit_section(sec_id):
     section   = Section.query.execution_options(include_all_years=True).get_or_404(sec_id)
     teachers  = Employee.query.filter_by(status='active').all()
@@ -312,7 +314,7 @@ def edit_section(sec_id):
 @sections_bp.route('/sections/<int:sec_id>/delete', methods=['POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_sections')
 def delete_section(sec_id):
     section = Section.query.execution_options(include_all_years=True).get_or_404(sec_id)
     year_id = section.grade.academic_year_id
@@ -343,7 +345,7 @@ STAGES = ['ابتدائية', 'متوسطة', 'إعدادية']
 
 @sections_bp.route('/subjects')
 @login_required
-@admin_required
+@any_permission_required('view_subjects', 'manage_subjects')
 @module_required('subjects')
 def subjects():
     q        = request.args.get('q', '').strip()
@@ -390,7 +392,7 @@ def subjects():
 @sections_bp.route('/subjects/create', methods=['POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_subjects')
 @module_required('subjects')
 @action_required('subjects', 'create')
 def create_subject():
@@ -477,7 +479,7 @@ def create_subject():
 @sections_bp.route('/subjects/<int:sub_id>/edit', methods=['GET', 'POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_subjects')
 @module_required('subjects')
 @action_required('subjects', 'edit')
 def edit_subject(sub_id):
@@ -566,7 +568,7 @@ def edit_subject(sub_id):
 @sections_bp.route('/subjects/<int:sub_id>/delete', methods=['POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_subjects')
 @module_required('subjects')
 @action_required('subjects', 'delete')
 def delete_subject(sub_id):

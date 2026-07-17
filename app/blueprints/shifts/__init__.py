@@ -22,9 +22,13 @@ shifts_bp = Blueprint('shifts', __name__)
 
 
 def _require_admin():
-    return current_user.is_authenticated and (
-        current_user.is_super_admin or current_user.is_school_admin
-    )
+    if not current_user.is_authenticated:
+        return False
+    if current_user.is_super_admin or current_user.is_school_admin:
+        return True
+    # Roles granted manage_attendance_settings may manage shifts — the shifts
+    # UI lives inside the attendance-settings page that permission unlocks.
+    return current_user.has_permission('manage_attendance_settings')
 
 
 def _parse_time(s: str) -> _time | None:

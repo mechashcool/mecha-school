@@ -160,8 +160,15 @@ def _role_redirect_url(user):
         # first allowed accounting surface. Confinement is enforced by
         # _confine_accountant in app/__init__.py.
         return url_for('fees.index')
-    # All remaining staff roles (admin, hr, reception, …) land on admin dashboard
-    return url_for('admin.dashboard')
+
+    # All remaining staff land on the FIRST page their role's permissions
+    # authorize (User.has_permission — admin tiers bypass and therefore always
+    # get the dashboard). The dashboard is never implicit for other roles: it
+    # is offered only when view_dashboard is granted. A role with no usable
+    # permission lands on the profile page.
+    from app.utils.permissions_catalog import get_landing_endpoint
+    landing = get_landing_endpoint(user)
+    return url_for(landing or 'auth.profile')
 
 
 def _role_redirect(user):

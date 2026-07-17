@@ -33,6 +33,9 @@ from app.models import (
 # ──────────────────────────────────────────────────────────────────────────
 #  PERMISSIONS
 # ──────────────────────────────────────────────────────────────────────────
+# NOTE: the authoritative catalog now lives in app/utils/permissions_catalog.py
+# (PERMISSION_GROUPS). seed_permissions_and_roles() seeds BOTH the catalog and
+# the legacy list below, so historical names/labels keep working.
 
 ALL_PERMISSIONS = [
     # Students
@@ -100,7 +103,7 @@ ROLE_PRESETS = {
         'label':       'مسؤول النظام',
         'description': 'صلاحيات كاملة على جميع الأقسام',
         'is_admin':    False,
-        'permissions': [],
+        'permissions': ['view_dashboard'],
     },
     'accountant': {
         'label':       'محاسب',
@@ -119,18 +122,23 @@ ROLE_PRESETS = {
         'permissions': ['view_students', 'take_attendance', 'enter_grades',
                         'print_schedules'],
     },
+    # view_dashboard / view_notifications preserve these roles' existing
+    # surfaces now that the dashboard and the notifications inbox are gated
+    # by explicit permissions instead of "any staff".
     'hr': {
         'label':       'موارد بشرية',
         'description': 'يُدير بيانات الموظفين والرواتب',
         'is_admin':    False,
-        'permissions': ['manage_employees', 'manage_salaries', 'view_reports'],
+        'permissions': ['manage_employees', 'manage_salaries', 'view_reports',
+                        'view_dashboard', 'view_notifications'],
     },
     'reception': {
         'label':       'موظف استقبال',
         'description': 'يُدير بيانات الطلاب والإشعارات',
         'is_admin':    False,
         'permissions': ['view_students', 'add_student', 'edit_student',
-                        'manage_notifications', 'manage_rfid'],
+                        'manage_notifications', 'manage_rfid',
+                        'view_dashboard', 'view_notifications'],
     },
     'parent': {
         'label':       'ولي أمر',
@@ -203,6 +211,11 @@ def seed_permissions_and_roles():
             p.label = label
             p.category = category
         perm_map[name] = p
+
+    # Full custom-role catalog (superset; refreshes labels/categories so the
+    # role editor shows the complete organized catalog).
+    from app.utils.permissions_catalog import sync_catalog_permissions
+    sync_catalog_permissions()
 
     click.echo('── Seeding roles...')
     role_map = {}

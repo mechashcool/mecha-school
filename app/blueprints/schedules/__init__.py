@@ -11,7 +11,9 @@ from flask import (Blueprint, render_template, redirect, url_for,
                    flash, request, jsonify, send_file, abort)
 from flask_login import login_required
 from app.models import db, Schedule, Section, Subject, Employee, Grade, AcademicYear
-from app.utils.decorators import admin_required, get_current_school, historical_guard
+from app.utils.decorators import (admin_required, permission_required,
+                                   any_permission_required,
+                                   get_current_school, historical_guard)
 
 schedules_bp = Blueprint('schedules', __name__,
                            template_folder='../../templates/schedules')
@@ -63,7 +65,7 @@ def _subjects_for_grade(grade):
 
 @schedules_bp.route('/')
 @login_required
-@admin_required
+@any_permission_required('view_schedules', 'manage_schedules', 'print_schedules')
 def index():
     sections = Section.query.join(Grade).order_by(Grade.name, Section.name).all()
     grades   = Grade.query.order_by(Grade.name).all()
@@ -148,7 +150,7 @@ def _redirect_to_target(sec_id, grade_id):
 @schedules_bp.route('/create', methods=['POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_schedules')
 def create():
     from datetime import time as t
     sec_id     = request.form.get('section_id', type=int)
@@ -258,7 +260,7 @@ def create():
 @schedules_bp.route('/<int:entry_id>/delete', methods=['POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_schedules')
 def delete(entry_id):
     entry = Schedule.query.get_or_404(entry_id)
     sec_id   = entry.section_id
@@ -290,7 +292,7 @@ def _render_schedule_pdf(target, entries, filename):
 
 @schedules_bp.route('/<int:section_id>/print')
 @login_required
-@admin_required
+@any_permission_required('print_schedules', 'manage_schedules')
 def print_pdf(section_id):
     """Download a printable PDF of the weekly schedule for a section."""
     section = Section.query.get_or_404(section_id)
@@ -304,7 +306,7 @@ def print_pdf(section_id):
 
 @schedules_bp.route('/grade/<int:grade_id>/print')
 @login_required
-@admin_required
+@any_permission_required('print_schedules', 'manage_schedules')
 def print_grade_pdf(grade_id):
     """Download a printable PDF of the weekly schedule for a grade."""
     grade = Grade.query.get_or_404(grade_id)

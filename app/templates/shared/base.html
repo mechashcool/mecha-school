@@ -710,10 +710,18 @@
   </button>
   <div class="topbar-title">{% block page_title %}{% endblock %}</div>
   <div class="topbar-actions">
+    {# Notifications bell only for roles that can open the inbox: staff need
+       the view/manage permission (admins pass via bypass); parents, teachers
+       and investors keep their portal feed by role. #}
+    {% set _role_name = current_user.role.name if current_user.is_authenticated and current_user.role else '' %}
+    {% if _role_name in ('parent', 'teacher', 'investor_viewer')
+          or (current_user.is_authenticated and (current_user.has_permission('view_notifications')
+                                                 or current_user.has_permission('manage_notifications'))) %}
     <a href="{{ url_for('notifications.index') }}" class="topbar-btn" data-badge-dot="notifications">
       <i class="bi bi-bell"></i>
       <span class="badge-dot"{% if not unread_notifications %} style="display:none"{% endif %}></span>
     </a>
+    {% endif %}
     <a href="{{ url_for('auth.profile') }}" class="topbar-btn">
       <i class="bi bi-person"></i>
     </a>

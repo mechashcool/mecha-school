@@ -10,8 +10,8 @@ from io import BytesIO
 
 from app.models import (db, Student, StudentRegistrationRecord, Section, Grade,
                         AcademicYear, School, parent_students, User)
-from app.utils.decorators import (permission_required, get_current_school,
-                                   admin_required)
+from app.utils.decorators import (permission_required, any_permission_required,
+                                   get_current_school, admin_required)
 
 student_records_bp = Blueprint(
     'student_records', __name__,
@@ -239,7 +239,7 @@ def _apply_record_fields(record, form, school):
 
 @student_records_bp.route('/search-students')
 @login_required
-@admin_required
+@any_permission_required('add_student', 'edit_student')
 def search_students():
     school = _school_or_404()
     q = request.args.get('q', '').strip()
@@ -279,7 +279,7 @@ def search_students():
 
 @student_records_bp.route('/student-data/<int:student_id>')
 @login_required
-@admin_required
+@any_permission_required('add_student', 'edit_student')
 def get_student_data(student_id):
     school  = _school_or_404()
     student = (

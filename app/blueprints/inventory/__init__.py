@@ -12,7 +12,9 @@ from sqlalchemy.orm import joinedload
 from app.models import (
     db, InventoryCategory, InventoryCount, InventoryItem, InventoryMovement,
 )
-from app.utils.decorators import admin_required, get_active_year, get_current_school, historical_guard
+from app.utils.decorators import (admin_required, permission_required,
+                                   any_permission_required,
+                                   get_active_year, get_current_school, historical_guard)
 
 
 inventory_bp = Blueprint('inventory', __name__, template_folder='../../templates/inventory')
@@ -101,7 +103,7 @@ def _item_or_404(item_id, school, year):
 
 @inventory_bp.route('/')
 @login_required
-@admin_required
+@any_permission_required('view_inventory', 'manage_inventory')
 def index():
     school, year, response = _school_year_or_redirect()
     if response:
@@ -134,7 +136,7 @@ def index():
 @inventory_bp.route('/items/create', methods=['GET', 'POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_inventory')
 def create_item():
     school, year, response = _school_year_or_redirect()
     if response:
@@ -162,7 +164,7 @@ def create_item():
 @inventory_bp.route('/items/<int:item_id>/edit', methods=['GET', 'POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_inventory')
 def edit_item(item_id):
     school, year, response = _school_year_or_redirect()
     if response:
@@ -199,7 +201,7 @@ def _populate_item(item):
 @inventory_bp.route('/categories', methods=['GET', 'POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_inventory')
 def categories():
     school, year, response = _school_year_or_redirect()
     if response:
@@ -230,7 +232,7 @@ def categories():
 @inventory_bp.route('/categories/<int:category_id>/delete', methods=['POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_inventory')
 def delete_category(category_id):
     school, year, response = _school_year_or_redirect()
     if response:
@@ -256,7 +258,7 @@ def delete_category(category_id):
 
 @inventory_bp.route('/movements')
 @login_required
-@admin_required
+@any_permission_required('view_inventory', 'manage_inventory')
 def movements():
     school, year, response = _school_year_or_redirect()
     if response:
@@ -278,7 +280,7 @@ def movements():
 @inventory_bp.route('/movements/create', methods=['GET', 'POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_inventory')
 def create_movement():
     school, year, response = _school_year_or_redirect()
     if response:
@@ -333,7 +335,7 @@ def create_movement():
 
 @inventory_bp.route('/counts')
 @login_required
-@admin_required
+@any_permission_required('view_inventory', 'manage_inventory')
 def counts():
     school, year, response = _school_year_or_redirect()
     if response:
@@ -349,7 +351,7 @@ def counts():
 @inventory_bp.route('/counts/create', methods=['GET', 'POST'])
 @login_required
 @historical_guard
-@admin_required
+@permission_required('manage_inventory')
 def create_count():
     school, year, response = _school_year_or_redirect()
     if response:
@@ -392,7 +394,7 @@ def create_count():
 
 @inventory_bp.route('/reports')
 @login_required
-@admin_required
+@any_permission_required('view_inventory', 'manage_inventory')
 def reports():
     school, year, response = _school_year_or_redirect()
     if response:
@@ -430,7 +432,7 @@ def reports():
 
 @inventory_bp.route('/reports/export.xlsx')
 @login_required
-@admin_required
+@any_permission_required('view_inventory', 'manage_inventory')
 def export_excel():
     school, year, response = _school_year_or_redirect()
     if response:
@@ -496,7 +498,7 @@ def export_excel():
 
 @inventory_bp.route('/reports/export.pdf')
 @login_required
-@admin_required
+@any_permission_required('view_inventory', 'manage_inventory')
 def export_pdf():
     school, year, response = _school_year_or_redirect()
     if response:
@@ -602,7 +604,7 @@ def export_pdf():
 
 @inventory_bp.route('/reports/export_annual.xlsx')
 @login_required
-@admin_required
+@any_permission_required('view_inventory', 'manage_inventory')
 def export_annual_excel():
     school, year, response = _school_year_or_redirect()
     if response:
@@ -667,7 +669,7 @@ def export_annual_excel():
 
 @inventory_bp.route('/reports/export_annual.pdf')
 @login_required
-@admin_required
+@any_permission_required('view_inventory', 'manage_inventory')
 def export_annual_pdf():
     school, year, response = _school_year_or_redirect()
     if response:

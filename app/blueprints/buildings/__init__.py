@@ -18,7 +18,8 @@ from flask import (Blueprint, render_template, redirect, url_for,
 from flask_login import login_required, current_user
 
 from app.models import db, SchoolBuilding, Student
-from app.utils.decorators import admin_required, get_current_school
+from app.utils.decorators import (admin_required, permission_required,
+                                   get_current_school)
 from app.utils.buildings import school_buildings_enabled
 from app.utils.audit import log_action
 
@@ -54,7 +55,7 @@ def _get_building_or_404(building_id, school):
 
 @buildings_bp.route('/')
 @login_required
-@admin_required
+@permission_required('manage_buildings')
 def index():
     school = _require_buildings_school()
     if not school:
@@ -82,7 +83,7 @@ def index():
 
 @buildings_bp.route('/new', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_buildings')
 def new():
     school = _require_buildings_school()
     if not school:
@@ -126,7 +127,7 @@ def new():
 
 @buildings_bp.route('/<int:building_id>/edit', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@permission_required('manage_buildings')
 def edit(building_id):
     school = _require_buildings_school()
     if not school:
@@ -166,7 +167,7 @@ def edit(building_id):
 
 @buildings_bp.route('/<int:building_id>/toggle-active', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_buildings')
 def toggle_active(building_id):
     school = _require_buildings_school()
     if not school:
@@ -184,7 +185,7 @@ def toggle_active(building_id):
 
 @buildings_bp.route('/<int:building_id>/delete', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('manage_buildings')
 def delete(building_id):
     school = _require_buildings_school()
     if not school:

@@ -274,13 +274,17 @@
       </a>
     </li>
 
-    {# ── Admin / staff sidebar (grouped) ────────────────────────────────── #}
+    {# ── Admin / staff sidebar (grouped, permission-driven) ─────────────── #}
+    {# Every item is gated by current_user.has_permission(...) so each role —
+       built-in or created from role management — sees exactly the items its
+       granted permissions unlock. Admin tiers see everything because
+       has_permission() always returns True for them. #}
     {% else %}
 
     <li class="nav-section-label">الرئيسية</li>
 
-    {# Only admins see the admin dashboard link #}
-    {% if current_user.is_admin_user %}
+    {# Dashboard requires the view_dashboard permission (admins always pass) #}
+    {% if current_user.is_super_admin or current_user.has_permission('view_dashboard') %}
     {# Super admin: dedicated portal + schools overview #}
     {% if current_user.is_super_admin %}
     <li class="nav-item">
@@ -334,21 +338,23 @@
             <i class="bi bi-people"></i> الطلاب
           </a>
         </li>
-        {% if current_user.is_admin_user %}
         <li class="nav-item">
           <a href="{{ url_for('student_records.index') }}"
              class="{{ 'active' if request.blueprint == 'student_records' }}">
             <i class="bi bi-card-text"></i> سجل قيد الطالب
           </a>
         </li>
-        {% endif %}
       </ul>
     </li>
     {% endif %}
 
     {# ═══ Group: Attendance & discipline ════════════════════════════════ #}
-    {% if ('attendance' in enabled_modules and (current_user.has_permission('take_attendance') or current_user.has_permission('manage_attendance_settings'))) or
-          ('attendance_devices' in enabled_modules and current_user.is_admin_user) %}
+    {% if ('attendance' in enabled_modules and (current_user.has_permission('take_attendance') or
+                                                current_user.has_permission('manage_suspensions') or
+                                                current_user.has_permission('manage_attendance_settings') or
+                                                current_user.has_permission('manage_calendar'))) or
+          ('attendance_devices' in enabled_modules and (current_user.has_permission('view_attendance_devices') or
+                                                        current_user.has_permission('manage_attendance_devices'))) %}
     <li class="nav-group" data-group="attendance">
       <button type="button" class="nav-group-toggle" aria-expanded="false">
         <i class="bi bi-calendar-check-fill group-icon"></i> الحضور والانضباط
@@ -368,14 +374,14 @@
             <i class="bi bi-pencil-square"></i> تسجيل الحضور يدوياً
           </a>
         </li>
-        {% if current_user.is_admin_user %}
+        {% endif %}
+        {% if 'attendance' in enabled_modules and current_user.has_permission('manage_suspensions') %}
         <li class="nav-item">
           <a href="{{ url_for('attendance.suspensions') }}"
              class="{{ 'active' if request.endpoint in ['attendance.suspensions', 'attendance.create_suspension'] }}">
             <i class="bi bi-slash-circle"></i> إيقاف الطلاب
           </a>
         </li>
-        {% endif %}
         {% endif %}
         {% if 'attendance' in enabled_modules and current_user.has_permission('manage_attendance_settings') %}
         <li class="nav-item">
@@ -384,6 +390,8 @@
             <i class="bi bi-clock-history"></i> إعدادات الحضور
           </a>
         </li>
+        {% endif %}
+        {% if 'attendance' in enabled_modules and current_user.has_permission('manage_calendar') %}
         <li class="nav-item">
           <a href="{{ url_for('school_calendar.index') }}"
              class="{{ 'active' if request.blueprint == 'school_calendar' }}">
@@ -391,7 +399,8 @@
           </a>
         </li>
         {% endif %}
-        {% if 'attendance_devices' in enabled_modules and current_user.is_admin_user %}
+        {% if 'attendance_devices' in enabled_modules and (current_user.has_permission('view_attendance_devices') or
+                                                           current_user.has_permission('manage_attendance_devices')) %}
         <li class="nav-item">
           <a href="{{ url_for('attendance_devices.index') }}"
              class="{{ 'active' if request.blueprint == 'attendance_devices' }}">
@@ -404,9 +413,14 @@
     {% endif %}
 
     {# ═══ Group: Academic affairs ═══════════════════════════════════════ #}
+    {% set _can_sections = current_user.has_permission('view_sections') or current_user.has_permission('manage_sections') %}
+    {% set _can_subjects = current_user.has_permission('view_subjects') or current_user.has_permission('manage_subjects') %}
+    {% set _can_schedules = current_user.has_permission('view_schedules') or current_user.has_permission('manage_schedules') or current_user.has_permission('print_schedules') %}
     {% if ('grades' in enabled_modules and current_user.has_permission('enter_grades')) or
-          ('homework' in enabled_modules and current_user.is_admin_user and school_cfg.action_enabled('homework', 'view')) or
-          (current_user.is_admin_user and ('sections' in enabled_modules or 'subjects' in enabled_modules or 'schedules' in enabled_modules)) %}
+          ('homework' in enabled_modules and current_user.has_permission('manage_homework') and school_cfg.action_enabled('homework', 'view')) or
+          ('sections' in enabled_modules and _can_sections) or
+          ('subjects' in enabled_modules and _can_subjects) or
+          ('schedules' in enabled_modules and _can_schedules) %}
     <li class="nav-group" data-group="academic">
       <button type="button" class="nav-group-toggle" aria-expanded="false">
         <i class="bi bi-mortarboard-fill group-icon"></i> الشؤون الأكاديمية
@@ -421,7 +435,7 @@
           </a>
         </li>
         {% endif %}
-        {% if 'homework' in enabled_modules and current_user.is_admin_user and school_cfg.action_enabled('homework', 'view') %}
+        {% if 'homework' in enabled_modules and current_user.has_permission('manage_homework') and school_cfg.action_enabled('homework', 'view') %}
         <li class="nav-item">
           <a href="{{ url_for('homework.index') }}"
              class="{{ 'active' if request.blueprint == 'homework' }}">
@@ -429,8 +443,7 @@
           </a>
         </li>
         {% endif %}
-        {% if current_user.is_admin_user %}
-        {% if 'sections' in enabled_modules %}
+        {% if 'sections' in enabled_modules and _can_sections %}
         <li class="nav-item">
           <a href="{{ url_for('sections.index') }}"
              class="{{ 'active' if request.blueprint == 'sections' and request.endpoint not in ['sections.subjects', 'sections.edit_subject'] }}">
@@ -438,7 +451,7 @@
           </a>
         </li>
         {% endif %}
-        {% if 'subjects' in enabled_modules %}
+        {% if 'subjects' in enabled_modules and _can_subjects %}
         <li class="nav-item">
           <a href="{{ url_for('sections.subjects') }}"
              class="{{ 'active' if request.endpoint in ['sections.subjects', 'sections.edit_subject'] }}">
@@ -446,14 +459,13 @@
           </a>
         </li>
         {% endif %}
-        {% if 'schedules' in enabled_modules %}
+        {% if 'schedules' in enabled_modules and _can_schedules %}
         <li class="nav-item">
           <a href="{{ url_for('schedules.index') }}"
              class="{{ 'active' if request.blueprint == 'schedules' }}">
             <i class="bi bi-table"></i> الجداول الدراسية
           </a>
         </li>
-        {% endif %}
         {% endif %}
       </ul>
     </li>
@@ -535,9 +547,10 @@
     {% endif %}
 
     {# ═══ Group: School services ════════════════════════════════════════ #}
+    {% set _can_inventory = current_user.has_permission('view_inventory') or current_user.has_permission('manage_inventory') %}
     {% if ('transport' in enabled_modules and current_user.has_permission('manage_transport')) or
-          ('inventory' in enabled_modules and current_user.is_admin_user) or
-          (school and school.enable_buildings and current_user.is_admin_user) %}
+          ('inventory' in enabled_modules and _can_inventory) or
+          (school and school.enable_buildings and current_user.has_permission('manage_buildings')) %}
     <li class="nav-group" data-group="services">
       <button type="button" class="nav-group-toggle" aria-expanded="false">
         <i class="bi bi-box-seam-fill group-icon"></i> الخدمات المدرسية
@@ -552,7 +565,7 @@
           </a>
         </li>
         {% endif %}
-        {% if 'inventory' in enabled_modules and current_user.is_admin_user %}
+        {% if 'inventory' in enabled_modules and _can_inventory %}
         <li class="nav-item">
           <a href="{{ url_for('inventory.index') }}"
              class="{{ 'active' if request.blueprint == 'inventory' }}">
@@ -560,7 +573,7 @@
           </a>
         </li>
         {% endif %}
-        {% if school and school.enable_buildings and current_user.is_admin_user %}
+        {% if school and school.enable_buildings and current_user.has_permission('manage_buildings') %}
         <li class="nav-item">
           <a href="{{ url_for('buildings.index') }}"
              class="{{ 'active' if request.blueprint == 'buildings' }}">
@@ -573,7 +586,13 @@
     {% endif %}
 
     {# ═══ Group: Communication ══════════════════════════════════════════ #}
-    {% if current_user.is_admin_user or ('notifications' in enabled_modules) %}
+    {% set _can_chat_admin = current_user.has_permission('manage_chat') %}
+    {% set _can_chat_member = current_user.has_permission('use_chat') and not _can_chat_admin %}
+    {% set _can_notifications = current_user.has_permission('view_notifications') or current_user.has_permission('manage_notifications') %}
+    {% if ('chat' in enabled_modules and (_can_chat_admin or _can_chat_member)) or
+          current_user.has_permission('manage_complaints') or
+          current_user.has_permission('manage_school_board') or
+          ('notifications' in enabled_modules and _can_notifications) %}
     <li class="nav-group" data-group="comm">
       {% set _comm_badge = (sidebar_counts.unread_chat or 0) + (sidebar_counts.pending_complaints or 0) %}
       <button type="button" class="nav-group-toggle" aria-expanded="false">
@@ -582,7 +601,7 @@
         <i class="bi bi-chevron-left chevron"></i>
       </button>
       <ul class="nav-group-items">
-        {% if 'chat' in enabled_modules and current_user.is_admin_user %}
+        {% if 'chat' in enabled_modules and _can_chat_admin %}
         <li class="nav-item">
           <a href="{{ url_for('chat.index') }}"
              class="{{ 'active' if request.blueprint == 'chat' }}">
@@ -591,7 +610,16 @@
           </a>
         </li>
         {% endif %}
-        {% if current_user.is_admin_user %}
+        {% if 'chat' in enabled_modules and _can_chat_member %}
+        <li class="nav-item">
+          <a href="{{ safe_url_for('chat.user_index') }}"
+             class="{{ 'active' if request.endpoint and request.endpoint.startswith('chat.user') }}">
+            <i class="bi bi-chat-dots"></i> المراسلات
+            {{ nav_badge('chat', sidebar_counts.unread_chat) }}
+          </a>
+        </li>
+        {% endif %}
+        {% if current_user.has_permission('manage_complaints') %}
         <li class="nav-item">
           <a href="{{ url_for('admin.complaints_list') }}"
              class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.complaint') }}">
@@ -599,7 +627,9 @@
             {{ nav_badge('complaints', sidebar_counts.pending_complaints) }}
           </a>
         </li>
+        {% endif %}
         {# leave items are in the dedicated طلبات الإجازة nav-group #}
+        {% if current_user.has_permission('manage_school_board') %}
         <li class="nav-item">
           <a href="{{ url_for('admin.school_board_videos') }}"
              class="{{ 'active' if request.endpoint and request.endpoint.startswith('admin.school_board') }}">
@@ -607,7 +637,7 @@
           </a>
         </li>
         {% endif %}
-        {% if 'notifications' in enabled_modules %}
+        {% if 'notifications' in enabled_modules and _can_notifications %}
         <li class="nav-item">
           <a href="{{ url_for('notifications.index') }}"
              class="{{ 'active' if request.blueprint == 'notifications' }}">
@@ -621,7 +651,7 @@
     {% endif %}
 
     {# ═══ Leave Requests — single unified link ══════════════════════════ #}
-    {% if current_user.is_admin_user %}
+    {% if current_user.has_permission('manage_leave_requests') %}
     {% set _leaves_badge = (sidebar_counts.pending_leave_requests or 0) + (sidebar_counts.pending_employee_leave_requests or 0) %}
     <li class="nav-item">
       <a href="{{ url_for('admin.leave_requests_list') }}"
@@ -648,14 +678,16 @@
     </li>
     {% endif %}
 
-    {# ═══ Group: System (school manager) ════════════════════════════════ #}
-    {% if current_user.is_admin_user %}
+    {# ═══ Group: System ═════════════════════════════════════════════════ #}
+    {% set _can_school_settings = current_user.has_permission('manage_white_label') or current_user.has_permission('manage_settings') %}
+    {% if current_user.has_permission('manage_users') or _can_school_settings or current_user.has_permission('view_audit_log') %}
     <li class="nav-group" data-group="system">
       <button type="button" class="nav-group-toggle" aria-expanded="false">
         <i class="bi bi-gear-fill group-icon"></i> النظام
         <i class="bi bi-chevron-left chevron"></i>
       </button>
       <ul class="nav-group-items">
+        {% if current_user.has_permission('manage_users') %}
         {% if current_user.school_id is not none %}
         <li class="nav-item">
           <a href="{{ url_for('admin.users_list') }}"
@@ -671,12 +703,23 @@
           </a>
         </li>
         {% endif %}
+        {% endif %}
+        {% if _can_school_settings %}
         <li class="nav-item">
           <a href="{{ url_for('admin.school_settings') }}"
              class="{{ 'active' if request.endpoint == 'admin.school_settings' }}">
             <i class="bi bi-building-gear"></i> هوية المدرسة
           </a>
         </li>
+        {% endif %}
+        {% if current_user.has_permission('view_audit_log') %}
+        <li class="nav-item">
+          <a href="{{ url_for('audit.index') }}"
+             class="{{ 'active' if request.blueprint == 'audit' }}">
+            <i class="bi bi-journal-text"></i> سجل العمليات
+          </a>
+        </li>
+        {% endif %}
       </ul>
     </li>
     {% endif %}

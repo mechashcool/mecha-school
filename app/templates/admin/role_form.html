@@ -6,6 +6,10 @@
 <div class="page-header">
   <div>
     <h1 class="page-title">{{ 'تعديل: ' + role.label if role else 'دور جديد' }}</h1>
+    <p class="page-subtitle">
+      يرى المستخدم المرتبط بهذا الدور الصفحات والإجراءات المحددة أدناه فقط —
+      كل ما عداها يبقى مخفياً وممنوعاً من الخادم حتى عبر الروابط المباشرة.
+    </p>
   </div>
   <a href="{{ url_for('admin.roles_list') }}" class="btn btn-outline-secondary">
     <i class="bi bi-arrow-right me-1"></i>رجوع
@@ -13,6 +17,7 @@
 </div>
 
 <form method="POST" action="{{ url_for('admin.edit_role', role_id=role.id) if role else url_for('admin.create_role') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div class="row g-4">
     <div class="col-lg-4">
       <div class="card">
@@ -23,8 +28,14 @@
           {% if not role %}
           <div class="mb-3">
             <label class="form-label">المعرّف (بالإنجليزية) <span class="text-danger">*</span></label>
-            <input type="text" name="name" class="form-control" placeholder="مثال: accountant" required>
-            <small class="text-muted">حروف صغيرة وشرطات سفلية فقط</small>
+            <input type="text" name="name" class="form-control" placeholder="مثال: registrar"
+                   pattern="[a-z][a-z0-9_]{1,60}" required>
+            <small class="text-muted">حروف إنجليزية صغيرة وأرقام وشرطات سفلية فقط</small>
+          </div>
+          {% else %}
+          <div class="mb-3">
+            <label class="form-label">المعرّف</label>
+            <input type="text" class="form-control" value="{{ role.name }}" disabled>
           </div>
           {% endif %}
           <div class="mb-3">
@@ -36,13 +47,23 @@
             <label class="form-label">الوصف</label>
             <textarea name="description" class="form-control" rows="3">{{ role.description if role else '' }}</textarea>
           </div>
+          <div class="alert alert-info py-2 mb-0" style="font-size:12.5px">
+            <i class="bi bi-shield-lock me-1"></i>
+            الصلاحيات لا تتجاوز حدود المدرسة أبداً: بيانات المستخدم تبقى مقيّدة
+            بمدرسته وعامه الدراسي بغض النظر عن الصلاحيات الممنوحة.
+            {% if not is_builtin_role %}
+            <br><i class="bi bi-box-arrow-in-left me-1"></i>
+            لوحة التحكم لا تُمنح تلقائياً — بعد تسجيل الدخول يوجَّه المستخدم
+            إلى أول صفحة مصرّح بها.
+            {% endif %}
+          </div>
         </div>
       </div>
     </div>
 
     <div class="col-lg-8">
       <div class="card">
-        <div class="card-header">
+        <div class="card-header d-flex align-items-center">
           <i class="bi bi-shield-check text-accent"></i>
           الصلاحيات
           <button type="button" class="btn btn-sm btn-outline-secondary ms-auto"
@@ -51,28 +72,63 @@
           </button>
         </div>
         <div class="card-body">
-          {% set ns = namespace(current_cat='') %}
-          {% for perm in all_permissions %}
-            {% if perm.category != ns.current_cat %}
-              {% set ns.current_cat = perm.category %}
-              {% if not loop.first %}<hr class="my-3">{% endif %}
-              <div class="mb-3 mt-2" style="font-size:12px;font-weight:800;text-transform:uppercase;
-                                            letter-spacing:1.2px;color:#1a3a5c;
-                                            border-right:3px solid #e8a020;padding-right:8px">
-                {{ perm.category }}
+          {% for category, perms in catalog_groups %}
+          {% if perms %}
+          <div class="perm-group mb-3 {{ '' if loop.first else 'pt-3 border-top' }}">
+            <div class="d-flex align-items-center mb-2">
+              <div style="font-size:12px;font-weight:800;text-transform:uppercase;
+                          letter-spacing:1.2px;color:#1a3a5c;
+                          border-right:3px solid #e8a020;padding-right:8px">
+                {{ category }}
               </div>
-            {% endif %}
-            <div class="form-check form-check-inline mb-2" style="min-width:220px">
-              <input class="form-check-input perm-cb" type="checkbox"
-                     name="permissions" value="{{ perm.id }}"
-                     id="p_{{ perm.id }}"
-                     {% if role and perm in role.permissions %}checked{% endif %}>
-              <label class="form-check-label" for="p_{{ perm.id }}"
-                     style="font-size:13px;cursor:pointer">
-                {{ perm.label }}
-              </label>
+              <button type="button"
+                      class="btn btn-sm btn-link p-0 ms-auto group-toggle"
+                      style="font-size:12px;text-decoration:none"
+                      onclick="toggleGroup(this)">تحديد المجموعة</button>
             </div>
+            <div class="d-flex flex-wrap">
+              {% for perm in perms %}
+              <div class="form-check form-check-inline mb-2" style="min-width:260px">
+                <input class="form-check-input perm-cb" type="checkbox"
+                       name="permissions" value="{{ perm.id }}"
+                       id="p_{{ perm.id }}"
+                       {% if role and perm in role.permissions %}checked{% endif %}>
+                <label class="form-check-label" for="p_{{ perm.id }}"
+                       style="font-size:13px;cursor:pointer">
+                  {{ perm.label }}
+                </label>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
           {% endfor %}
+
+          {# Legacy / portal permissions — only offered for built-in roles.
+             Custom roles cannot hold them (filtered server-side as well). #}
+          {% if role and is_builtin_role and other_permissions %}
+          <div class="perm-group mb-2 pt-3 border-top">
+            <div class="mb-2" style="font-size:12px;font-weight:800;text-transform:uppercase;
+                                     letter-spacing:1.2px;color:#9aabb8;
+                                     border-right:3px solid #9aabb8;padding-right:8px">
+              صلاحيات أخرى (خاصة بالأدوار المدمجة)
+            </div>
+            <div class="d-flex flex-wrap">
+              {% for perm in other_permissions %}
+              <div class="form-check form-check-inline mb-2" style="min-width:260px">
+                <input class="form-check-input perm-cb" type="checkbox"
+                       name="permissions" value="{{ perm.id }}"
+                       id="p_{{ perm.id }}"
+                       {% if perm in role.permissions %}checked{% endif %}>
+                <label class="form-check-label" for="p_{{ perm.id }}"
+                       style="font-size:13px;cursor:pointer">
+                  {{ perm.label }}
+                </label>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
         </div>
       </div>
     </div>
@@ -92,6 +148,12 @@
 <script>
 function toggleAll() {
   const cbs = document.querySelectorAll('.perm-cb');
+  const anyUnchecked = [...cbs].some(cb => !cb.checked);
+  cbs.forEach(cb => cb.checked = anyUnchecked);
+}
+function toggleGroup(btn) {
+  const group = btn.closest('.perm-group');
+  const cbs = group.querySelectorAll('.perm-cb');
   const anyUnchecked = [...cbs].some(cb => !cb.checked);
   cbs.forEach(cb => cb.checked = anyUnchecked);
 }
