@@ -148,7 +148,7 @@ def generate_fee_receipt(installment, school_settings=None, print_date=None) -> 
     from reportlab.lib.pagesizes import A4, portrait
     from reportlab.lib.units import cm, inch
     from reportlab.lib import colors
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, Frame, PageTemplate
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, Frame, PageTemplate, HRFlowable
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.colors import HexColor
     from reportlab.pdfbase import pdfmetrics
@@ -163,8 +163,10 @@ def generate_fee_receipt(installment, school_settings=None, print_date=None) -> 
     pagesize = portrait(A4)
     page_width, page_height = pagesize
 
-    # 450 pt gives enough vertical room for the amount-in-words row (may wrap to 2 lines)
-    max_content_height = 450  # points - this ensures single page output
+    # 480 pt gives enough vertical room for the redesigned header/footer plus
+    # the amount-in-words row (may wrap to 2 lines), while still ensuring
+    # single page output.
+    max_content_height = 480  # points - this ensures single page output
     frame = Frame(1*cm, page_height - max_content_height - 1*cm, 
                   page_width - 2*cm, max_content_height,
                   leftPadding=0, bottomPadding=0, rightPadding=0, topPadding=0)
@@ -182,80 +184,44 @@ def generate_fee_receipt(installment, school_settings=None, print_date=None) -> 
     # Use dark grey (#444444) for professional appearance
     if arabic_font_registered:
         arabic_style = ParagraphStyle('arabic', fontName='Amiri', fontSize=10, alignment=2, textColor=colors.black)
-        arabic_title = ParagraphStyle('arabic_title', fontName='Amiri', fontSize=14, alignment=1, textColor=colors.black)
         arabic_bold = ParagraphStyle('arabic_bold', fontName='Amiri-Bold', fontSize=10, alignment=2, textColor=colors.black)
         data_style = ParagraphStyle('data_cell', fontName='Amiri', fontSize=8, textColor=colors.black, alignment=0)
+        school_name_style = ParagraphStyle('school_name', fontName='Amiri-Bold', fontSize=16, alignment=1, textColor=colors.black, leading=20)
+        receipt_title_style = ParagraphStyle('receipt_title', fontName='Amiri', fontSize=12, alignment=1, textColor=HexColor('#333333'), leading=16)
     else:
         # If Amiri font is not available, use default fonts but warn about Arabic issues
         print("WARNING: Amiri font not loaded. Arabic text will display as squares.")
         arabic_style = ParagraphStyle('arabic', fontSize=10, alignment=2, textColor=colors.black)
-        arabic_title = ParagraphStyle('arabic_title', fontSize=14, alignment=1, textColor=colors.black)
         arabic_bold = ParagraphStyle('arabic_bold', fontSize=10, alignment=2, textColor=colors.black)
         data_style = ParagraphStyle('data_cell', fontSize=8, textColor=colors.black, alignment=0)
+        school_name_style = ParagraphStyle('school_name', fontSize=16, alignment=1, textColor=colors.black, leading=20)
+        receipt_title_style = ParagraphStyle('receipt_title', fontSize=12, alignment=1, textColor=HexColor('#333333'), leading=16)
 
     elements = []
 
-    # Header with school info and logo in side-by-side layout
+    # ---- Header: logo (centered) -> school name (centered, bold) -> receipt title (centered) ----
     school_name_ar = school_settings.school_name_ar if school_settings and school_settings.school_name_ar else "المدرسة"
-    school_name_en = school_settings.school_name if school_settings else "School"
-    
-    # Create header table with 3 columns: Arabic name (right), Logo (center), English name (left)
-    header_data = []
-    
-    # Prepare the three elements for the header row
-    arabic_name_element = None
-    logo_element = None  
-    english_name_element = None
-    
-    # Arabic school name (right side)
-    arabic_name_element = Paragraph(_shape_arabic_text(school_name_ar), arabic_title)
-    
-    # Logo (center) — supports both local paths and Supabase/CDN URLs
+
+    logo_flowable = None
     if school_settings and school_settings.logo_path:
         logo_path = _resolve_logo_for_pdf(school_settings.logo_path)
         if logo_path:
             try:
-                logo_element = Image(logo_path, width=1.5*cm, height=1.5*cm)
-                logo_element.hAlign = 'CENTER'
+                logo_flowable = Image(logo_path, width=2*cm, height=2*cm)
+                logo_flowable.hAlign = 'CENTER'
             except Exception as e:
                 print(f"Error loading logo: {e}")
-                logo_element = Paragraph("", arabic_title)  # Empty placeholder
-    
-    # English school name (left side) - use Amiri font for consistency
-    if arabic_font_registered:
-        english_style = ParagraphStyle('english_header', fontName='Amiri', fontSize=14, alignment=0, textColor=colors.black)
-    else:
-        english_style = ParagraphStyle('english_header', fontSize=14, alignment=0, textColor=colors.black)
-    english_name_element = Paragraph(school_name_en, english_style)
-    
-    # If no logo, create empty placeholder
-    if logo_element is None:
-        logo_element = Paragraph("", arabic_title)
-    
-    # Create header table row
-    header_data = [[arabic_name_element, logo_element, english_name_element]]
-    
-    # Create header table with equal column widths
-    header_table = Table(header_data, colWidths=[5*cm, 2*cm, 5*cm])  # Arabic, Logo, English
-    header_table.setStyle(TableStyle([
-        ('ALIGN', (0, 0), (0, 0), 'RIGHT'),   # Arabic name right-aligned
-        ('ALIGN', (1, 0), (1, 0), 'CENTER'),  # Logo centered
-        ('ALIGN', (2, 0), (2, 0), 'LEFT'),    # English name left-aligned
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),  # All vertically centered
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-    ]))
-    
-    elements.append(header_table)
-    elements.append(Spacer(1, 0.1*cm))  # Reduced top spacing after header
+                logo_flowable = None
 
-    # Combined receipt title as single centered paragraph
-    receipt_title_combined = "إيصال رسوم دراسية - Fee Receipt"
-    elements.append(Paragraph(_shape_arabic_text(receipt_title_combined), arabic_title))
+    if logo_flowable is not None:
+        elements.append(logo_flowable)
+        elements.append(Spacer(1, 0.15*cm))
 
-    elements.append(Spacer(1, 0.4*cm))  # Reduced space after title before table
+    elements.append(Paragraph(_shape_arabic_text(school_name_ar), school_name_style))
+    elements.append(Spacer(1, 0.1*cm))
+    elements.append(Paragraph(_shape_arabic_text("إيصال استلام رسوم دراسية"), receipt_title_style))
+    elements.append(Spacer(1, 0.2*cm))
+    elements.append(HRFlowable(width="100%", thickness=0.75, color=HexColor('#999999'), spaceBefore=0, spaceAfter=10))
 
     # Receipt details table
     issue_date = print_date if print_date is not None else datetime.now().date()
@@ -358,18 +324,22 @@ def generate_fee_receipt(installment, school_settings=None, print_date=None) -> 
     ]))
     elements.append(signature_table)
 
-    # Footer
-    footer_text = school_settings.receipt_footer if school_settings and school_settings.receipt_footer else f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC | {school_name_en} System"
-    
-    # Create footer paragraph with Amiri font
+    # ---- Footer: subtle divider -> system attribution -> generated timestamp ----
+    attribution_text = "تم إصدار هذا الوصل إلكترونيًا عبر نظام Core School — النواة الذكية للحلول التقنية"
+    generated_at = datetime.now().strftime('%Y-%m-%d %H:%M')
+
     if arabic_font_registered:
-        footer_style_arabic = ParagraphStyle('footer_arabic', fontName='Amiri', fontSize=7, textColor=HexColor('#666666'), alignment=1)
-        elements.append(Spacer(1, 0.2*cm))
-        elements.append(Paragraph(process_arabic_text(footer_text), footer_style_arabic))
+        attribution_style = ParagraphStyle('attribution', fontName='Amiri', fontSize=7.5, textColor=HexColor('#777777'), alignment=1)
+        timestamp_style = ParagraphStyle('gen_timestamp', fontName='Amiri', fontSize=6, textColor=HexColor('#999999'), alignment=1)
     else:
-        footer_style = ParagraphStyle('footer', fontSize=7, textColor=HexColor('#666666'), alignment=1)
-        elements.append(Spacer(1, 0.2*cm))
-        elements.append(Paragraph(footer_text, footer_style))
+        attribution_style = ParagraphStyle('attribution', fontSize=7.5, textColor=HexColor('#777777'), alignment=1)
+        timestamp_style = ParagraphStyle('gen_timestamp', fontSize=6, textColor=HexColor('#999999'), alignment=1)
+
+    elements.append(Spacer(1, 0.4*cm))
+    elements.append(HRFlowable(width="100%", thickness=0.5, color=HexColor('#cccccc'), spaceBefore=0, spaceAfter=6))
+    elements.append(Paragraph(process_arabic_text(attribution_text), attribution_style))
+    elements.append(Spacer(1, 0.05*cm))
+    elements.append(Paragraph(_shape_arabic_text(f"أُصدر في {generated_at}"), timestamp_style))
 
     doc.build(elements)
     return buf.getvalue()
