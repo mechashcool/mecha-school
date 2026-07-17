@@ -25,7 +25,7 @@
       </div>
       <div class="col-md-3">
         <label class="form-label">نوع الحركة</label>
-        <select name="movement_type" class="form-select" required>
+        <select name="movement_type" id="movementType" class="form-select" required>
           {% for key, label in movement_types.items() %}
           <option value="{{ key }}">{{ label }}</option>
           {% endfor %}
@@ -34,6 +34,23 @@
       <div class="col-md-3">
         <label class="form-label">الكمية</label>
         <input type="number" name="quantity" class="form-control" step="0.01" min="0.01" required>
+      </div>
+      <div class="col-md-6" id="warehouseRow">
+        <label class="form-label" id="warehouseLabel">المخزن <span class="text-danger">*</span></label>
+        <select name="warehouse_id" class="form-select" required>
+          {% for warehouse in warehouses %}
+          <option value="{{ warehouse.id }}">{{ warehouse.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-6" id="toWarehouseRow" style="display:none">
+        <label class="form-label">إلى مخزن <span class="text-danger">*</span></label>
+        <select name="to_warehouse_id" class="form-select">
+          <option value="">— اختر مخزن الوجهة —</option>
+          {% for warehouse in warehouses %}
+          <option value="{{ warehouse.id }}">{{ warehouse.name }}</option>
+          {% endfor %}
+        </select>
       </div>
       <div class="col-md-4">
         <label class="form-label">السبب</label>
@@ -62,4 +79,25 @@
     </form>
   </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+  const typeSel = document.getElementById('movementType');
+  const toRow = document.getElementById('toWarehouseRow');
+  const toSelect = toRow ? toRow.querySelector('select[name="to_warehouse_id"]') : null;
+  const warehouseLabel = document.getElementById('warehouseLabel');
+  if (!typeSel || !toRow) return;
+
+  function toggle() {
+    const isTransfer = typeSel.value === 'transfer';
+    toRow.style.display = isTransfer ? '' : 'none';
+    if (toSelect) toSelect.required = isTransfer;
+    if (warehouseLabel) warehouseLabel.firstChild.textContent = isTransfer ? 'من مخزن ' : 'المخزن ';
+  }
+  typeSel.addEventListener('change', toggle);
+  toggle();
+})();
+</script>
 {% endblock %}

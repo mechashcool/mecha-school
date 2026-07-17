@@ -11,7 +11,8 @@ from app.models import (
     AuditLog, Complaint, Device, Employee, EmployeeAttendance, EmployeeDocument,
     EmployeeEvaluation, Exam, ExamResult, Expense, ExpenseCategory,
     FeeInstallment, FeeRecord, FeeReminderLog, FeeType, Grade,
-    InventoryCategory, InventoryCount, InventoryItem, InventoryMovement,
+    InventoryCategory, InventoryCount, InventoryItem, InventoryItemStock,
+    InventoryMovement, InventoryWarehouse,
     LeaveRequest, Notification, NotificationRead, PayrollItem, PayrollSettings,
     PushNotification, Revenue,
     RevenueCategory, SalaryComponent, SalaryRecord, Schedule, School, Section,
@@ -75,10 +76,12 @@ LINKED_SCHOOL_MODELS = (
     (AuditLog, 'سجل التدقيق'),
     (StudentTransport, 'نقل الطلاب'),
     (TransportRoute, 'مسارات النقل'),
-    (InventoryCategory, 'تصنيفات المخزون'),
-    (InventoryItem, 'مواد المخزون'),
+    (InventoryItemStock, 'مخزون المواد حسب المخزن'),
     (InventoryMovement, 'حركات المخزون'),
     (InventoryCount, 'جرد المخزون'),
+    (InventoryItem, 'مواد المخزون'),
+    (InventoryCategory, 'تصنيفات المخزون'),
+    (InventoryWarehouse, 'المخازن'),
     (AttendanceDevice, 'أجهزة الحضور'),
 )
 
@@ -130,13 +133,22 @@ SCHOOL_DELETE_ORDER = (
     (Employee, 'الموظفون/التدريسيون'),
     (User, 'المستخدمون'),
     # ── Inventory (must precede AcademicYear) ──────────────────────────────────
-    # InventoryMovement/Count.item_id → inventory_items.id  (no ondelete)
+    # InventoryItemStock.item_id → inventory_items.id AND
+    # InventoryItemStock.warehouse_id → inventory_warehouses.id  (no ondelete
+    # on either FK) — must precede both InventoryItem and InventoryWarehouse.
+    (InventoryItemStock, 'مخزون المواد حسب المخزن'),
+    # InventoryMovement/Count.item_id → inventory_items.id, and
+    # warehouse_id/to_warehouse_id → inventory_warehouses.id  (no ondelete) —
+    # must precede both InventoryItem and InventoryWarehouse.
     (InventoryMovement, 'حركات المخزون'),
     (InventoryCount, 'جرد المخزون'),
     # InventoryItem.category_id → inventory_categories.id  (no ondelete)
     (InventoryItem, 'مواد المخزون'),
     # InventoryCategory.academic_year_id → academic_years.id  (no ondelete)
     (InventoryCategory, 'تصنيفات المخزون'),
+    # InventoryWarehouse.school_id → schools.id only (no year FK); its only
+    # dependents (ItemStock/Movement/Count above) are already gone here.
+    (InventoryWarehouse, 'المخازن'),
     # ── Transport (must precede school deletion) ───────────────────────────────
     # StudentTransport already deleted above; no FK blocks TransportRoute now.
     (TransportRoute, 'مسارات النقل'),

@@ -84,6 +84,26 @@
   </div>
   <div class="col-lg-6">
     <div class="card">
+      <div class="card-header">حسب المخزن</div>
+      <div class="table-wrapper">
+        <table class="table table-hover mb-0">
+          <thead><tr><th>المخزن</th><th>عدد الأصناف</th><th>إجمالي الكميات</th></tr></thead>
+          <tbody>
+            {% for name, count, total in warehouse_totals %}
+            <tr><td>{{ name }}</td><td>{{ count }}</td><td>{{ total or 0 }}</td></tr>
+            {% else %}
+            <tr><td colspan="3" class="text-center text-muted py-4">لا توجد بيانات.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mt-1">
+  <div class="col-lg-6">
+    <div class="card">
       <div class="card-header">المواد منخفضة الكمية</div>
       <div class="table-wrapper">
         <table class="table table-hover mb-0">
@@ -93,6 +113,28 @@
             <tr><td>{{ item.name }}</td><td>{{ item.current_quantity }}</td><td>{{ item.minimum_quantity }}</td></tr>
             {% else %}
             <tr><td colspan="3" class="text-center text-muted py-4">لا توجد تنبيهات منخفضة.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header">مواد منخفضة حسب المخزن</div>
+      <div class="table-wrapper">
+        <table class="table table-hover mb-0">
+          <thead><tr><th>المادة</th><th>المخزن</th><th>الكمية</th><th>حد التنبيه</th></tr></thead>
+          <tbody>
+            {% for stock in low_stock_by_warehouse %}
+            <tr>
+              <td>{{ stock.item.name if stock.item else '-' }}</td>
+              <td>{{ stock.warehouse.name if stock.warehouse else '-' }}</td>
+              <td>{{ stock.quantity }}</td>
+              <td>{{ stock.minimum_quantity }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="text-center text-muted py-4">لا توجد تنبيهات منخفضة حسب المخزن.</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -154,7 +196,7 @@
     <table class="table table-hover mb-0">
       <thead>
         <tr>
-          <th>التاريخ</th><th>المادة</th><th>التصنيف</th><th>الحجم</th>
+          <th>التاريخ</th><th>المادة</th><th>التصنيف</th><th>المخزن</th><th>الحجم</th>
           <th>كمية النظام</th><th>الكمية الفعلية</th><th>الفرق</th><th>الحالة</th>
         </tr>
       </thead>
@@ -164,6 +206,7 @@
           <td>{{ row.count_date.strftime('%Y-%m-%d') if row.count_date else '-' }}</td>
           <td>{{ row.item.name if row.item else '-' }}</td>
           <td>{{ row.item.category.name if row.item and row.item.category else '-' }}</td>
+          <td>{{ row.warehouse.name if row.warehouse else '-' }}</td>
           <td>{{ row.item.size if row.item and row.item.size else '-' }}</td>
           <td>{{ row.system_quantity }}</td>
           <td>{{ row.actual_quantity }}</td>
@@ -171,7 +214,7 @@
           <td>{{ count_status.get(row.status, row.status) }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="8" class="text-center text-muted py-4">لا توجد سجلات جرد.</td></tr>
+        <tr><td colspan="9" class="text-center text-muted py-4">لا توجد سجلات جرد.</td></tr>
         {% endfor %}
       </tbody>
     </table>

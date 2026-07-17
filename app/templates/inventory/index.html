@@ -9,6 +9,9 @@
     <p class="page-subtitle">إدارة المواد المخزنية والكميات والتنبيهات</p>
   </div>
   <div class="d-flex gap-2">
+    <a href="{{ url_for('inventory.warehouses') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-building me-1"></i>المخازن
+    </a>
     <a href="{{ url_for('inventory.categories') }}" class="btn btn-outline-secondary">
       <i class="bi bi-tags me-1"></i>التصنيفات
     </a>
@@ -57,6 +60,15 @@
           <option value="low" {% if status == 'low' %}selected{% endif %}>مواد منخفضة</option>
         </select>
       </div>
+      <div class="col-md-3">
+        <label class="form-label">المخزن</label>
+        <select name="warehouse_id" class="form-select">
+          <option value="">كل المخازن</option>
+          {% for warehouse in warehouses %}
+          <option value="{{ warehouse.id }}" {% if warehouse_id == warehouse.id %}selected{% endif %}>{{ warehouse.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
       <div class="col-md-2 d-flex gap-2">
         <button class="btn btn-primary flex-grow-1"><i class="bi bi-search me-1"></i>بحث</button>
         <a href="{{ url_for('inventory.index') }}" class="btn btn-outline-secondary"><i class="bi bi-x-lg"></i></a>
@@ -73,8 +85,9 @@
           <th>المادة</th>
           <th>التصنيف</th>
           <th>الوحدة</th>
-          <th>الكمية الحالية</th>
+          <th>{{ 'الكمية في ' + selected_warehouse.name if selected_warehouse else 'الكمية الإجمالية' }}</th>
           <th>حد التنبيه</th>
+          <th>المخازن</th>
           <th>المورد</th>
           <th>الحالة</th>
           <th>الإجراءات</th>
@@ -82,18 +95,34 @@
       </thead>
       <tbody>
         {% for item in items %}
+        {% set item_stocks = stocks_by_item.get(item.id, []) %}
+        {% set selected_stock = (item_stocks | selectattr('warehouse_id', 'equalto', warehouse_id) | first) if warehouse_id else None %}
         <tr>
           <td>
-            <div class="fw-700">{{ item.name }}{% if item.size %} <span class="badge bg-secondary" style="font-size:11px">{{ item.size }}</span>{% endif %}</div>
+            <div class="fw-700">
+              <a href="{{ url_for('inventory.item_detail', item_id=item.id) }}">{{ item.name }}</a>
+              {% if item.size %} <span class="badge bg-secondary" style="font-size:11px">{{ item.size }}</span>{% endif %}
+            </div>
             <div class="text-muted" style="font-size:12px">{{ item.item_code or 'بدون رمز' }}</div>
           </td>
           <td>{{ item.category.name if item.category else '-' }}</td>
           <td>{{ item.unit }}</td>
-          <td>{{ item.current_quantity }}</td>
-          <td>{{ item.minimum_quantity }}</td>
+          <td>{{ selected_stock.quantity if selected_stock else item.current_quantity }}</td>
+          <td>{{ selected_stock.minimum_quantity if selected_stock else item.minimum_quantity }}</td>
+          <td>
+            {% if item_stocks %}
+            {% for stock in item_stocks %}
+            <span class="badge {{ 'bg-danger' if stock.is_low_stock else 'bg-light text-dark' }}" style="font-size:11px">
+              {{ stock.warehouse.name if stock.warehouse else '-' }}: {{ stock.quantity }}
+            </span>
+            {% endfor %}
+            {% else %}
+            <span class="text-muted">-</span>
+            {% endif %}
+          </td>
           <td>{{ item.supplier or '-' }}</td>
           <td>
-            {% if item.is_low_stock %}
+            {% if (selected_stock.is_low_stock if selected_stock else item.is_low_stock) %}
             <span class="badge-status badge-inactive">منخفض</span>
             {% else %}
             <span class="badge-status badge-active">طبيعي</span>
@@ -101,6 +130,9 @@
           </td>
           <td>
             <div class="d-flex gap-1">
+              <a href="{{ url_for('inventory.item_detail', item_id=item.id) }}" class="btn btn-sm btn-outline-secondary" title="تفاصيل">
+                <i class="bi bi-eye"></i>
+              </a>
               <a href="{{ url_for('inventory.edit_item', item_id=item.id) }}" class="btn btn-sm btn-outline-primary" title="تعديل">
                 <i class="bi bi-pencil"></i>
               </a>
@@ -112,7 +144,7 @@
         </tr>
         {% else %}
         <tr>
-          <td colspan="8" class="text-center text-muted py-5">لا توجد مواد مخزنية.</td>
+          <td colspan="9" class="text-center text-muted py-5">لا توجد مواد مخزنية.</td>
         </tr>
         {% endfor %}
       </tbody>

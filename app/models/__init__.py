@@ -2095,6 +2095,31 @@ class InventoryCategory(db.Model):
         return f'<InventoryCategory {self.name}>'
 
 
+class InventoryWarehouse(db.Model):
+    """Physical stock location within a school. Persists across academic
+    years (like SchoolBuilding) — a warehouse is not re-created every year."""
+    __tablename__ = 'inventory_warehouses'
+    __school_scoped__ = True
+
+    id = db.Column(db.Integer, primary_key=True)
+    school_id = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
+    is_default = db.Column(db.Boolean, default=False, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    school = db.relationship('School', foreign_keys=[school_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('school_id', 'name', name='uq_inventory_warehouse_school_name'),
+    )
+
+    def __repr__(self):
+        return f'<InventoryWarehouse {self.name}>'
+
+
 class InventoryItem(db.Model):
     __tablename__ = 'inventory_items'
     __school_scoped__ = True
@@ -2107,6 +2132,10 @@ class InventoryItem(db.Model):
     name = db.Column(db.String(200), nullable=False)
     item_code = db.Column(db.String(80), nullable=True)
     unit = db.Column(db.String(40), nullable=False)
+    # Aggregate across all InventoryItemStock rows for this item — kept in
+    # sync whenever a stock row changes. Source of truth for quantity is now
+    # InventoryItemStock; these two columns exist so existing reports/filters
+    # that read the item-level total keep working unchanged.
     current_quantity = db.Column(db.Numeric(12, 2), nullable=False, default=0)
     minimum_quantity = db.Column(db.Numeric(12, 2), nullable=False, default=0)
     purchase_price = db.Column(db.Numeric(12, 2), nullable=True)
@@ -2136,6 +2165,43 @@ class InventoryItem(db.Model):
         return f'<InventoryItem {self.name}>'
 
 
+class InventoryItemStock(db.Model):
+    """Per-(item, warehouse) quantity and reorder threshold. This is the
+    actual source of truth for stock quantity; InventoryItem.current_quantity
+    is a denormalized aggregate kept in sync from these rows."""
+    __tablename__ = 'inventory_item_stocks'
+    __school_scoped__ = True
+    __year_scoped__ = True
+
+    id = db.Column(db.Integer, primary_key=True)
+    school_id = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'), nullable=False, index=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('inventory_items.id'), nullable=False, index=True)
+    warehouse_id = db.Column(db.Integer, db.ForeignKey('inventory_warehouses.id'), nullable=False, index=True)
+    quantity = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    minimum_quantity = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    school = db.relationship('School', foreign_keys=[school_id])
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    item = db.relationship('InventoryItem', foreign_keys=[item_id],
+                           backref=db.backref('stocks', lazy='dynamic'))
+    warehouse = db.relationship('InventoryWarehouse', foreign_keys=[warehouse_id],
+                                backref=db.backref('stocks', lazy='dynamic'))
+
+    __table_args__ = (
+        db.UniqueConstraint('item_id', 'warehouse_id', name='uq_inventory_item_stock_item_warehouse'),
+    )
+
+    @property
+    def is_low_stock(self):
+        return (self.quantity or 0) <= (self.minimum_quantity or 0)
+
+    def __repr__(self):
+        return f'<InventoryItemStock item={self.item_id} warehouse={self.warehouse_id}>'
+
+
 class InventoryMovement(db.Model):
     __tablename__ = 'inventory_movements'
     __school_scoped__ = True
@@ -2145,6 +2211,11 @@ class InventoryMovement(db.Model):
     school_id = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False, index=True)
     academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'), nullable=False, index=True)
     item_id = db.Column(db.Integer, db.ForeignKey('inventory_items.id'), nullable=False, index=True)
+    # Source warehouse for 'in'/'out'/'transfer'; to_warehouse_id is only used
+    # for 'transfer' (destination). Nullable to accommodate historical rows
+    # created before the warehouse feature existed (backfilled by migration).
+    warehouse_id = db.Column(db.Integer, db.ForeignKey('inventory_warehouses.id'), nullable=True, index=True)
+    to_warehouse_id = db.Column(db.Integer, db.ForeignKey('inventory_warehouses.id'), nullable=True, index=True)
     movement_type = db.Column(db.String(20), nullable=False)
     reason = db.Column(db.String(60), nullable=False)
     quantity = db.Column(db.Numeric(12, 2), nullable=False)
@@ -2159,6 +2230,8 @@ class InventoryMovement(db.Model):
     academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
     item = db.relationship('InventoryItem', foreign_keys=[item_id],
                            backref=db.backref('movements', lazy='dynamic'))
+    warehouse = db.relationship('InventoryWarehouse', foreign_keys=[warehouse_id])
+    to_warehouse = db.relationship('InventoryWarehouse', foreign_keys=[to_warehouse_id])
     creator = db.relationship('User', foreign_keys=[created_by])
 
     def __repr__(self):
@@ -2174,6 +2247,9 @@ class InventoryCount(db.Model):
     school_id = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False, index=True)
     academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'), nullable=False, index=True)
     item_id = db.Column(db.Integer, db.ForeignKey('inventory_items.id'), nullable=False, index=True)
+    # Nullable for historical rows created before the warehouse feature
+    # existed (backfilled by migration); required for new counts.
+    warehouse_id = db.Column(db.Integer, db.ForeignKey('inventory_warehouses.id'), nullable=True, index=True)
     system_quantity = db.Column(db.Numeric(12, 2), nullable=False, default=0)
     actual_quantity = db.Column(db.Numeric(12, 2), nullable=False, default=0)
     difference = db.Column(db.Numeric(12, 2), nullable=False, default=0)
@@ -2188,6 +2264,7 @@ class InventoryCount(db.Model):
     academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
     item = db.relationship('InventoryItem', foreign_keys=[item_id],
                            backref=db.backref('counts', lazy='dynamic'))
+    warehouse = db.relationship('InventoryWarehouse', foreign_keys=[warehouse_id])
     counter = db.relationship('User', foreign_keys=[counted_by])
 
     def __repr__(self):

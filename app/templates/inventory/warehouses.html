@@ -1,0 +1,99 @@
+{% extends "shared/base.html" %}
+{% block title %}المخازن{% endblock %}
+{% block page_title %}المخازن{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div><h1 class="page-title">المخازن</h1></div>
+  <a href="{{ url_for('inventory.index') }}" class="btn btn-outline-secondary">رجوع</a>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-body">
+        <form method="POST" class="row g-3">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+          <div class="col-12">
+            <label class="form-label">اسم المخزن</label>
+            <input type="text" name="name" class="form-control" required>
+          </div>
+          <div class="col-12">
+            <label class="form-label">الوصف</label>
+            <textarea name="description" class="form-control" rows="3"></textarea>
+          </div>
+          <div class="col-12">
+            <button class="btn btn-primary">إضافة</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="table-wrapper">
+        <table class="table table-hover mb-0">
+          <thead><tr><th>المخزن</th><th>الوصف</th><th>الحالة</th><th>إجراء</th></tr></thead>
+          <tbody>
+            {% for warehouse in warehouses %}
+            <tr>
+              <td class="fw-700">
+                {{ warehouse.name }}
+                {% if warehouse.is_default %}<span class="badge bg-primary" style="font-size:11px">افتراضي</span>{% endif %}
+              </td>
+              <td>{{ warehouse.description or '-' }}</td>
+              <td>
+                {% if warehouse.is_active %}
+                <span class="badge-status badge-active">فعال</span>
+                {% else %}
+                <span class="badge-status badge-inactive">معطل</span>
+                {% endif %}
+              </td>
+              <td>
+                <div class="d-flex gap-1">
+                  <button type="button" class="btn btn-sm btn-outline-primary" title="تعديل"
+                          data-bs-toggle="collapse" data-bs-target="#editWarehouse{{ warehouse.id }}">
+                    <i class="bi bi-pencil"></i>
+                  </button>
+                  {% if not warehouse.is_default %}
+                  <form method="POST" action="{{ url_for('inventory.toggle_warehouse', warehouse_id=warehouse.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary" title="{{ 'تعطيل' if warehouse.is_active else 'تفعيل' }}">
+                      <i class="bi {{ 'bi-pause-circle' if warehouse.is_active else 'bi-play-circle' }}"></i>
+                    </button>
+                  </form>
+                  <form method="POST" action="{{ url_for('inventory.delete_warehouse', warehouse_id=warehouse.id) }}"
+                        onsubmit="return confirm('هل أنت متأكد من حذف هذا المخزن؟ يتطلب ذلك ألا يحتوي على كميات أو حركات.');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+                    <button type="submit" class="btn btn-sm btn-outline-danger" title="حذف">
+                      <i class="bi bi-trash"></i>
+                    </button>
+                  </form>
+                  {% endif %}
+                </div>
+                <div class="collapse mt-2" id="editWarehouse{{ warehouse.id }}">
+                  <form method="POST" action="{{ url_for('inventory.edit_warehouse', warehouse_id=warehouse.id) }}" class="row g-2">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+                    <div class="col-12">
+                      <input type="text" name="name" class="form-control form-control-sm" value="{{ warehouse.name }}" required>
+                    </div>
+                    <div class="col-12">
+                      <textarea name="description" class="form-control form-control-sm" rows="2">{{ warehouse.description or '' }}</textarea>
+                    </div>
+                    <div class="col-12">
+                      <button type="submit" class="btn btn-sm btn-primary">حفظ</button>
+                    </div>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="text-center text-muted py-4">لا توجد مخازن.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,111 @@
+{% extends "shared/base.html" %}
+{% block title %}{{ item.name }}{% endblock %}
+{% block page_title %}{{ item.name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">
+      {{ item.name }}
+      {% if item.size %} <span class="badge bg-secondary" style="font-size:12px">{{ item.size }}</span>{% endif %}
+    </h1>
+    <p class="page-subtitle">{{ item.item_code or 'بدون رمز' }} · {{ item.category.name if item.category else '-' }}</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('inventory.index') }}" class="btn btn-outline-secondary">رجوع</a>
+    <a href="{{ url_for('inventory.edit_item', item_id=item.id) }}" class="btn btn-outline-primary">
+      <i class="bi bi-pencil me-1"></i>تعديل
+    </a>
+    <a href="{{ url_for('inventory.create_movement', item_id=item.id) }}" class="btn btn-primary">
+      <i class="bi bi-arrow-left-right me-1"></i>حركة
+    </a>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="card"><div class="card-body">
+      <div class="text-muted">الكمية الإجمالية</div>
+      <div class="page-title">{{ item.current_quantity }} {{ item.unit }}</div>
+    </div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="card"><div class="card-body">
+      <div class="text-muted">حد التنبيه الافتراضي</div>
+      <div class="page-title">{{ item.minimum_quantity }}</div>
+    </div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="card"><div class="card-body">
+      <div class="text-muted">المورد</div>
+      <div class="page-title" style="font-size:16px">{{ item.supplier or '-' }}</div>
+    </div></div>
+  </div>
+  <div class="col-md-3">
+    <div class="card"><div class="card-body">
+      <div class="text-muted">الحالة</div>
+      <div class="page-title" style="font-size:16px">
+        {% if item.is_low_stock %}
+        <span class="badge-status badge-inactive">منخفض</span>
+        {% else %}
+        <span class="badge-status badge-active">طبيعي</span>
+        {% endif %}
+      </div>
+    </div></div>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">الكمية حسب المخزن</div>
+  <div class="table-wrapper">
+    <table class="table table-hover mb-0">
+      <thead><tr><th>المخزن</th><th>الكمية</th><th>حد التنبيه</th><th>الحالة</th></tr></thead>
+      <tbody>
+        {% for stock in stocks %}
+        <tr>
+          <td>{{ stock.warehouse.name if stock.warehouse else '-' }}</td>
+          <td>{{ stock.quantity }} {{ item.unit }}</td>
+          <td>{{ stock.minimum_quantity }}</td>
+          <td>
+            {% if stock.is_low_stock %}
+            <span class="badge-status badge-inactive">منخفض</span>
+            {% else %}
+            <span class="badge-status badge-active">طبيعي</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="text-center text-muted py-4">هذه المادة غير مرتبطة بأي مخزن بعد.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">آخر الحركات</div>
+  <div class="table-wrapper">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>التاريخ</th><th>النوع</th><th>من مخزن</th><th>إلى مخزن</th><th>الكمية</th><th>السبب</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for movement in movements %}
+        <tr>
+          <td>{{ movement.movement_date.strftime('%Y-%m-%d') if movement.movement_date else '-' }}</td>
+          <td>{{ movement_types.get(movement.movement_type, movement.movement_type) }}</td>
+          <td>{{ movement.warehouse.name if movement.warehouse else '-' }}</td>
+          <td>{{ movement.to_warehouse.name if movement.to_warehouse else '-' }}</td>
+          <td>{{ movement.quantity }}</td>
+          <td>{{ movement.reason }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="text-center text-muted py-4">لا توجد حركات مسجلة لهذه المادة.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

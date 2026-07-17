@@ -47,13 +47,24 @@
         <label class="form-label">سعر الشراء</label>
         <input type="number" name="purchase_price" class="form-control" step="0.01" min="0" value="{{ item.purchase_price if item and item.purchase_price is not none else '' }}">
       </div>
+      {% if not item %}
       <div class="col-md-4">
-        <label class="form-label">الكمية الحالية</label>
-        <input type="number" name="current_quantity" class="form-control" step="0.01" min="0" value="{{ item.current_quantity if item else 0 }}">
+        <label class="form-label">المخزن <span class="text-danger">*</span></label>
+        <select name="warehouse_id" class="form-select" required>
+          {% for warehouse in warehouses %}
+          <option value="{{ warehouse.id }}">{{ warehouse.name }}</option>
+          {% endfor %}
+        </select>
       </div>
       <div class="col-md-4">
-        <label class="form-label">حد التنبيه الأدنى</label>
+        <label class="form-label">الكمية الحالية</label>
+        <input type="number" name="current_quantity" class="form-control" step="0.01" min="0" value="0">
+      </div>
+      {% endif %}
+      <div class="col-md-4">
+        <label class="form-label">حد التنبيه الافتراضي</label>
         <input type="number" name="minimum_quantity" class="form-control" step="0.01" min="0" value="{{ item.minimum_quantity if item else 0 }}">
+        <div class="form-text">يُستخدم كحد افتراضي عند إضافة المادة إلى مخزن جديد.</div>
       </div>
       <div class="col-md-4">
         <label class="form-label">المورد</label>
@@ -69,6 +80,62 @@
         <label class="form-label">ملاحظات</label>
         <textarea name="notes" class="form-control" rows="3">{{ item.notes if item else '' }}</textarea>
       </div>
+
+      {% if item %}
+      <div class="col-12">
+        <hr>
+        <label class="form-label fw-700">الكميات حسب المخزن</label>
+        <div class="table-wrapper">
+          <table class="table table-sm mb-0">
+            <thead><tr><th>المخزن</th><th>الكمية</th><th>حد التنبيه</th><th>الحالة</th></tr></thead>
+            <tbody>
+              {% for stock in stocks %}
+              <tr>
+                <td>
+                  {{ stock.warehouse.name if stock.warehouse else '-' }}
+                  <input type="hidden" name="stock_id" value="{{ stock.id }}">
+                </td>
+                <td><input type="number" name="stock_quantity" class="form-control form-control-sm" step="0.01" min="0" value="{{ stock.quantity }}"></td>
+                <td><input type="number" name="stock_minimum" class="form-control form-control-sm" step="0.01" min="0" value="{{ stock.minimum_quantity }}"></td>
+                <td>
+                  {% if stock.is_low_stock %}
+                  <span class="badge-status badge-inactive">منخفض</span>
+                  {% else %}
+                  <span class="badge-status badge-active">طبيعي</span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% else %}
+              <tr><td colspan="4" class="text-center text-muted py-3">لا توجد مخازن مرتبطة بهذه المادة.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {% if available_warehouses %}
+      <div class="col-12">
+        <label class="form-label fw-700">إضافة إلى مخزن آخر</label>
+        <div class="row g-2">
+          <div class="col-md-5">
+            <select name="new_warehouse_id" class="form-select">
+              <option value="">— اختر مخزن —</option>
+              {% for warehouse in available_warehouses %}
+              <option value="{{ warehouse.id }}">{{ warehouse.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-3">
+            <input type="number" name="new_quantity" class="form-control" step="0.01" min="0" placeholder="الكمية" value="0">
+          </div>
+          <div class="col-md-4">
+            <input type="number" name="new_minimum" class="form-control" step="0.01" min="0" placeholder="حد التنبيه" value="{{ item.minimum_quantity }}">
+          </div>
+        </div>
+      </div>
+      {% endif %}
+      {% endif %}
+
       <div class="col-12 d-flex gap-2">
         <button class="btn btn-primary"><i class="bi bi-check2-circle me-1"></i>حفظ</button>
         <a href="{{ url_for('inventory.index') }}" class="btn btn-outline-secondary">إلغاء</a>

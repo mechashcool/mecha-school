@@ -20,6 +20,7 @@
         <tr>
           <th>التاريخ</th>
           <th>المادة</th>
+          <th>المخزن</th>
           <th>الحجم</th>
           <th>كمية النظام</th>
           <th>الكمية الفعلية</th>
@@ -34,6 +35,7 @@
         <tr>
           <td>{{ row.count_date.strftime('%Y-%m-%d') if row.count_date else '-' }}</td>
           <td>{{ row.item.name if row.item else '-' }}</td>
+          <td>{{ row.warehouse.name if row.warehouse else '-' }}</td>
           <td>{{ row.item.size if row.item and row.item.size else '-' }}</td>
           <td>{{ row.system_quantity }}</td>
           <td>{{ row.actual_quantity }}</td>
@@ -43,7 +45,7 @@
           <td>{{ row.reason or '-' }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="9" class="text-center text-muted py-5">لا توجد سجلات جرد.</td></tr>
+        <tr><td colspan="10" class="text-center text-muted py-5">لا توجد سجلات جرد.</td></tr>
         {% endfor %}
       </tbody>
     </table>

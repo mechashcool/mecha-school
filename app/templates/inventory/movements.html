@@ -16,7 +16,7 @@
 <div class="card mb-4">
   <div class="card-body py-3">
     <form method="GET" class="row g-2 align-items-end">
-      <div class="col-md-8">
+      <div class="col-md-6">
         <label class="form-label">المادة</label>
         <select name="item_id" class="form-select">
           <option value="">كل المواد</option>
@@ -25,7 +25,16 @@
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-4">
+      <div class="col-md-3">
+        <label class="form-label">المخزن</label>
+        <select name="warehouse_id" class="form-select">
+          <option value="">كل المخازن</option>
+          {% for warehouse in warehouses %}
+          <option value="{{ warehouse.id }}" {% if selected_warehouse_id == warehouse.id %}selected{% endif %}>{{ warehouse.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
         <button class="btn btn-primary"><i class="bi bi-filter me-1"></i>تصفية</button>
         <a href="{{ url_for('inventory.movements') }}" class="btn btn-outline-secondary">مسح</a>
       </div>
@@ -41,6 +50,7 @@
           <th>التاريخ</th>
           <th>المادة</th>
           <th>النوع</th>
+          <th>المخزن</th>
           <th>السبب</th>
           <th>الكمية</th>
           <th>المستلم</th>
@@ -55,8 +65,17 @@
           <td>
             {% if movement.movement_type == 'in' %}
             <span class="badge-status badge-active">إدخال</span>
-            {% else %}
+            {% elif movement.movement_type == 'out' %}
             <span class="badge-status badge-inactive">إخراج</span>
+            {% else %}
+            <span class="badge-status">نقل</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if movement.movement_type == 'transfer' %}
+            {{ movement.warehouse.name if movement.warehouse else '-' }} ← {{ movement.to_warehouse.name if movement.to_warehouse else '-' }}
+            {% else %}
+            {{ movement.warehouse.name if movement.warehouse else '-' }}
             {% endif %}
           </td>
           <td>{{ movement.reason }}</td>
@@ -65,7 +84,7 @@
           <td>{{ movement.notes or '-' }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="7" class="text-center text-muted py-5">لا توجد حركات مخزنية.</td></tr>
+        <tr><td colspan="8" class="text-center text-muted py-5">لا توجد حركات مخزنية.</td></tr>
         {% endfor %}
       </tbody>
     </table>

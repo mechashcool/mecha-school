@@ -17,7 +17,15 @@
         <select name="item_id" class="form-select" required>
           <option value="">اختر المادة</option>
           {% for item in items %}
-          <option value="{{ item.id }}">{{ item.name }}{% if item.size %} [{{ item.size }}]{% endif %} - كمية النظام: {{ item.current_quantity }}</option>
+          <option value="{{ item.id }}">{{ item.name }}{% if item.size %} [{{ item.size }}]{% endif %} - الإجمالي: {{ item.current_quantity }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label">المخزن <span class="text-danger">*</span></label>
+        <select name="warehouse_id" class="form-select" required>
+          {% for warehouse in warehouses %}
+          <option value="{{ warehouse.id }}">{{ warehouse.name }}</option>
           {% endfor %}
         </select>
       </div>

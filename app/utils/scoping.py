@@ -24,7 +24,8 @@ def _models():
         EmployeeLeaveRequest, Exam,
         ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord,
         FeeType, Grade, InventoryCategory, InventoryCount, InventoryItem,
-        InventoryMovement, LeaveRequest, Notification, PayrollItem,
+        InventoryItemStock, InventoryMovement, InventoryWarehouse,
+        LeaveRequest, Notification, PayrollItem,
         PayrollSettings, PushNotification, Revenue,
         RevenueCategory, SalaryComponent, SalaryRecord, Schedule,
         Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
@@ -40,7 +41,8 @@ def _models():
         EmployeeLeaveRequest, Exam,
         ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord,
         FeeType, Grade, InventoryCategory, InventoryCount, InventoryItem,
-        InventoryMovement, LeaveRequest, Notification, PayrollItem,
+        InventoryItemStock, InventoryMovement, InventoryWarehouse,
+        LeaveRequest, Notification, PayrollItem,
         PayrollSettings, PushNotification, Revenue,
         RevenueCategory, SalaryComponent, SalaryRecord, Schedule,
         Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
@@ -53,10 +55,13 @@ def _models():
     # require re-entering master student data.
     # PayrollSettings and SalaryComponent are school-scoped only — payroll
     # configuration and component definitions persist across academic years.
+    # InventoryWarehouse is school-scoped only — a physical warehouse persists
+    # across academic years, like SchoolBuilding.
     year_scoped = (
         Complaint, EmployeeAttendance, EmployeeEvaluation, Exam, ExamResult, Expense,
         FeeInstallment, FeeRecord, FeeType, Grade, InventoryCategory,
-        InventoryCount, InventoryItem, InventoryMovement, PayrollItem, Revenue,
+        InventoryCount, InventoryItem, InventoryItemStock, InventoryMovement,
+        PayrollItem, Revenue,
         SalaryRecord, Schedule, Section, StudentAttendance, Subject, LeaveRequest,
     )
     return school_scoped, year_scoped
@@ -322,7 +327,8 @@ def _inherit_scope(session_, obj):
         AcademicYear, Complaint, Employee, EmployeeAttendance, EmployeeDocument,
         EmployeeEvaluation, Exam, ExamResult, Expense, FeeInstallment,
         FeeRecord, Grade, InventoryCategory, InventoryCount, InventoryItem,
-        InventoryMovement, LeaveRequest, Notification, PayrollItem,
+        InventoryItemStock, InventoryMovement, LeaveRequest, Notification,
+        PayrollItem,
         PushNotification, Revenue, SalaryRecord, Schedule,
         Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
         Subject, User,
@@ -447,7 +453,7 @@ def _inherit_scope(session_, obj):
             obj.school_id = category.school_id
         if category and getattr(obj, 'academic_year_id', None) is None:
             obj.academic_year_id = category.academic_year_id
-    elif isinstance(obj, (InventoryMovement, InventoryCount)):
+    elif isinstance(obj, (InventoryMovement, InventoryCount, InventoryItemStock)):
         item = obj.item or load(InventoryItem, obj.item_id)
         if item and getattr(obj, 'school_id', None) is None:
             obj.school_id = item.school_id
@@ -465,7 +471,8 @@ def _validate_relationship_scope(session_, obj):
         AcademicYear, Complaint, Employee, EmployeeAttendance, EmployeeDocument,
         EmployeeEvaluation, Exam, ExamResult, Expense, FeeInstallment,
         FeeRecord, Grade, InventoryCategory, InventoryCount, InventoryItem,
-        InventoryMovement, LeaveRequest, PayrollItem, Revenue, RevenueCategory,
+        InventoryItemStock, InventoryMovement, InventoryWarehouse,
+        LeaveRequest, PayrollItem, Revenue, RevenueCategory,
         SalaryRecord, Schedule,
         Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
         Subject, ExpenseCategory, Notification, User,
@@ -611,12 +618,29 @@ def _validate_relationship_scope(session_, obj):
                 'InventoryItem must match category school')
         require(category and category.academic_year_id == obj.academic_year_id,
                 'InventoryItem must match category academic year')
+    elif isinstance(obj, InventoryItemStock):
+        item = obj.item or load(InventoryItem, obj.item_id)
+        require(item and item.school_id == obj.school_id,
+                'InventoryItemStock must match item school')
+        require(item and item.academic_year_id == obj.academic_year_id,
+                'InventoryItemStock must match item academic year')
+        warehouse = obj.warehouse or load(InventoryWarehouse, obj.warehouse_id)
+        require(warehouse and warehouse.school_id == obj.school_id,
+                'InventoryItemStock warehouse must belong to the same school')
     elif isinstance(obj, (InventoryMovement, InventoryCount)):
         item = obj.item or load(InventoryItem, obj.item_id)
         require(item and item.school_id == obj.school_id,
                 'Inventory transaction must match item school')
         require(item and item.academic_year_id == obj.academic_year_id,
                 'Inventory transaction must match item academic year')
+        if getattr(obj, 'warehouse_id', None):
+            warehouse = obj.warehouse or load(InventoryWarehouse, obj.warehouse_id)
+            require(warehouse and warehouse.school_id == obj.school_id,
+                    'Inventory transaction warehouse must belong to the same school')
+        if getattr(obj, 'to_warehouse_id', None):
+            to_warehouse = obj.to_warehouse or load(InventoryWarehouse, obj.to_warehouse_id)
+            require(to_warehouse and to_warehouse.school_id == obj.school_id,
+                    'Inventory transfer destination warehouse must belong to the same school')
 
 
 def _before_flush(session_, flush_context, instances):
