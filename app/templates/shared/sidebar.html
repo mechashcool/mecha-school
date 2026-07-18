@@ -338,12 +338,14 @@
             <i class="bi bi-people"></i> الطلاب
           </a>
         </li>
+        {% if current_user.has_permission('view_student_records') %}
         <li class="nav-item">
           <a href="{{ url_for('student_records.index') }}"
              class="{{ 'active' if request.blueprint == 'student_records' }}">
             <i class="bi bi-card-text"></i> سجل قيد الطالب
           </a>
         </li>
+        {% endif %}
       </ul>
     </li>
     {% endif %}

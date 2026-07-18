@@ -342,7 +342,7 @@ def search():
 
 @student_records_bp.route('/')
 @login_required
-@permission_required('view_students')
+@permission_required('view_student_records')
 def index():
     school = _school_or_404()
     q      = request.args.get('q', '').strip()

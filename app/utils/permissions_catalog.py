@@ -44,6 +44,7 @@ PERMISSION_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ]),
     ('الطلاب', [
         ('view_students',           'عرض الطلاب والبحث والتصدير وسجل القيد'),
+        ('view_student_records',    'سجل قيد الطالب'),
         ('add_student',             'إضافة طالب'),
         ('edit_student',            'تعديل بيانات طالب'),
         ('delete_student',          'حذف / أرشفة طالب'),
