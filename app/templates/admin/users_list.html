@@ -101,7 +101,7 @@
           <td>
             {% set target_super = user.role and user.role.name == 'super_admin' %}
             {% set target_school_admin = user.role and user.role.name == 'school_admin' %}
-            {% set can_manage_row = current_user.is_super_admin or (current_user.is_school_admin and not target_super and not target_school_admin and user.id != current_user.id) %}
+            {% set can_manage_row = current_user.is_super_admin or (current_user.has_permission('manage_users') and not target_super and not target_school_admin and user.id != current_user.id) %}
             <div class="d-flex gap-1">
               {% if current_user.school_id is not none and user.id == current_user.id %}
               <span class="badge-status badge-active">حسابك</span>
