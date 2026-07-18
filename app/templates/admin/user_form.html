@@ -53,12 +53,12 @@
             <div class="col-md-6">
               <label class="form-label">البريد الإلكتروني</label>
               <input type="email" name="email" class="form-control"
-                     value="{{ user.email if user else '' }}">
+                     value="{{ (user.email or '') if user else '' }}">
             </div>
             <div class="col-md-6">
               <label class="form-label">رقم الهاتف</label>
               <input type="tel" name="phone" class="form-control"
-                     value="{{ user.phone if user else '' }}">
+                     value="{{ (user.phone or '') if user else '' }}">
             </div>
             <div class="col-md-6">
               <label class="form-label">{{ 'كلمة المرور الجديدة' if user else 'كلمة المرور' }} <span class="text-danger">{{ '' if user else '*' }}</span></label>
