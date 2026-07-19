@@ -152,13 +152,35 @@
       <a href="{{ url_for('transport.edit', route_id=route.id) }}">الطاقة الاستيعابية</a>.
     </div>
 
-    {% elif available_students %}
+    {% elif available_students or residential_area_id %}
     <div class="card mb-4">
       <div class="card-header d-flex align-items-center justify-content-between">
         <span><i class="bi bi-person-plus-fill text-accent me-1"></i>ربط طالب بالخط</span>
         <small class="text-muted">المقاعد المتاحة: {{ available_seats }}</small>
       </div>
       <div class="card-body">
+
+        {# ── Residential-area filter (school-scoped; narrows the picker list) ── #}
+        {% if residential_areas_list %}
+        <form method="get"
+              action="{{ url_for('transport.detail', route_id=route.id) }}"
+              class="mb-3" id="areaFilterForm">
+          <label class="form-label fw-600 mb-1" style="font-size:12px">
+            <i class="bi bi-geo-alt me-1"></i>تصفية حسب منطقة السكن
+          </label>
+          <select name="residential_area_id" class="form-select form-select-sm"
+                  onchange="this.form.submit()">
+            <option value="">كل المناطق</option>
+            {% for a in residential_areas_list %}
+            <option value="{{ a.id }}" {{ 'selected' if residential_area_id == a.id }}>
+              {{ a.name }}{{ '' if a.is_active else ' (معطّلة)' }}
+            </option>
+            {% endfor %}
+          </select>
+        </form>
+        {% endif %}
+
+        {% if available_students %}
         <form method="POST"
               action="{{ url_for('transport.add_student', route_id=route.id) }}"
               id="addStudentForm">
@@ -239,6 +261,15 @@
             </button>
           </div>
         </form>
+        {% else %}
+        {# No students match the selected residential area — keep the filter
+           visible so the user can reset it. #}
+        <div class="text-muted py-2" style="font-size:13px">
+          <i class="bi bi-search me-1"></i>
+          لا يوجد طلاب متاحون في منطقة السكن المحددة.
+          <a href="{{ url_for('transport.detail', route_id=route.id) }}">عرض كل المناطق</a>
+        </div>
+        {% endif %}
       </div>
     </div>
 

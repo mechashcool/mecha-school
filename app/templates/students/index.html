@@ -138,7 +138,7 @@
       {% if residential_areas_list %}
       <div class="col-md-2">
         <label class="form-label mb-1" style="font-size:12px">منطقة السكن</label>
-        <select name="residential_area_id" class="form-select" onchange="this.form.submit()">
+        <select name="residential_area_id" id="residentialAreaFilter" class="form-select">
           <option value="">كل المناطق</option>
           {% for a in residential_areas_list %}
           <option value="{{ a.id }}" {{ 'selected' if residential_area_id == a.id }}>
@@ -496,6 +496,15 @@ function onStageChange(el) {
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => doSearch(1), 280);
   });
+
+  // Residential-area filter uses the same fast AJAX path as live search instead
+  // of a full-page reload — results update smoothly without re-rendering the
+  // whole page. All filters (incl. this one) are read by getFilterParams() and
+  // enforced/isolated server-side by the /students/search endpoint.
+  const areaFilter = document.getElementById('residentialAreaFilter');
+  if (areaFilter) {
+    areaFilter.addEventListener('change', function () { doSearch(1); });
+  }
 
   paginationEl.addEventListener('click', function (e) {
     const link = e.target.closest('a[data-page]');

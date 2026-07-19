@@ -135,6 +135,12 @@ def create():
 def detail(route_id):
     school, route = _scope_route(route_id)
 
+    # Optional residential-area filter for the "ربط طالب بالخط" picker. Reuses
+    # the same ResidentialArea model/helper and the same filtering logic as the
+    # Students page (Student.residential_area_id == id applied on a query already
+    # scoped to the current school).
+    residential_area_id = request.args.get('residential_area_id', type=int)
+
     links = (StudentTransport.query
              .filter_by(route_id=route_id)
              .join(Student, StudentTransport.student_id == Student.id)
@@ -158,7 +164,18 @@ def detail(route_id):
             )
         )
         avail_q = avail_q.filter(~Student.id.in_(active_in_other))
+    # Residential-area filter — fail-closed: avail_q is already scoped to this
+    # school, so a manipulated foreign area id matches no rows and can never
+    # expose or return another school's students.
+    if residential_area_id:
+        avail_q = avail_q.filter(Student.residential_area_id == residential_area_id)
     available_students = avail_q.order_by(Student.full_name).all()
+
+    # Residential areas for the picker filter dropdown — this school only
+    # (reuses the exact helper from the Students blueprint; local import avoids
+    # any import-order coupling between blueprints).
+    from app.blueprints.students import _school_residential_areas
+    residential_areas_list = _school_residential_areas(school.id) if school else []
 
     active_count    = sum(1 for lk in links if lk.status == 'active')
     available_seats = max(0, route.capacity - active_count)
@@ -167,6 +184,8 @@ def detail(route_id):
     return render_template('transport/detail.html',
                            route=route, links=links,
                            available_students=available_students,
+                           residential_areas_list=residential_areas_list,
+                           residential_area_id=residential_area_id,
                            active_count=active_count,
                            available_seats=available_seats,
                            is_full=is_full)
