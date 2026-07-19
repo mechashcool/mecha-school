@@ -2,26 +2,68 @@
 {% block title %}الطلاب{% endblock %}
 {% block page_title %}إدارة الطلاب{% endblock %}
 
+{% block extra_css %}
+<style>
+  /* Students page action bar — groups the three existing actions into one
+     full-width row aligned with the filters/table cards below. RTL is inherited
+     from the page, so the primary group sits on the right and the export action
+     on the opposite (left) side of the same row. */
+  .students-action-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .students-action-bar__group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+  }
+  @media (max-width: 576px) {
+    /* Stack neatly on small screens: each group and the export action take the
+       full row width without overlap. */
+    .students-action-bar,
+    .students-action-bar__group {
+      width: 100%;
+    }
+    .students-action-bar .btn,
+    .students-action-bar__group .btn {
+      flex: 1 1 auto;
+      justify-content: center;
+    }
+  }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page-header">
   <div>
     <h1 class="page-title">الطلاب</h1>
     <p class="page-subtitle" id="stu-total-label">إجمالي {{ students.total }} طالب</p>
   </div>
-  {% if current_user.has_permission('add_student') and not is_historical_year and 'students.create' in enabled_features %}
-  <a href="{{ url_for('students.create') }}" class="btn btn-primary">
-    <i class="bi bi-person-plus-fill me-2"></i>إضافة طالب
-  </a>
-  {% endif %}
+</div>
+
+<!-- Action bar -->
+<div class="students-action-bar">
+  <div class="students-action-bar__group">
+    {% if current_user.has_permission('add_student') and not is_historical_year and 'students.create' in enabled_features %}
+    <a href="{{ url_for('students.create') }}" class="btn btn-primary">
+      <i class="bi bi-person-plus-fill me-2"></i>إضافة طالب
+    </a>
+    {% endif %}
+    {% if current_user.has_permission('manage_residential_areas') %}
+    <a href="{{ url_for('students.residential_areas') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-geo-alt me-1"></i>مناطق السكن
+    </a>
+    {% endif %}
+  </div>
   {% if 'students.export' in enabled_features %}
   <a href="{{ url_for('students.export_excel', status='active') }}"
      class="btn btn-outline-success">
     <i class="bi bi-file-earmark-excel-fill me-1"></i>تصدير Excel
-  </a>
-  {% endif %}
-  {% if current_user.has_permission('manage_residential_areas') %}
-  <a href="{{ url_for('students.residential_areas') }}" class="btn btn-outline-secondary">
-    <i class="bi bi-geo-alt me-1"></i>مناطق السكن
   </a>
   {% endif %}
 </div>
