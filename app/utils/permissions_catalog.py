@@ -48,6 +48,7 @@ PERMISSION_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ('add_student',             'إضافة طالب'),
         ('edit_student',            'تعديل بيانات طالب'),
         ('delete_student',          'حذف / أرشفة طالب'),
+        ('manage_residential_areas', 'إدارة مناطق السكن'),
         ('manage_rfid',             'إدارة بطاقات RFID'),
     ]),
     ('الصفوف والشعب والمواد', [
@@ -134,6 +135,7 @@ CATALOG_PERMISSION_NAMES: frozenset = frozenset(
 LANDING_PAGES: list[tuple[tuple, str, str | None]] = [
     (('view_dashboard',),                        'admin.dashboard',          None),
     (('view_students',),                         'students.index',           'students'),
+    (('manage_residential_areas',),              'students.residential_areas', 'students'),
     (('take_attendance',),                       'attendance.index',         'attendance'),
     (('manage_suspensions',),                    'attendance.suspensions',   'attendance'),
     (('manage_attendance_settings',),            'admin.attendance_settings', 'attendance'),

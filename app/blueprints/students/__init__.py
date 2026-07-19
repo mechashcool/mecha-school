@@ -7,7 +7,8 @@ from flask_login import login_required, current_user
 from sqlalchemy.orm import joinedload
 from app.models import (db, Student, Section, Grade, AcademicYear, StudentDocument,
                         parent_students, User, Role, AttendanceDevice, DeviceStudentMapping,
-                        FeeRecord, FeeInstallment, FeeType, Revenue, RevenueCategory)
+                        FeeRecord, FeeInstallment, FeeType, Revenue, RevenueCategory,
+                        ResidentialArea)
 from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    get_current_school, get_active_year, get_view_year,
                                    historical_guard)
@@ -20,6 +21,7 @@ from app.utils.buildings import (
     apply_building_scope_to_students, user_allowed_building_ids,
     user_can_access_student, validate_building_for_school,
 )
+from app.utils.audit import log_action
 
 students_bp = Blueprint('students', __name__,
                          template_folder='../../templates/students')
@@ -29,6 +31,50 @@ def _is_teacher():
     return (current_user.is_authenticated and
             current_user.role and
             current_user.role.name == 'teacher')
+
+
+# ─── Residential areas helpers (school-scoped lookup list) ───────────────────
+# Same pattern as app/utils/buildings.py: bypass the automatic tenant criteria
+# and filter by the trusted server-side school id explicitly, so the queries
+# behave identically for school users and for a super admin with an active
+# school selected. Never trust a client-provided area id without these checks.
+
+def _school_residential_areas(school_id, active_only=False):
+    """All ResidentialArea rows of ONE school, ordered by name."""
+    if not school_id:
+        return []
+    q = (ResidentialArea.query
+         .execution_options(bypass_tenant_scope=True)
+         .filter_by(school_id=school_id))
+    if active_only:
+        q = q.filter_by(is_active=True)
+    return q.order_by(ResidentialArea.name).all()
+
+
+def _validate_residential_area_for_school(area_id, school_id):
+    """Return area_id if it is an active area of the given school, else None.
+
+    Fail-closed: a manipulated id belonging to another school (or an inactive
+    area) resolves to None = "no area".
+    """
+    if not area_id or not school_id:
+        return None
+    area = (ResidentialArea.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(id=area_id, school_id=school_id, is_active=True)
+            .first())
+    return area.id if area else None
+
+
+def _get_residential_area_or_404(area_id, school):
+    """Load an area scoped by id + school_id — a foreign school's id is a 404."""
+    area = (ResidentialArea.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(id=area_id, school_id=school.id)
+            .first())
+    if area is None:
+        abort(404)
+    return area
 
 
 @students_bp.route('/')
@@ -42,6 +88,7 @@ def index():
     grade_id    = request.args.get('grade_id', type=int)
     section_id  = request.args.get('section_id', type=int)
     building_id = request.args.get('building_id', type=int)
+    residential_area_id = request.args.get('residential_area_id', type=int)
     school      = get_current_school()
     year        = get_view_year(school.id) if school else None
 
@@ -82,6 +129,12 @@ def index():
         # A restricted user may only filter within their allowed buildings.
         if allowed_building_ids is None or building_id in allowed_building_ids:
             query = query.filter(Student.building_id == building_id)
+
+    # Optional residential-area filter. The query is already restricted to the
+    # current school, so a manipulated foreign area id matches no rows —
+    # students of this school can never be linked to another school's area.
+    if residential_area_id:
+        query = query.filter(Student.residential_area_id == residential_area_id)
 
     if section_id:
         query = query.filter_by(section_id=section_id)
@@ -154,6 +207,10 @@ def index():
         if allowed_building_ids is not None:
             buildings_list = [b for b in buildings_list if b.id in allowed_building_ids]
 
+    # Residential areas for the filter dropdown (this school only; includes
+    # deactivated areas so students linked to them can still be filtered).
+    residential_areas_list = _school_residential_areas(school.id) if school else []
+
     return render_template('students/index.html',
                            students=students, search=search, status=status,
                            capacity_info=capacity_info,
@@ -166,7 +223,9 @@ def index():
                            section_id=section_id,
                            buildings_enabled=buildings_on,
                            buildings_list=buildings_list,
-                           building_id=building_id)
+                           building_id=building_id,
+                           residential_areas_list=residential_areas_list,
+                           residential_area_id=residential_area_id)
 
 
 @students_bp.route('/search')
@@ -187,6 +246,7 @@ def search():
     grade_id    = request.args.get('grade_id', type=int)
     section_id  = request.args.get('section_id', type=int)
     building_id = request.args.get('building_id', type=int)
+    residential_area_id = request.args.get('residential_area_id', type=int)
 
     buildings_on         = school_buildings_enabled(school)
     allowed_building_ids = user_allowed_building_ids(current_user, school)
@@ -217,6 +277,11 @@ def search():
     if buildings_on and building_id:
         if allowed_building_ids is None or building_id in allowed_building_ids:
             query = query.filter(Student.building_id == building_id)
+
+    # Residential-area filter — same fail-closed reasoning as students.index:
+    # the query is already school-filtered, so a foreign area id matches nothing.
+    if residential_area_id:
+        query = query.filter(Student.residential_area_id == residential_area_id)
 
     if section_id:
         query = query.filter_by(section_id=section_id)
@@ -376,6 +441,10 @@ def create():
     can_manage_fees = current_user.has_permission('manage_fees')
     fee_types = FeeType.query.all() if can_manage_fees else []
 
+    # ── Residential areas (active areas of the current school only) ─────────
+    residential_areas_for_form = _school_residential_areas(school.id,
+                                                           active_only=True)
+
     # ── Auto-generated parent credentials (shown read-only in the wizard) ─────
     # A fresh pair is produced on each page load, so cancelling and re-opening a
     # new student always yields new credentials. On a re-render after a
@@ -410,6 +479,7 @@ def create():
                                    buildings_enabled=buildings_on,
                                    buildings_list=buildings_for_form,
                                    selected_building_id=request.form.get('building_id', type=int),
+                                   residential_areas_list=residential_areas_for_form,
                                    active_year=year,
                                    can_manage_fees=can_manage_fees,
                                    fee_types=fee_types,
@@ -423,6 +493,19 @@ def create():
             for _err in _cfg_errors:
                 flash(_err, 'danger')
             return _re_render('')
+
+        # ── Residential area (optional) — validated BEFORE any upload/DB write ─
+        # Empty is allowed (no area). A non-empty value must resolve to an active
+        # area of THIS school; an invalid, inactive, or foreign-school id is
+        # rejected here (submitted values preserved by _re_render) instead of
+        # being silently discarded, so the user can correct the selection.
+        _raw_area_id = request.form.get('residential_area_id', type=int)
+        residential_area_id_val = None
+        if _raw_area_id:
+            residential_area_id_val = _validate_residential_area_for_school(
+                _raw_area_id, school.id)
+            if not residential_area_id_val:
+                return _re_render('يرجى اختيار منطقة سكن صالحة لهذه المدرسة.')
 
         # Parent credentials are generated automatically — nothing the manager
         # typed is validated here. The unique username is produced (and its
@@ -510,6 +593,9 @@ def create():
                     and building_id_val not in allowed_building_ids):
                 return _re_render('ليس لديك صلاحية الوصول إلى بيانات هذه البناية')
 
+        # Residential area was validated (and rejected on error) in the
+        # pre-validation block above; residential_area_id_val is safe to use.
+
         student = Student(
             student_id        = student_id,
             full_name         = request.form.get('full_name', '').strip(),
@@ -527,6 +613,7 @@ def create():
             photo             = photo_path,
             notes             = request.form.get('notes', '').strip(),
             building_id       = building_id_val,
+            residential_area_id = residential_area_id_val,
             # Multi-tenant fields
             school_id         = school.id if school else None,
             academic_year_id  = year.id   if year   else None,
@@ -792,6 +879,7 @@ def create():
                            buildings_enabled=buildings_on,
                            buildings_list=buildings_for_form,
                            selected_building_id=None,
+                           residential_areas_list=residential_areas_for_form,
                            active_year=year,
                            can_manage_fees=can_manage_fees,
                            fee_types=fee_types,
@@ -935,6 +1023,21 @@ def edit(student_id):
                         or cur.id in allowed_building_ids):
                 buildings_for_form = buildings_for_form + [cur]
 
+    # ── Residential areas (active areas of this school; keep the student's
+    # current area selectable even if deactivated, so the dropdown shows the
+    # real current value rather than silently losing it on save) ────────────
+    residential_areas_for_form = (_school_residential_areas(school.id, active_only=True)
+                                  if school else [])
+    if (student.residential_area_id
+            and student.residential_area_id not in
+            [a.id for a in residential_areas_for_form] and school):
+        _cur_area = (ResidentialArea.query
+                     .execution_options(bypass_tenant_scope=True)
+                     .filter_by(id=student.residential_area_id, school_id=school.id)
+                     .first())
+        if _cur_area:
+            residential_areas_for_form = residential_areas_for_form + [_cur_area]
+
     # Always show sections/grades from the current active year so students
     # can be reassigned across year boundaries (e.g. during year rollover).
     edit_year_id = year.id if year else student.academic_year_id
@@ -1006,6 +1109,7 @@ def edit(student_id):
                 buildings_enabled=buildings_on,
                 buildings_list=buildings_for_form,
                 selected_building_id=student.building_id,
+                residential_areas_list=residential_areas_for_form,
             )
 
         new_section_id = request.form.get('section_id', type=int)
@@ -1060,6 +1164,43 @@ def edit(student_id):
                 flash('ليس لديك صلاحية الوصول إلى بيانات هذه البناية', 'danger')
                 return redirect(url_for('students.edit', student_id=student.id))
             student.building_id = _new_building
+
+        # ── Residential area (optional) — server-side school validation ──────
+        if school:
+            _raw_area = request.form.get('residential_area_id', type=int)
+            if not _raw_area:
+                # Intentional empty selection — clear any existing link.
+                student.residential_area_id = None
+            elif _raw_area == student.residential_area_id:
+                # Unchanged — keep it even if the area was deactivated meanwhile
+                # (it was validated against this school when originally linked).
+                pass
+            else:
+                _area_id = _validate_residential_area_for_school(_raw_area, school.id)
+                if not _area_id:
+                    # Invalid / inactive / foreign-school id — reject the change
+                    # without saving anything and without clearing the student's
+                    # current area. Submitted values are preserved (the dirty
+                    # student object carries them into the form) so the user can
+                    # correct the selection. No commit happens on this path, so
+                    # the in-memory edits are discarded at request teardown.
+                    flash('يرجى اختيار منطقة سكن صالحة لهذه المدرسة.', 'danger')
+                    return render_template(
+                        'students/form.html', student=student, sections=sections,
+                        grades=grades, stages=['ابتدائية', 'متوسطة', 'إعدادية'],
+                        selected_grade_id=selected_grade_id,
+                        selected_stage=selected_stage,
+                        active_devices=active_devices,
+                        available_parents=available_parents,
+                        linked_parents=linked_parents,
+                        existing_device_mappings=existing_device_mappings,
+                        form_cfg=form_cfg,
+                        buildings_enabled=buildings_on,
+                        buildings_list=buildings_for_form,
+                        selected_building_id=student.building_id,
+                        residential_areas_list=residential_areas_for_form,
+                    )
+                student.residential_area_id = _area_id
 
         if form_cfg.section_visible('notes'):
             student.notes = request.form.get('notes', '').strip()
@@ -1204,7 +1345,8 @@ def edit(student_id):
                            form_cfg=form_cfg,
                            buildings_enabled=buildings_on,
                            buildings_list=buildings_for_form,
-                           selected_building_id=student.building_id)
+                           selected_building_id=student.building_id,
+                           residential_areas_list=residential_areas_for_form)
 
 
 @students_bp.route('/<int:student_id>')
@@ -1415,3 +1557,176 @@ def export_excel():
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         headers={'Content-Disposition': f'attachment; filename=students_{status}.xlsx'}
     )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  RESIDENTIAL AREAS (مناطق السكن) — per-school lookup list management
+#  Same isolation pattern as the buildings blueprint: every query is scoped by
+#  the trusted server-side school id; ids from other schools resolve to 404.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _require_school_for_areas():
+    """Return the current school or None (caller redirects). Super admin must
+    have an active school selected — areas are always owned by one school."""
+    school = get_current_school()
+    if not school:
+        flash('يرجى اختيار مدرسة أولاً.', 'warning')
+    return school
+
+
+@students_bp.route('/residential-areas')
+@login_required
+@permission_required('manage_residential_areas')
+def residential_areas():
+    school = _require_school_for_areas()
+    if not school:
+        return redirect(url_for('students.index'))
+
+    areas = _school_residential_areas(school.id)
+
+    # Linked-student counts per area (all statuses, all years) — scoped to this
+    # school only so totals can never include another school's students.
+    counts = dict(
+        db.session.query(Student.residential_area_id, db.func.count(Student.id))
+        .execution_options(bypass_tenant_scope=True, include_all_years=True)
+        .filter(Student.school_id == school.id,
+                Student.residential_area_id.isnot(None))
+        .group_by(Student.residential_area_id)
+        .all()
+    )
+
+    return render_template('students/residential_areas.html',
+                           areas=areas, student_counts=counts)
+
+
+@students_bp.route('/residential-areas/new', methods=['GET', 'POST'])
+@login_required
+@permission_required('manage_residential_areas')
+def residential_area_new():
+    school = _require_school_for_areas()
+    if not school:
+        return redirect(url_for('students.index'))
+
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        is_active = request.form.get('is_active', '1') == '1'
+
+        if not name:
+            flash('اسم المنطقة مطلوب.', 'danger')
+            return render_template('students/residential_area_form.html',
+                                   area=None, form_name=name)
+        if len(name) > 200:
+            flash('اسم المنطقة طويل جداً (الحد الأقصى 200 حرف).', 'danger')
+            return render_template('students/residential_area_form.html',
+                                   area=None, form_name=name[:200])
+
+        # Prevent duplicate names within the same school.
+        existing = (ResidentialArea.query
+                    .execution_options(bypass_tenant_scope=True)
+                    .filter_by(school_id=school.id, name=name)
+                    .first())
+        if existing:
+            flash('توجد منطقة سكن بنفس الاسم في هذه المدرسة.', 'danger')
+            return render_template('students/residential_area_form.html',
+                                   area=None, form_name=name)
+
+        area = ResidentialArea(school_id=school.id, name=name, is_active=is_active)
+        db.session.add(area)
+        db.session.commit()
+        log_action('create', 'residential_area', area.id,
+                   details=f'created residential area "{name}"')
+        flash(f'تم إنشاء منطقة السكن "{name}" بنجاح.', 'success')
+        return redirect(url_for('students.residential_areas'))
+
+    return render_template('students/residential_area_form.html', area=None)
+
+
+@students_bp.route('/residential-areas/<int:area_id>/edit', methods=['GET', 'POST'])
+@login_required
+@permission_required('manage_residential_areas')
+def residential_area_edit(area_id):
+    school = _require_school_for_areas()
+    if not school:
+        return redirect(url_for('students.index'))
+    area = _get_residential_area_or_404(area_id, school)
+
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        is_active = request.form.get('is_active', '1') == '1'
+
+        if not name:
+            flash('اسم المنطقة مطلوب.', 'danger')
+            return render_template('students/residential_area_form.html', area=area)
+        if len(name) > 200:
+            flash('اسم المنطقة طويل جداً (الحد الأقصى 200 حرف).', 'danger')
+            return render_template('students/residential_area_form.html', area=area)
+
+        duplicate = (ResidentialArea.query
+                     .execution_options(bypass_tenant_scope=True)
+                     .filter(ResidentialArea.school_id == school.id,
+                             ResidentialArea.name == name,
+                             ResidentialArea.id != area.id)
+                     .first())
+        if duplicate:
+            flash('توجد منطقة سكن أخرى بنفس الاسم في هذه المدرسة.', 'danger')
+            return render_template('students/residential_area_form.html', area=area)
+
+        area.name = name
+        area.is_active = is_active
+        db.session.commit()
+        log_action('edit', 'residential_area', area.id,
+                   details=f'updated residential area "{name}"')
+        flash('تم تحديث بيانات منطقة السكن بنجاح.', 'success')
+        return redirect(url_for('students.residential_areas'))
+
+    return render_template('students/residential_area_form.html', area=area)
+
+
+@students_bp.route('/residential-areas/<int:area_id>/toggle-active', methods=['POST'])
+@login_required
+@permission_required('manage_residential_areas')
+def residential_area_toggle_active(area_id):
+    school = _require_school_for_areas()
+    if not school:
+        return redirect(url_for('students.index'))
+    area = _get_residential_area_or_404(area_id, school)
+
+    area.is_active = not area.is_active
+    db.session.commit()
+    state = 'تفعيل' if area.is_active else 'تعطيل'
+    log_action('edit', 'residential_area', area.id,
+               details=f'{state} residential area "{area.name}"')
+    flash(f'تم {state} منطقة السكن "{area.name}".', 'success')
+    return redirect(url_for('students.residential_areas'))
+
+
+@students_bp.route('/residential-areas/<int:area_id>/delete', methods=['POST'])
+@login_required
+@permission_required('manage_residential_areas')
+def residential_area_delete(area_id):
+    school = _require_school_for_areas()
+    if not school:
+        return redirect(url_for('students.index'))
+    area = _get_residential_area_or_404(area_id, school)
+
+    # Block delete while students (any status, any year) are still linked, to
+    # avoid orphaning data. Deactivate or relink students instead.
+    linked = (Student.query
+              .execution_options(bypass_tenant_scope=True, include_all_years=True)
+              .filter_by(school_id=school.id, residential_area_id=area.id)
+              .count())
+    if linked:
+        flash(
+            f'لا يمكن حذف منطقة السكن "{area.name}" لوجود {linked} طالب مرتبط بها. '
+            'قم بتعطيل المنطقة أو نقل الطلاب إلى منطقة أخرى بدلاً من حذفها.',
+            'danger',
+        )
+        return redirect(url_for('students.residential_areas'))
+
+    name = area.name
+    db.session.delete(area)
+    db.session.commit()
+    log_action('delete', 'residential_area', area_id,
+               details=f'deleted residential area "{name}"')
+    flash(f'تم حذف منطقة السكن "{name}".', 'success')
+    return redirect(url_for('students.residential_areas'))

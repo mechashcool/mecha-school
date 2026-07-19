@@ -19,6 +19,11 @@
     <i class="bi bi-file-earmark-excel-fill me-1"></i>تصدير Excel
   </a>
   {% endif %}
+  {% if current_user.has_permission('manage_residential_areas') %}
+  <a href="{{ url_for('students.residential_areas') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-geo-alt me-1"></i>مناطق السكن
+  </a>
+  {% endif %}
 </div>
 
 <!-- Filters -->
@@ -88,10 +93,23 @@
         </select>
       </div>
       {% endif %}
+      {% if residential_areas_list %}
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12px">منطقة السكن</label>
+        <select name="residential_area_id" class="form-select" onchange="this.form.submit()">
+          <option value="">كل المناطق</option>
+          {% for a in residential_areas_list %}
+          <option value="{{ a.id }}" {{ 'selected' if residential_area_id == a.id }}>
+            {{ a.name }}{{ '' if a.is_active else ' (معطّلة)' }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
       <div class="col-md-1">
         <button class="btn btn-primary w-100"><i class="bi bi-search"></i></button>
       </div>
-      {% if search or status or stage or grade_id or section_id or building_id %}
+      {% if search or status or stage or grade_id or section_id or building_id or residential_area_id %}
       <div class="col-md-1">
         <a href="{{ url_for('students.index') }}" class="btn btn-outline-secondary w-100">مسح</a>
       </div>
@@ -237,7 +255,7 @@
         {% for p in students.iter_pages() %}
           {% if p %}
           <li class="page-item {{ 'active' if p == students.page }}">
-            <a class="page-link" href="{{ url_for('students.index', page=p, q=search, status=status, stage=stage or '', grade_id=grade_id or '', section_id=section_id or '', building_id=building_id or '') }}">{{ p }}</a>
+            <a class="page-link" href="{{ url_for('students.index', page=p, q=search, status=status, stage=stage or '', grade_id=grade_id or '', section_id=section_id or '', building_id=building_id or '', residential_area_id=residential_area_id or '') }}">{{ p }}</a>
           </li>
           {% else %}
           <li class="page-item disabled"><span class="page-link">…</span></li>
@@ -286,7 +304,7 @@ function onStageChange(el) {
     const form = document.getElementById('studentFilterForm');
     const params = new URLSearchParams();
     params.set('q', searchInput.value.trim());
-    ['status', 'stage', 'grade_id', 'section_id', 'building_id'].forEach(name => {
+    ['status', 'stage', 'grade_id', 'section_id', 'building_id', 'residential_area_id'].forEach(name => {
       const el = form ? form.elements[name] : null;
       if (el && el.value) params.set(name, el.value);
     });

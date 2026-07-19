@@ -325,24 +325,35 @@
     {% if not current_user.is_super_admin %}
 
     {# ═══ Group: Students ═══════════════════════════════════════════════ #}
-    {% if 'students' in enabled_modules and current_user.has_permission('view_students') %}
+    {% if 'students' in enabled_modules and (current_user.has_permission('view_students')
+          or current_user.has_permission('manage_residential_areas')) %}
     <li class="nav-group" data-group="students">
       <button type="button" class="nav-group-toggle" aria-expanded="false">
         <i class="bi bi-people-fill group-icon"></i> شؤون الطلاب
         <i class="bi bi-chevron-left chevron"></i>
       </button>
       <ul class="nav-group-items">
+        {% if current_user.has_permission('view_students') %}
         <li class="nav-item">
           <a href="{{ url_for('students.index') }}"
-             class="{{ 'active' if request.blueprint == 'students' }}">
+             class="{{ 'active' if request.blueprint == 'students' and not (request.endpoint and request.endpoint.startswith('students.residential_area')) }}">
             <i class="bi bi-people"></i> الطلاب
           </a>
         </li>
+        {% endif %}
         {% if current_user.has_permission('view_student_records') %}
         <li class="nav-item">
           <a href="{{ url_for('student_records.index') }}"
              class="{{ 'active' if request.blueprint == 'student_records' }}">
             <i class="bi bi-card-text"></i> سجل قيد الطالب
+          </a>
+        </li>
+        {% endif %}
+        {% if current_user.has_permission('manage_residential_areas') %}
+        <li class="nav-item">
+          <a href="{{ url_for('students.residential_areas') }}"
+             class="{{ 'active' if request.endpoint and request.endpoint.startswith('students.residential_area') }}">
+            <i class="bi bi-geo-alt"></i> مناطق السكن
           </a>
         </li>
         {% endif %}

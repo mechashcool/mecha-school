@@ -735,6 +735,40 @@ teacher_subjects = db.Table(
 #  4. STUDENTS  (with RFID + school + year)
 # ═════════════════════════════════════════════════════════════════════════════
 
+class ResidentialArea(db.Model):
+    """
+    A residential area (منطقة سكن) defined by one school for its own students.
+
+    Purely a per-school lookup list: each school manages its own areas and a
+    student may optionally be linked to one area of the SAME school. The
+    existing free-text Student.address field is unchanged and unrelated.
+    """
+    __tablename__ = 'residential_areas'
+    __school_scoped__ = True
+    # Not year-scoped: areas are geographic and persist across academic years.
+
+    id          = db.Column(db.Integer, primary_key=True)
+    school_id   = db.Column(db.Integer, db.ForeignKey('schools.id', ondelete='CASCADE'),
+                            nullable=False, index=True)
+    name        = db.Column(db.String(200), nullable=False)
+    is_active   = db.Column(db.Boolean, default=True, nullable=False,
+                            server_default=db.true())
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at  = db.Column(db.DateTime, default=datetime.utcnow,
+                            onupdate=datetime.utcnow)
+
+    school = db.relationship('School', foreign_keys=[school_id],
+                             backref=db.backref('residential_areas', lazy='dynamic'))
+
+    __table_args__ = (
+        # Area name unique within a school (case-sensitive at DB level).
+        db.UniqueConstraint('school_id', 'name', name='uq_residential_area_school_name'),
+    )
+
+    def __repr__(self):
+        return f'<ResidentialArea {self.id} – {self.name} (school={self.school_id})>'
+
+
 class Student(db.Model):
     __tablename__ = 'students'
     __school_scoped__ = True
@@ -767,6 +801,11 @@ class Student(db.Model):
     building_id   = db.Column(db.Integer, db.ForeignKey('school_buildings.id'),
                               nullable=True, index=True)
 
+    # Optional residential-area link (same school only, validated in routes).
+    # NULL means "no area" — all existing students stay valid without one.
+    residential_area_id = db.Column(db.Integer, db.ForeignKey('residential_areas.id'),
+                                    nullable=True, index=True)
+
     guardian_name     = db.Column(db.String(200), nullable=True)
     guardian_phone    = db.Column(db.String(30),  nullable=True)
     guardian_email    = db.Column(db.String(180), nullable=True)
@@ -795,6 +834,8 @@ class Student(db.Model):
     academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id],
                                     backref=db.backref('students', lazy='dynamic'))
     building     = db.relationship('SchoolBuilding', foreign_keys=[building_id])
+    residential_area = db.relationship('ResidentialArea',
+                                       foreign_keys=[residential_area_id])
 
     __table_args__ = (
         # student_id is unique per school regardless of year (students persist).

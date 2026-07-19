@@ -154,6 +154,25 @@
             </div>
             {% endif %}
 
+            {# residential area (optional per-school lookup — separate from the
+               free-text address, which is unchanged) #}
+            {% if residential_areas_list %}
+            <div class="col-md-4">
+              <label class="form-label">
+                <i class="bi bi-geo-alt me-1"></i>منطقة السكن
+              </label>
+              <select name="residential_area_id" class="form-select">
+                <option value="">— بدون منطقة —</option>
+                {% for a in residential_areas_list %}
+                <option value="{{ a.id }}"
+                        {{ 'selected' if student and student.residential_area_id == a.id }}>
+                  {{ a.name }}{{ '' if a.is_active else ' (معطّلة)' }}
+                </option>
+                {% endfor %}
+              </select>
+            </div>
+            {% endif %}
+
             {# address #}
             {% if form_cfg.field_visible('address') %}
             <div class="col-12">

@@ -216,6 +216,20 @@
           </div>
           {% endif %}
 
+          {% if residential_areas_list %}
+          <div class="col-md-4">
+            <label class="form-label"><i class="bi bi-geo-alt me-1"></i>منطقة السكن</label>
+            <select name="residential_area_id" id="wizResidentialArea" class="form-select">
+              <option value="">— بدون منطقة —</option>
+              {% for a in residential_areas_list %}
+              <option value="{{ a.id }}" {{ 'selected' if sf.get('residential_area_id') == a.id|string }}>
+                {{ a.name }}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          {% endif %}
+
           {% if form_cfg.field_visible('address') %}
           <div class="col-12">
             <label class="form-label">العنوان
@@ -1056,6 +1070,7 @@ calcNet();
     s1 += fld('الجنس', genderMap[txt('gender')] || '');
     s1 += fld('الجنسية', txt('nationality'));
     s1 += fld('رقم الهاتف', txt('phone'));
+    s1 += fld('منطقة السكن', selText('wizResidentialArea'));
     s1 += fld('العنوان', txt('address'));
     s1 += fld('ملاحظات', txt('notes'));
     s1 += '</div>';

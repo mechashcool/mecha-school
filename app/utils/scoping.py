@@ -32,6 +32,7 @@ def _models():
         Subject, User,
         SchoolVideo, SchoolAnnouncement,
         SchoolBuilding, UserBuildingAccess,
+        ResidentialArea,
     )
 
     school_scoped = (
@@ -49,10 +50,13 @@ def _models():
         Subject, User,
         SchoolVideo, SchoolAnnouncement,
         SchoolBuilding, UserBuildingAccess,
+        ResidentialArea,
     )
     # Student, StudentDocument, StudentSuspension are school-scoped only —
     # they persist across academic years so that a year rollover does not
     # require re-entering master student data.
+    # ResidentialArea is school-scoped only — areas are geographic and persist
+    # across academic years, like SchoolBuilding.
     # PayrollSettings and SalaryComponent are school-scoped only — payroll
     # configuration and component definitions persist across academic years.
     # InventoryWarehouse is school-scoped only — a physical warehouse persists
@@ -676,6 +680,24 @@ def _before_flush(session_, flush_context, instances):
             if (getattr(obj, '__year_scoped__', False)
                     or obj.__class__.__name__ == 'Notification'):
                 _validate_relationship_scope(session_, obj)
+
+            # ResidentialArea is an optional, school-scoped (NOT year-scoped)
+            # Student relationship, so it is not covered by the year-scoped
+            # relationship validator above. Validate it here for every Student
+            # write (new or dirty) so a residential_area_id pointing to another
+            # school is rejected — fail closed — regardless of the code path
+            # (route, script, admin action, or future code) that set it.
+            if (obj.__class__.__name__ == 'Student'
+                    and getattr(obj, 'residential_area_id', None) is not None):
+                from app.models import ResidentialArea
+                area = session_.get(
+                    ResidentialArea, obj.residential_area_id,
+                    execution_options={'bypass_tenant_scope': True},
+                )
+                if area is None or area.school_id != getattr(obj, 'school_id', None):
+                    raise ValueError(
+                        'Student residential_area_id must belong to the same school'
+                    )
 
 
 def register_tenant_guards(app):

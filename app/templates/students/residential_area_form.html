@@ -1,0 +1,59 @@
+{% extends "shared/base.html" %}
+{% block title %}{{ 'تعديل منطقة سكن' if area else 'إضافة منطقة سكن' }}{% endblock %}
+{% block page_title %}{{ 'تعديل منطقة سكن' if area else 'منطقة سكن جديدة' }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ 'تعديل: ' + area.name if area else 'إضافة منطقة سكن جديدة' }}</h1>
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="{{ url_for('students.index') }}">الطلاب</a></li>
+        <li class="breadcrumb-item"><a href="{{ url_for('students.residential_areas') }}">مناطق السكن</a></li>
+        <li class="breadcrumb-item active">{{ 'تعديل' if area else 'إضافة' }}</li>
+      </ol>
+    </nav>
+  </div>
+  <a href="{{ url_for('students.residential_areas') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<form method="POST"
+      action="{{ url_for('students.residential_area_edit', area_id=area.id) if area else url_for('students.residential_area_new') }}">
+  <div class="row g-4">
+    <div class="col-lg-8">
+      <div class="card">
+        <div class="card-header">
+          <i class="bi bi-geo-alt text-accent"></i>بيانات منطقة السكن
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-12">
+              <label class="form-label">اسم المنطقة <span class="text-danger">*</span></label>
+              <input type="text" name="name" class="form-control" required maxlength="200"
+                     placeholder="مثال: حي الجامعة"
+                     value="{{ area.name if area else (form_name or '') }}">
+            </div>
+            <div class="col-12">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" name="is_active" id="isActive"
+                       value="1" {{ 'checked' if (area and area.is_active) or not area }}>
+                <label class="form-check-label" for="isActive">المنطقة مفعّلة</label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-4 d-flex gap-3">
+    <button type="submit" class="btn btn-primary px-5">
+      <i class="bi bi-check-circle-fill me-2"></i>
+      {{ 'حفظ التعديلات' if area else 'إنشاء المنطقة' }}
+    </button>
+    <a href="{{ url_for('students.residential_areas') }}" class="btn btn-outline-secondary px-5">إلغاء</a>
+  </div>
+</form>
+{% endblock %}
