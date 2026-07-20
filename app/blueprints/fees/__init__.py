@@ -419,32 +419,27 @@ def resolve_payment_amount_for_receipt(inst, op_ref=None):
     """Resolve a receipt to ONE exact payment operation and return
     ``(amount, resolved_op_ref)``.
 
-    The amount is ALWAYS the sum of every Revenue row carrying a single
-    operation's ``[TXN:op_ref]`` tag — so a partial payment prints its own
-    amount and a cascaded payment prints the full entered amount across all its
-    installments. The operation is chosen by its exact reference, never by
-    picking the earliest/latest Revenue row that merely shares this
-    installment's receipt number:
+    Two deliberately separate receipt behaviors:
 
-      1. ``op_ref`` given (the normal path — the pay action and every reprint
-         link carry the exact op_ref of the payment they represent): confirm
-         this installment actually took part in that operation (a Revenue row
+      1. ``op_ref`` given — the IMMEDIATE post-payment receipt link, which
+         carries the exact op_ref of the payment just recorded. Confirm this
+         installment actually took part in that operation (a Revenue row
          ``... - {inst.receipt_no} [TXN:{op_ref}]`` exists in this
-         installment's school), then sum all rows tagged with that op_ref.
-         A foreign or non-matching op_ref is ignored and resolution falls
-         through — it can never surface another school's data.
-      2. ``op_ref`` absent (a bare installment link — the per-row Print button
-         in the Fees and Installments table): resolve the operation that
-         COMPLETED this installment — the most recent tagged Revenue row for
-         it — then return ONLY this installment's own Revenue amount under
-         that op_ref, never the operation's other installments. A payment
-         that cascaded across several installments still prints each row's
-         own credited share here; the shared full-operation total remains
-         available only through the explicit ``op_ref`` path above.
-      3. No tagged Revenue at all (historical payments predating the tag): the
-         preserved legacy fallback — the latest Revenue row embedding this
-         installment's receipt_no, else the installment's stored
-         received_amount. These have no op_ref, so ``resolved_op_ref`` is None.
+         installment's school), then sum ALL rows tagged with that op_ref —
+         so a partial payment prints only its own accepted amount and a
+         cascaded payment prints the full entered amount across all the
+         installments it touched. A foreign or non-matching op_ref is ignored
+         and resolution falls through — it can never surface another school's
+         data.
+      2. ``op_ref`` absent — the REPRINT link from an installment row's Print
+         button in the Fees and Installments table. This prints the CUMULATIVE
+         total received for THIS installment across all of its partial
+         payments, taken from the installment's persisted ``received_amount``,
+         and keeps the installment's OWN receipt number (``resolved_op_ref``
+         is None, so the label stays ``inst.receipt_no``). It is deliberately
+         neither the latest single Revenue row nor a full cascaded operation
+         total spanning other installments — those are reserved for the
+         explicit op_ref path above.
     """
     fallback = (Decimal(str(inst.received_amount or 0)), None)
     if not inst.receipt_no:
@@ -473,34 +468,13 @@ def resolve_payment_amount_for_receipt(inst, op_ref=None):
             return _sum_by_op(op_ref), op_ref
         # Foreign / stale op_ref → ignore and fall through to a safe default.
 
-    # 2) Bare link — the operation that completed this installment (most recent).
-    latest_tagged = (
-        Revenue.query
-        .execution_options(include_all_years=True)
-        .filter(Revenue.school_id == inst.school_id,
-                Revenue.description.like(f'%- {inst.receipt_no} [TXN:%'))
-        .order_by(Revenue.id.desc())
-        .first()
-    )
-    if latest_tagged is not None:
-        m = _PAYMENT_TXN_RE.search(latest_tagged.description or '')
-        if m:
-            # This installment's own credited share of that operation ONLY —
-            # never the operation's other installments (no cascade total here).
-            return Decimal(str(latest_tagged.amount)), m.group(1)
-        return Decimal(str(latest_tagged.amount)), None
-
-    # 3) Historical untagged fallback (no op_ref exists for these rows).
-    legacy = (
-        Revenue.query
-        .execution_options(include_all_years=True)
-        .filter(Revenue.school_id == inst.school_id,
-                Revenue.description.like(f'%- {inst.receipt_no}'))
-        .order_by(Revenue.created_at.desc(), Revenue.id.desc())
-        .first()
-    )
-    if legacy is not None:
-        return Decimal(str(legacy.amount)), None
+    # 2) Bare installment-row reprint (no valid op_ref) — show the CUMULATIVE
+    # amount received for THIS installment across all of its partial payments,
+    # using the installment's persisted received_amount and its own receipt
+    # number (resolved_op is None → the label keeps inst.receipt_no). This is
+    # deliberately not the latest single Revenue row, and not a full cascaded
+    # operation total spanning other installments — both of which are reserved
+    # for the explicit op_ref path above.
     return fallback
 
 
