@@ -735,11 +735,12 @@ def create():
 
         # ── Create optional fee record (shared fee logic, manage_fees gated) ──
         _fee_created = False
-        _fee_payment_data = []   # plain dicts for post-commit Revenue records
+        _payment_ops = []        # one allocation-group per accepted payment field
         _paid_inst_count  = 0
         if create_fee:
             from app.blueprints.fees import (persist_fee_record, FeeValidationError,
-                                             distribute_fee_payment, _notify_fee_parents)
+                                             stage_installment_payment,
+                                             finalize_payment_notifications)
             try:
                 _fee_record = persist_fee_record(
                     request.form,
@@ -757,15 +758,19 @@ def create():
                 # Flush first so the installments have IDs and are queryable.
                 db.session.flush()
                 _num_inst = max(1, min(12, int(request.form.get('num_installments', 1) or 1)))
-                # Fetched ONCE and reused for every entry below: distribute_fee_payment
-                # mutates these same in-memory installment objects in place, so a
-                # cascade triggered by an earlier installment's payment is already
-                # reflected (reduced remaining balance) when a later installment's
-                # own entered amount is processed — no installment is ever paid twice.
+                # Fetched ONCE and reused for every entry below: the canonical
+                # stage_installment_payment mutates these same in-memory
+                # installment objects in place, so a cascade triggered by an
+                # earlier installment's payment is already reflected (reduced
+                # remaining balance) when a later installment's own entered
+                # amount is processed — no installment is ever paid twice.
                 _installments = (FeeInstallment.query
                                  .filter_by(fee_record_id=_fee_record.id, school_id=school.id)
                                  .order_by(FeeInstallment.installment_no)
                                  .all())
+                # Revenue category resolved lazily on the first accepted payment
+                # (flush only — no commit, to keep the whole registration atomic).
+                _fee_cat = None
                 for _wi in range(1, _num_inst + 1):
                     _pay_raw = request.form.get(f'pay_amount_{_wi}', '').strip()
                     if not _pay_raw:
@@ -791,72 +796,45 @@ def create():
                     # is forwarded to the next installment (in the existing
                     # ascending order, starting no earlier than #_wi) that still has
                     # an outstanding balance. If every installment from #_wi onward
-                    # is already settled, fall back to #_wi itself so
-                    # distribute_fee_payment() raises its normal "already fully
-                    # paid" rejection — correct here too, since nothing is left to
-                    # apply this amount to.
+                    # is already settled, fall back to #_wi itself so the canonical
+                    # payment path raises its normal "already fully paid" rejection.
                     _effective_start_no = next(
                         (i.installment_no for i in _installments
                          if i.installment_no >= _wi
                          and (Decimal(str(i.amount)) - Decimal(str(i.received_amount or 0))) > 0),
                         _wi,
                     )
-                    # Delegate to the exact same distribution function used by the
-                    # standalone Fees and Installments "record payment" flow
-                    # (fees.pay_installment): settle the target installment first,
-                    # then cascade any excess into the following unpaid
-                    # installments of this same fee record, in order — never a
-                    # second, independently-maintained payment implementation.
-                    # Raises FeeValidationError (caught below, atomic rollback) if
-                    # the entered amount exceeds what's currently outstanding from
-                    # that point onward.
-                    _allocations = distribute_fee_payment(
+                    if _fee_cat is None:
+                        _fee_cat = (
+                            RevenueCategory.query
+                            .execution_options(bypass_tenant_scope=True)
+                            .filter_by(name='رسوم دراسية', school_id=school.id)
+                            .first()
+                        )
+                        if not _fee_cat:
+                            _fee_cat = RevenueCategory(name='رسوم دراسية', school_id=school.id)
+                            db.session.add(_fee_cat)
+                            db.session.flush()
+                    # ONE canonical payment recorder — the exact same call the
+                    # standalone Fees and Installments page and Student Profile
+                    # make via fees.pay_installment. It distributes the amount,
+                    # cascades any excess, and stages the tagged Revenue rows in
+                    # THIS transaction (no commit of its own), so the wizard keeps
+                    # its single atomic student-creation commit and full rollback.
+                    # Raises FeeValidationError (caught below → rollback) if the
+                    # amount exceeds what's currently outstanding from that point.
+                    _allocs = stage_installment_payment(
                         _installments, _effective_start_no, _received,
+                        fee_category=_fee_cat, student_name=student.full_name,
                         payment_method=request.form.get(f'pay_method_{_wi}', 'cash'),
                         paid_date=_pay_date_val,
                         notes=request.form.get(f'pay_notes_{_wi}', '').strip(),
                         collected_by=current_user.id,
+                        rev_academic_year_id=year.id,
                     )
-                    for _alloc in _allocations:
-                        _ai, _aa = _alloc['installment'], _alloc['applied']
-                        _fee_payment_data.append({
-                            'school_id':        school.id,
-                            'academic_year_id': year.id,
-                            'amount':           float(_aa),
-                            'installment_no':   _ai.installment_no,
-                            'paid_date':        _ai.paid_date,
-                            'inst_id':          _ai.id,
-                            'fee_record_id':    _fee_record.id,
-                            'receipt_no':       _ai.receipt_no,
-                            'status':           _ai.status,
-                            'payment_method':   _ai.payment_method,
-                        })
-                _paid_inst_count = len(_fee_payment_data)
-
-                # Revenue records staged in the same transaction — every payment must
-                # have its matching accounting entry before the single final commit.
-                if _fee_payment_data:
-                    _fee_cat = (
-                        RevenueCategory.query
-                        .execution_options(bypass_tenant_scope=True)
-                        .filter_by(name='رسوم دراسية', school_id=school.id)
-                        .first()
-                    )
-                    if not _fee_cat:
-                        _fee_cat = RevenueCategory(name='رسوم دراسية', school_id=school.id)
-                        db.session.add(_fee_cat)
-                        db.session.flush()
-                    for _pd in _fee_payment_data:
-                        db.session.add(Revenue(
-                            category_id      = _fee_cat.id,
-                            school_id        = _pd['school_id'],
-                            academic_year_id = _pd['academic_year_id'],
-                            amount           = _pd['amount'],
-                            description      = (f'دفعة رسوم للطالب {student.full_name}'
-                                                f' - قسط #{_pd["installment_no"]}'),
-                            date             = _pd['paid_date'],
-                            recorded_by      = current_user.id,
-                        ))
+                    if _allocs:
+                        _payment_ops.append(_allocs)
+                        _paid_inst_count += len(_allocs)
 
             except FeeValidationError as _fee_exc:
                 # Keep registration atomic: discard the student and everything
@@ -880,48 +858,24 @@ def create():
                 db.session.rollback()
                 raise
 
+        # Captured before commit: after db.session.commit() SQLAlchemy expires
+        # attributes and a lazy reload goes through the year-scoped ORM filter.
+        _student_id_for_notify = student.id
+
         # ── Single final commit ──────────────────────────────────────────────
         # Student, fee record, installments, payments, receipt numbers, and
         # Revenue records are all staged in the same session and committed here.
         db.session.commit()
 
-        # ── Post-commit: same audit log + FCM pushes as fees.pay_installment ──
-        # Every payment recorded through this wizard step must leave the same
-        # audit trail and trigger the same parent/investor notifications as one
-        # recorded from the standalone Fees and Installments page. None of this
-        # may ever roll back the already-committed student/fee/payment records,
-        # so it mirrors pay_installment's own defensive error handling.
-        if _fee_payment_data:
-            status_labels = {'paid': 'مكتمل', 'partial': 'دفعة جزئية',
-                             'pending': 'قيد الانتظار', 'overdue': 'متأخر'}
-            for _pd in _fee_payment_data:
-                log_action('payment', 'fee_installment', _pd['inst_id'],
-                          details=f"received={_pd['amount']} method={_pd['payment_method']} "
-                                  f"status={_pd['status']}")
-                _notify_fee_parents(
-                    student.id,
-                    'تم تسجيل دفعة',
-                    f"تم تسجيل دفعة بقيمة {_pd['amount']} لقسط الرسوم رقم {_pd['installment_no']} "
-                    f"({status_labels.get(_pd['status'], '')}).",
-                    screen='fees',
-                    fee_record_id=_pd['fee_record_id'],
-                    installment_id=_pd['inst_id'],
-                )
-                try:
-                    from app.services.fcm_service import notify_investors
-                    notify_investors(
-                        school_id = school.id,
-                        title     = 'إيراد جديد',
-                        body      = f"تم تسجيل إيراد جديد بقيمة {_pd['amount']}",
-                        data      = {
-                            'type':       'investor_revenue',
-                            'route':      '/investor/revenues',
-                            'school_id':  str(school.id),
-                            'amount':     str(_pd['amount']),
-                        },
-                    )
-                except Exception:
-                    _log.exception('[students] investor push failed for inst_id=%s', _pd['inst_id'])
+        # ── Post-commit side effects via the SAME canonical helper as
+        # fees.pay_installment — one call per accepted payment operation, so
+        # each entered payment leaves an identical audit trail and triggers the
+        # identical parent/investor notifications regardless of entry point.
+        # None of this can roll back the already-committed records (the helper
+        # never raises).
+        for _op in _payment_ops:
+            finalize_payment_notifications(
+                _op, student_id=_student_id_for_notify, school_id=school.id)
 
         flash(f'تم إضافة الطالب {student.full_name} برقم {student.student_id}.', 'success')
         if parent_created:

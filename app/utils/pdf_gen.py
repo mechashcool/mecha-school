@@ -136,10 +136,24 @@ def _shape_arabic_text(text):
         return text
 
 
-def generate_fee_receipt(installment, school_settings=None, print_date=None) -> bytes | None:
+def generate_fee_receipt(installment, school_settings=None, print_date=None,
+                         actual_paid=None, receipt_no_override=None) -> bytes | None:
     """
     Generate a professional PDF receipt for a paid fee installment.
     Portrait orientation, top half of A4 page.
+
+    `actual_paid`: the amount actually received in the specific payment
+    transaction this receipt represents (resolved by the caller from the
+    persisted Revenue record, not from temporary request data), shown as the
+    "Amount Paid" figure and its amount-in-words line. Falls back to
+    `installment.received_amount` (the installment's running total) when not
+    supplied, matching the previous behavior.
+
+    `receipt_no_override`: the payment operation's reference (op_ref) to show as
+    the receipt number, so each distinct payment operation prints as a distinct
+    receipt. Falls back to `installment.receipt_no` when not supplied
+    (historical untagged payments).
+
     Returns bytes or None if ReportLab unavailable.
     """
     if not _get_rl():
@@ -261,8 +275,14 @@ def generate_fee_receipt(installment, school_settings=None, print_date=None) -> 
         else:
             return Paragraph(processed_text, ParagraphStyle('data_cell', fontSize=8, textColor=colors.black, alignment=0))
     
-    # Amount in words — derived from the persisted received_amount (not client input)
-    _paid_int = int(float(installment.received_amount or 0))
+    # Amount actually received in THIS payment transaction — derived from the
+    # persisted Revenue record by the caller (not client/request input); falls
+    # back to the installment's running total when the caller has none.
+    _paid_amount = float(actual_paid) if actual_paid is not None else float(installment.received_amount or 0)
+
+    # Amount in words — same figure as the "Amount Paid" row below, never the
+    # installment's running total.
+    _paid_int = int(_paid_amount)
     _amount_words = amount_to_words_iqd(_paid_int)
     _amount_words_text = (_amount_words + ' فقط لا غير') if _amount_words else '—'
 
@@ -274,13 +294,14 @@ def generate_fee_receipt(installment, school_settings=None, print_date=None) -> 
         _words_cell_style = ParagraphStyle('_wcs', fontSize=9,
                                            alignment=2, textColor=colors.black)
 
+    _receipt_no_display = receipt_no_override or installment.receipt_no or '—'
     data = [
-        [create_arabic_paragraph('رقم الإيصال / Receipt No', arabic_bold), create_data_paragraph(installment.receipt_no or '—')],
+        [create_arabic_paragraph('رقم الإيصال / Receipt No', arabic_bold), create_data_paragraph(_receipt_no_display)],
         [create_arabic_paragraph('اسم الطالب / Student Name', arabic_bold), create_data_paragraph(student.full_name)],
         [create_arabic_paragraph('رقم الطالب / Student ID', arabic_bold), create_data_paragraph(student.student_id)],
         [create_arabic_paragraph('نوع الرسم / Fee Type', arabic_bold), create_data_paragraph(fee_record.fee_type.name)],
         [create_arabic_paragraph('القسط / Installment', arabic_bold), create_data_paragraph(f"#{installment.installment_no}")],
-        [create_arabic_paragraph('المبلغ المدفوع / Amount Paid', arabic_bold), create_data_paragraph(f"{float(installment.received_amount):,.2f} {school_settings.currency_symbol if school_settings else 'د.ع'}")],
+        [create_arabic_paragraph('المبلغ المدفوع / Amount Paid', arabic_bold), create_data_paragraph(f"{_paid_amount:,.2f} {school_settings.currency_symbol if school_settings else 'د.ع'}")],
         [create_arabic_paragraph('المبلغ كتابةً / Amount in Words', arabic_bold),
          Paragraph(_shape_arabic_text(_amount_words_text), _words_cell_style)],
         [create_arabic_paragraph('المبلغ المتبقي / Remaining Balance', arabic_bold), create_data_paragraph(f"{remaining:,.2f} {school_settings.currency_symbol if school_settings else 'د.ع'}")],

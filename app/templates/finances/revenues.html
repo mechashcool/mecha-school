@@ -65,7 +65,7 @@
         <tr>
           <td>{{ r.date.strftime('%Y-%m-%d') }}</td>
           <td><span class="badge" style="background:#e8f8f0;color:#1aab6d;font-weight:600">{{ r.category.name }}</span></td>
-          <td>{{ r.description or '—' }}</td>
+          <td>{{ r.display_description or '—' }}</td>
           <td class="fw-700 text-success">{{ '{:,.0f}'.format(r.amount) }}</td>
           <td class="text-muted" style="font-size:12.5px">{{ r.recorder.full_name if r.recorder else '—' }}</td>
           <td>

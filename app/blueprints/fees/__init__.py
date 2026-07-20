@@ -1,5 +1,6 @@
 """Mecha-School – Fees Blueprint"""
 import logging
+import re
 from decimal import Decimal, InvalidOperation
 
 from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify, session as flask_session, abort
@@ -284,6 +285,219 @@ def distribute_fee_payment(installments, start_installment_no, received, *,
             allocations.append({'installment': inst, 'applied': applied})
             leftover -= applied
     return allocations
+
+
+# Tag written into every Revenue.description of ONE accepted payment operation.
+# `op_ref` is a fresh, globally-unique receipt number (same generator as the
+# per-installment receipt_no), so all Revenue rows created for a single payment
+# — even when the amount cascades across several installments — carry the SAME
+# tag and can be summed back to the exact entered amount with no heuristics.
+# Historical rows written before this tag existed simply lack it and fall back
+# to per-installment behavior; they are never guessed at or merged.
+_PAYMENT_TXN_RE = re.compile(r'\[TXN:([^\]]+)\]')
+
+
+def _payment_txn_tag(op_ref):
+    return f' [TXN:{op_ref}]'
+
+
+# Shared Arabic status labels for payment notifications / receipts.
+_PAY_STATUS_LABELS = {'paid': 'مكتمل', 'partial': 'دفعة جزئية',
+                      'pending': 'قيد الانتظار', 'overdue': 'متأخر'}
+
+
+def stage_installment_payment(installments, start_installment_no, received, *,
+                              fee_category, student_name, payment_method='cash',
+                              paid_date=None, notes=None, collected_by=None,
+                              rev_academic_year_id=None):
+    """Canonical payment recorder — the ONE pathway used by every entry point.
+
+    Distributes ONE entered payment across installments (via the canonical
+    distribute_fee_payment / apply_installment_payment) AND stages the matching
+    Revenue rows in the current db.session, tagging every Revenue row of this
+    single payment with one fresh, unique operation reference. That tag makes
+    the payment one identifiable financial transaction even when its amount is
+    spread over several installments, so a receipt can later reproduce the exact
+    entered total with no timestamp/heuristic guessing.
+
+    Adds objects to db.session but NEVER commits and acquires no lock — the
+    CALLER owns the transaction boundary and (where needed) the row lock. This
+    is what lets the standalone Fees route commit immediately while the
+    student-registration wizard folds the same call into its single atomic
+    student-creation commit. Raises FeeValidationError (from
+    distribute_fee_payment) if the amount exceeds what is currently outstanding;
+    nothing is staged in that case.
+
+    Returns a list of allocation dicts, each with the captured primitives
+    (inst_id, installment_no, applied, status, …) needed for post-commit side
+    effects and receipts, plus the shared ``op_ref``.
+    """
+    paid_date = paid_date or date.today()
+    allocations = distribute_fee_payment(
+        installments, start_installment_no, received,
+        payment_method=payment_method, paid_date=paid_date,
+        notes=notes, collected_by=collected_by,
+    )
+    op_ref = generate_receipt_no()
+    txn_tag = _payment_txn_tag(op_ref)
+    staged = []
+    for alloc in allocations:
+        ai, aa = alloc['installment'], alloc['applied']
+        rev = Revenue(
+            category_id      = fee_category.id,
+            school_id        = ai.school_id,
+            academic_year_id = ai.academic_year_id or rev_academic_year_id,
+            amount           = aa,
+            description      = (
+                f'دفعة رسوم للطالب {student_name}'
+                f' - قسط #{ai.installment_no}'
+                + (f' - {ai.receipt_no}' if ai.receipt_no else '')
+                + txn_tag
+            ),
+            date             = paid_date,
+            recorded_by      = collected_by,
+        )
+        db.session.add(rev)
+        staged.append({
+            'installment':    ai,
+            'applied':        aa,
+            'inst_id':        ai.id,
+            'installment_no': ai.installment_no,
+            'fee_record_id':  ai.fee_record_id,
+            'status':         ai.status,
+            'payment_method': ai.payment_method,
+            'receipt_no':     ai.receipt_no,
+            'op_ref':         op_ref,
+            'revenue':        rev,
+        })
+    return staged
+
+
+def finalize_payment_notifications(allocations, *, student_id, school_id):
+    """Canonical POST-COMMIT side effects for ONE accepted payment operation.
+
+    Writes one audit-log line and one parent FCM push per touched installment,
+    and a single investor FCM push for the whole operation — identical whether
+    the payment came from the Fees page, the Student Profile, or the Add Student
+    wizard. Must be called only AFTER the payment's transaction has committed.
+    Takes captured primitives (never live ORM objects) so it is safe once the
+    session has expired attributes on commit. Never raises — notification or
+    logging failures must not disturb an already-committed payment.
+    """
+    if not allocations:
+        return
+    total_applied = sum((Decimal(str(a['applied'])) for a in allocations), Decimal('0'))
+    for a in allocations:
+        log_action('payment', 'fee_installment', a['inst_id'],
+                   details=f"received={a['applied']} method={a['payment_method']} "
+                           f"status={a['status']}")
+        if student_id is not None:
+            _notify_fee_parents(
+                student_id,
+                'تم تسجيل دفعة',
+                f"تم تسجيل دفعة بقيمة {a['applied']} لقسط الرسوم رقم {a['installment_no']} "
+                f"({_PAY_STATUS_LABELS.get(a['status'], '')}).",
+                screen='fees',
+                fee_record_id=a['fee_record_id'],
+                installment_id=a['inst_id'],
+            )
+    if total_applied > 0:
+        try:
+            from app.services.fcm_service import notify_investors
+            notify_investors(
+                school_id=school_id,
+                title='إيراد جديد',
+                body=f'تم تسجيل إيراد جديد بقيمة {float(total_applied)}',
+                data={'type': 'investor_revenue', 'route': '/investor/revenues',
+                      'school_id': str(school_id), 'amount': str(float(total_applied))},
+            )
+        except Exception:
+            _log.exception('[fees] investor push failed (school_id=%s)', school_id)
+
+
+def resolve_payment_amount_for_receipt(inst, op_ref=None):
+    """Resolve a receipt to ONE exact payment operation and return
+    ``(amount, resolved_op_ref)``.
+
+    The amount is ALWAYS the sum of every Revenue row carrying a single
+    operation's ``[TXN:op_ref]`` tag — so a partial payment prints its own
+    amount and a cascaded payment prints the full entered amount across all its
+    installments. The operation is chosen by its exact reference, never by
+    picking the earliest/latest Revenue row that merely shares this
+    installment's receipt number:
+
+      1. ``op_ref`` given (the normal path — the pay action and every reprint
+         link carry the exact op_ref of the payment they represent): confirm
+         this installment actually took part in that operation (a Revenue row
+         ``... - {inst.receipt_no} [TXN:{op_ref}]`` exists in this
+         installment's school), then sum all rows tagged with that op_ref.
+         A foreign or non-matching op_ref is ignored and resolution falls
+         through — it can never surface another school's data.
+      2. ``op_ref`` absent (a bare installment link, e.g. the reprint button
+         shown once an installment is fully settled): resolve the operation
+         that COMPLETED this installment — the most recent tagged Revenue row
+         for it — and sum by THAT exact op_ref. Recency only decides which
+         operation the single reprint button represents; the amount is still
+         summed by an exact op_ref, never taken from one row chosen by recency.
+      3. No tagged Revenue at all (historical payments predating the tag): the
+         preserved legacy fallback — the latest Revenue row embedding this
+         installment's receipt_no, else the installment's stored
+         received_amount. These have no op_ref, so ``resolved_op_ref`` is None.
+    """
+    fallback = (Decimal(str(inst.received_amount or 0)), None)
+    if not inst.receipt_no:
+        return fallback
+
+    def _sum_by_op(_op):
+        total = (
+            db.session.query(func.coalesce(func.sum(Revenue.amount), 0))
+            .execution_options(include_all_years=True)
+            .filter(Revenue.school_id == inst.school_id,
+                    Revenue.description.like(f'%[TXN:{_op}]%'))
+            .scalar()
+        )
+        return Decimal(str(total or 0))
+
+    # 1) Explicit op_ref — accepted only if it belongs to THIS installment+school.
+    if op_ref:
+        owns = (
+            Revenue.query
+            .execution_options(include_all_years=True)
+            .filter(Revenue.school_id == inst.school_id,
+                    Revenue.description.like(f'%- {inst.receipt_no} [TXN:{op_ref}]%'))
+            .first()
+        )
+        if owns is not None:
+            return _sum_by_op(op_ref), op_ref
+        # Foreign / stale op_ref → ignore and fall through to a safe default.
+
+    # 2) Bare link — the operation that completed this installment (most recent).
+    latest_tagged = (
+        Revenue.query
+        .execution_options(include_all_years=True)
+        .filter(Revenue.school_id == inst.school_id,
+                Revenue.description.like(f'%- {inst.receipt_no} [TXN:%'))
+        .order_by(Revenue.id.desc())
+        .first()
+    )
+    if latest_tagged is not None:
+        m = _PAYMENT_TXN_RE.search(latest_tagged.description or '')
+        if m:
+            return _sum_by_op(m.group(1)), m.group(1)
+        return Decimal(str(latest_tagged.amount)), None
+
+    # 3) Historical untagged fallback (no op_ref exists for these rows).
+    legacy = (
+        Revenue.query
+        .execution_options(include_all_years=True)
+        .filter(Revenue.school_id == inst.school_id,
+                Revenue.description.like(f'%- {inst.receipt_no}'))
+        .order_by(Revenue.created_at.desc(), Revenue.id.desc())
+        .first()
+    )
+    if legacy is not None:
+        return Decimal(str(legacy.amount)), None
+    return fallback
 
 
 @fees_bp.route('/')
@@ -1055,95 +1269,57 @@ def pay_installment(inst_id):
             .all()
         )
 
-        # ── Distribute the entered amount: settle the selected installment,
-        # then cascade any excess into the following unpaid installments of
-        # this same fee record, in order. Raises FeeValidationError (with the
-        # maximum payable amount) if the entered amount exceeds what's
-        # currently outstanding — nothing is mutated in that case, so the
-        # request is rejected before anything is saved. The cap/mutate logic
-        # for each individual installment lives in apply_installment_payment(),
-        # the single source of truth shared with the student-registration
-        # wizard's fee step via distribute_fee_payment().
-        allocations = distribute_fee_payment(
+        # ── Record the payment through the ONE canonical pathway ──────────────
+        # stage_installment_payment settles the selected installment, cascades
+        # any excess into the following installments (via distribute_fee_payment
+        # / apply_installment_payment), and stages one tagged Revenue row per
+        # touched installment — the exact same code the Add Student wizard now
+        # calls, so both entry points produce byte-for-byte identical financial
+        # results. Raises FeeValidationError (with the maximum payable amount)
+        # when the amount exceeds what is currently outstanding; nothing is
+        # staged, so the request is rejected before anything is saved.
+        _sel_inst_id = inst.id            # captured pre-commit for the receipt URL
+        _sel_school_id = inst.school_id   # captured pre-commit for post-commit notify
+        _notify_student_id = _student.id if _student is not None else None
+        allocations = stage_installment_payment(
             locked_installments, inst.installment_no, received,
+            fee_category=fee_category, student_name=student_name,
             payment_method=request.form.get('payment_method', 'cash'),
             paid_date=paid_date,
             notes=request.form.get('notes', '').strip(),
             collected_by=current_user.id,
+            rev_academic_year_id=rev_academic_year_id,
         )
-
-        # ── Apply ALL DB mutations in ONE atomic transaction ──────────────────
-        # Every touched installment's fields, its receipt number, and one
-        # matching Revenue row per installment are written together. If any
-        # part fails the entire operation rolls back — no partial state, no
-        # missing Revenue records.
-        for _alloc in allocations:
-            _ai, _aa = _alloc['installment'], _alloc['applied']
-            db.session.add(Revenue(
-                category_id      = fee_category.id,
-                school_id        = _ai.school_id,
-                academic_year_id = _ai.academic_year_id or rev_academic_year_id,
-                amount           = _aa,
-                description      = (
-                    f'دفعة رسوم للطالب {student_name}'
-                    f' - قسط #{_ai.installment_no}'
-                    + (f' - {_ai.receipt_no}' if _ai.receipt_no else '')
-                ),
-                date             = paid_date,
-                recorded_by      = current_user.id,
-            ))
+        _sel_receipt_no = next(
+            (a['receipt_no'] for a in allocations if a['installment_no'] == inst.installment_no),
+            None,
+        )
+        # Every row staged by ONE stage_installment_payment call shares one
+        # op_ref — this payment's exact operation reference. The receipt link
+        # below carries it so the printed/reprinted receipt is tied directly to
+        # THIS payment, never resolved by earliest/latest row selection.
+        _op_ref = allocations[0]['op_ref'] if allocations else None
         db.session.commit()  # single commit — installments + revenue are atomic
 
-        # ── Post-commit: audit log and FCM push, one per touched installment ──
-        # These run after the transaction is safe. None of this must ever roll
-        # back the committed payment — both have their own error handling.
-        status_labels = {'paid': 'مكتمل', 'partial': 'دفعة جزئية',
-                         'pending': 'قيد الانتظار', 'overdue': 'متأخر'}
+        # ── Post-commit side effects through the same canonical helper ────────
+        finalize_payment_notifications(
+            allocations,
+            student_id=_notify_student_id,
+            school_id=_sel_school_id,
+        )
+
         total_applied = sum(a['applied'] for a in allocations)
-        for _alloc in allocations:
-            _ai, _aa = _alloc['installment'], _alloc['applied']
-            log_action('payment', 'fee_installment', _ai.id,
-                       details=f'received={_aa} method={_ai.payment_method} '
-                               f'status={_ai.status}')
-            if _student is not None:
-                _notify_fee_parents(
-                    _student.id,
-                    'تم تسجيل دفعة',
-                    f'تم تسجيل دفعة بقيمة {_aa} لقسط الرسوم رقم {_ai.installment_no} '
-                    f"({status_labels.get(_ai.status, '')}).",
-                    screen='fees',
-                    fee_record_id=_ai.fee_record_id,
-                    installment_id=_ai.id,
-                )
-
-        # Notify investors that new revenue was posted for their school —
-        # one push for the whole payment, not one per installment touched.
-        try:
-            from app.services.fcm_service import notify_investors
-            notify_investors(
-                school_id = inst.school_id,
-                title     = 'إيراد جديد',
-                body      = f'تم تسجيل إيراد جديد بقيمة {float(total_applied)}',
-                data      = {
-                    'type':       'investor_revenue',
-                    'route':      '/investor/revenues',
-                    'school_id':  str(inst.school_id),
-                    'amount':     str(float(total_applied)),
-                },
-            )
-        except Exception:
-            _log.exception('[fees] investor push failed for inst_id=%s', inst_id)
-
         if len(allocations) > 1:
-            _touched_nos = '، '.join(str(a['installment'].installment_no) for a in allocations)
+            _touched_nos = '، '.join(str(a['installment_no']) for a in allocations)
             message = (f'تم تسجيل دفعة بقيمة {total_applied}، وُزّعت على الأقساط: {_touched_nos}.')
         else:
-            _ai = allocations[0]['installment']
-            status_label = status_labels.get(_ai.status, '')
+            _a = allocations[0]
+            status_label = _PAY_STATUS_LABELS.get(_a['status'], '')
             message = (f'تم تسجيل دفعة {total_applied} ({status_label}). '
-                      f"رقم الإيصال: {_ai.receipt_no or '—'}")
+                      f"رقم الإيصال: {_a['receipt_no'] or '—'}")
 
-        receipt_url = url_for('fees.generate_receipt', inst_id=inst.id) if inst.receipt_no else None
+        receipt_url = (url_for('fees.generate_receipt', inst_id=_sel_inst_id, op=_op_ref)
+                       if _sel_receipt_no else None)
         return jsonify({
             'status':      'success',
             'message':     message,
@@ -1187,17 +1363,33 @@ def generate_receipt(inst_id):
     if not user_can_access_student(current_user, get_current_school(), _student):
         abort(403)
 
+    # Tie the receipt DIRECTLY to one payment operation via its exact op_ref
+    # (passed by the pay action and every reprint link). resolve_* sums the
+    # Revenue rows for that exact operation — a partial payment prints its own
+    # amount, a cascaded payment prints its full entered total, and two separate
+    # payments on the same installment resolve to two distinct operations — with
+    # no earliest/latest row guessing. A missing/foreign op_ref falls back
+    # safely (completing operation, then historical received_amount).
+    _op_ref = (request.args.get('op') or '').strip() or None
+    _actual_paid, _resolved_op = resolve_payment_amount_for_receipt(inst, _op_ref)
+
     school_settings = get_current_school() or SchoolSettings.get()
-    pdf_bytes = generate_fee_receipt(inst, school_settings, print_date=date.today())
-    
+    # Show the operation reference as the receipt number when resolved, so each
+    # distinct payment operation prints as a distinct, reproducible receipt;
+    # historical untagged payments keep the installment's own receipt number.
+    _receipt_label = _resolved_op or inst.receipt_no
+    pdf_bytes = generate_fee_receipt(inst, school_settings, print_date=date.today(),
+                                     actual_paid=_actual_paid,
+                                     receipt_no_override=_resolved_op)
+
     if not pdf_bytes:
         abort(500, "PDF generation failed")
-    
+
     from io import BytesIO
     buf = BytesIO(pdf_bytes)
     buf.seek(0)
-    
-    filename = f"receipt_{inst.receipt_no}.pdf"
+
+    filename = f"receipt_{_receipt_label}.pdf"
     return send_file(buf, as_attachment=False, download_name=filename, mimetype='application/pdf')
 
 

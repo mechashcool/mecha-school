@@ -38,7 +38,7 @@
         <tr>
           <td class="small text-muted">{{ r.date.strftime('%Y-%m-%d') }}</td>
           <td class="small">{{ r.category.name if r.category else '—' }}</td>
-          <td class="small">{{ r.description or '—' }}</td>
+          <td class="small">{{ r.display_description or '—' }}</td>
           <td class="text-start fw-semibold text-success">{{ "{:,.0f}".format(r.amount) }}</td>
         </tr>
         {% else %}

@@ -1257,6 +1257,17 @@ class Revenue(db.Model):
     academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id],
                                     backref=db.backref('revenues', lazy='dynamic'))
 
+    @property
+    def display_description(self):
+        """Human-facing description with the internal ``[TXN:...]`` payment-
+        operation tag removed. The stored ``description`` keeps the tag — it is
+        the persistent identifier the fees module uses to resolve a payment's
+        receipt (see ``resolve_payment_amount_for_receipt``) — so only display
+        surfaces (revenue lists, exports) use this property. Rows without a tag
+        (manual revenue, historical fee payments) are returned unchanged."""
+        import re
+        return re.sub(r'\s*\[TXN:[^\]]+\]', '', self.description or '').strip()
+
 
 class ExpenseCategory(db.Model):
     __tablename__ = 'expense_categories'

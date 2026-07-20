@@ -335,7 +335,7 @@ def export_financial(revenues, expenses, year: int) -> bytes | None:
     for i, r in enumerate(revenues, 1):
         ws1.cell(row=i+1, column=1, value=r.date.strftime('%Y-%m-%d'))
         ws1.cell(row=i+1, column=2, value=r.category.name)
-        ws1.cell(row=i+1, column=3, value=r.description or '')
+        ws1.cell(row=i+1, column=3, value=r.display_description or '')
         ws1.cell(row=i+1, column=4, value=float(r.amount))
     _autowidth(ws1)
 
