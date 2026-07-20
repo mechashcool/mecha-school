@@ -1297,6 +1297,31 @@ calcNet();
     btnSubmit.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>جارٍ الحفظ...';
   });
 
+  // Enter key: same as clicking Next / Submit for the current step — reuses
+  // the exact same handlers above, so no navigation or validation logic is
+  // duplicated. Only the Review (last) step's Enter reaches the real submit
+  // button, and only the existing `submitting` guard decides whether that
+  // save actually goes through, so it can never fire twice. Textareas, file
+  // inputs, checkboxes/radios, buttons, and links keep their own native
+  // Enter behavior and are left untouched.
+  form.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    if (e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+    const t = e.target;
+    const tag = t.tagName;
+    if (tag === 'TEXTAREA' || tag === 'BUTTON' || tag === 'A') return;
+    if (tag === 'INPUT') {
+      const type = (t.getAttribute('type') || 'text').toLowerCase();
+      if (['button', 'submit', 'reset', 'file', 'checkbox', 'radio', 'image'].includes(type)) return;
+    }
+    e.preventDefault();
+    if (current === steps.length - 1) {
+      if (!btnSubmit.disabled) btnSubmit.click();
+    } else {
+      btnNext.click();
+    }
+  });
+
   // Land on the step that the server flagged as invalid (or the first step).
   const errKey = progress.dataset.errorStep || 'student';
   let startIdx = steps.findIndex(s => s.dataset.stepKey === errKey);

@@ -166,6 +166,126 @@ def persist_fee_record(form, *, school, student_id, fee_type_id, academic_year_i
     return record
 
 
+def apply_installment_payment(inst, received, *, payment_method='cash',
+                              paid_date=None, notes=None, collected_by=None):
+    """Cap and apply a payment amount to ONE installment's fields.
+
+    Single source of truth for "never record more than the installment's
+    outstanding balance" and the resulting field/status/receipt updates.
+    Shared by the standalone `fees.pay_installment` route and the student-
+    registration wizard so a payment recorded from either flow is capped and
+    applied identically and can never diverge between the two. Performs no
+    DB-session work beyond mutating `inst`'s own attributes: it does not
+    create the matching Revenue record, does not acquire any row lock, and
+    does not commit — the caller owns locking, the Revenue entry, and the
+    transaction boundary appropriate to its own flow.
+
+    Returns (applied, remaining_before):
+      applied          — Decimal amount actually applied to `inst`, i.e.
+                          `received` capped at the installment's remaining
+                          balance (0 if nothing was applied).
+      remaining_before — Decimal outstanding balance before this call, so the
+                          caller can tell "already fully paid" (<= 0) apart
+                          from an ordinary partial/full payment.
+    """
+    remaining = Decimal(str(inst.amount)) - Decimal(str(inst.received_amount or 0))
+    if remaining <= 0 or received <= 0:
+        return Decimal('0'), remaining
+    if received > remaining:
+        received = remaining
+
+    inst.received_amount = Decimal(str(inst.received_amount or 0)) + received
+    inst.payment_method  = payment_method or 'cash'
+    if collected_by is not None:
+        inst.collected_by = collected_by
+    if notes:
+        inst.notes = notes
+    inst.paid_date = paid_date or date.today()
+    inst.recompute_status()
+    if Decimal(str(inst.received_amount or 0)) > 0 and not inst.receipt_no:
+        inst.receipt_no = generate_receipt_no()
+    return received, remaining
+
+
+def distribute_fee_payment(installments, start_installment_no, received, *,
+                           payment_method='cash', paid_date=None, notes=None,
+                           collected_by=None):
+    """Distribute ONE entered payment across an installment's outstanding
+    balance and, if it exceeds that, cascade the excess forward into the
+    following unpaid/partially-paid installments of the SAME fee record, in
+    ascending installment_no order — never altering any installment's
+    original scheduled amount or due date.
+
+    Single source of truth for "how much of an entered payment lands on
+    which installment", shared by every payment entry point in the system:
+    the standalone Fees and Installments page and the student profile page
+    (both via `fees.pay_installment`), and the student-registration
+    wizard's Fees step. Performs no DB queries, creates no Revenue rows, and
+    never commits — the caller owns fetching/locking `installments`, the
+    matching Revenue entries (one per installment actually touched, so
+    existing per-installment receipt/accounting behavior is unchanged), and
+    the transaction boundary appropriate to its own flow.
+
+    `installments` must be the pre-fetched (and, where the caller needs
+    concurrency safety, already row-locked) FeeInstallment rows of ONE fee
+    record; only those with `installment_no >= start_installment_no`
+    participate, in ascending order — payments never cascade backward into
+    earlier installments.
+
+    Raises FeeValidationError — with a message naming the maximum payable
+    amount, or stating the installment is already fully paid — if `received`
+    cannot be applied as requested. Nothing is mutated in that case, so the
+    caller can reject the payment before saving anything.
+
+    Returns a list of {'installment': FeeInstallment, 'applied': Decimal}
+    for every installment actually touched, in the order applied.
+    """
+    # The selected installment itself must still have an outstanding balance —
+    # checked explicitly (and separately from the cascade below) so a stale or
+    # tampered request naming an already-settled installment is rejected with
+    # a message about THAT installment, instead of silently starting the
+    # payment on a different, later installment the caller never selected.
+    start_inst = next((i for i in installments if i.installment_no == start_installment_no), None)
+    if start_inst is None:
+        raise FeeValidationError('القسط المحدد غير موجود.')
+    start_remaining = Decimal(str(start_inst.amount)) - Decimal(str(start_inst.received_amount or 0))
+    if start_remaining <= 0:
+        raise FeeValidationError('هذا القسط مسدّد بالكامل بالفعل.')
+
+    eligible = sorted(
+        (inst for inst in installments if inst.installment_no >= start_installment_no),
+        key=lambda i: i.installment_no,
+    )
+    outstanding = [
+        (inst, Decimal(str(inst.amount)) - Decimal(str(inst.received_amount or 0)))
+        for inst in eligible
+    ]
+    outstanding = [(inst, rem) for inst, rem in outstanding if rem > 0]
+
+    total_outstanding = sum((rem for _, rem in outstanding), Decimal('0'))
+    if received > total_outstanding:
+        raise FeeValidationError(
+            'المبلغ المدخل يتجاوز إجمالي المتبقي على هذا القسط والأقساط التالية له. '
+            f'الحد الأقصى الذي يمكن دفعه حالياً هو {total_outstanding}.'
+        )
+
+    allocations = []
+    leftover = received
+    for inst, remaining_balance in outstanding:
+        if leftover <= 0:
+            break
+        portion = min(remaining_balance, leftover)
+        applied, _ = apply_installment_payment(
+            inst, portion,
+            payment_method=payment_method, paid_date=paid_date,
+            notes=notes, collected_by=collected_by,
+        )
+        if applied > 0:
+            allocations.append({'installment': inst, 'applied': applied})
+            leftover -= applied
+    return allocations
+
+
 @fees_bp.route('/')
 @login_required
 @permission_required('manage_fees')
@@ -808,14 +928,24 @@ def bulk_create():
 @permission_required('record_payments')
 def pay_installment(inst_id):
     """
-    Record a (partial or full) payment against an installment.
+    Record a payment starting at ONE installment.
 
-    All mutations — installment fields, receipt number, and the matching Revenue
-    record — are written in a single atomic transaction. Either everything commits
-    or everything rolls back. There is no silent swallowing of Revenue failures.
+    If the entered amount exceeds that installment's own outstanding balance,
+    the excess automatically cascades into the following unpaid/partially-paid
+    installments of the same fee record, in order (see distribute_fee_payment).
+    If the amount exceeds the total outstanding across the selected installment
+    and everything after it, the whole payment is rejected up front with the
+    maximum amount currently payable — nothing is saved.
+
+    All mutations — every touched installment's fields and receipt number, and
+    one matching Revenue row per installment — are written in a single atomic
+    transaction. Either everything commits or everything rolls back. There is
+    no silent swallowing of Revenue failures.
 
     Form fields:
-      received_amount  — Decimal (required). May be less than inst.amount.
+      received_amount  — Decimal (required). May exceed the selected
+                          installment's own remaining balance; the excess is
+                          distributed to the installments after it.
       payment_method   — cash | transfer | cheque | card  (default cash)
       paid_date        — YYYY-MM-DD (optional, defaults to today)
       notes            — free text
@@ -908,107 +1038,121 @@ def pay_installment(inst_id):
             active_year = get_active_year(school.id) if school else None
             rev_academic_year_id = active_year.id if active_year else None
 
-        # ── Acquire row lock and recheck remaining (race-condition guard) ─────
-        # SELECT FOR UPDATE serializes concurrent payment attempts for this
-        # installment. populate_existing() refreshes inst's scalar attributes
-        # from the latest committed DB state so any payment already committed by
-        # a concurrent request is reflected before we compute remaining.
-        # The lock is held until the transaction commits below.
-        (
+        # ── Acquire row lock on the selected installment AND every installment
+        # after it in the same fee record (race-condition guard for the whole
+        # cascade, not just the one the user clicked). SELECT FOR UPDATE
+        # serializes concurrent payment attempts; populate_existing() refreshes
+        # each installment's scalar attributes from the latest committed DB
+        # state so any payment already committed by a concurrent request is
+        # reflected before distribution. The lock is held until commit below.
+        locked_installments = (
             db.session.query(FeeInstallment)
             .execution_options(include_all_years=True)
             .with_for_update()
-            .filter(FeeInstallment.id == inst_id)
+            .filter(FeeInstallment.fee_record_id == inst.fee_record_id,
+                    FeeInstallment.installment_no >= inst.installment_no)
             .populate_existing()
-            .one()
+            .all()
         )
 
-        remaining = Decimal(str(inst.amount)) - Decimal(str(inst.received_amount or 0))
-        if remaining <= 0:
-            return jsonify({'status': 'error',
-                            'message': 'هذا القسط مسدّد بالكامل بالفعل.'}), 400
-        if received > remaining:
-            received = remaining
+        # ── Distribute the entered amount: settle the selected installment,
+        # then cascade any excess into the following unpaid installments of
+        # this same fee record, in order. Raises FeeValidationError (with the
+        # maximum payable amount) if the entered amount exceeds what's
+        # currently outstanding — nothing is mutated in that case, so the
+        # request is rejected before anything is saved. The cap/mutate logic
+        # for each individual installment lives in apply_installment_payment(),
+        # the single source of truth shared with the student-registration
+        # wizard's fee step via distribute_fee_payment().
+        allocations = distribute_fee_payment(
+            locked_installments, inst.installment_no, received,
+            payment_method=request.form.get('payment_method', 'cash'),
+            paid_date=paid_date,
+            notes=request.form.get('notes', '').strip(),
+            collected_by=current_user.id,
+        )
 
         # ── Apply ALL DB mutations in ONE atomic transaction ──────────────────
-        # Installment fields, receipt number, and Revenue record are written
-        # together. If any part fails the entire operation rolls back — no
-        # partial state, no missing Revenue records.
-        inst.received_amount = Decimal(str(inst.received_amount or 0)) + received
-        inst.payment_method  = request.form.get('payment_method', 'cash')
-        inst.collected_by    = current_user.id
-        inst.notes           = request.form.get('notes', '').strip() or inst.notes
-        inst.paid_date       = paid_date
-        inst.recompute_status()
+        # Every touched installment's fields, its receipt number, and one
+        # matching Revenue row per installment are written together. If any
+        # part fails the entire operation rolls back — no partial state, no
+        # missing Revenue records.
+        for _alloc in allocations:
+            _ai, _aa = _alloc['installment'], _alloc['applied']
+            db.session.add(Revenue(
+                category_id      = fee_category.id,
+                school_id        = _ai.school_id,
+                academic_year_id = _ai.academic_year_id or rev_academic_year_id,
+                amount           = _aa,
+                description      = (
+                    f'دفعة رسوم للطالب {student_name}'
+                    f' - قسط #{_ai.installment_no}'
+                    + (f' - {_ai.receipt_no}' if _ai.receipt_no else '')
+                ),
+                date             = paid_date,
+                recorded_by      = current_user.id,
+            ))
+        db.session.commit()  # single commit — installments + revenue are atomic
 
-        # Assign a receipt number on the first payment against this installment.
-        if Decimal(str(inst.received_amount or 0)) > 0 and not inst.receipt_no:
-            inst.receipt_no = generate_receipt_no()
+        # ── Post-commit: audit log and FCM push, one per touched installment ──
+        # These run after the transaction is safe. None of this must ever roll
+        # back the committed payment — both have their own error handling.
+        status_labels = {'paid': 'مكتمل', 'partial': 'دفعة جزئية',
+                         'pending': 'قيد الانتظار', 'overdue': 'متأخر'}
+        total_applied = sum(a['applied'] for a in allocations)
+        for _alloc in allocations:
+            _ai, _aa = _alloc['installment'], _alloc['applied']
+            log_action('payment', 'fee_installment', _ai.id,
+                       details=f'received={_aa} method={_ai.payment_method} '
+                               f'status={_ai.status}')
+            if _student is not None:
+                _notify_fee_parents(
+                    _student.id,
+                    'تم تسجيل دفعة',
+                    f'تم تسجيل دفعة بقيمة {_aa} لقسط الرسوم رقم {_ai.installment_no} '
+                    f"({status_labels.get(_ai.status, '')}).",
+                    screen='fees',
+                    fee_record_id=_ai.fee_record_id,
+                    installment_id=_ai.id,
+                )
 
-        revenue = Revenue(
-            category_id      = fee_category.id,
-            school_id        = inst.school_id,
-            academic_year_id = rev_academic_year_id,
-            amount           = received,
-            description      = (
-                f'دفعة رسوم للطالب {student_name}'
-                f' - قسط #{inst.installment_no}'
-                + (f' - {inst.receipt_no}' if inst.receipt_no else '')
-            ),
-            date             = paid_date,
-            recorded_by      = current_user.id,
-        )
-        db.session.add(revenue)
-        db.session.commit()  # single commit — installment + revenue are atomic
-
-        # ── Post-commit: audit log and FCM push ───────────────────────────────
-        # These run after the transaction is safe. Neither must ever roll back
-        # the committed payment — both have their own error handling.
-        log_action('payment', 'fee_installment', inst.id,
-                   details=f'received={received} method={inst.payment_method} '
-                           f'status={inst.status}')
-
-        status_label = {'paid': 'مكتمل', 'partial': 'دفعة جزئية',
-                        'pending': 'قيد الانتظار', 'overdue': 'متأخر'}.get(inst.status, '')
-        receipt = inst.receipt_no or '—'
-
-        if _student is not None:
-            _notify_fee_parents(
-                _student.id,
-                'تم تسجيل دفعة',
-                f'تم تسجيل دفعة بقيمة {received} لقسط الرسوم رقم {inst.installment_no} '
-                f'({status_label}).',
-                screen='fees',
-                fee_record_id=inst.fee_record_id,
-                installment_id=inst.id,
-            )
-
-        # Notify investors that a new revenue entry was posted for their school.
-        # school_id comes from inst (server-side); amount from the local Decimal.
+        # Notify investors that new revenue was posted for their school —
+        # one push for the whole payment, not one per installment touched.
         try:
             from app.services.fcm_service import notify_investors
             notify_investors(
                 school_id = inst.school_id,
                 title     = 'إيراد جديد',
-                body      = f'تم تسجيل إيراد جديد بقيمة {float(received)}',
+                body      = f'تم تسجيل إيراد جديد بقيمة {float(total_applied)}',
                 data      = {
                     'type':       'investor_revenue',
                     'route':      '/investor/revenues',
                     'school_id':  str(inst.school_id),
-                    'revenue_id': str(revenue.id),
-                    'amount':     str(float(received)),
+                    'amount':     str(float(total_applied)),
                 },
             )
         except Exception:
             _log.exception('[fees] investor push failed for inst_id=%s', inst_id)
 
+        if len(allocations) > 1:
+            _touched_nos = '، '.join(str(a['installment'].installment_no) for a in allocations)
+            message = (f'تم تسجيل دفعة بقيمة {total_applied}، وُزّعت على الأقساط: {_touched_nos}.')
+        else:
+            _ai = allocations[0]['installment']
+            status_label = status_labels.get(_ai.status, '')
+            message = (f'تم تسجيل دفعة {total_applied} ({status_label}). '
+                      f"رقم الإيصال: {_ai.receipt_no or '—'}")
+
         receipt_url = url_for('fees.generate_receipt', inst_id=inst.id) if inst.receipt_no else None
         return jsonify({
             'status':      'success',
-            'message':     f'تم تسجيل دفعة {received} ({status_label}). رقم الإيصال: {receipt}',
+            'message':     message,
             'receipt_url': receipt_url,
         })
 
+    except FeeValidationError as _fee_exc:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(_fee_exc)}), 400
     except Exception as e:
         db.session.rollback()
         _log.exception('[fees] Payment processing error for inst_id=%s', inst_id)

@@ -236,9 +236,12 @@
       ' · <span class="text-danger">المتبقي: <b>' + parseFloat(remaining).toLocaleString() + '</b></span>';
 
     document.getElementById('rAmount').value = '';
-    document.getElementById('rAmount').max   = remaining;
+    // No hard `max` here: entering more than this installment's remaining is
+    // valid — the server settles this installment first, then automatically
+    // distributes the excess to the following unpaid installments in order.
     document.getElementById('rRemaining').innerText =
-      'الحد الأقصى: ' + parseFloat(remaining).toLocaleString();
+      'المتبقي على هذا القسط: ' + parseFloat(remaining).toLocaleString() +
+      ' — أي مبلغ زائد يُوزَّع تلقائياً على الأقساط التالية.';
 
     document.getElementById('rDate').value = new Date().toISOString().slice(0, 10);
 
