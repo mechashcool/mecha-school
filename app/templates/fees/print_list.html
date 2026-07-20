@@ -351,8 +351,9 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
     print-color-adjust: exact;
   }
 
-  /* Prevent a row from splitting across a page break */
-  table.fee-tbl tbody tr { page-break-inside: avoid; }
+  /* Keep each student record whole — never split/clip a row across a page
+     boundary; a record that cannot fit is moved entirely to the next page. */
+  table.fee-tbl tbody tr { page-break-inside: avoid; break-inside: avoid; }
   table.fee-tbl tbody tr:hover td { background: inherit !important; }
 
   /* Preserve badge colours */
@@ -437,7 +438,7 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
 ═══════════════════════════════════════════════════════ -->
 <div class="print-footer">
   <span>{{ (school.school_name_ar or school.school_name) if school else '' }}</span>
-  <span>نظام ميكا سكول — كشف الرسوم الدراسية</span>
+  <span>Core School — كشف الرسوم الدراسية</span>
   <span class="js-print-date-footer"></span>
 </div>
 
