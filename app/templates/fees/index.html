@@ -1,5 +1,5 @@
 {% extends "shared/base.html" %}
-{% from 'fees/_fees_table.html' import fees_table_body, fees_modal_and_js with context %}
+{% from 'fees/_fees_table.html' import fees_table_body, overdue_table_body, fees_modal_and_js with context %}
 {% block title %}الرسوم الدراسية{% endblock %}
 {% block page_title %}إدارة الرسوم الدراسية{% endblock %}
 
@@ -386,7 +386,11 @@
 </div>
 
 <div class="card">
+  {% if overdue_mode %}
+  {{ overdue_table_body(overdue_installments, show_student_col=True) }}
+  {% else %}
   {{ fees_table_body(fee_entries, show_student_col=True, installment_filter=installment_filter) }}
+  {% endif %}
 </div>
 
 {{ fees_modal_and_js() }}

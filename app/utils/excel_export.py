@@ -315,6 +315,62 @@ def export_fees(records) -> bytes | None:
     return buf.getvalue()
 
 
+def export_overdue_installments(installments) -> bytes | None:
+    """Export overdue installments — ONE row per overdue installment.
+
+    ``installments`` must already be scoped/ordered/filtered by the caller
+    (school + academic-year + building isolated). Each FeeInstallment is
+    expected to have its fee_record → student / fee_type / academic_year
+    eagerly loaded. The same student may legitimately appear on several rows,
+    one per overdue installment; rows are NOT grouped or de-duplicated.
+    """
+    wb = _wb()
+    if not wb:
+        return None
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    ws = wb.active
+    ws.title = 'الأقساط المتأخرة'
+    ws.sheet_view.rightToLeft = True
+
+    headers = ['#', 'كود الطالب', 'اسم الطالب', 'نوع الرسم', 'رقم القسط',
+               'مبلغ القسط', 'المستلم', 'المتبقي', 'تاريخ الاستحقاق', 'السنة الدراسية']
+    hs = _header_style()
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = hs['font']; cell.fill = hs['fill']; cell.alignment = hs['alignment']
+    ws.row_dimensions[1].height = 22
+
+    for i, inst in enumerate(installments, 1):
+        rec       = inst.fee_record
+        student   = rec.student if rec else None
+        amount    = float(inst.amount or 0)
+        received  = float(inst.received_amount or 0)
+        remaining = amount - received
+        row = [
+            i,
+            student.student_id if student else '',
+            student.full_name if student else '',
+            rec.fee_type.name if rec and rec.fee_type else '',
+            inst.installment_no,
+            amount,
+            received,
+            remaining,
+            inst.due_date.strftime('%Y-%m-%d') if inst.due_date else '',
+            rec.academic_year.name if rec and rec.academic_year else '',
+        ]
+        for col, val in enumerate(row, 1):
+            cell = ws.cell(row=i+1, column=col, value=val)
+            cell.alignment = Alignment(vertical='center')
+            if i % 2 == 0:
+                cell.fill = PatternFill('solid', fgColor='F0F4F8')
+
+    _autowidth(ws)
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 # ─── FINANCIAL SUMMARY ────────────────────────────────────────────────────────────
 
 def export_financial(revenues, expenses, year: int) -> bytes | None:

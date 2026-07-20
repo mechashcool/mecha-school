@@ -8,7 +8,7 @@ from flask_login import login_required, current_user
 from datetime import date, datetime as dt
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import joinedload, aliased
+from sqlalchemy.orm import joinedload
 
 from app.models import (db, FeeRecord, FeeInstallment, FeeType, Student, AcademicYear, SchoolSettings, Revenue, RevenueCategory, Section, Grade, School)
 from app.utils.decorators import (permission_required, get_current_school,
@@ -25,25 +25,63 @@ fees_bp = Blueprint('fees', __name__, template_folder='../../templates/fees')
 _log = logging.getLogger('mecha.fees')
 
 
-def _overdue_installment_exists():
-    """Correlated EXISTS: the FeeRecord has at least one *overdue* installment.
+def _overdue_installments_query(school, *, search='', fee_type_filter='all',
+                                installment_filter='all'):
+    """Query yielding ONE row per *overdue* FeeInstallment.
 
     Overdue = due_date strictly before today AND an outstanding balance remains
     (amount - received_amount > 0). This covers both completely unpaid and
     partially paid installments, and excludes fully paid ones. An installment
     due today is NOT overdue.
 
-    The FeeInstallment is aliased so the central ORM tenant-scope event applies
-    school_id/academic_year_id criteria to it automatically (include_aliases=True),
-    keeping the subquery school- and academic-year isolated without an explicit
-    filter here.
+    The installment is joined to its FeeRecord and Student so the shared
+    fee-type / student-search / installment-number filters and the building
+    scope apply identically to the record-level list. The same student appears
+    once per overdue installment (no grouping/merging).
+
+    School and academic-year isolation are enforced automatically by the central
+    ORM tenant-scope event: FeeInstallment and FeeRecord are school+year scoped
+    and Student is school scoped, so every joined table — including the eager-
+    loaded aliases — is constrained to the current school and view year. Building
+    scope is applied explicitly through the Student join.
     """
-    oi = aliased(FeeInstallment)
-    return db.session.query(oi.id).filter(
-        oi.fee_record_id == FeeRecord.id,
-        oi.due_date < date.today(),
-        (oi.amount - func.coalesce(oi.received_amount, 0)) > 0,
-    ).exists()
+    q = (
+        FeeInstallment.query
+        .join(FeeRecord, FeeInstallment.fee_record_id == FeeRecord.id)
+        .join(Student, FeeRecord.student_id == Student.id)
+        .options(
+            joinedload(FeeInstallment.fee_record).joinedload(FeeRecord.student),
+            joinedload(FeeInstallment.fee_record).joinedload(FeeRecord.fee_type),
+            joinedload(FeeInstallment.fee_record).joinedload(FeeRecord.academic_year),
+        )
+        .filter(FeeInstallment.due_date < date.today())
+        .filter(
+            (FeeInstallment.amount - func.coalesce(FeeInstallment.received_amount, 0)) > 0
+        )
+    )
+
+    if school:
+        q = q.filter(FeeRecord.school_id == school.id)
+
+    # Building scope — restricted users only see overdue installments of their
+    # buildings' students (filters on the joined Student.building_id).
+    q = apply_building_scope_to_fees(q, current_user, school)
+
+    if search:
+        q = q.filter(Student.full_name.ilike(f'%{search}%') |
+                     Student.student_id.ilike(f'%{search}%'))
+
+    if fee_type_filter != 'all':
+        q = q.filter(FeeRecord.fee_type_id == int(fee_type_filter))
+
+    if installment_filter != 'all':
+        q = q.filter(FeeInstallment.installment_no == int(installment_filter))
+
+    return q.order_by(
+        Student.full_name.asc(),
+        FeeInstallment.due_date.asc(),
+        FeeInstallment.installment_no.asc(),
+    )
 
 
 def _notify_fee_parents(student_id, title, body, screen, *, fee_record_id=None,
@@ -518,6 +556,36 @@ def index():
     school = get_current_school()
     year   = get_view_year(school.id) if school else None
 
+    fee_types = FeeType.query.all()
+    years_q   = AcademicYear.query
+    if school:
+        years_q = years_q.filter_by(school_id=school.id)
+    years = years_q.order_by(AcademicYear.start_date.desc()).all()
+
+    # ── "متأخر التسديد" — one visible row per overdue installment ──────────
+    # This mode intentionally does NOT group by fee record: a student with
+    # several overdue installments appears once per overdue installment, each
+    # row carrying that installment's own number/amount/received/remaining/
+    # due date. School, building and academic-year isolation are enforced by
+    # _overdue_installments_query (see its docstring).
+    if payment_status == 'overdue':
+        overdue_page = _overdue_installments_query(
+            school,
+            search=search,
+            fee_type_filter=fee_type_filter,
+            installment_filter=installment_filter,
+        ).paginate(page=page, per_page=20, error_out=False)
+        return render_template(
+            'fees/index.html',
+            records=overdue_page, fee_entries=[],
+            overdue_mode=True, overdue_installments=overdue_page.items,
+            fee_types=fee_types,
+            years=years, search=search,
+            fee_type_filter=fee_type_filter,
+            payment_status=payment_status,
+            installment_filter=installment_filter,
+        )
+
     query = FeeRecord.query.join(Student).outerjoin(
         total_paid_sub, FeeRecord.id == total_paid_sub.c.fee_record_id
     )
@@ -547,8 +615,6 @@ def index():
         query = query.filter(remaining_expr <= 0)
     elif payment_status == 'unpaid':
         query = query.filter(remaining_expr > 0)
-    elif payment_status == 'overdue':
-        query = query.filter(_overdue_installment_exists())
 
     records   = query.order_by(FeeRecord.created_at.desc())\
                      .paginate(page=page, per_page=20, error_out=False)
@@ -568,13 +634,9 @@ def index():
         _inst_map.setdefault(_i.fee_record_id, []).append(_i)
     fee_entries = [(r, _inst_map.get(r.id, [])) for r in records.items]
 
-    fee_types = FeeType.query.all()
-    years_q   = AcademicYear.query
-    if school:
-        years_q = years_q.filter_by(school_id=school.id)
-    years = years_q.order_by(AcademicYear.start_date.desc()).all()
     return render_template('fees/index.html',
                            records=records, fee_entries=fee_entries,
+                           overdue_mode=False, overdue_installments=[],
                            fee_types=fee_types,
                            years=years, search=search,
                            fee_type_filter=fee_type_filter,
@@ -1399,12 +1461,31 @@ def generate_receipt(inst_id):
 @permission_required('manage_fees')
 def export_excel():
     from flask import Response
-    from app.utils.excel_export import export_fees
+    from app.utils.excel_export import export_fees, export_overdue_installments
 
     search            = request.args.get('q', '')
     fee_type_filter   = request.args.get('fee_type', 'all')
     payment_status    = request.args.get('payment_status', 'all')
     installment_filter = request.args.get('installment', 'all')
+
+    # "متأخر التسديد" — export one row per overdue installment (no grouping),
+    # mirroring the on-screen overdue meaning. Same shared filters + isolation.
+    if payment_status == 'overdue':
+        overdue_insts = _overdue_installments_query(
+            get_current_school(),
+            search=search,
+            fee_type_filter=fee_type_filter,
+            installment_filter=installment_filter,
+        ).all()
+        data = export_overdue_installments(overdue_insts)
+        if not data:
+            flash('مكتبة Excel غير متاحة.', 'warning')
+            return redirect(url_for('fees.index', payment_status='overdue'))
+        return Response(
+            data,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            headers={'Content-Disposition': 'attachment; filename=fees_overdue.xlsx'}
+        )
 
     total_paid_sub = db.session.query(
         FeeInstallment.fee_record_id,
@@ -1434,8 +1515,6 @@ def export_excel():
         query = query.filter(remaining_expr <= 0)
     elif payment_status == 'unpaid':
         query = query.filter(remaining_expr > 0)
-    elif payment_status == 'overdue':
-        query = query.filter(_overdue_installment_exists())
 
     records = query.order_by(FeeRecord.created_at.desc()).all()
     data = export_fees(records)
@@ -1497,6 +1576,49 @@ def print_list():
     school = get_current_school()
     year   = get_view_year(school.id) if school else None
 
+    logo_url = None
+    if school and getattr(school, 'logo_path', None):
+        from app.utils.helpers import resolve_photo_url
+        logo_url = resolve_photo_url(school.logo_path)
+
+    fee_types     = FeeType.query.all()
+    fee_type_name = next(
+        (ft.name for ft in fee_types if str(ft.id) == fee_type_filter), None)
+
+    # "متأخر التسديد" — print one row per overdue installment (no grouping),
+    # mirroring the on-screen overdue meaning. Same shared filters + isolation.
+    if payment_status == 'overdue':
+        overdue_insts = _overdue_installments_query(
+            school,
+            search=search,
+            fee_type_filter=fee_type_filter,
+            installment_filter=installment_filter,
+        ).all()
+
+        grand_amount = sum(float(i.amount or 0) for i in overdue_insts)
+        grand_paid   = sum(float(i.received_amount or 0) for i in overdue_insts)
+        grand_rem    = grand_amount - grand_paid
+
+        return render_template(
+            'fees/print_list.html',
+            fee_entries=[],
+            overdue_mode=True,
+            overdue_installments=overdue_insts,
+            row_count=len(overdue_insts),
+            school=school,
+            year=year,
+            search=search,
+            fee_type_filter=fee_type_filter,
+            fee_type_name=fee_type_name,
+            payment_status=payment_status,
+            installment_filter=installment_filter,
+            grand_amount=grand_amount,
+            grand_paid=grand_paid,
+            grand_rem=grand_rem,
+            print_date=date.today(),
+            logo_url=logo_url,
+        )
+
     query = (
         FeeRecord.query
         .join(Student)
@@ -1528,8 +1650,6 @@ def print_list():
         query = query.filter(remaining_expr <= 0)
     elif payment_status == 'unpaid':
         query = query.filter(remaining_expr > 0)
-    elif payment_status == 'overdue':
-        query = query.filter(_overdue_installment_exists())
 
     records = query.order_by(FeeRecord.created_at.desc()).all()
 
@@ -1555,18 +1675,12 @@ def print_list():
     )
     grand_rem   = grand_total - grand_disc - grand_paid
 
-    fee_types     = FeeType.query.all()
-    fee_type_name = next(
-        (ft.name for ft in fee_types if str(ft.id) == fee_type_filter), None)
-
-    logo_url = None
-    if school and getattr(school, 'logo_path', None):
-        from app.utils.helpers import resolve_photo_url
-        logo_url = resolve_photo_url(school.logo_path)
-
     return render_template(
         'fees/print_list.html',
         fee_entries=fee_entries,
+        overdue_mode=False,
+        overdue_installments=[],
+        row_count=len(fee_entries),
         school=school,
         year=year,
         search=search,

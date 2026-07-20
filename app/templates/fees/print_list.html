@@ -438,7 +438,7 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
     {% elif payment_status == 'overdue' %}<span>الحالة: متأخر التسديد</span>{% endif %}
     {% if installment_filter != 'all' %}<span>القسط: {{ installment_filter }}</span>{% endif %}
     {% if search %}<span>بحث: {{ search }}</span>{% endif %}
-    <span>عدد السجلات: {{ fee_entries | length }}</span>
+    <span>عدد السجلات: {{ row_count }}</span>
     <span>تاريخ الطباعة: <span class="js-print-date"></span></span>
   </div>
 </div>
@@ -461,7 +461,7 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
     كشف الرسوم الدراسية
     {% if year %} — {{ year.name }}{% endif %}
   </span>
-  <span class="bar-meta">{{ fee_entries | length }} سجل</span>
+  <span class="bar-meta">{{ row_count }} سجل</span>
   <button class="btn-screen btn-print" onclick="window.print()">🖨 طباعة</button>
   <button class="btn-screen btn-close" onclick="window.close()">✕ إغلاق</button>
 </div>
@@ -489,7 +489,7 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
 
   <!-- Filter strip (hidden in print — shown in print header instead) -->
   <div class="filter-strip">
-    <span>السجلات: <strong>{{ fee_entries | length }}</strong></span>
+    <span>السجلات: <strong>{{ row_count }}</strong></span>
     {% if fee_type_name %}<span class="chip">نوع الرسم: {{ fee_type_name }}</span>{% endif %}
     {% if payment_status == 'paid'   %}<span class="chip">الحالة: مدفوع</span>
     {% elif payment_status == 'unpaid' %}<span class="chip">الحالة: غير مدفوع</span>
@@ -512,6 +512,52 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
         <col class="col-rem">
         <col class="col-year">
       </colgroup>
+      {% if overdue_mode %}
+      {# Overdue mode — one row per overdue installment; same student may repeat. #}
+      <thead>
+        <tr>
+          <th class="th-num col-idx">#</th>
+          <th class="col-name">الطالب</th>
+          <th class="col-type">نوع الرسم</th>
+          <th class="col-total th-center">رقم القسط</th>
+          <th class="col-net   td-net">مبلغ القسط</th>
+          <th class="col-paid  td-paid">المستلم</th>
+          <th class="col-rem">المتبقي</th>
+          <th class="col-disc th-center">تاريخ الاستحقاق</th>
+          <th class="col-year th-center">السنة الدراسية</th>
+        </tr>
+      </thead>
+      {% for inst in overdue_installments %}
+      {% set rec = inst.fee_record %}
+      {% set inst_received = inst.received_amount | float if inst.received_amount else 0 %}
+      {% set inst_remaining = (inst.amount | float) - inst_received %}
+      <tbody class="rec-group">
+        <tr{% if loop.index is even %} class="row-even"{% endif %}>
+          <td class="td-idx">{{ loop.index }}</td>
+          <td>
+            <div class="td-name">{{ rec.student.full_name if rec and rec.student else '—' }}</div>
+            <div class="td-code">{{ rec.student.student_id if rec and rec.student else '' }}</div>
+          </td>
+          <td>{{ rec.fee_type.name if rec and rec.fee_type else '—' }}</td>
+          <td class="td-year">القسط {{ inst.installment_no }}</td>
+          <td class="td-net">{{ '{:,.0f}'.format(inst.amount) }}</td>
+          <td class="td-paid">{{ '{:,.0f}'.format(inst_received) }}</td>
+          <td>
+            <span class="badge-due">{{ '{:,.0f}'.format(inst_remaining) }}</span>
+          </td>
+          <td class="td-year">{{ inst.due_date.strftime('%Y-%m-%d') if inst.due_date else '—' }}</td>
+          <td class="td-year">{{ rec.academic_year.name if rec and rec.academic_year else '—' }}</td>
+        </tr>
+      </tbody>
+      {% else %}
+      <tbody>
+        <tr class="empty-row">
+          <td colspan="9">لا توجد أقساط متأخرة السداد مطابقة للفلاتر المحددة</td>
+        </tr>
+      </tbody>
+      {% endfor %}
+
+      {% else %}
       <thead>
         <tr>
           <th class="th-num col-idx">#</th>
@@ -563,13 +609,40 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
         </tr>
       </tbody>
       {% endfor %}
+      {% endif %}
     </table>
   </div>
 
+  {% if overdue_mode %}
+  {% if overdue_installments %}
+  <!-- Overdue totals summary card — one entry per overdue installment -->
+  <div class="grand-totals">
+    <div class="gt-header">ملخص الأقساط المتأخرة — {{ row_count }} قسط</div>
+    <div class="gt-grid">
+      <div class="gt-cell">
+        <label>عدد الأقساط المتأخرة</label>
+        <div class="val">{{ row_count }}</div>
+      </div>
+      <div class="gt-cell">
+        <label>إجمالي مبالغ الأقساط</label>
+        <div class="val">{{ '{:,.0f}'.format(grand_amount) }}</div>
+      </div>
+      <div class="gt-cell">
+        <label>إجمالي المستلم</label>
+        <div class="val v-paid">{{ '{:,.0f}'.format(grand_paid) }}</div>
+      </div>
+      <div class="gt-cell">
+        <label>إجمالي المتبقي المتأخر</label>
+        <div class="val v-rem">{{ '{:,.0f}'.format(grand_rem) }}</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+  {% else %}
   {% if fee_entries %}
   <!-- Grand totals summary card — appears once at the very end of the report -->
   <div class="grand-totals">
-    <div class="gt-header">الملخص المالي الكلي — {{ fee_entries | length }} سجل</div>
+    <div class="gt-header">الملخص المالي الكلي — {{ row_count }} سجل</div>
     <div class="gt-grid">
       <div class="gt-cell">
         <label>إجمالي الرسوم</label>
@@ -591,6 +664,7 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
       </div>
     </div>
   </div>
+  {% endif %}
   {% endif %}
 
 </div><!-- /.screen-card -->

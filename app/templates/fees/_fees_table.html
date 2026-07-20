@@ -141,6 +141,87 @@
 {% endmacro %}
 
 
+{% macro overdue_table_body(overdue_installments, show_student_col=True) %}
+{#
+  Overdue mode — ONE visible row per overdue installment. The same student may
+  appear on several rows (one per overdue installment); rows are never grouped
+  or merged. Each row carries that installment's own number / amount / received
+  / remaining / due date / academic year, plus its pay + print actions.
+  Reuses openPayModal() and printReceipt() from fees_modal_and_js().
+#}
+{% set _has_actions = current_user.has_permission('record_payments') %}
+<div class="table-wrapper">
+  <table class="table table-hover">
+    <thead>
+      <tr>
+        {% if show_student_col %}<th>الطالب</th>{% endif %}
+        <th>نوع الرسم</th>
+        <th>القسط</th>
+        <th>مبلغ القسط</th>
+        <th>المستلم</th>
+        <th>المتبقي</th>
+        <th>الاستحقاق</th>
+        <th>العام الدراسي</th>
+        {% if _has_actions %}<th>الإجراءات</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for inst in overdue_installments %}
+      {% set rec = inst.fee_record %}
+      {% set student = rec.student if rec else None %}
+      {% set inst_received  = inst.received_amount|float if inst.received_amount else 0 %}
+      {% set inst_remaining = (inst.amount|float) - inst_received %}
+      <tr>
+        {% if show_student_col %}
+        <td>
+          <div class="fw-600">{{ student.full_name if student else '—' }}</div>
+          <div style="font-size:11.5px;color:#9aabb8">{{ student.student_id if student else '' }}</div>
+        </td>
+        {% endif %}
+        <td>{{ rec.fee_type.name if rec and rec.fee_type else '—' }}</td>
+        <td>القسط {{ inst.installment_no }}</td>
+        <td class="fw-600">{{ '{:,.0f}'.format(inst.amount) }}</td>
+        <td class="text-success">{{ '{:,.0f}'.format(inst_received) }}</td>
+        <td>
+          <span class="badge-status badge-overdue">{{ '{:,.0f}'.format(inst_remaining) }}</span>
+        </td>
+        <td style="font-size:12.5px">{{ inst.due_date.strftime('%Y-%m-%d') }}</td>
+        <td style="font-size:12.5px">{{ rec.academic_year.name if rec and rec.academic_year else '—' }}</td>
+        {% if _has_actions %}
+        <td>
+          {% if not is_historical_year %}
+          <button type="button" class="btn btn-sm btn-success"
+                  onclick="openPayModal({{ inst.id }}, '{{ (student.full_name if student else '')|e }}',
+                                        {{ inst.amount|float }}, {{ inst_received }},
+                                        {{ inst.installment_no }})">
+            <i class="bi bi-cash-stack me-1"></i>دفع
+          </button>
+          {% else %}
+          <span class="text-muted" style="font-size:12px">مؤرشف</span>
+          {% endif %}
+          {% if inst.receipt_no %}
+          <button type="button" class="btn btn-sm btn-outline-secondary"
+                  onclick="printReceipt({{ inst.id }})">
+            <i class="bi bi-printer me-1"></i>طباعة
+          </button>
+          {% endif %}
+        </td>
+        {% endif %}
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="{{ 9 if show_student_col else 8 }}" class="text-center text-muted py-5">
+          <i class="bi bi-check2-circle" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+          لا توجد أقساط متأخرة السداد مطابقة للفلاتر المحددة
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endmacro %}
+
+
 {% macro fees_modal_and_js() %}
 {# Pay modal — rendered once per page outside any card wrapper #}
 <div class="modal fade" id="payModal" tabindex="-1" aria-hidden="true">
