@@ -433,12 +433,14 @@ def resolve_payment_amount_for_receipt(inst, op_ref=None):
          installment's school), then sum all rows tagged with that op_ref.
          A foreign or non-matching op_ref is ignored and resolution falls
          through — it can never surface another school's data.
-      2. ``op_ref`` absent (a bare installment link, e.g. the reprint button
-         shown once an installment is fully settled): resolve the operation
-         that COMPLETED this installment — the most recent tagged Revenue row
-         for it — and sum by THAT exact op_ref. Recency only decides which
-         operation the single reprint button represents; the amount is still
-         summed by an exact op_ref, never taken from one row chosen by recency.
+      2. ``op_ref`` absent (a bare installment link — the per-row Print button
+         in the Fees and Installments table): resolve the operation that
+         COMPLETED this installment — the most recent tagged Revenue row for
+         it — then return ONLY this installment's own Revenue amount under
+         that op_ref, never the operation's other installments. A payment
+         that cascaded across several installments still prints each row's
+         own credited share here; the shared full-operation total remains
+         available only through the explicit ``op_ref`` path above.
       3. No tagged Revenue at all (historical payments predating the tag): the
          preserved legacy fallback — the latest Revenue row embedding this
          installment's receipt_no, else the installment's stored
@@ -483,7 +485,9 @@ def resolve_payment_amount_for_receipt(inst, op_ref=None):
     if latest_tagged is not None:
         m = _PAYMENT_TXN_RE.search(latest_tagged.description or '')
         if m:
-            return _sum_by_op(m.group(1)), m.group(1)
+            # This installment's own credited share of that operation ONLY —
+            # never the operation's other installments (no cascade total here).
+            return Decimal(str(latest_tagged.amount)), m.group(1)
         return Decimal(str(latest_tagged.amount)), None
 
     # 3) Historical untagged fallback (no op_ref exists for these rows).
