@@ -158,7 +158,7 @@ table.fee-tbl tbody td {
   vertical-align: middle;
   font-size: 13px;
 }
-table.fee-tbl tbody tr:nth-child(even) td { background: #f5f8fd; }
+table.fee-tbl tbody tr.row-even td { background: #f5f8fd; }
 table.fee-tbl tbody tr:hover td { background: #eef4ff; }
 
 /* Cell type helpers */
@@ -345,15 +345,20 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
     background: #fff !important;
   }
 
-  table.fee-tbl tbody tr:nth-child(even) td {
+  table.fee-tbl tbody tr.row-even td {
     background: #f5f7fa !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
 
-  /* Keep each student record whole — never split/clip a row across a page
-     boundary; a record that cannot fit is moved entirely to the next page. */
-  table.fee-tbl tbody tr { page-break-inside: avoid; break-inside: avoid; }
+  /* Keep each student record whole — never split/clip a record across a page
+     boundary; a record that cannot fit is moved entirely to the next page.
+     Chrome does not reliably honor break-inside on a bare <tr> (especially
+     with border-collapse), so each record is its own <tbody> row group and the
+     break-avoid is applied to that group — which Chrome honors reliably. The
+     <tr> rule is kept as a defensive fallback for other engines. */
+  table.fee-tbl tbody.rec-group { page-break-inside: avoid; break-inside: avoid; }
+  table.fee-tbl tbody tr        { page-break-inside: avoid; break-inside: avoid; }
   table.fee-tbl tbody tr:hover td { background: inherit !important; }
 
   /* Preserve badge colours */
@@ -514,13 +519,15 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
           <th class="col-year th-center">السنة الدراسية</th>
         </tr>
       </thead>
-      <tbody>
-        {% for rec, insts in fee_entries %}
-        {% set paid_ns = namespace(v=0) %}
-        {% for i in insts %}{% set paid_ns.v = paid_ns.v + (i.received_amount | float) %}{% endfor %}
-        {% set net = (rec.total_amount | float) - (rec.discount | float if rec.discount else 0) %}
-        {% set rem = net - paid_ns.v %}
-        <tr>
+      {% for rec, insts in fee_entries %}
+      {% set paid_ns = namespace(v=0) %}
+      {% for i in insts %}{% set paid_ns.v = paid_ns.v + (i.received_amount | float) %}{% endfor %}
+      {% set net = (rec.total_amount | float) - (rec.discount | float if rec.discount else 0) %}
+      {% set rem = net - paid_ns.v %}
+      {# Each student record is its own <tbody> row group so Chrome print keeps
+         it whole and moves it entirely to the next page when it will not fit. #}
+      <tbody class="rec-group">
+        <tr{% if loop.index is even %} class="row-even"{% endif %}>
           <td class="td-idx">{{ loop.index }}</td>
           <td>
             <div class="td-name">{{ rec.student.full_name }}</div>
@@ -542,12 +549,14 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
           </td>
           <td class="td-year">{{ rec.academic_year.name if rec.academic_year else '—' }}</td>
         </tr>
-        {% else %}
+      </tbody>
+      {% else %}
+      <tbody>
         <tr class="empty-row">
           <td colspan="9">لا توجد سجلات رسوم مطابقة للفلاتر المحددة</td>
         </tr>
-        {% endfor %}
       </tbody>
+      {% endfor %}
     </table>
   </div>
 
