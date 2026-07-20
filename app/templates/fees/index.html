@@ -370,6 +370,7 @@
           <option value="all" {% if payment_status == 'all' %}selected{% endif %}>الكل</option>
           <option value="paid" {% if payment_status == 'paid' %}selected{% endif %}>مدفوع</option>
           <option value="unpaid" {% if payment_status == 'unpaid' %}selected{% endif %}>غير مدفوع</option>
+          <option value="overdue" {% if payment_status == 'overdue' %}selected{% endif %}>متأخر التسديد</option>
         </select>
       </div>
       <div class="col-md-3">

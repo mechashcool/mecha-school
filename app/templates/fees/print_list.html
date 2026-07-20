@@ -434,7 +434,8 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
     {% if year %}<span>العام الدراسي: {{ year.name }}</span>{% endif %}
     {% if fee_type_name %}<span>نوع الرسم: {{ fee_type_name }}</span>{% endif %}
     {% if payment_status == 'paid' %}<span>الحالة: مدفوع</span>
-    {% elif payment_status == 'unpaid' %}<span>الحالة: غير مدفوع</span>{% endif %}
+    {% elif payment_status == 'unpaid' %}<span>الحالة: غير مدفوع</span>
+    {% elif payment_status == 'overdue' %}<span>الحالة: متأخر التسديد</span>{% endif %}
     {% if installment_filter != 'all' %}<span>القسط: {{ installment_filter }}</span>{% endif %}
     {% if search %}<span>بحث: {{ search }}</span>{% endif %}
     <span>عدد السجلات: {{ fee_entries | length }}</span>
@@ -491,7 +492,8 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
     <span>السجلات: <strong>{{ fee_entries | length }}</strong></span>
     {% if fee_type_name %}<span class="chip">نوع الرسم: {{ fee_type_name }}</span>{% endif %}
     {% if payment_status == 'paid'   %}<span class="chip">الحالة: مدفوع</span>
-    {% elif payment_status == 'unpaid' %}<span class="chip">الحالة: غير مدفوع</span>{% endif %}
+    {% elif payment_status == 'unpaid' %}<span class="chip">الحالة: غير مدفوع</span>
+    {% elif payment_status == 'overdue' %}<span class="chip">الحالة: متأخر التسديد</span>{% endif %}
     {% if installment_filter != 'all' %}<span class="chip">القسط رقم: {{ installment_filter }}</span>{% endif %}
     {% if search %}<span class="chip">بحث: {{ search }}</span>{% endif %}
   </div>

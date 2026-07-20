@@ -8,7 +8,7 @@ from flask_login import login_required, current_user
 from datetime import date, datetime as dt
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, aliased
 
 from app.models import (db, FeeRecord, FeeInstallment, FeeType, Student, AcademicYear, SchoolSettings, Revenue, RevenueCategory, Section, Grade, School)
 from app.utils.decorators import (permission_required, get_current_school,
@@ -23,6 +23,27 @@ from app.utils.buildings import (
 
 fees_bp = Blueprint('fees', __name__, template_folder='../../templates/fees')
 _log = logging.getLogger('mecha.fees')
+
+
+def _overdue_installment_exists():
+    """Correlated EXISTS: the FeeRecord has at least one *overdue* installment.
+
+    Overdue = due_date strictly before today AND an outstanding balance remains
+    (amount - received_amount > 0). This covers both completely unpaid and
+    partially paid installments, and excludes fully paid ones. An installment
+    due today is NOT overdue.
+
+    The FeeInstallment is aliased so the central ORM tenant-scope event applies
+    school_id/academic_year_id criteria to it automatically (include_aliases=True),
+    keeping the subquery school- and academic-year isolated without an explicit
+    filter here.
+    """
+    oi = aliased(FeeInstallment)
+    return db.session.query(oi.id).filter(
+        oi.fee_record_id == FeeRecord.id,
+        oi.due_date < date.today(),
+        (oi.amount - func.coalesce(oi.received_amount, 0)) > 0,
+    ).exists()
 
 
 def _notify_fee_parents(student_id, title, body, screen, *, fee_record_id=None,
@@ -526,7 +547,9 @@ def index():
         query = query.filter(remaining_expr <= 0)
     elif payment_status == 'unpaid':
         query = query.filter(remaining_expr > 0)
-    
+    elif payment_status == 'overdue':
+        query = query.filter(_overdue_installment_exists())
+
     records   = query.order_by(FeeRecord.created_at.desc())\
                      .paginate(page=page, per_page=20, error_out=False)
 
@@ -1411,6 +1434,8 @@ def export_excel():
         query = query.filter(remaining_expr <= 0)
     elif payment_status == 'unpaid':
         query = query.filter(remaining_expr > 0)
+    elif payment_status == 'overdue':
+        query = query.filter(_overdue_installment_exists())
 
     records = query.order_by(FeeRecord.created_at.desc()).all()
     data = export_fees(records)
@@ -1503,6 +1528,8 @@ def print_list():
         query = query.filter(remaining_expr <= 0)
     elif payment_status == 'unpaid':
         query = query.filter(remaining_expr > 0)
+    elif payment_status == 'overdue':
+        query = query.filter(_overdue_installment_exists())
 
     records = query.order_by(FeeRecord.created_at.desc()).all()
 
