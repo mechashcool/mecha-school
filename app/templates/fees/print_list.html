@@ -264,7 +264,11 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
     text-align: center;
     border-bottom: 3px double #1a3a5c;
     padding-bottom: 10pt;
-    margin-bottom: 14pt;
+    /* Gap below the header on page 1 only (this block renders once, at the top
+       of the flow; later pages show only the repeating <thead>). Tightened to
+       lift the page-1 table into the empty space — kept under one row height so
+       page-1 pagination is unchanged (record 8 still moves whole to page 2). */
+    margin-bottom: 6pt;
   }
   .print-header .ph-logo {
     width: 56pt;
