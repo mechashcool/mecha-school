@@ -132,9 +132,11 @@ def dashboard():
         present = sum(1 for r in atts if r.status == 'present')
         total   = len(atts) or 1
 
-        # Fees
+        # Fees — active (non-cancelled) only. A cancelled fee is preserved as
+        # history but is no longer a current obligation, so it must not inflate
+        # the parent's total / paid / due figures.
         fee_total = fee_paid = 0.0
-        for rec in s.fee_records:
+        for rec in s.fee_records.filter(FeeRecord.cancelled_at.is_(None)):
             fee_total += float(rec.net_amount)
             fee_paid  += float(rec.total_paid)
 
@@ -190,7 +192,9 @@ def child_overview(student_id):
         if att_stats['total'] else 0
     )
 
-    fee_records = list(s.fee_records)
+    # Active (non-cancelled) fees only — cancelled fees are historical and must
+    # not appear as current obligations in the parent portal.
+    fee_records = list(s.fee_records.filter(FeeRecord.cancelled_at.is_(None)))
     results = (ExamResult.query
                .filter_by(student_id=s.id)
                .order_by(ExamResult.id.desc()).limit(30).all())

@@ -1,0 +1,257 @@
+{% extends "shared/base.html" %}
+{% block title %}تفاصيل عملية {{ type_label }}{% endblock %}
+{% block page_title %}تفاصيل العملية{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">
+      {% if event.event_type == 'fee_cancellation' %}
+      <i class="bi bi-x-octagon text-danger me-1"></i>
+      {% else %}
+      <i class="bi bi-arrow-counterclockwise text-warning me-1"></i>
+      {% endif %}
+      {{ type_label }}
+    </h1>
+    <p class="page-subtitle">
+      عرض تاريخي للقراءة فقط — لا يمكن التعديل أو الحذف أو إعادة التنفيذ.
+    </p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('fees.refunds_history') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>رجوع للسجل
+    </a>
+    {% if current_user.has_permission('view_students') %}
+    <a href="{{ url_for('students.view', student_id=event.student_id) }}" class="btn btn-outline-primary">
+      <i class="bi bi-person me-1"></i>ملف الطالب
+    </a>
+    {% endif %}
+    {% if current_user.has_permission('manage_fees') %}
+    <a href="{{ url_for('fees.student_statement', student_id=event.student_id) }}"
+       class="btn btn-outline-primary" target="_blank">
+      <i class="bi bi-file-earmark-text me-1"></i>الكشف المالي
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ── Operation summary ───────────────────────────────────────────────────── -->
+<div class="card mb-4">
+  <div class="card-header">
+    <i class="bi bi-info-circle text-accent me-1"></i>معلومات العملية
+  </div>
+  <div class="card-body">
+    <div class="row g-3">
+      <div class="col-md-3">
+        <div class="text-muted" style="font-size:12px">نوع العملية</div>
+        <div class="fw-600">
+          {{ type_label }}
+          {% if is_legacy %}
+          <span class="badge bg-secondary" style="font-size:10px"
+                title="تم التعرّف على الدفعة عبر رقم الإيصال (دفعة قديمة قبل مرجع العملية)">قديمة</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="text-muted" style="font-size:12px">الحالة الحالية</div>
+        <div class="fw-600">
+          {% if status_code == 'cancelled' %}
+          <span class="badge-status badge-overdue">{{ status_label }}</span>
+          {% elif status_code == 'repaid' %}
+          <span class="badge-status badge-paid">{{ status_label }}</span>
+          {% else %}
+          <span class="badge-status badge-partial">{{ status_label }}</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="text-muted" style="font-size:12px">المبلغ المُزال من الإيراد النشط</div>
+        <div class="fw-600 text-danger">{{ '{:,.0f}'.format(income_removed) }}</div>
+      </div>
+      <div class="col-md-3">
+        <div class="text-muted" style="font-size:12px">مرجع سجل العملية</div>
+        <div class="fw-600"><code>REF-EVT-{{ event.id }}</code></div>
+      </div>
+
+      <div class="col-md-3">
+        <div class="text-muted" style="font-size:12px">الطالب</div>
+        <div class="fw-600">{{ event.student.full_name if event.student else '—' }}</div>
+        <div class="text-muted" style="font-size:11.5px">{{ event.student.student_id if event.student else '' }}</div>
+      </div>
+      <div class="col-md-3">
+        <div class="text-muted" style="font-size:12px">نوع الرسم</div>
+        <div class="fw-600">{{ event.fee_record.fee_type.name if event.fee_record and event.fee_record.fee_type else '—' }}</div>
+      </div>
+      <div class="col-md-3">
+        <div class="text-muted" style="font-size:12px">السنة الدراسية</div>
+        <div class="fw-600">{{ event.academic_year.name if event.academic_year else '—' }}</div>
+      </div>
+      <div class="col-md-3">
+        <div class="text-muted" style="font-size:12px">مرجع عملية الدفع الأصلية</div>
+        <div class="fw-600">
+          {% if event.op_refs %}<code style="font-size:11px">{{ event.op_refs }}</code>
+          {% else %}<span class="text-muted">— (دفعة قديمة مرتبطة برقم الإيصال)</span>{% endif %}
+        </div>
+      </div>
+
+      <div class="col-md-3">
+        <div class="text-muted" style="font-size:12px">نفّذ العملية</div>
+        <div class="fw-600">{{ event.performer.full_name if event.performer else '—' }}</div>
+      </div>
+      <div class="col-md-3">
+        <div class="text-muted" style="font-size:12px">تاريخ ووقت التنفيذ</div>
+        <div class="fw-600">{{ event.created_at.strftime('%Y-%m-%d %H:%M') if event.created_at else '—' }}</div>
+      </div>
+      <div class="col-md-3">
+        <div class="text-muted" style="font-size:12px">تاريخ الدفعة الأصلية</div>
+        <div class="fw-600">{{ orig_date.strftime('%Y-%m-%d') if orig_date else '—' }}</div>
+      </div>
+      <div class="col-md-3">
+        <div class="text-muted" style="font-size:12px">محصِّل الدفعة الأصلية</div>
+        <div class="fw-600">{{ orig_collector.full_name if orig_collector else '—' }}</div>
+      </div>
+    </div>
+
+    <div class="alert alert-light border mt-3 mb-0">
+      <div class="text-muted" style="font-size:12px">السبب الكامل المُدخل</div>
+      <div style="white-space:pre-wrap">{{ event.reason }}</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Fee cancellation info (when applicable) ─────────────────────────────── -->
+{% if event.event_type == 'fee_cancellation' and event.fee_record %}
+{% set rec = event.fee_record %}
+<div class="card mb-4">
+  <div class="card-header">
+    <i class="bi bi-x-octagon text-danger me-1"></i>معلومات إلغاء الرسم
+  </div>
+  <div class="card-body">
+    <div class="row g-3">
+      <div class="col-md-3">
+        <div class="text-muted" style="font-size:12px">المبلغ الإجمالي</div>
+        <div class="fw-600">{{ '{:,.0f}'.format(rec.total_amount or 0) }}</div>
+      </div>
+      <div class="col-md-3">
+        <div class="text-muted" style="font-size:12px">الخصم</div>
+        <div class="fw-600">{{ '{:,.0f}'.format(rec.discount or 0) }}</div>
+      </div>
+      <div class="col-md-3">
+        <div class="text-muted" style="font-size:12px">الصافي</div>
+        <div class="fw-600">{{ '{:,.0f}'.format(rec.net_amount) }}</div>
+      </div>
+      <div class="col-md-3">
+        <div class="text-muted" style="font-size:12px">تاريخ الإلغاء</div>
+        <div class="fw-600">{{ rec.cancelled_at.strftime('%Y-%m-%d %H:%M') if rec.cancelled_at else '—' }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Affected installments (before / after the operation) ────────────────── -->
+<div class="card mb-4">
+  <div class="card-header">
+    <i class="bi bi-list-ol text-accent me-1"></i>الأقساط المتأثرة والأرصدة قبل/بعد العملية
+  </div>
+  <div class="table-wrapper">
+    <table class="table table-sm mb-0">
+      <thead>
+        <tr>
+          <th>القسط</th>
+          <th>مبلغ القسط</th>
+          <th>المبلغ المعكوس</th>
+          <th>المستلم قبل</th>
+          <th>المستلم بعد</th>
+          <th>المتبقي قبل</th>
+          <th>المتبقي بعد</th>
+          <th>الإيصال</th>
+          <th>الحالة الحالية</th>
+          <th>المستلم حالياً</th>
+          {% if current_user.has_permission('record_payments') %}
+          <th>الإيصال التاريخي</th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in inst_rows %}
+        {% set inst = r.inst %}
+        <tr>
+          <td>القسط {{ inst.installment_no }}</td>
+          <td>{{ '{:,.0f}'.format(inst.amount or 0) }}</td>
+          <td class="text-danger fw-600">{{ '{:,.0f}'.format(r.reversed) }}</td>
+          <td>{{ '{:,.0f}'.format(r.before_received) }}</td>
+          <td>{{ '{:,.0f}'.format(r.after_received) }}</td>
+          <td>{{ '{:,.0f}'.format(r.before_remaining) }}</td>
+          <td>{{ '{:,.0f}'.format(r.after_remaining) }}</td>
+          <td><code style="font-size:11px">{{ inst.receipt_no or '—' }}</code></td>
+          <td>
+            <span class="badge-status badge-{{ inst.status }}">
+              {% if inst.status == 'cancelled' %}ملغى
+              {% elif inst.status == 'paid' %}مدفوع
+              {% elif inst.status == 'partial' %}جزئي
+              {% elif inst.status == 'overdue' %}متأخر
+              {% else %}معلق{% endif %}
+            </span>
+          </td>
+          <td>{{ '{:,.0f}'.format(r.current_received) }}</td>
+          {% if current_user.has_permission('record_payments') %}
+          <td>
+            {% if inst.receipt_no %}
+            <a class="btn btn-sm btn-outline-secondary"
+               href="{{ url_for('fees.generate_receipt', inst_id=inst.id, op=r.op_ref) if r.op_ref else url_for('fees.generate_receipt', inst_id=inst.id) }}"
+               target="_blank" title="عرض الإيصال التاريخي">
+              <i class="bi bi-printer"></i>
+            </a>
+            {% else %}—{% endif %}
+          </td>
+          {% endif %}
+        </tr>
+        {% else %}
+        <tr><td colspan="11" class="text-center text-muted py-4">لا توجد أقساط متأثرة.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Reversed Revenue allocations ───────────────────────────────────────── -->
+<div class="card mb-4">
+  <div class="card-header d-flex align-items-center justify-content-between">
+    <span><i class="bi bi-cash-stack text-accent me-1"></i>سجلات الإيراد التي تم عكسها (مُعلَّمة كمسترجعة)</span>
+    <span class="text-muted" style="font-size:12.5px">
+      إجمالي المُزال: <strong class="text-danger">{{ '{:,.0f}'.format(income_removed) }}</strong>
+    </span>
+  </div>
+  <div class="table-wrapper">
+    <table class="table table-sm mb-0">
+      <thead>
+        <tr>
+          <th>الوصف</th>
+          <th>المبلغ</th>
+          <th>تاريخ الإيراد</th>
+          <th>مرجع العملية</th>
+          <th>محصِّل</th>
+          <th>تاريخ العكس</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rr in rev_rows %}
+        <tr>
+          <td style="font-size:12.5px">{{ rr.display }}</td>
+          <td class="text-danger fw-600">{{ '{:,.0f}'.format(rr.rev.amount or 0) }}</td>
+          <td style="white-space:nowrap">{{ rr.rev.date.strftime('%Y-%m-%d') if rr.rev.date else '—' }}</td>
+          <td>{% if rr.op_ref %}<code style="font-size:11px">{{ rr.op_ref }}</code>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+          <td class="text-muted" style="font-size:12.5px">{{ rr.rev.recorder.full_name if rr.rev.recorder else '—' }}</td>
+          <td style="white-space:nowrap">{{ rr.rev.refunded_at.strftime('%Y-%m-%d %H:%M') if rr.rev.refunded_at else '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="text-center text-muted py-4">
+          لا توجد سجلات إيراد مرتبطة بهذه العملية (لم يكن هناك مبلغ مدفوع نشط عند التنفيذ).
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

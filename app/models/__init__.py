@@ -1116,9 +1116,20 @@ class FeeRecord(db.Model):
                                     backref=db.backref('fee_records', lazy='dynamic'))
     canceller     = db.relationship('User', foreign_keys=[cancelled_by])
 
+    # Uniqueness is enforced ONLY across ACTIVE (non-cancelled) fees: a student
+    # may hold at most one non-cancelled fee of a given type per academic year,
+    # but any number of previously cancelled fees may coexist as history so the
+    # same fee can be re-created after cancellation. Implemented as a PARTIAL
+    # unique index (``cancelled_at IS NULL``) rather than a plain unique
+    # constraint, which would forbid a replacement fee alongside a cancelled one.
     __table_args__ = (
-        db.UniqueConstraint('student_id', 'fee_type_id', 'academic_year_id',
-                            name='uq_fee_record_student_type_year'),
+        db.Index(
+            'uq_fee_record_active_student_type_year',
+            'student_id', 'fee_type_id', 'academic_year_id',
+            unique=True,
+            postgresql_where=db.text('cancelled_at IS NULL'),
+            sqlite_where=db.text('cancelled_at IS NULL'),
+        ),
     )
 
     @property

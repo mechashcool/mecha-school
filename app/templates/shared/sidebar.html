@@ -238,10 +238,18 @@
     {% if 'fees' in enabled_modules %}
     <li class="nav-item">
       <a href="{{ url_for('fees.index') }}"
-         class="{{ 'active' if request.blueprint == 'fees' }}">
+         class="{{ 'active' if request.blueprint == 'fees' and request.endpoint not in ['fees.refunds_history', 'fees.refund_event_detail'] }}">
         <i class="bi bi-cash-stack"></i> الرسوم والأقساط
       </a>
     </li>
+    {% if current_user.has_permission('refund_payments') or current_user.has_permission('cancel_fees') %}
+    <li class="nav-item">
+      <a href="{{ url_for('fees.refunds_history') }}"
+         class="{{ 'active' if request.endpoint in ['fees.refunds_history', 'fees.refund_event_detail'] }}">
+        <i class="bi bi-clock-history"></i> سجل الاسترجاعات والإلغاءات
+      </a>
+    </li>
+    {% endif %}
     {% endif %}
     {% if 'finances' in enabled_modules %}
     <li class="nav-item">
@@ -485,7 +493,7 @@
     {% endif %}
 
     {# ═══ Group: Finance ════════════════════════════════════════════════ #}
-    {% if ('fees' in enabled_modules and (current_user.has_permission('manage_fees') or current_user.has_permission('record_payments'))) or
+    {% if ('fees' in enabled_modules and (current_user.has_permission('manage_fees') or current_user.has_permission('record_payments') or current_user.has_permission('refund_payments') or current_user.has_permission('cancel_fees'))) or
           ('finances' in enabled_modules and (current_user.has_permission('manage_revenues') or current_user.has_permission('manage_expenses'))) or
           ('salaries' in enabled_modules and current_user.has_permission('manage_salaries')) %}
     <li class="nav-group" data-group="finance">
@@ -497,8 +505,16 @@
         {% if 'fees' in enabled_modules and (current_user.has_permission('manage_fees') or current_user.has_permission('record_payments')) %}
         <li class="nav-item">
           <a href="{{ url_for('fees.index') }}"
-             class="{{ 'active' if request.blueprint == 'fees' }}">
+             class="{{ 'active' if request.blueprint == 'fees' and request.endpoint not in ['fees.refunds_history', 'fees.refund_event_detail'] }}">
             <i class="bi bi-cash-stack"></i> الرسوم والأقساط
+          </a>
+        </li>
+        {% endif %}
+        {% if 'fees' in enabled_modules and (current_user.has_permission('refund_payments') or current_user.has_permission('cancel_fees')) %}
+        <li class="nav-item">
+          <a href="{{ url_for('fees.refunds_history') }}"
+             class="{{ 'active' if request.endpoint in ['fees.refunds_history', 'fees.refund_event_detail'] }}">
+            <i class="bi bi-clock-history"></i> سجل الاسترجاعات والإلغاءات
           </a>
         </li>
         {% endif %}

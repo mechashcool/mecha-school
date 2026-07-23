@@ -186,6 +186,14 @@
       <span>أنواع الرسوم</span>
     </a>
 
+    {% if current_user.has_permission('refund_payments') or current_user.has_permission('cancel_fees') %}
+    <!-- "سجل الاسترجاعات والإلغاءات" outlined -->
+    <a href="{{ url_for('fees.refunds_history') }}" class="fees-btn fees-btn-outline">
+      <i class="bi bi-clock-history"></i>
+      <span>سجل الاسترجاعات والإلغاءات</span>
+    </a>
+    {% endif %}
+
     <!-- "التقارير والتصدير" dropdown -->
     <div class="fees-dropdown-wrap">
       <button type="button" class="fees-btn fees-btn-outline fees-dropdown-toggle"

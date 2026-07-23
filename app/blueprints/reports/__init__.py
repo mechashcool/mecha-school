@@ -95,7 +95,8 @@ def index():
     # Fees collection
     def _fee_sum(col, filters=None):
         q = db.session.query(func.coalesce(func.sum(col), 0))\
-                      .join(FeeRecord, FeeInstallment.fee_record_id == FeeRecord.id)
+                      .join(FeeRecord, FeeInstallment.fee_record_id == FeeRecord.id)\
+                      .filter(FeeRecord.cancelled_at.is_(None))  # exclude cancelled fees
         if school_id:
             q = q.filter(FeeRecord.school_id == school_id)
         if filters:
@@ -281,7 +282,8 @@ def fees_report():
 
     def _inst_sum(col, extra_filters=None):
         q = db.session.query(func.coalesce(func.sum(col), 0))\
-                      .join(FeeRecord, FeeInstallment.fee_record_id == FeeRecord.id)
+                      .join(FeeRecord, FeeInstallment.fee_record_id == FeeRecord.id)\
+                      .filter(FeeRecord.cancelled_at.is_(None))  # exclude cancelled fees
         if school_id:
             q = q.filter(FeeRecord.school_id == school_id)
         if extra_filters:
@@ -296,7 +298,8 @@ def fees_report():
                               [FeeInstallment.status == 'partial'])
 
     overdue_base = (FeeInstallment.query
-                    .join(FeeRecord, FeeInstallment.fee_record_id == FeeRecord.id))
+                    .join(FeeRecord, FeeInstallment.fee_record_id == FeeRecord.id)
+                    .filter(FeeRecord.cancelled_at.is_(None)))  # exclude cancelled fees
     if school_id:
         overdue_base = overdue_base.filter(FeeRecord.school_id == school_id)
     overdue_q = (overdue_base

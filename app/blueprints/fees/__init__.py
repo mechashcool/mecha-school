@@ -5,16 +5,16 @@ from decimal import Decimal, InvalidOperation
 
 from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify, session as flask_session, abort
 from flask_login import login_required, current_user
-from datetime import date, datetime as dt
+from datetime import date, datetime as dt, timedelta
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, contains_eager
 from werkzeug.exceptions import HTTPException
 
-from app.models import (db, FeeRecord, FeeInstallment, FeeType, Student, AcademicYear, SchoolSettings, Revenue, RevenueCategory, Section, Grade, School, FeeRefundEvent)
-from app.utils.decorators import (permission_required, get_current_school,
-                                   get_active_year, get_view_year, historical_guard,
-                                   admin_required)
+from app.models import (db, FeeRecord, FeeInstallment, FeeType, Student, AcademicYear, SchoolSettings, Revenue, RevenueCategory, Section, Grade, School, FeeRefundEvent, User)
+from app.utils.decorators import (permission_required, any_permission_required,
+                                   get_current_school, get_active_year, get_view_year,
+                                   historical_guard, admin_required)
 from app.utils.helpers import generate_receipt_no
 from app.utils.audit import log_action
 from app.utils.buildings import (
@@ -148,6 +148,36 @@ class FeeValidationError(ValueError):
 
     Carries a user-safe Arabic message suitable for flashing back to the form.
     """
+
+
+# Shown when a NEW fee is rejected because an ACTIVE (non-cancelled) fee of the
+# same type already exists for the student in the same academic year. A cancelled
+# fee never triggers this — it is history and may be replaced by a fresh fee.
+# Kept as a single constant so every creation entry point (standalone Add Fee,
+# bulk assignment, the student wizard) shows byte-identical wording.
+ACTIVE_DUPLICATE_FEE_MSG = (
+    'يوجد رسم فعّال مسجل مسبقًا لهذا الطالب من نفس النوع وفي نفس السنة الدراسية.'
+)
+
+
+def _active_fee_exists(student_id, fee_type_id, academic_year_id):
+    """True when an ACTIVE (non-cancelled) matching fee already exists.
+
+    Only active fees block a duplicate; cancelled fees are historical and are
+    intentionally ignored so a replacement fee can be created. School and
+    academic-year isolation come from the caller's already-validated ids plus
+    the central ORM tenant scope (FeeRecord is school+year scoped)."""
+    return (
+        FeeRecord.query
+        .filter(
+            FeeRecord.student_id == student_id,
+            FeeRecord.fee_type_id == fee_type_id,
+            FeeRecord.academic_year_id == academic_year_id,
+            FeeRecord.cancelled_at.is_(None),
+        )
+        .first()
+        is not None
+    )
 
 
 def compute_fee_amounts(form):
@@ -998,17 +1028,32 @@ def create():
                 return render_template('fees/form.html',
                                        fee_types=fee_types, years=years), 400
 
-        if FeeRecord.query.filter_by(student_id=selected_student_id,
-                                     fee_type_id=selected_fee_type_id,
-                                     academic_year_id=selected_year_id).first():
-            flash('A fee record for this student, fee type, and academic year already exists.', 'danger')
+        # Only an ACTIVE (non-cancelled) matching fee blocks a duplicate. A
+        # cancelled fee is preserved as history and must allow a replacement.
+        if _active_fee_exists(selected_student_id, selected_fee_type_id, selected_year_id):
+            flash(ACTIVE_DUPLICATE_FEE_MSG, 'danger')
             return render_template('fees/form.html',
                                    fee_types=fee_types, years=years,
                                    selected_student=selected_student)
 
-        # ── Discount + record + installments (shared with the student wizard) ─
+        # ── Discount computation (may reject with a user-facing message) ──────
         try:
             total_amount, discount, _net = compute_fee_amounts(request.form)
+        except FeeValidationError as exc:
+            flash(str(exc), 'danger')
+            return render_template('fees/form.html',
+                                   fee_types=fee_types, years=years,
+                                   selected_student=selected_student), 400
+
+        # ── Persist + commit under ONE IntegrityError guard ───────────────────
+        # The partial-unique index (uq_fee_record_active_student_type_year) is
+        # the last line of defence against a concurrent request creating a second
+        # ACTIVE matching fee between the check above and here. The violation can
+        # surface at flush (inside persist_fee_record) OR at commit, so both are
+        # wrapped: on that race the DB raises IntegrityError, which is rolled back
+        # and surfaced as the same friendly Arabic message. Cancelled fees are
+        # excluded from the index, so a replacement fee never trips it.
+        try:
             persist_fee_record(
                 request.form,
                 school=school,
@@ -1018,13 +1063,13 @@ def create():
                 total_amount=total_amount,
                 discount=discount,
             )
-        except FeeValidationError as exc:
-            flash(str(exc), 'danger')
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash(ACTIVE_DUPLICATE_FEE_MSG, 'danger')
             return render_template('fees/form.html',
                                    fee_types=fee_types, years=years,
                                    selected_student=selected_student), 400
-
-        db.session.commit()
         # Push after the fee record + installments are committed.
         _notify_fee_parents(
             selected_student.id,
@@ -1356,7 +1401,9 @@ def bulk_create():
         flash('لا يوجد طلاب صالحون من بين المحددين.', 'danger')
         return render_template('fees/bulk_form.html', fee_types=fee_types, years=years), 400
 
-    # ── Detect duplicates: students who already have this fee for this year ───
+    # ── Detect duplicates: students who already have an ACTIVE matching fee ───
+    # Cancelled fees are historical and never block a replacement, so only
+    # non-cancelled matches count as duplicates.
     existing_student_ids = set(
         row.student_id for row in
         FeeRecord.query
@@ -1364,6 +1411,7 @@ def bulk_create():
             FeeRecord.student_id.in_(valid_ids),
             FeeRecord.fee_type_id == selected_fee_type_id,
             FeeRecord.academic_year_id == selected_year_id,
+            FeeRecord.cancelled_at.is_(None),
         )
         .with_entities(FeeRecord.student_id)
         .all()
@@ -1435,13 +1483,10 @@ def bulk_create():
 
     try:
         for student in eligible_students:
-            # Guard against race: another request may have created the fee between
-            # the preview step and this confirm step.
-            if FeeRecord.query.filter_by(
-                student_id=student.id,
-                fee_type_id=selected_fee_type_id,
-                academic_year_id=selected_year_id,
-            ).first():
+            # Guard against race: another request may have created an ACTIVE fee
+            # between the preview step and this confirm step. Cancelled fees do
+            # not count — a replacement is allowed alongside them.
+            if _active_fee_exists(student.id, selected_fee_type_id, selected_year_id):
                 concurrent_skip += 1
                 continue
 
@@ -2352,8 +2397,14 @@ def student_statement(student_id):
             _inst_map.setdefault(_i.fee_record_id, []).append(_i)
         fee_entries = [(r, _inst_map.get(r.id, [])) for r in fee_records]
 
-    # Cancelled fees remain visible on the statement as history but are excluded
-    # from the active grand totals (they are no longer owed or collectible).
+    # The financial statement reflects the student's CURRENT active position
+    # only. A fully cancelled fee disappears completely — it is not rendered,
+    # its installments are hidden, it is excluded from the fee-record count and
+    # from every grand total. It stays preserved as history (visible in the
+    # dedicated "سجل الاسترجاعات والإلغاءات" page and the operational fees table),
+    # never as an active obligation here. Refunded installments need no special
+    # handling: received_amount / paid_date / payment_method / status are the
+    # live source of truth and already reflect the reversal.
     _active_entries = [(r, insts) for r, insts in fee_entries if not r.is_cancelled]
     grand_total = sum(float(r.total_amount) for r, _ in _active_entries)
     grand_disc  = sum(float(r.discount or 0) for r, _ in _active_entries)
@@ -2373,7 +2424,10 @@ def student_statement(student_id):
         'fees/student_statement.html',
         student=student,
         school=school,
-        fee_entries=fee_entries,
+        # Only active (non-cancelled) fees reach the template, so the on-screen
+        # statement, its print view, per-fee summaries, the fee-record count and
+        # the grand totals all describe the current active position exclusively.
+        fee_entries=_active_entries,
         grand_total=grand_total,
         grand_disc=grand_disc,
         grand_net=grand_net,
@@ -2381,6 +2435,370 @@ def student_statement(student_id):
         grand_rem=grand_rem,
         print_date=date.today(),
         logo_url=logo_url,
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  REFUNDS & CANCELLATIONS HISTORY — read-only audit viewer
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# A historical, read-only window onto every FeeRefundEvent (installment refunds
+# — modern & legacy — and full-fee cancellations). It NEVER mutates anything and
+# never re-runs a reversal: it only reads the events, their reversed Revenue
+# allocations (Revenue.refund_event_id), the affected installments, and the
+# cancelled fee record — the exact source-of-truth rows written when the
+# operation happened, with no timestamp/heuristic reconstruction. Cancelled fees
+# and refunded payments stay excluded from every ACTIVE total elsewhere; only
+# their complete history surfaces here.
+
+# Both installment-refund variants (modern TXN + legacy receipt-linked) are the
+# same operation type to the user.
+_INSTALLMENT_REFUND_TYPES = ('installment_refund', 'installment_refund_legacy')
+
+_REFUND_EVENT_TYPE_LABELS = {
+    'installment_refund':        'استرجاع مبلغ قسط',
+    'installment_refund_legacy': 'استرجاع مبلغ قسط',
+    'fee_cancellation':          'إلغاء رسم بالكامل',
+}
+
+# Derived "current status" of a historical operation — computed ONLY from stored
+# source-of-truth state, never from timestamps.
+_REFUND_STATUS_LABELS = {
+    'cancelled': 'رسم ملغى',
+    'repaid':    'أُعيد الدفع بعد الاسترجاع',
+    'refunded':  'مسترجع — القسط مستحق',
+}
+
+
+def _refund_event_type_label(event):
+    return _REFUND_EVENT_TYPE_LABELS.get(event.event_type, event.event_type)
+
+
+def _refund_event_is_legacy(event):
+    """True when the reversal used the LEGACY (pre-TXN, receipt-linked) path, so
+    the UI can flag that the payment was identified by receipt number rather than
+    a transaction reference."""
+    return event.event_type == 'installment_refund_legacy'
+
+
+def _refund_event_status(event):
+    """Current status of a refund/cancellation, derived only from stored state.
+
+    Returns ``(code, label)``.
+      * fee_cancellation → 'cancelled' (the fee is preserved as cancelled).
+      * installment refund whose installment now carries a positive received
+        amount → 'repaid' (the installment was paid again after the refund).
+      * otherwise → 'refunded' (reversal still in effect; the installment is due).
+    No timestamps or heuristics are used — only the reversed rows and the live
+    installment state that the reversal itself wrote.
+    """
+    if event.event_type == 'fee_cancellation':
+        return ('cancelled', _REFUND_STATUS_LABELS['cancelled'])
+    inst = event.installment
+    if inst is not None and Decimal(str(inst.received_amount or 0)) > 0:
+        return ('repaid', _REFUND_STATUS_LABELS['repaid'])
+    return ('refunded', _REFUND_STATUS_LABELS['refunded'])
+
+
+def _refund_event_reversed_revenues(event):
+    """The EXACT Revenue allocation rows this event reversed (source of truth).
+
+    Bound by ``Revenue.refund_event_id == event.id`` — the persistent link the
+    reversal wrote — so no timestamp/amount guessing is involved. School-scoped
+    by an explicit filter; ``bypass_tenant_scope`` only relaxes the academic-year
+    filter so a cross-year historical event resolves its rows. Cross-school access
+    is impossible: the explicit ``school_id`` filter equals the event's own school.
+    """
+    return (
+        Revenue.query
+        .execution_options(bypass_tenant_scope=True)
+        .filter(Revenue.school_id == event.school_id,
+                Revenue.refund_event_id == event.id)
+        .order_by(Revenue.id)
+        .all()
+    )
+
+
+@fees_bp.route('/refunds-history')
+@login_required
+@any_permission_required('refund_payments', 'cancel_fees')
+def refunds_history():
+    """Read-only list of every installment refund and full-fee cancellation.
+
+    School isolation: FeeRefundEvent is school-scoped (ORM auto-filter) and an
+    explicit ``school_id`` filter is added for defence in depth. Building scope is
+    applied through the joined Student. ``include_all_years`` spans academic years
+    (this is a historical viewer); a dedicated academic-year filter narrows it.
+    Every filter is validated server-side; nothing here mutates data.
+    """
+    school = get_current_school()
+    page               = request.args.get('page', 1, type=int)
+    search             = request.args.get('q', '').strip()
+    op_type            = request.args.get('op_type', 'all')
+    status_filter      = request.args.get('status', 'all')
+    fee_type_filter    = request.args.get('fee_type', 'all')
+    installment_filter = request.args.get('installment', 'all')
+    employee_filter    = request.args.get('employee', 'all')
+    year_filter        = request.args.get('academic_year', 'all')
+    date_from          = request.args.get('date_from', '').strip()
+    date_to            = request.args.get('date_to', '').strip()
+    ref                = request.args.get('ref', '').strip()
+
+    q = (
+        FeeRefundEvent.query
+        .execution_options(include_all_years=True)
+        .join(Student, FeeRefundEvent.student_id == Student.id)
+        .join(FeeRecord, FeeRefundEvent.fee_record_id == FeeRecord.id)
+        .outerjoin(FeeInstallment, FeeRefundEvent.installment_id == FeeInstallment.id)
+        .options(
+            contains_eager(FeeRefundEvent.student),
+            contains_eager(FeeRefundEvent.fee_record).joinedload(FeeRecord.fee_type),
+            contains_eager(FeeRefundEvent.installment),
+            joinedload(FeeRefundEvent.performer),
+            joinedload(FeeRefundEvent.academic_year),
+        )
+    )
+    if school:
+        q = q.filter(FeeRefundEvent.school_id == school.id)
+
+    # Building scope — restricted users only see events for their buildings' students.
+    q = apply_building_scope_to_fees(q, current_user, school)
+
+    if search:
+        q = q.filter(Student.full_name.ilike(f'%{search}%') |
+                     Student.student_id.ilike(f'%{search}%'))
+
+    if op_type == 'installment_refund':
+        q = q.filter(FeeRefundEvent.event_type.in_(_INSTALLMENT_REFUND_TYPES))
+    elif op_type == 'fee_cancellation':
+        q = q.filter(FeeRefundEvent.event_type == 'fee_cancellation')
+
+    if status_filter == 'cancelled':
+        q = q.filter(FeeRefundEvent.event_type == 'fee_cancellation')
+    elif status_filter == 'repaid':
+        q = q.filter(FeeRefundEvent.event_type.in_(_INSTALLMENT_REFUND_TYPES),
+                     FeeInstallment.received_amount > 0)
+    elif status_filter == 'refunded':
+        q = q.filter(FeeRefundEvent.event_type.in_(_INSTALLMENT_REFUND_TYPES),
+                     func.coalesce(FeeInstallment.received_amount, 0) <= 0)
+
+    if fee_type_filter != 'all':
+        try:
+            q = q.filter(FeeRecord.fee_type_id == int(fee_type_filter))
+        except (ValueError, TypeError):
+            pass
+
+    if installment_filter != 'all':
+        try:
+            q = q.filter(FeeInstallment.installment_no == int(installment_filter))
+        except (ValueError, TypeError):
+            pass
+
+    if employee_filter != 'all':
+        try:
+            q = q.filter(FeeRefundEvent.performed_by == int(employee_filter))
+        except (ValueError, TypeError):
+            pass
+
+    if year_filter != 'all':
+        try:
+            q = q.filter(FeeRefundEvent.academic_year_id == int(year_filter))
+        except (ValueError, TypeError):
+            pass
+
+    if date_from:
+        try:
+            q = q.filter(FeeRefundEvent.created_at >= dt.strptime(date_from, '%Y-%m-%d'))
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            q = q.filter(FeeRefundEvent.created_at <
+                         dt.strptime(date_to, '%Y-%m-%d') + timedelta(days=1))
+        except ValueError:
+            pass
+
+    if ref:
+        like = f'%{ref}%'
+        q = q.filter(FeeRefundEvent.op_refs.ilike(like) |
+                     FeeInstallment.receipt_no.ilike(like))
+
+    events = (q.order_by(FeeRefundEvent.created_at.desc())
+               .paginate(page=page, per_page=25, error_out=False))
+
+    # Row view-models: (event, event_type_label, (status_code, status_label), legacy).
+    event_rows = [
+        {
+            'event':      ev,
+            'type_label': _refund_event_type_label(ev),
+            'status':     _refund_event_status(ev),
+            'legacy':     _refund_event_is_legacy(ev),
+        }
+        for ev in events.items
+    ]
+
+    # ── Filter option data (scoped to this school's events only) ──────────────
+    fee_type_opts, employee_opts, inst_numbers, years = [], [], [], []
+    if school:
+        fee_type_opts = (
+            db.session.query(FeeType.id, FeeType.name)
+            .execution_options(include_all_years=True)
+            .join(FeeRecord, FeeRecord.fee_type_id == FeeType.id)
+            .join(FeeRefundEvent, FeeRefundEvent.fee_record_id == FeeRecord.id)
+            .filter(FeeRefundEvent.school_id == school.id)
+            .distinct().order_by(FeeType.name).all()
+        )
+        employee_opts = (
+            db.session.query(User.id, User.full_name)
+            .execution_options(include_all_years=True)
+            .join(FeeRefundEvent, FeeRefundEvent.performed_by == User.id)
+            .filter(FeeRefundEvent.school_id == school.id)
+            .distinct().order_by(User.full_name).all()
+        )
+        inst_numbers = [
+            r[0] for r in
+            db.session.query(FeeInstallment.installment_no)
+            .execution_options(include_all_years=True)
+            .join(FeeRefundEvent, FeeRefundEvent.installment_id == FeeInstallment.id)
+            .filter(FeeRefundEvent.school_id == school.id)
+            .distinct().order_by(FeeInstallment.installment_no).all()
+        ]
+        years = (AcademicYear.query
+                 .filter_by(school_id=school.id)
+                 .order_by(AcademicYear.start_date.desc()).all())
+
+    # Preserve current filters across pagination links.
+    filter_args = {
+        'q': search, 'op_type': op_type, 'status': status_filter,
+        'fee_type': fee_type_filter, 'installment': installment_filter,
+        'employee': employee_filter, 'academic_year': year_filter,
+        'date_from': date_from, 'date_to': date_to, 'ref': ref,
+    }
+
+    return render_template(
+        'fees/refunds_history.html',
+        events=events,
+        event_rows=event_rows,
+        fee_type_opts=fee_type_opts,
+        employee_opts=employee_opts,
+        inst_numbers=inst_numbers,
+        years=years,
+        status_labels=_REFUND_STATUS_LABELS,
+        # echo filters back to the form
+        search=search, op_type=op_type, status_filter=status_filter,
+        fee_type_filter=fee_type_filter, installment_filter=installment_filter,
+        employee_filter=employee_filter, year_filter=year_filter,
+        date_from=date_from, date_to=date_to, ref=ref,
+        filter_args=filter_args,
+    )
+
+
+@fees_bp.route('/refunds-history/<int:event_id>')
+@login_required
+@any_permission_required('refund_payments', 'cancel_fees')
+def refund_event_detail(event_id):
+    """Read-only detail of ONE refund / cancellation event.
+
+    Shows the original payment context (rebuilt only from the reversed Revenue
+    rows and the affected installments — never guessed), the reversed income, the
+    per-installment before/after balances at the moment of the operation, the
+    fee-cancellation info when applicable, the stored reason, and who/when.
+    School + building isolation enforced explicitly.
+    """
+    school = get_current_school()
+    event = (
+        FeeRefundEvent.query
+        .execution_options(include_all_years=True)
+        .options(
+            joinedload(FeeRefundEvent.student),
+            joinedload(FeeRefundEvent.fee_record).joinedload(FeeRecord.fee_type),
+            joinedload(FeeRefundEvent.installment).joinedload(FeeInstallment.collector),
+            joinedload(FeeRefundEvent.performer),
+            joinedload(FeeRefundEvent.academic_year),
+        )
+        .filter(FeeRefundEvent.id == event_id)
+        .first_or_404()
+    )
+    # School isolation (defence in depth on top of the ORM scope).
+    if school and event.school_id and event.school_id != school.id:
+        abort(403)
+    # Building / student access.
+    if not user_can_access_student(current_user, school, event.student):
+        abort(403)
+
+    reversed_revs = _refund_event_reversed_revenues(event)
+    income_removed = sum((Decimal(str(r.amount or 0)) for r in reversed_revs), Decimal('0'))
+
+    # Affected installments: the single one for a refund, or all of them for a
+    # full-fee cancellation.
+    if event.event_type == 'fee_cancellation':
+        affected = (
+            FeeInstallment.query
+            .execution_options(include_all_years=True)
+            .filter(FeeInstallment.fee_record_id == event.fee_record_id,
+                    FeeInstallment.school_id == event.school_id)
+            .options(joinedload(FeeInstallment.collector))
+            .order_by(FeeInstallment.installment_no)
+            .all()
+        )
+    else:
+        affected = [event.installment] if event.installment else []
+
+    # Per-installment before/after — EXACT, from stored data only.
+    # A reversal fires only when the identifiable active total equals the
+    # installment's received amount exactly, so the reversed amount for an
+    # installment IS its received amount at the moment of the operation:
+    #   before_received = reversed_i,  after_received = 0.
+    inst_rows = []
+    for inst in affected:
+        if inst is None:
+            continue
+        _matched = [r for r in reversed_revs
+                    if _receipt_token_in(r.description, inst.receipt_no)]
+        reversed_i = sum((Decimal(str(r.amount or 0)) for r in _matched), Decimal('0'))
+        # One op_ref for the historical-receipt link (modern TXN rows only;
+        # legacy rows carry none → bare reprint of the kept receipt number).
+        _op_ref = next((_extract_op_ref(r.description) for r in _matched
+                        if _extract_op_ref(r.description)), None)
+        amount_i = Decimal(str(inst.amount or 0))
+        inst_rows.append({
+            'inst':             inst,
+            'reversed':         reversed_i,
+            'before_received':  reversed_i,
+            'after_received':   Decimal('0'),
+            'before_remaining': amount_i - reversed_i,
+            'after_remaining':  amount_i,
+            'current_received': Decimal(str(inst.received_amount or 0)),
+            'op_ref':           _op_ref,
+        })
+
+    # Reversed Revenue rows enriched for display (op_ref + tag-free description).
+    rev_rows = [
+        {'rev': r, 'op_ref': _extract_op_ref(r.description), 'display': r.display_description}
+        for r in reversed_revs
+    ]
+
+    status_code, status_label = _refund_event_status(event)
+    # Original payment date + collector, recovered from the reversed rows (which
+    # carry the payment date and the recording user). Payment method is NOT
+    # stored on Revenue and is cleared from the installment on a full refund, so
+    # it is only shown per-installment as "current" state where still present.
+    orig_date      = reversed_revs[0].date if reversed_revs else None
+    orig_collector = reversed_revs[0].recorder if reversed_revs else None
+
+    return render_template(
+        'fees/refund_event_detail.html',
+        event=event,
+        type_label=_refund_event_type_label(event),
+        status_code=status_code,
+        status_label=status_label,
+        is_legacy=_refund_event_is_legacy(event),
+        income_removed=income_removed,
+        inst_rows=inst_rows,
+        rev_rows=rev_rows,
+        orig_date=orig_date,
+        orig_collector=orig_collector,
+        print_date=date.today(),
     )
 
 

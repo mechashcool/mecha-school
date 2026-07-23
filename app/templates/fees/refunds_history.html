@@ -1,0 +1,232 @@
+{% extends "shared/base.html" %}
+{% block title %}سجل الاسترجاعات والإلغاءات{% endblock %}
+{% block page_title %}سجل الاسترجاعات والإلغاءات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">سجل الاسترجاعات والإلغاءات</h1>
+    <p class="page-subtitle">
+      سجل تاريخي للقراءة فقط لكل عمليات استرجاع الأقساط وإلغاء الرسوم بالكامل.
+      لا يمكن التعديل أو الحذف أو إعادة تنفيذ أي عملية من هنا.
+    </p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('fees.index') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-1"></i>رجوع للرسوم
+    </a>
+  </div>
+</div>
+
+<!-- ── Filters ─────────────────────────────────────────────────────────────── -->
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="row g-3 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label mb-1" style="font-size:12.5px">بحث (اسم الطالب أو الرقم)</label>
+        <input type="text" name="q" value="{{ search }}" class="form-control"
+               placeholder="اسم الطالب أو رقمه">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12.5px">نوع العملية</label>
+        <select name="op_type" class="form-select">
+          <option value="all" {% if op_type == 'all' %}selected{% endif %}>الكل</option>
+          <option value="installment_refund" {% if op_type == 'installment_refund' %}selected{% endif %}>استرجاع مبلغ قسط</option>
+          <option value="fee_cancellation" {% if op_type == 'fee_cancellation' %}selected{% endif %}>إلغاء رسم بالكامل</option>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12.5px">الحالة</label>
+        <select name="status" class="form-select">
+          <option value="all" {% if status_filter == 'all' %}selected{% endif %}>الكل</option>
+          {% for code, label in status_labels.items() %}
+          <option value="{{ code }}" {% if status_filter == code %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12.5px">نوع الرسم</label>
+        <select name="fee_type" class="form-select">
+          <option value="all" {% if fee_type_filter == 'all' %}selected{% endif %}>الكل</option>
+          {% for ft_id, ft_name in fee_type_opts %}
+          <option value="{{ ft_id }}" {% if fee_type_filter == ft_id|string %}selected{% endif %}>{{ ft_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12.5px">رقم القسط</label>
+        <select name="installment" class="form-select">
+          <option value="all" {% if installment_filter == 'all' %}selected{% endif %}>الكل</option>
+          {% for n in inst_numbers %}
+          <option value="{{ n }}" {% if installment_filter == n|string %}selected{% endif %}>القسط {{ n }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12.5px">المنفِّذ</label>
+        <select name="employee" class="form-select">
+          <option value="all" {% if employee_filter == 'all' %}selected{% endif %}>الكل</option>
+          {% for uid, uname in employee_opts %}
+          <option value="{{ uid }}" {% if employee_filter == uid|string %}selected{% endif %}>{{ uname }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12.5px">السنة الدراسية</label>
+        <select name="academic_year" class="form-select">
+          <option value="all" {% if year_filter == 'all' %}selected{% endif %}>الكل</option>
+          {% for y in years %}
+          <option value="{{ y.id }}" {% if year_filter == y.id|string %}selected{% endif %}>{{ y.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12.5px">من تاريخ</label>
+        <input type="date" name="date_from" value="{{ date_from }}" class="form-control">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12.5px">إلى تاريخ</label>
+        <input type="date" name="date_to" value="{{ date_to }}" class="form-control">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12.5px">مرجع/إيصال</label>
+        <input type="text" name="ref" value="{{ ref }}" class="form-control"
+               placeholder="مرجع العملية أو رقم الإيصال">
+      </div>
+      <div class="col-md-2 d-flex gap-2">
+        <button class="btn btn-primary flex-grow-1"><i class="bi bi-search me-1"></i>عرض</button>
+        <a href="{{ url_for('fees.refunds_history') }}" class="btn btn-outline-secondary"
+           title="مسح الفلاتر"><i class="bi bi-x-lg"></i></a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ── Results ─────────────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-header d-flex align-items-center justify-content-between">
+    <span><i class="bi bi-clock-history text-accent me-1"></i>العمليات</span>
+    <span class="text-muted" style="font-size:12.5px">
+      إجمالي النتائج: <strong>{{ events.total }}</strong>
+    </span>
+  </div>
+  <div class="table-wrapper">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>التاريخ والوقت</th>
+          <th>نوع العملية</th>
+          <th>الحالة</th>
+          <th>الطالب</th>
+          <th>نوع الرسم</th>
+          <th>القسط</th>
+          <th>المبلغ</th>
+          <th>الإيصال الأصلي</th>
+          <th>مرجع العملية</th>
+          <th>السبب</th>
+          <th>المنفِّذ</th>
+          <th>السنة</th>
+          <th>التفاصيل</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in event_rows %}
+        {% set ev = row.event %}
+        {% set status_code = row.status[0] %}
+        <tr>
+          <td style="white-space:nowrap;font-size:12.5px">
+            {{ ev.created_at.strftime('%Y-%m-%d') if ev.created_at else '—' }}
+            <div class="text-muted" style="font-size:11px">
+              {{ ev.created_at.strftime('%H:%M') if ev.created_at else '' }}
+            </div>
+          </td>
+          <td style="white-space:nowrap">
+            {% if ev.event_type == 'fee_cancellation' %}
+            <span class="badge" style="background:#fef0f0;color:#e03e3e;font-weight:600">
+              <i class="bi bi-x-octagon me-1"></i>{{ row.type_label }}
+            </span>
+            {% else %}
+            <span class="badge" style="background:#fff8ec;color:#c47f17;font-weight:600">
+              <i class="bi bi-arrow-counterclockwise me-1"></i>{{ row.type_label }}
+            </span>
+            {% endif %}
+            {% if row.legacy %}
+            <span class="badge bg-secondary" style="font-size:10px" title="تم التعرّف على الدفعة عبر رقم الإيصال (دفعة قديمة قبل مرجع العملية)">قديمة</span>
+            {% endif %}
+          </td>
+          <td style="white-space:nowrap">
+            {% if status_code == 'cancelled' %}
+            <span class="badge-status badge-overdue">{{ row.status[1] }}</span>
+            {% elif status_code == 'repaid' %}
+            <span class="badge-status badge-paid">{{ row.status[1] }}</span>
+            {% else %}
+            <span class="badge-status badge-partial">{{ row.status[1] }}</span>
+            {% endif %}
+          </td>
+          <td>
+            <div class="fw-600">{{ ev.student.full_name if ev.student else '—' }}</div>
+            <div class="text-muted" style="font-size:11.5px">{{ ev.student.student_id if ev.student else '' }}</div>
+          </td>
+          <td>{{ ev.fee_record.fee_type.name if ev.fee_record and ev.fee_record.fee_type else '—' }}</td>
+          <td class="text-center">
+            {% if ev.installment %}القسط {{ ev.installment.installment_no }}{% else %}—{% endif %}
+          </td>
+          <td class="fw-600 {{ 'text-danger' if status_code == 'cancelled' else 'text-warning' }}">
+            {{ '{:,.0f}'.format(ev.amount or 0) }}
+          </td>
+          <td><code style="font-size:11px">{{ ev.installment.receipt_no if ev.installment and ev.installment.receipt_no else '—' }}</code></td>
+          <td>
+            {% if ev.op_refs %}
+            <code style="font-size:11px">{{ ev.op_refs }}</code>
+            {% else %}
+            <span class="text-muted" style="font-size:11.5px">—</span>
+            {% endif %}
+          </td>
+          <td style="max-width:220px">
+            <span style="font-size:12.5px" title="{{ ev.reason }}">
+              {{ ev.reason if ev.reason|length <= 50 else ev.reason[:50] ~ '…' }}
+            </span>
+          </td>
+          <td class="text-muted" style="font-size:12.5px;white-space:nowrap">
+            {{ ev.performer.full_name if ev.performer else '—' }}
+          </td>
+          <td style="font-size:12px;white-space:nowrap">
+            {{ ev.academic_year.name if ev.academic_year else '—' }}
+          </td>
+          <td>
+            <a href="{{ url_for('fees.refund_event_detail', event_id=ev.id) }}"
+               class="btn btn-sm btn-outline-primary" title="عرض التفاصيل">
+              <i class="bi bi-eye"></i>
+            </a>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="13" class="text-center text-muted py-5">
+            <i class="bi bi-clock-history" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا توجد عمليات استرجاع أو إلغاء مطابقة للفلاتر المحددة
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if events.pages > 1 %}
+  <div class="card-footer">
+    <ul class="pagination pagination-sm mb-0 justify-content-center">
+      {% for p in events.iter_pages() %}
+        {% if p %}
+        <li class="page-item {{ 'active' if p == events.page }}">
+          <a class="page-link"
+             href="{{ url_for('fees.refunds_history', page=p, **filter_args) }}">{{ p }}</a>
+        </li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link">…</span></li>
+        {% endif %}
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
