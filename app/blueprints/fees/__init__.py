@@ -1046,11 +1046,14 @@ def create():
                                    selected_student=selected_student), 400
 
         # ── Persist + commit under ONE IntegrityError guard ───────────────────
-        # The partial-unique index (uq_fee_record_active_student_type_year) is the
-        # last line of defence against a concurrent request creating a second
-        # ACTIVE matching fee. The violation can surface at flush (inside
-        # persist_fee_record) OR at commit, so both are wrapped. Cancelled fees
-        # are excluded from that index, so a replacement fee never trips it.
+        # Active-fee uniqueness is enforced at two DB layers, both excluding
+        # cancelled rows so a replacement fee after cancellation never trips them:
+        #   * the partial-unique index uq_fee_record_active_student_type_year, and
+        #   * the BEFORE INSERT/UPDATE trigger trg_prevent_fee_record_duplicate,
+        #     which RAISEs SQLSTATE 23505.
+        # Either can fire on a concurrent request creating a second ACTIVE matching
+        # fee, and both surface as IntegrityError at flush (inside
+        # persist_fee_record) OR at commit, so both statements are wrapped.
         try:
             persist_fee_record(
                 request.form,
@@ -1062,27 +1065,26 @@ def create():
                 discount=discount,
             )
             db.session.commit()
-        except IntegrityError:
+        except IntegrityError as exc:
             db.session.rollback()
             # Report the active-duplicate message ONLY when a genuinely active,
-            # non-cancelled matching fee actually exists (the true race). If the
-            # violation fired with NO active match, a stale BLANKET unique
-            # (pre-partial-index) is still on the table and is wrongly blocking a
-            # replacement after cancellation — surface an honest message and log
-            # it so the corrective migration (x4y5z6a7b8c9) is applied, instead of
-            # falsely claiming an active duplicate.
+            # non-cancelled matching fee actually exists (the true race). Any other
+            # IntegrityError is unexpected here (cancelled rows are excluded from
+            # both the partial index and the duplicate trigger), so surface a
+            # generic failure and log the real exception for diagnosis instead of
+            # falsely blaming a duplicate or a not-yet-applied migration.
             if _active_fee_exists(selected_student_id, selected_fee_type_id, selected_year_id):
                 flash(ACTIVE_DUPLICATE_FEE_MSG, 'danger')
             else:
                 _log.error(
-                    '[fees] fee INSERT rejected by a stale blanket unique on '
-                    'fee_records (no active duplicate). Apply migration '
-                    'x4y5z6a7b8c9. student_id=%s fee_type_id=%s year_id=%s',
+                    '[fees] fee INSERT failed with an unexpected IntegrityError '
+                    '(no active duplicate). student_id=%s fee_type_id=%s '
+                    'year_id=%s: %s',
                     selected_student_id, selected_fee_type_id, selected_year_id,
+                    exc,
                 )
-                flash('تعذّر إنشاء الرسم بسبب قيد قديم في قاعدة البيانات يمنع إضافة '
-                      'رسم جديد بعد إلغاء رسم مماثل. يرجى تطبيق تحديث قاعدة البيانات '
-                      '(الترحيل) ثم إعادة المحاولة.', 'danger')
+                flash('تعذّر إنشاء سجل الرسوم بسبب خطأ غير متوقع في قاعدة البيانات. '
+                      'لم يتم حفظ أي بيانات. يرجى المحاولة مرة أخرى.', 'danger')
             return render_template('fees/form.html',
                                    fee_types=fee_types, years=years,
                                    selected_student=selected_student), 400
