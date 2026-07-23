@@ -1046,13 +1046,11 @@ def create():
                                    selected_student=selected_student), 400
 
         # ── Persist + commit under ONE IntegrityError guard ───────────────────
-        # The partial-unique index (uq_fee_record_active_student_type_year) is
-        # the last line of defence against a concurrent request creating a second
-        # ACTIVE matching fee between the check above and here. The violation can
-        # surface at flush (inside persist_fee_record) OR at commit, so both are
-        # wrapped: on that race the DB raises IntegrityError, which is rolled back
-        # and surfaced as the same friendly Arabic message. Cancelled fees are
-        # excluded from the index, so a replacement fee never trips it.
+        # The partial-unique index (uq_fee_record_active_student_type_year) is the
+        # last line of defence against a concurrent request creating a second
+        # ACTIVE matching fee. The violation can surface at flush (inside
+        # persist_fee_record) OR at commit, so both are wrapped. Cancelled fees
+        # are excluded from that index, so a replacement fee never trips it.
         try:
             persist_fee_record(
                 request.form,
@@ -1066,7 +1064,25 @@ def create():
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
-            flash(ACTIVE_DUPLICATE_FEE_MSG, 'danger')
+            # Report the active-duplicate message ONLY when a genuinely active,
+            # non-cancelled matching fee actually exists (the true race). If the
+            # violation fired with NO active match, a stale BLANKET unique
+            # (pre-partial-index) is still on the table and is wrongly blocking a
+            # replacement after cancellation — surface an honest message and log
+            # it so the corrective migration (x4y5z6a7b8c9) is applied, instead of
+            # falsely claiming an active duplicate.
+            if _active_fee_exists(selected_student_id, selected_fee_type_id, selected_year_id):
+                flash(ACTIVE_DUPLICATE_FEE_MSG, 'danger')
+            else:
+                _log.error(
+                    '[fees] fee INSERT rejected by a stale blanket unique on '
+                    'fee_records (no active duplicate). Apply migration '
+                    'x4y5z6a7b8c9. student_id=%s fee_type_id=%s year_id=%s',
+                    selected_student_id, selected_fee_type_id, selected_year_id,
+                )
+                flash('تعذّر إنشاء الرسم بسبب قيد قديم في قاعدة البيانات يمنع إضافة '
+                      'رسم جديد بعد إلغاء رسم مماثل. يرجى تطبيق تحديث قاعدة البيانات '
+                      '(الترحيل) ثم إعادة المحاولة.', 'danger')
             return render_template('fees/form.html',
                                    fee_types=fee_types, years=years,
                                    selected_student=selected_student), 400
@@ -2694,7 +2710,7 @@ def refund_event_detail(event_id):
         .options(
             joinedload(FeeRefundEvent.student),
             joinedload(FeeRefundEvent.fee_record).joinedload(FeeRecord.fee_type),
-            joinedload(FeeRefundEvent.installment).joinedload(FeeInstallment.collector),
+            joinedload(FeeRefundEvent.installment),
             joinedload(FeeRefundEvent.academic_year),
         )
         .filter(FeeRefundEvent.id == event_id)
@@ -2718,7 +2734,6 @@ def refund_event_detail(event_id):
             .execution_options(include_all_years=True)
             .filter(FeeInstallment.fee_record_id == event.fee_record_id,
                     FeeInstallment.school_id == event.school_id)
-            .options(joinedload(FeeInstallment.collector))
             .order_by(FeeInstallment.installment_no)
             .all()
         )
@@ -2760,12 +2775,11 @@ def refund_event_detail(event_id):
     ]
 
     status_code, status_label = _refund_event_status(event)
-    # Original payment date + collector, recovered from the reversed rows (which
-    # carry the payment date and the recording user). Payment method is NOT
-    # stored on Revenue and is cleared from the installment on a full refund, so
-    # it is only shown per-installment as "current" state where still present.
-    orig_date      = reversed_revs[0].date if reversed_revs else None
-    orig_collector = reversed_revs[0].recorder if reversed_revs else None
+    # Original payment DATE, recovered from the reversed rows. The original
+    # payment COLLECTOR is intentionally NOT exposed in the refunds/cancellations
+    # history — collector identity is shown only on normal payment pages and
+    # active receipts, never here.
+    orig_date = reversed_revs[0].date if reversed_revs else None
 
     return render_template(
         'fees/refund_event_detail.html',
@@ -2778,7 +2792,6 @@ def refund_event_detail(event_id):
         inst_rows=inst_rows,
         rev_rows=rev_rows,
         orig_date=orig_date,
-        orig_collector=orig_collector,
         print_date=date.today(),
     )
 

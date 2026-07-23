@@ -102,10 +102,6 @@
         <div class="text-muted" style="font-size:12px">تاريخ الدفعة الأصلية</div>
         <div class="fw-600">{{ orig_date.strftime('%Y-%m-%d') if orig_date else '—' }}</div>
       </div>
-      <div class="col-md-3">
-        <div class="text-muted" style="font-size:12px">محصِّل الدفعة الأصلية</div>
-        <div class="fw-600">{{ orig_collector.full_name if orig_collector else '—' }}</div>
-      </div>
     </div>
 
     <div class="alert alert-light border mt-3 mb-0">
@@ -227,7 +223,6 @@
           <th>المبلغ</th>
           <th>تاريخ الإيراد</th>
           <th>مرجع العملية</th>
-          <th>محصِّل</th>
           <th>تاريخ العكس</th>
         </tr>
       </thead>
@@ -238,11 +233,10 @@
           <td class="text-danger fw-600">{{ '{:,.0f}'.format(rr.rev.amount or 0) }}</td>
           <td style="white-space:nowrap">{{ rr.rev.date.strftime('%Y-%m-%d') if rr.rev.date else '—' }}</td>
           <td>{% if rr.op_ref %}<code style="font-size:11px">{{ rr.op_ref }}</code>{% else %}<span class="text-muted">—</span>{% endif %}</td>
-          <td class="text-muted" style="font-size:12.5px">{{ rr.rev.recorder.full_name if rr.rev.recorder else '—' }}</td>
           <td style="white-space:nowrap">{{ rr.rev.refunded_at.strftime('%Y-%m-%d %H:%M') if rr.rev.refunded_at else '—' }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="6" class="text-center text-muted py-4">
+        <tr><td colspan="5" class="text-center text-muted py-4">
           لا توجد سجلات إيراد مرتبطة بهذه العملية (لم يكن هناك مبلغ مدفوع نشط عند التنفيذ).
         </td></tr>
         {% endfor %}
