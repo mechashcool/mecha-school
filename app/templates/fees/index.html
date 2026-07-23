@@ -186,12 +186,12 @@
       <span>أنواع الرسوم</span>
     </a>
 
-    {% if current_user.has_permission('refund_payments') or current_user.has_permission('cancel_fees') %}
-    <!-- "سجل الاسترجاعات والإلغاءات" outlined -->
-    <a href="{{ url_for('fees.refunds_history') }}" class="fees-btn fees-btn-outline">
-      <i class="bi bi-clock-history"></i>
-      <span>سجل الاسترجاعات والإلغاءات</span>
-    </a>
+    {% if current_user.is_school_admin or current_user.is_super_admin %}
+    <!-- "تذكيرات الأقساط" outlined — opens the reminder settings card below -->
+    <button type="button" class="fees-btn fees-btn-outline" id="feeReminderShortcut">
+      <i class="bi bi-bell-fill"></i>
+      <span>تذكيرات الأقساط</span>
+    </button>
     {% endif %}
 
     <!-- "التقارير والتصدير" dropdown -->
@@ -724,6 +724,22 @@
       collapseEl.classList.add('show');
     }
   }
+})();
+
+// ── Reminder shortcut button — expand + scroll to the settings card ───────────
+(function () {
+  var btn = document.getElementById('feeReminderShortcut');
+  var collapseEl = document.getElementById('feeReminderCollapse');
+  var cardEl = document.getElementById('feeReminderCard');
+  if (!btn || !collapseEl) return;
+  btn.addEventListener('click', function () {
+    if (window.bootstrap) {
+      new bootstrap.Collapse(collapseEl, { toggle: false }).show();
+    } else {
+      collapseEl.classList.add('show');
+    }
+    (cardEl || collapseEl).scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 })();
 
 // ── Fee reminder settings — live preview + validation ─────────────────────────
