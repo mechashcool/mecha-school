@@ -431,13 +431,21 @@
 
   // Row actions dropdown: render at viewport level (Popper strategy:'fixed') so
   // the menu is not clipped by the .table-wrapper overflow context.
-  document.querySelectorAll('.fees-actions-toggle').forEach(function (toggle) {
-    var existing = bootstrap.Dropdown.getInstance(toggle);
-    if (existing) existing.dispose();
-    new bootstrap.Dropdown(toggle, {
-      popperConfig: function (defaultConfig) {
-        return Object.assign({}, defaultConfig, { strategy: 'fixed' });
-      }
+  // NOTE: this partial's <script> runs BEFORE the Bootstrap bundle loads at the
+  // end of <body>, so `bootstrap` is undefined at parse time. Touching it here
+  // synchronously would throw and abort the rest of this IIFE, leaving
+  // printReceipt / openRefundModal / openCancelFeeModal undefined. Defer to
+  // DOMContentLoaded, which fires after the bundle has executed.
+  document.addEventListener('DOMContentLoaded', function () {
+    if (!window.bootstrap) return;
+    document.querySelectorAll('.fees-actions-toggle').forEach(function (toggle) {
+      var existing = bootstrap.Dropdown.getInstance(toggle);
+      if (existing) existing.dispose();
+      new bootstrap.Dropdown(toggle, {
+        popperConfig: function (defaultConfig) {
+          return Object.assign({}, defaultConfig, { strategy: 'fixed' });
+        }
+      });
     });
   });
 
