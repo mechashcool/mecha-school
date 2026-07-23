@@ -89,15 +89,62 @@ def _overdue_installments_query(school, *, search='', fee_type_filter='all',
 
 def _notify_fee_parents(student_id, title, body, screen, *, fee_record_id=None,
                         installment_id=None):
-    """FCM push to a student's linked parents after a fee/payment change.
+    """In-app Notification rows + FCM push to a student's linked parents after a
+    fee/payment change.
 
     Called only after the DB transaction has committed. Parents are resolved
     server-side from the student→parent link (school isolation inherited); no
     client-supplied identifier is trusted. The body carries no amounts beyond
-    what the caller passes. Never raises — push must not fail a payment.
+    what the caller passes. Never raises — notification/push must not fail a
+    payment.
+
+    Two distinct delivery channels are written here, mirroring the homework and
+    attendance flows:
+      1. In-app `Notification` rows (one per linked parent) — the ONLY source
+         the mobile parent feed (`/parent/notifications`) reads. Without these
+         rows the parent never sees the fee/payment in the app.
+      2. FCM push via NotificationService (also persists PushNotification audit
+         rows). Unchanged existing behavior.
     """
     if not student_id:
         return
+
+    # ── Channel 1: in-app Notification rows ───────────────────────────────────
+    # Resolve the student through the school-scoped ORM (Student is school-scoped
+    # but NOT year-scoped, so prior-year installment payments still resolve). A
+    # student_id that does not belong to the acting school returns None here and
+    # no notification is created — fail-closed cross-school isolation. The
+    # Notification row is tagged with the student's own school_id; the mobile
+    # feed filters `Notification.school_id == user.school_id`, so even a corrupt
+    # cross-school parent link could never surface another school's fee event.
+    try:
+        from app.models import Notification, parent_students
+        student = Student.query.get(student_id)
+        if student is not None:
+            parent_ids = [
+                row[0] for row in
+                db.session.query(parent_students.c.user_id)
+                .filter(parent_students.c.student_id == student_id)
+                .all()
+            ]
+            for uid in parent_ids:
+                db.session.add(Notification(
+                    school_id      = student.school_id,
+                    title          = title,
+                    body           = body,
+                    ntype          = 'fee',
+                    target_user_id = uid,
+                    created_by     = None,
+                ))
+            if parent_ids:
+                db.session.commit()
+                _log.info('[fees] in-app fee notification created student_id=%s parents=%d',
+                          student_id, len(parent_ids))
+    except Exception:
+        db.session.rollback()
+        _log.exception('[fees] in-app notification create failed student_id=%s', student_id)
+
+    # ── Channel 2: FCM push (+ PushNotification audit rows) ────────────────────
     data = {
         'type':   'fee',
         'screen': screen,            # 'fees'
