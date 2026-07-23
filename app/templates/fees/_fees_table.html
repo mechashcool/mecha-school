@@ -491,7 +491,9 @@
           ' · المتبقي: <b>' + _fmt(d.remaining) + '</b><br>' +
           'المبلغ المسترجع: <b class="text-danger">' + _fmt(d.refund_amount) + '</b>' +
           (d.op_refs && d.op_refs.length ?
-            '<br>عمليات الدفع الأصلية: <code>' + d.op_refs.join('، ') + '</code>' : '');
+            '<br>عمليات الدفع الأصلية: <code>' + d.op_refs.join('، ') + '</code>' : '') +
+          (d.legacy ?
+            '<br><span class="badge bg-secondary">دفعة قديمة — مطابقة دقيقة عبر رقم الإيصال</span>' : '');
         details.style.display = 'block';
         _refundBtn.disabled = false;
       })
@@ -573,7 +575,9 @@
           'المدفوع: <b>' + _fmt(d.paid) + '</b> · المتبقي: <b>' + _fmt(d.remaining) + '</b><br>' +
           'المبلغ المسترجع عند الإلغاء: <b class="text-danger">' + _fmt(d.refund_amount) + '</b>' +
           (d.op_refs && d.op_refs.length ?
-            '<br>عمليات الدفع الأصلية: <code>' + d.op_refs.join('، ') + '</code>' : '');
+            '<br>عمليات الدفع الأصلية: <code>' + d.op_refs.join('، ') + '</code>' : '') +
+          (d.legacy ?
+            '<br><span class="badge bg-secondary">يشمل دفعات قديمة — مطابقة دقيقة عبر رقم الإيصال</span>' : '');
         details.style.display = 'block';
         _cancelBtn.disabled = false;
       })

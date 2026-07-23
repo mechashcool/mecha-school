@@ -546,10 +546,17 @@ def resolve_payment_amount_for_receipt(inst, op_ref=None):
 #
 # There is no separate payment/allocation table: a payment "allocation" is one
 # ``Revenue`` row tagged ``... - قسط #{no} - {inst.receipt_no} [TXN:{op_ref}]``
-# (see stage_installment_payment). A refund therefore:
+# (see stage_installment_payment). Two EXACT matching mechanisms exist, never
+# mixed with any heuristic (date/amount/method/collector/notes/proximity):
+#   * MODERN — rows carrying ``- {receipt_no} [TXN:{op_ref}]`` (primary; unchanged);
+#   * LEGACY — pre-TXN rows carrying the installment's globally-unique
+#     ``receipt_no`` token but no ``[TXN:...]`` tag (fallback only).
+# Both bind a row to exactly ONE installment via the UNIQUE receipt_no, and a
+# refund/cancellation proceeds only when the identifiable active total equals the
+# installment's ``received_amount`` EXACTLY. A refund therefore:
 #   1. finds the EXACT active (non-refunded) Revenue rows for the installment,
-#      identified only by that installment's globally-unique ``receipt_no`` +
-#      the ``[TXN:...]`` tag — never by timestamp or amount heuristics;
+#      identified only by that installment's globally-unique ``receipt_no`` (with
+#      or without the ``[TXN:...]`` tag) — never by timestamp or amount heuristics;
 #   2. flags those rows refunded (``refunded_at`` + ``refund_event_id``) so they
 #      drop out of every active-income total while remaining as history;
 #   3. restores the installment's ``received_amount`` / status / paid fields;
@@ -590,29 +597,104 @@ def _active_allocations_for_installment(inst):
     return [r for r in rows if fragment in (r.description or '')]
 
 
+def _receipt_token_in(description, receipt_no):
+    """True when ``receipt_no`` appears in ``description`` as a whole token —
+    bounded by non-alphanumeric characters on both sides — so a receipt number
+    can never match as a prefix/suffix of a longer token. ``receipt_no`` is
+    globally unique per installment (``FeeInstallment.receipt_no`` UNIQUE), so an
+    exact token match binds the row to exactly ONE installment (hence one student
+    and one fee) with no cross-record leakage."""
+    if not receipt_no:
+        return False
+    return re.search(r'(?<![A-Za-z0-9])' + re.escape(receipt_no) + r'(?![A-Za-z0-9])',
+                     description or '') is not None
+
+
+def _legacy_allocations_for_installment(inst):
+    """Legacy fallback: active (non-refunded) ``Revenue`` rows for a pre-TXN
+    payment, matched EXCLUSIVELY by this installment's globally-unique
+    ``receipt_no`` embedded in the description and carrying NO ``[TXN:...]`` tag.
+
+    This is only a *candidate* set — the caller still requires the exact sum to
+    equal the installment's ``received_amount`` before anything is reversed
+    (:func:`_installment_refund_preview`). Never uses date, amount, method,
+    collector, notes, or proximity. ``bypass_tenant_scope`` only relaxes the year
+    filter; the explicit ``school_id`` filter plus the unique-``receipt_no`` token
+    prevent any cross-school / cross-student / cross-fee match. Modern tagged rows
+    are excluded here (they keep their own exact TXN path unchanged)."""
+    if not inst.receipt_no:
+        return []
+    rows = (
+        Revenue.query
+        .execution_options(bypass_tenant_scope=True)
+        .filter(Revenue.school_id == inst.school_id,
+                Revenue.refunded_at.is_(None),
+                Revenue.description.like(f'%{inst.receipt_no}%'))
+        .all()
+    )
+    return [r for r in rows
+            if '[TXN:' not in (r.description or '')
+            and _receipt_token_in(r.description, inst.receipt_no)]
+
+
 def _installment_refund_preview(inst):
     """Compute the confirmation payload + whether a safe exact refund is possible.
 
-    Returns dict with refundable flag, the identifiable active amount, and the
-    installment's current figures. A refund is only offered when the identifiable
-    tagged active allocations sum to EXACTLY the installment's current
-    ``received_amount`` — otherwise part of the received money is unlinked
-    (historical) and must not be guessed; the caller shows a clear message and
-    changes nothing.
+    Two exact mechanisms, never mixed with any heuristic:
+      * MODERN — rows carrying ``- {receipt_no} [TXN:{op_ref}]`` (unchanged);
+      * LEGACY — pre-TXN rows carrying the installment's unique ``receipt_no``
+        token but no ``[TXN:...]`` tag.
+    Both are matched EXCLUSIVELY by the globally-unique receipt_no, so a matched
+    row can only belong to this installment. A refund is offered only when the
+    identifiable active total (modern ∪ legacy) equals EXACTLY the installment's
+    current ``received_amount``. Otherwise ``reason_code`` explains why:
+      * ``'no_rows'``  — no active Revenue rows are linked to this installment;
+      * ``'mismatch'`` — matched rows exist but their sum ≠ received_amount.
     """
     received = Decimal(str(inst.received_amount or 0))
-    allocs   = _active_allocations_for_installment(inst)
-    identifiable = sum((Decimal(str(r.amount)) for r in allocs), Decimal('0'))
-    op_refs = sorted({_extract_op_ref(r.description) for r in allocs
+    tagged   = _active_allocations_for_installment(inst)
+    legacy   = _legacy_allocations_for_installment(inst)
+    allocs   = tagged + legacy
+    tagged_amount = sum((Decimal(str(r.amount)) for r in tagged), Decimal('0'))
+    legacy_amount = sum((Decimal(str(r.amount)) for r in legacy), Decimal('0'))
+    identifiable  = tagged_amount + legacy_amount
+    op_refs = sorted({_extract_op_ref(r.description) for r in tagged
                       if _extract_op_ref(r.description)})
-    refundable = bool(allocs) and identifiable == received and received > 0
+
+    if not allocs:
+        reason_code = 'no_rows'
+        refundable  = False
+    elif identifiable != received or received <= 0:
+        reason_code = 'mismatch'
+        refundable  = False
+    else:
+        reason_code = None
+        refundable  = True
+
     return {
         'received':      received,
         'identifiable':  identifiable,
+        'tagged_amount': tagged_amount,
+        'legacy_amount': legacy_amount,
         'op_refs':       op_refs,
         'allocations':   allocs,
+        'legacy_used':   bool(legacy),
         'refundable':    refundable,
+        'reason_code':   reason_code,
     }
+
+
+def _refund_block_message(prev):
+    """Precise Arabic message explaining why a refund/cancellation is blocked."""
+    if prev['reason_code'] == 'no_rows':
+        return ('لم يتم العثور على أي سجلات إيراد نشطة مرتبطة برقم إيصال هذا القسط، '
+                'لذلك لا يمكن استرجاعه. لم يتم تغيير أي بيانات مالية.')
+    if prev['reason_code'] == 'mismatch':
+        _diff = prev['received'] - prev['identifiable']
+        return (f'مجموع سجلات الإيراد المطابقة ({prev["identifiable"]}) لا يساوي المبلغ '
+                f'المستلم لهذا القسط ({prev["received"]})؛ الفرق غير المطابَق '
+                f'{_diff}. لا يمكن الاسترجاع بدقة، ولم يتم تغيير أي بيانات مالية.')
+    return None
 
 
 def refund_installment(inst, *, reason, performed_by):
@@ -627,13 +709,14 @@ def refund_installment(inst, *, reason, performed_by):
     """
     prev = _installment_refund_preview(inst)
     if not prev['refundable']:
-        raise FeeValidationError(
-            'لا يمكن استرجاع هذا القسط تلقائياً: المبلغ المستلم لا يطابق دفعات '
-            'مسجّلة قابلة للاسترجاع بدقة (قد يكون سجلاً تاريخياً غير مرتبط بعملية دفع). '
-            'لم يتم تغيير أي بيانات مالية.'
-        )
+        raise FeeValidationError(_refund_block_message(prev))
     allocs = prev['allocations']
     total  = prev['identifiable']
+
+    # A legacy (pre-TXN) reversal is flagged distinctly for audit. op_refs are the
+    # real TXN references only — legacy rows have none and NONE are fabricated;
+    # their exact linkage is the receipt_no + the refund_event_id set below.
+    _event_type = 'installment_refund_legacy' if prev['legacy_used'] else 'installment_refund'
 
     event = FeeRefundEvent(
         school_id        = inst.school_id,
@@ -641,7 +724,7 @@ def refund_installment(inst, *, reason, performed_by):
         student_id       = inst.fee_record.student_id,
         fee_record_id    = inst.fee_record_id,
         installment_id   = inst.id,
-        event_type       = 'installment_refund',
+        event_type       = _event_type,
         amount           = total,
         reason           = reason,
         op_refs          = ','.join(prev['op_refs']),
@@ -672,10 +755,11 @@ def cancel_fee_record(rec, locked_installments, *, reason, performed_by):
     """Cancel a whole fee and reverse every active allocation across all its
     installments. Stages mutations; the CALLER owns the lock and commit.
 
-    Refuses (raising ``FeeValidationError``, changing nothing) when any
-    installment holds received money that is not fully linked to reversible
-    tagged allocations — the same "never guess historical money" rule as
-    single-installment refund.
+    Each installment is reconciled independently through the same exact
+    mechanisms as a single refund — MODERN tagged allocations and the LEGACY
+    unique-``receipt_no`` fallback. Refuses (raising ``FeeValidationError``,
+    changing nothing) when ANY installment holds received money that cannot be
+    reconciled exactly, naming that installment number and the unmatched amount.
     """
     if rec.cancelled_at is not None:
         raise FeeValidationError('هذا الرسم ملغى بالفعل.')
@@ -686,9 +770,11 @@ def cancel_fee_record(rec, locked_installments, *, reason, performed_by):
     for inst in locked_installments:
         prev = _installment_refund_preview(inst)
         if prev['received'] > 0 and not prev['refundable']:
+            _unmatched = prev['received'] - prev['identifiable']
             raise FeeValidationError(
                 f'لا يمكن إلغاء الرسم: القسط رقم {inst.installment_no} يحتوي مبلغاً '
-                'مستلماً غير مرتبط بعملية دفع قابلة للاسترجاع بدقة (سجل تاريخي). '
+                f'مستلماً ({prev["received"]}) لا يمكن مطابقته بدقة مع سجلات إيراد '
+                f'نشطة (المطابَق: {prev["identifiable"]}، غير المطابَق: {_unmatched}). '
                 'لم يتم تغيير أي بيانات مالية.'
             )
         plan.append((inst, prev))
@@ -1660,11 +1746,10 @@ def refund_preview(inst_id):
         'refund_amount':     float(prev['identifiable']),
         'op_refs':           prev['op_refs'],
         'refundable':        prev['refundable'],
+        'legacy':            prev['legacy_used'],
+        'reason_code':       prev['reason_code'],
         'is_cancelled':      bool(rec and rec.is_cancelled),
-        'message': None if prev['refundable'] else (
-            'لا يوجد مبلغ نشط قابل للاسترجاع لهذا القسط، أو أن المبلغ المستلم غير '
-            'مرتبط بعملية دفع قابلة للاسترجاع بدقة (سجل تاريخي).'
-        ),
+        'message':           None if prev['refundable'] else _refund_block_message(prev),
     })
 
 
@@ -1764,19 +1849,24 @@ def cancel_fee_preview(fee_id):
 
     rows, all_ops, total_refund, blocking = [], set(), Decimal('0'), None
     paid = Decimal('0')
+    _legacy_any = False
     for inst in insts:
         prev = _installment_refund_preview(inst)
         paid += prev['received']
-        if prev['received'] > 0 and not prev['refundable']:
-            blocking = (f'القسط رقم {inst.installment_no} يحتوي مبلغاً مستلماً غير '
-                        'مرتبط بعملية دفع قابلة للاسترجاع بدقة (سجل تاريخي).')
+        if prev['received'] > 0 and not prev['refundable'] and blocking is None:
+            _unmatched = prev['received'] - prev['identifiable']
+            blocking = (f'القسط رقم {inst.installment_no}: المبلغ المستلم '
+                        f'({prev["received"]}) لا يمكن مطابقته بدقة مع سجلات إيراد '
+                        f'نشطة (المطابَق: {prev["identifiable"]}، غير المطابَق: {_unmatched}).')
         total_refund += prev['identifiable']
         all_ops.update(prev['op_refs'])
+        _legacy_any = _legacy_any or prev['legacy_used']
         rows.append({
             'installment_no': inst.installment_no,
             'amount':         float(inst.amount or 0),
             'received':       float(prev['received']),
             'refundable':     prev['refundable'] or prev['received'] == 0,
+            'legacy':         prev['legacy_used'],
         })
 
     net = Decimal(str(rec.net_amount))
@@ -1793,6 +1883,7 @@ def cancel_fee_preview(fee_id):
         'refund_amount':  float(total_refund),
         'op_refs':        sorted(all_ops),
         'installments':   rows,
+        'legacy':         _legacy_any,
         'is_cancelled':   bool(rec.is_cancelled),
         'cancellable':    (blocking is None) and not rec.is_cancelled,
         'message':        ('هذا الرسم ملغى بالفعل.' if rec.is_cancelled else blocking),
