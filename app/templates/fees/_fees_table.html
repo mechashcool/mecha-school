@@ -57,18 +57,31 @@
         </td>
         <td style="font-size:12.5px">{{ rec.academic_year.name if rec.academic_year }}</td>
         <td>
-          <button class="btn btn-sm btn-outline-primary"
-                  onclick="toggleInstallments({{ rec.id }})">
-            <i class="bi bi-list-ul me-1"></i>الأقساط
-          </button>
-          {% if current_user.has_permission('cancel_fees') and not rec.is_cancelled and not is_historical_year %}
-          <button type="button" class="btn btn-sm btn-outline-danger"
-                  onclick="openCancelFeeModal({{ rec.id }})">
-            <i class="bi bi-x-octagon me-1"></i>إلغاء الرسم بالكامل
-          </button>
-          {% elif rec.is_cancelled %}
-          <span class="badge-status badge-overdue" title="{{ rec.cancellation_reason or '' }}">ملغى</span>
-          {% endif %}
+          <div class="fee-act-cell">
+            <button class="btn btn-sm btn-outline-primary fee-act"
+                    onclick="toggleInstallments({{ rec.id }})">
+              <i class="bi bi-list-ul"></i>الأقساط
+            </button>
+            {% if current_user.has_permission('cancel_fees') and not rec.is_cancelled and not is_historical_year %}
+            <div class="dropdown">
+              <button type="button"
+                      class="btn btn-sm btn-outline-secondary fee-act fee-act-icon fees-actions-toggle"
+                      data-bs-toggle="dropdown" aria-expanded="false" aria-label="الإجراءات" title="الإجراءات">
+                <i class="bi bi-three-dots-vertical"></i>
+              </button>
+              <ul class="dropdown-menu dropdown-menu-end">
+                <li>
+                  <button type="button" class="dropdown-item text-danger"
+                          onclick="openCancelFeeModal({{ rec.id }})">
+                    <i class="bi bi-x-octagon me-2"></i>إلغاء الرسم بالكامل
+                  </button>
+                </li>
+              </ul>
+            </div>
+            {% elif rec.is_cancelled %}
+            <span class="badge-status badge-overdue" title="{{ rec.cancellation_reason or '' }}">ملغى</span>
+            {% endif %}
+          </div>
         </td>
       </tr>
       {# Installments sub-row #}
@@ -120,12 +133,13 @@
                     {% else %}
                     {# Unpaid → دفع. Partial/paid → طباعة + استرجاع المدفوع (and
                        دفع again when a balance remains, e.g. after a refund). #}
+                    <div class="fee-act-cell">
                     {% if inst_remaining > 0 and _can_pay and not is_historical_year %}
-                    <button type="button" class="btn btn-sm btn-success"
+                    <button type="button" class="btn btn-sm btn-success fee-act"
                             onclick="openPayModal({{ inst.id }}, '{{ rec.student.full_name|e }}',
                                                   {{ inst.amount|float }}, {{ inst_received }},
                                                   {{ inst.installment_no }})">
-                      <i class="bi bi-cash-stack me-1"></i>دفع
+                      <i class="bi bi-cash-stack"></i>دفع
                     </button>
                     {% elif inst_remaining > 0 and not is_historical_year and not _can_pay %}
                     {# refund-only user: no pay button #}
@@ -133,17 +147,18 @@
                     <span class="text-muted" style="font-size:12px">مؤرشف</span>
                     {% endif %}
                     {% if inst_received > 0 and _can_pay %}
-                    <button type="button" class="btn btn-sm btn-outline-secondary"
-                            onclick="printReceipt({{ inst.id }})">
-                      <i class="bi bi-printer me-1"></i>طباعة
+                    <button type="button" class="btn btn-sm btn-outline-secondary fee-act fee-act-icon"
+                            onclick="printReceipt({{ inst.id }})" title="طباعة" aria-label="طباعة">
+                      <i class="bi bi-printer"></i>
                     </button>
                     {% endif %}
                     {% if inst_received > 0 and _can_refund and not is_historical_year %}
-                    <button type="button" class="btn btn-sm btn-outline-warning"
-                            onclick="openRefundModal({{ inst.id }})">
-                      <i class="bi bi-arrow-counterclockwise me-1"></i>استرجاع المدفوع
+                    <button type="button" class="btn btn-sm btn-outline-warning fee-act"
+                            onclick="openRefundModal({{ inst.id }})" title="استرجاع المدفوع">
+                      <i class="bi bi-arrow-counterclockwise"></i>استرجاع
                     </button>
                     {% endif %}
+                    </div>
                     {% endif %}
                   </td>
                   {% endif %}
@@ -219,28 +234,30 @@
         <td style="font-size:12.5px">{{ rec.academic_year.name if rec and rec.academic_year else '—' }}</td>
         {% if _has_actions %}
         <td>
+          <div class="fee-act-cell">
           {% if not is_historical_year and _can_pay %}
-          <button type="button" class="btn btn-sm btn-success"
+          <button type="button" class="btn btn-sm btn-success fee-act"
                   onclick="openPayModal({{ inst.id }}, '{{ (student.full_name if student else '')|e }}',
                                         {{ inst.amount|float }}, {{ inst_received }},
                                         {{ inst.installment_no }})">
-            <i class="bi bi-cash-stack me-1"></i>دفع
+            <i class="bi bi-cash-stack"></i>دفع
           </button>
           {% elif is_historical_year %}
           <span class="text-muted" style="font-size:12px">مؤرشف</span>
           {% endif %}
           {% if inst.receipt_no and _can_pay %}
-          <button type="button" class="btn btn-sm btn-outline-secondary"
-                  onclick="printReceipt({{ inst.id }})">
-            <i class="bi bi-printer me-1"></i>طباعة
+          <button type="button" class="btn btn-sm btn-outline-secondary fee-act fee-act-icon"
+                  onclick="printReceipt({{ inst.id }})" title="طباعة" aria-label="طباعة">
+            <i class="bi bi-printer"></i>
           </button>
           {% endif %}
           {% if inst_received > 0 and _can_refund and not is_historical_year %}
-          <button type="button" class="btn btn-sm btn-outline-warning"
-                  onclick="openRefundModal({{ inst.id }})">
-            <i class="bi bi-arrow-counterclockwise me-1"></i>استرجاع المدفوع
+          <button type="button" class="btn btn-sm btn-outline-warning fee-act"
+                  onclick="openRefundModal({{ inst.id }})" title="استرجاع المدفوع">
+            <i class="bi bi-arrow-counterclockwise"></i>استرجاع
           </button>
           {% endif %}
+          </div>
         </td>
         {% endif %}
       </tr>
@@ -259,6 +276,17 @@
 
 
 {% macro fees_modal_and_js() %}
+{# Compact, consistent sizing for all table action controls (fee rows,
+   installment sub-rows, overdue rows). Small utility only — no redesign. #}
+<style>
+  .fee-act-cell { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+  .btn.fee-act {
+    height:32px; padding:0 10px; font-size:12.5px; line-height:1; border-radius:8px;
+    display:inline-flex; align-items:center; gap:5px; white-space:nowrap;
+  }
+  .btn.fee-act.fee-act-icon { padding:0 9px; }
+  .btn.fee-act i { font-size:13px; margin:0; }
+</style>
 {# Pay modal — rendered once per page outside any card wrapper #}
 <div class="modal fade" id="payModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">
@@ -400,6 +428,18 @@
     var row = document.getElementById('inst_' + id);
     row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
   };
+
+  // Row actions dropdown: render at viewport level (Popper strategy:'fixed') so
+  // the menu is not clipped by the .table-wrapper overflow context.
+  document.querySelectorAll('.fees-actions-toggle').forEach(function (toggle) {
+    var existing = bootstrap.Dropdown.getInstance(toggle);
+    if (existing) existing.dispose();
+    new bootstrap.Dropdown(toggle, {
+      popperConfig: function (defaultConfig) {
+        return Object.assign({}, defaultConfig, { strategy: 'fixed' });
+      }
+    });
+  });
 
   var _lastRemaining = 0;
   var _paySubmitting = false;
