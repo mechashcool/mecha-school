@@ -61,9 +61,20 @@
                   onclick="toggleInstallments({{ rec.id }})">
             <i class="bi bi-list-ul me-1"></i>الأقساط
           </button>
+          {% if current_user.has_permission('cancel_fees') and not rec.is_cancelled and not is_historical_year %}
+          <button type="button" class="btn btn-sm btn-outline-danger"
+                  onclick="openCancelFeeModal({{ rec.id }})">
+            <i class="bi bi-x-octagon me-1"></i>إلغاء الرسم بالكامل
+          </button>
+          {% elif rec.is_cancelled %}
+          <span class="badge-status badge-overdue" title="{{ rec.cancellation_reason or '' }}">ملغى</span>
+          {% endif %}
         </td>
       </tr>
       {# Installments sub-row #}
+      {% set _can_pay    = current_user.has_permission('record_payments') %}
+      {% set _can_refund = current_user.has_permission('refund_payments') %}
+      {% set _can_act    = _can_pay or _can_refund %}
       <tr id="inst_{{ rec.id }}" style="display:none;background:#f8fbff">
         <td colspan="{{ _cols }}" class="p-0">
           <div class="px-4 py-3">
@@ -72,7 +83,7 @@
                 <tr>
                   <th>القسط</th><th>المبلغ</th><th>المستلم</th><th>المتبقي</th>
                   <th>الاستحقاق</th><th>الدفع</th><th>الحالة</th><th>الإيصال</th>
-                  {% if current_user.has_permission('record_payments') %}
+                  {% if _can_act %}
                   <th>إجراء</th>
                   {% endif %}
                 </tr>
@@ -82,6 +93,7 @@
                 {% if installment_filter == 'all' or inst.installment_no == installment_filter|int %}
                 {% set inst_received  = inst.received_amount|float if inst.received_amount else 0 %}
                 {% set inst_remaining = (inst.amount|float) - inst_received %}
+                {% set inst_cancelled = inst.status == 'cancelled' or rec.is_cancelled %}
                 <tr>
                   <td>القسط {{ inst.installment_no }}</td>
                   <td>{{ '{:,.0f}'.format(inst.amount) }}</td>
@@ -93,29 +105,45 @@
                   <td>{{ inst.paid_date.strftime('%Y-%m-%d') if inst.paid_date else '—' }}</td>
                   <td>
                     <span class="badge-status badge-{{ inst.status }}">
-                      {% if inst.status == 'paid'     %}مدفوع
+                      {% if inst_cancelled            %}ملغى
+                      {% elif inst.status == 'paid'    %}مدفوع
                       {% elif inst.status == 'partial' %}جزئي
                       {% elif inst.status == 'overdue' %}متأخر
                       {% else %}معلق{% endif %}
                     </span>
                   </td>
                   <td><code>{{ inst.receipt_no or '—' }}</code></td>
-                  {% if current_user.has_permission('record_payments') %}
+                  {% if _can_act %}
                   <td>
-                    {% if inst.status != 'paid' and not is_historical_year %}
+                    {% if inst_cancelled %}
+                    <span class="text-muted" style="font-size:12px">ملغى</span>
+                    {% else %}
+                    {# Unpaid → دفع. Partial/paid → طباعة + استرجاع المدفوع (and
+                       دفع again when a balance remains, e.g. after a refund). #}
+                    {% if inst_remaining > 0 and _can_pay and not is_historical_year %}
                     <button type="button" class="btn btn-sm btn-success"
                             onclick="openPayModal({{ inst.id }}, '{{ rec.student.full_name|e }}',
                                                   {{ inst.amount|float }}, {{ inst_received }},
                                                   {{ inst.installment_no }})">
                       <i class="bi bi-cash-stack me-1"></i>دفع
                     </button>
-                    {% elif inst.status != 'paid' %}
+                    {% elif inst_remaining > 0 and not is_historical_year and not _can_pay %}
+                    {# refund-only user: no pay button #}
+                    {% elif inst_remaining > 0 %}
                     <span class="text-muted" style="font-size:12px">مؤرشف</span>
-                    {% else %}
+                    {% endif %}
+                    {% if inst_received > 0 and _can_pay %}
                     <button type="button" class="btn btn-sm btn-outline-secondary"
                             onclick="printReceipt({{ inst.id }})">
                       <i class="bi bi-printer me-1"></i>طباعة
                     </button>
+                    {% endif %}
+                    {% if inst_received > 0 and _can_refund and not is_historical_year %}
+                    <button type="button" class="btn btn-sm btn-outline-warning"
+                            onclick="openRefundModal({{ inst.id }})">
+                      <i class="bi bi-arrow-counterclockwise me-1"></i>استرجاع المدفوع
+                    </button>
+                    {% endif %}
                     {% endif %}
                   </td>
                   {% endif %}
@@ -149,7 +177,9 @@
   / remaining / due date / academic year, plus its pay + print actions.
   Reuses openPayModal() and printReceipt() from fees_modal_and_js().
 #}
-{% set _has_actions = current_user.has_permission('record_payments') %}
+{% set _can_pay    = current_user.has_permission('record_payments') %}
+{% set _can_refund = current_user.has_permission('refund_payments') %}
+{% set _has_actions = _can_pay or _can_refund %}
 <div class="table-wrapper">
   <table class="table table-hover">
     <thead>
@@ -189,20 +219,26 @@
         <td style="font-size:12.5px">{{ rec.academic_year.name if rec and rec.academic_year else '—' }}</td>
         {% if _has_actions %}
         <td>
-          {% if not is_historical_year %}
+          {% if not is_historical_year and _can_pay %}
           <button type="button" class="btn btn-sm btn-success"
                   onclick="openPayModal({{ inst.id }}, '{{ (student.full_name if student else '')|e }}',
                                         {{ inst.amount|float }}, {{ inst_received }},
                                         {{ inst.installment_no }})">
             <i class="bi bi-cash-stack me-1"></i>دفع
           </button>
-          {% else %}
+          {% elif is_historical_year %}
           <span class="text-muted" style="font-size:12px">مؤرشف</span>
           {% endif %}
-          {% if inst.receipt_no %}
+          {% if inst.receipt_no and _can_pay %}
           <button type="button" class="btn btn-sm btn-outline-secondary"
                   onclick="printReceipt({{ inst.id }})">
             <i class="bi bi-printer me-1"></i>طباعة
+          </button>
+          {% endif %}
+          {% if inst_received > 0 and _can_refund and not is_historical_year %}
+          <button type="button" class="btn btn-sm btn-outline-warning"
+                  onclick="openRefundModal({{ inst.id }})">
+            <i class="bi bi-arrow-counterclockwise me-1"></i>استرجاع المدفوع
           </button>
           {% endif %}
         </td>
@@ -279,6 +315,82 @@
     </div>
   </div>
 </div>
+
+{# Refund modal — استرجاع المدفوع (single installment) #}
+<div class="modal fade" id="refundModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <form id="refundForm" autocomplete="off">
+        <div class="modal-header">
+          <h5 class="modal-title">
+            <i class="bi bi-arrow-counterclockwise text-warning me-1"></i>
+            استرجاع المبلغ المدفوع للقسط
+          </h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div id="refundLoading" class="text-center text-muted py-3">
+            <span class="spinner-border spinner-border-sm me-1"></span>جارٍ تحميل التفاصيل...
+          </div>
+          <div id="refundBlocked" class="alert alert-warning mb-0" style="display:none"></div>
+          <div id="refundDetails" style="display:none">
+            <div class="alert alert-secondary mb-3" id="refundCtx" style="font-size:13px"></div>
+            <div class="alert alert-warning py-2" style="font-size:13px">
+              سيُعاد المبلغ المستلم لهذا القسط إلى صفر، وسيصبح القسط مستحقاً وقابلاً للدفع من جديد.
+              يُحفظ الدفع الأصلي والإيصال كسجل تاريخي ويُعلَّم كـ«مسترجع».
+            </div>
+            <label class="form-label">سبب الاسترجاع <span class="text-danger">*</span></label>
+            <textarea name="reason" id="refundReason" rows="2" class="form-control" required></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">إلغاء</button>
+          <button type="submit" id="refundSubmitBtn" class="btn btn-warning" disabled>
+            <i class="bi bi-check-circle-fill me-1"></i>تأكيد الاسترجاع
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{# Cancel-fee modal — إلغاء الرسم بالكامل #}
+<div class="modal fade" id="cancelFeeModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <form id="cancelFeeForm" autocomplete="off">
+        <div class="modal-header">
+          <h5 class="modal-title">
+            <i class="bi bi-x-octagon text-danger me-1"></i>
+            إلغاء الرسم بالكامل
+          </h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div id="cancelLoading" class="text-center text-muted py-3">
+            <span class="spinner-border spinner-border-sm me-1"></span>جارٍ تحميل التفاصيل...
+          </div>
+          <div id="cancelBlocked" class="alert alert-warning mb-0" style="display:none"></div>
+          <div id="cancelDetails" style="display:none">
+            <div class="alert alert-secondary mb-3" id="cancelCtx" style="font-size:13px"></div>
+            <div class="alert alert-danger py-2" style="font-size:13px">
+              سيتم إلغاء هذا الرسم وجميع أقساطه، واسترجاع كل المبالغ المدفوعة عليه.
+              يُحفظ الرسم والمدفوعات والإيصالات كسجل تاريخي ولن يقبل الرسم أي مدفوعات جديدة.
+            </div>
+            <label class="form-label">سبب الإلغاء <span class="text-danger">*</span></label>
+            <textarea name="reason" id="cancelReason" rows="2" class="form-control" required></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">إلغاء</button>
+          <button type="submit" id="cancelSubmitBtn" class="btn btn-danger" disabled>
+            <i class="bi bi-check-circle-fill me-1"></i>تأكيد الإلغاء
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
 <script>
 (function () {
   if (window._feesTableJsLoaded) return;
@@ -338,6 +450,171 @@
     var win = window.open(url, '_blank');
     if (win) { win.onload = function () { win.print(); }; }
   };
+
+  var _fmt = function (n) { return (parseFloat(n) || 0).toLocaleString(); };
+
+  // ── Refund (استرجاع المدفوع) ────────────────────────────────────────────────
+  var _refundSubmitting = false;
+  var _refundBtn = document.getElementById('refundSubmitBtn');
+
+  window.openRefundModal = function (instId) {
+    var loading = document.getElementById('refundLoading');
+    var blocked = document.getElementById('refundBlocked');
+    var details = document.getElementById('refundDetails');
+    loading.style.display = 'block';
+    blocked.style.display = 'none';
+    details.style.display = 'none';
+    _refundBtn.disabled = true;
+    _refundSubmitting = false;
+    _refundBtn.innerHTML = '<i class="bi bi-check-circle-fill me-1"></i>تأكيد الاسترجاع';
+    document.getElementById('refundReason').value = '';
+    document.getElementById('refundForm').action =
+      "{{ url_for('fees.refund_installment_route', inst_id=0) }}".replace('/0', '/' + instId);
+
+    new bootstrap.Modal(document.getElementById('refundModal')).show();
+
+    var pu = "{{ url_for('fees.refund_preview', inst_id=0) }}".replace('/0', '/' + instId);
+    fetch(pu, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        loading.style.display = 'none';
+        if (d.status !== 'success' || !d.refundable) {
+          blocked.textContent = (d && d.message) ? d.message :
+            'لا يمكن استرجاع هذا القسط.';
+          blocked.style.display = 'block';
+          return;
+        }
+        document.getElementById('refundCtx').innerHTML =
+          '<b>' + d.student_name + '</b> (' + (d.student_code || '') + ')<br>' +
+          'نوع الرسم: <b>' + d.fee_type + '</b> · القسط ' + d.installment_no + '<br>' +
+          'قيمة القسط: <b>' + _fmt(d.amount) + '</b> · المستلم: <b>' + _fmt(d.received) + '</b>' +
+          ' · المتبقي: <b>' + _fmt(d.remaining) + '</b><br>' +
+          'المبلغ المسترجع: <b class="text-danger">' + _fmt(d.refund_amount) + '</b>' +
+          (d.op_refs && d.op_refs.length ?
+            '<br>عمليات الدفع الأصلية: <code>' + d.op_refs.join('، ') + '</code>' : '');
+        details.style.display = 'block';
+        _refundBtn.disabled = false;
+      })
+      .catch(function () {
+        loading.style.display = 'none';
+        blocked.textContent = 'حدث خطأ أثناء تحميل تفاصيل الاسترجاع.';
+        blocked.style.display = 'block';
+      });
+  };
+
+  document.getElementById('refundForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (_refundSubmitting) return;
+    var reason = document.getElementById('refundReason').value.trim();
+    if (!reason) { alert('سبب الاسترجاع مطلوب.'); return; }
+    _refundSubmitting = true;
+    _refundBtn.disabled = true;
+    _refundBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>جارٍ التنفيذ...';
+    fetch(this.action, {
+      method: 'POST', body: new FormData(this),
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.status === 'success') {
+          bootstrap.Modal.getInstance(document.getElementById('refundModal')).hide();
+          alert(d.message); location.reload();
+        } else {
+          _refundSubmitting = false;
+          _refundBtn.disabled = false;
+          _refundBtn.innerHTML = '<i class="bi bi-check-circle-fill me-1"></i>تأكيد الاسترجاع';
+          alert(d.message || 'حدث خطأ أثناء الاسترجاع.');
+        }
+      })
+      .catch(function () {
+        _refundSubmitting = false;
+        _refundBtn.disabled = false;
+        _refundBtn.innerHTML = '<i class="bi bi-check-circle-fill me-1"></i>تأكيد الاسترجاع';
+        alert('حدث خطأ أثناء الاسترجاع.');
+      });
+  });
+
+  // ── Full-fee cancellation (إلغاء الرسم بالكامل) ──────────────────────────────
+  var _cancelSubmitting = false;
+  var _cancelBtn = document.getElementById('cancelSubmitBtn');
+
+  window.openCancelFeeModal = function (feeId) {
+    var loading = document.getElementById('cancelLoading');
+    var blocked = document.getElementById('cancelBlocked');
+    var details = document.getElementById('cancelDetails');
+    loading.style.display = 'block';
+    blocked.style.display = 'none';
+    details.style.display = 'none';
+    _cancelBtn.disabled = true;
+    _cancelSubmitting = false;
+    _cancelBtn.innerHTML = '<i class="bi bi-check-circle-fill me-1"></i>تأكيد الإلغاء';
+    document.getElementById('cancelReason').value = '';
+    document.getElementById('cancelFeeForm').action =
+      "{{ url_for('fees.cancel_fee_route', fee_id=0) }}".replace('/0', '/' + feeId);
+
+    new bootstrap.Modal(document.getElementById('cancelFeeModal')).show();
+
+    var pu = "{{ url_for('fees.cancel_fee_preview', fee_id=0) }}".replace('/0', '/' + feeId);
+    fetch(pu, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        loading.style.display = 'none';
+        if (d.status !== 'success' || !d.cancellable) {
+          blocked.textContent = (d && d.message) ? d.message :
+            'لا يمكن إلغاء هذا الرسم.';
+          blocked.style.display = 'block';
+          return;
+        }
+        document.getElementById('cancelCtx').innerHTML =
+          '<b>' + d.student_name + '</b> (' + (d.student_code || '') + ')<br>' +
+          'نوع الرسم: <b>' + d.fee_type + '</b><br>' +
+          'الإجمالي: <b>' + _fmt(d.total) + '</b> · الخصم: <b>' + _fmt(d.discount) + '</b>' +
+          ' · الصافي: <b>' + _fmt(d.net) + '</b><br>' +
+          'المدفوع: <b>' + _fmt(d.paid) + '</b> · المتبقي: <b>' + _fmt(d.remaining) + '</b><br>' +
+          'المبلغ المسترجع عند الإلغاء: <b class="text-danger">' + _fmt(d.refund_amount) + '</b>' +
+          (d.op_refs && d.op_refs.length ?
+            '<br>عمليات الدفع الأصلية: <code>' + d.op_refs.join('، ') + '</code>' : '');
+        details.style.display = 'block';
+        _cancelBtn.disabled = false;
+      })
+      .catch(function () {
+        loading.style.display = 'none';
+        blocked.textContent = 'حدث خطأ أثناء تحميل تفاصيل الإلغاء.';
+        blocked.style.display = 'block';
+      });
+  };
+
+  document.getElementById('cancelFeeForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (_cancelSubmitting) return;
+    var reason = document.getElementById('cancelReason').value.trim();
+    if (!reason) { alert('سبب الإلغاء مطلوب.'); return; }
+    _cancelSubmitting = true;
+    _cancelBtn.disabled = true;
+    _cancelBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>جارٍ التنفيذ...';
+    fetch(this.action, {
+      method: 'POST', body: new FormData(this),
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.status === 'success') {
+          bootstrap.Modal.getInstance(document.getElementById('cancelFeeModal')).hide();
+          alert(d.message); location.reload();
+        } else {
+          _cancelSubmitting = false;
+          _cancelBtn.disabled = false;
+          _cancelBtn.innerHTML = '<i class="bi bi-check-circle-fill me-1"></i>تأكيد الإلغاء';
+          alert(d.message || 'حدث خطأ أثناء الإلغاء.');
+        }
+      })
+      .catch(function () {
+        _cancelSubmitting = false;
+        _cancelBtn.disabled = false;
+        _cancelBtn.innerHTML = '<i class="bi bi-check-circle-fill me-1"></i>تأكيد الإلغاء';
+        alert('حدث خطأ أثناء الإلغاء.');
+      });
+  });
 
   document.getElementById('payModal').addEventListener('hidden.bs.modal', _resetPayBtn);
 

@@ -1102,16 +1102,28 @@ class FeeRecord(db.Model):
     notes            = db.Column(db.Text, nullable=True)
     created_at       = db.Column(db.DateTime, default=datetime.utcnow)
 
+    # Full-fee cancellation (see FeeRefundEvent). A cancelled fee is preserved
+    # as financial history but no longer counts as an active fee, outstanding
+    # balance, collectible amount, or paid income, and rejects new payments.
+    cancelled_at        = db.Column(db.DateTime, nullable=True)
+    cancelled_by        = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    cancellation_reason = db.Column(db.Text, nullable=True)
+
     installments  = db.relationship('FeeInstallment', backref='fee_record', lazy='dynamic',
                                     cascade='all, delete-orphan')
     academic_year = db.relationship('AcademicYear', backref='fee_records')
     school        = db.relationship('School', foreign_keys=[school_id],
                                     backref=db.backref('fee_records', lazy='dynamic'))
+    canceller     = db.relationship('User', foreign_keys=[cancelled_by])
 
     __table_args__ = (
         db.UniqueConstraint('student_id', 'fee_type_id', 'academic_year_id',
                             name='uq_fee_record_student_type_year'),
     )
+
+    @property
+    def is_cancelled(self) -> bool:
+        return self.cancelled_at is not None
 
     @property
     def net_amount(self) -> Decimal:
@@ -1213,6 +1225,55 @@ class FeeReminderLog(db.Model):
     )
 
 
+class FeeRefundEvent(db.Model):
+    """One auditable refund / full-fee-cancellation event.
+
+    Records WHO reversed WHAT, WHEN and WHY. It is a separate financial-audit
+    ledger, not a second payment system: it never moves money on its own. The
+    actual reversal is expressed by flagging the exact original ``Revenue``
+    allocation rows (``Revenue.refunded_at`` + ``Revenue.refund_event_id``) and
+    restoring the affected installment / fee fields — all inside one atomic
+    transaction with this row.
+
+      * ``event_type='installment_refund'`` — one installment's active received
+        amount fully reversed; ``installment_id`` is set.
+      * ``event_type='fee_cancellation'``   — the whole fee and all its
+        installments cancelled; ``installment_id`` is NULL.
+
+    ``op_refs`` stores the comma-joined payment operation references (op_ref /
+    ``[TXN:...]`` tags) that were reversed, so the event stays linked to the
+    exact original operations with no timestamp/heuristic guessing.
+    """
+    __tablename__ = 'fee_refund_events'
+    __school_scoped__ = True
+    __year_scoped__ = True
+
+    id               = db.Column(db.Integer, primary_key=True)
+    school_id        = db.Column(db.Integer, db.ForeignKey('schools.id'),
+                                 nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'),
+                                 nullable=False, index=True)
+    student_id       = db.Column(db.Integer, db.ForeignKey('students.id'),
+                                 nullable=False, index=True)
+    fee_record_id    = db.Column(db.Integer, db.ForeignKey('fee_records.id'),
+                                 nullable=False, index=True)
+    installment_id   = db.Column(db.Integer, db.ForeignKey('fee_installments.id'),
+                                 nullable=True, index=True)
+    event_type       = db.Column(db.String(30), nullable=False)  # installment_refund | fee_cancellation
+    amount           = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    reason           = db.Column(db.Text, nullable=False)
+    op_refs          = db.Column(db.Text, nullable=True)
+    performed_by     = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    created_at       = db.Column(db.DateTime, default=datetime.utcnow)
+
+    school        = db.relationship('School', foreign_keys=[school_id])
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    student       = db.relationship('Student', foreign_keys=[student_id])
+    fee_record    = db.relationship('FeeRecord', foreign_keys=[fee_record_id])
+    installment   = db.relationship('FeeInstallment', foreign_keys=[installment_id])
+    performer     = db.relationship('User', foreign_keys=[performed_by])
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  7. GENERAL INCOME (Revenue) & EXPENSES
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1250,12 +1311,24 @@ class Revenue(db.Model):
     date        = db.Column(db.Date, nullable=False, default=date.today)
     recorded_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+    # Refund reversal (see FeeRefundEvent). A revenue allocation with
+    # refunded_at set is preserved as history but is NO LONGER active income:
+    # every "active revenue" total in the system filters on refunded_at IS NULL.
+    refunded_at     = db.Column(db.DateTime, nullable=True)
+    refund_event_id = db.Column(db.Integer, db.ForeignKey('fee_refund_events.id'),
+                                nullable=True, index=True)
 
     recorder = db.relationship('User', foreign_keys=[recorded_by])
     school   = db.relationship('School', foreign_keys=[school_id],
                                backref=db.backref('revenues', lazy='dynamic'))
     academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id],
                                     backref=db.backref('revenues', lazy='dynamic'))
+    refund_event  = db.relationship('FeeRefundEvent', foreign_keys=[refund_event_id],
+                                    backref=db.backref('reversed_revenues', lazy='dynamic'))
+
+    @property
+    def is_refunded(self) -> bool:
+        return self.refunded_at is not None
 
     @property
     def display_description(self):

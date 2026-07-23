@@ -101,7 +101,8 @@ def revenues():
 
     query = (Revenue.query.execution_options(include_all_years=True)
              .filter(Revenue.school_id == sid,
-                     extract('year', Revenue.date) == year))
+                     extract('year', Revenue.date) == year,
+                     Revenue.refunded_at.is_(None)))
     if month:
         query = query.filter(extract('month', Revenue.date) == month)
 

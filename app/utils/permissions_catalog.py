@@ -79,6 +79,8 @@ PERMISSION_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ('المالية', [
         ('manage_fees',             'إدارة الرسوم الدراسية والأقساط'),
         ('record_payments',         'تسجيل المدفوعات وطباعة الإيصالات'),
+        ('refund_payments',         'استرجاع مدفوعات الأقساط'),
+        ('cancel_fees',             'إلغاء الرسوم بالكامل'),
         ('manage_revenues',         'إدارة الإيرادات العامة'),
         ('manage_expenses',         'إدارة المصروفات'),
     ]),

@@ -137,7 +137,8 @@ def _shape_arabic_text(text):
 
 
 def generate_fee_receipt(installment, school_settings=None, print_date=None,
-                         actual_paid=None, receipt_no_override=None) -> bytes | None:
+                         actual_paid=None, receipt_no_override=None,
+                         refund_status=None) -> bytes | None:
     """
     Generate a professional PDF receipt for a paid fee installment.
     Portrait orientation, top half of A4 page.
@@ -234,6 +235,15 @@ def generate_fee_receipt(installment, school_settings=None, print_date=None,
     elements.append(Paragraph(_shape_arabic_text(school_name_ar), school_name_style))
     elements.append(Spacer(1, 0.1*cm))
     elements.append(Paragraph(_shape_arabic_text("إيصال استلام رسوم دراسية"), receipt_title_style))
+    # Refund status stamp — this receipt's payment operation was later reversed.
+    if refund_status in ('refunded', 'partial'):
+        _refund_label = 'مسترجع بالكامل' if refund_status == 'refunded' else 'مسترجع جزئياً'
+        _refund_style = ParagraphStyle(
+            'refund_stamp',
+            fontName=('Amiri-Bold' if arabic_font_registered else 'Helvetica-Bold'),
+            fontSize=12, alignment=1, textColor=HexColor('#c0392b'), leading=16)
+        elements.append(Spacer(1, 0.1*cm))
+        elements.append(Paragraph(_shape_arabic_text(f'★ {_refund_label} ★'), _refund_style))
     elements.append(Spacer(1, 0.2*cm))
     elements.append(HRFlowable(width="100%", thickness=0.75, color=HexColor('#999999'), spaceBefore=0, spaceAfter=10))
 

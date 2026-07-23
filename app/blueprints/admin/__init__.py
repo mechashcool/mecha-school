@@ -432,7 +432,8 @@ def _build_dashboard_context():
     first_of_month = today.replace(day=1)
     rev_q = (db.session.query(func.sum(Revenue.amount))
              .execution_options(include_all_years=True)
-             .filter(Revenue.date >= first_of_month))
+             .filter(Revenue.date >= first_of_month,
+                     Revenue.refunded_at.is_(None)))
     exp_q = (db.session.query(func.sum(Expense.amount))
              .execution_options(include_all_years=True)
              .filter(Expense.date >= first_of_month))
@@ -461,7 +462,8 @@ def _build_dashboard_context():
     prev_last  = first_of_month - timedelta(days=1)
     _prq = (db.session.query(func.sum(Revenue.amount))
             .execution_options(include_all_years=True)
-            .filter(Revenue.date >= prev_first, Revenue.date <= prev_last))
+            .filter(Revenue.date >= prev_first, Revenue.date <= prev_last,
+                    Revenue.refunded_at.is_(None)))
     _peq = (db.session.query(func.sum(Expense.amount))
             .execution_options(include_all_years=True)
             .filter(Expense.date >= prev_first, Expense.date <= prev_last))
@@ -522,6 +524,9 @@ def _build_dashboard_context():
                 func.sum(model.amount).label('total'))
              .execution_options(include_all_years=True)
              .filter(model.date >= _win_start, model.date < _win_end_excl))
+        if model is Revenue:
+            # Refunded revenue allocations are no longer active income.
+            q = q.filter(Revenue.refunded_at.is_(None))
         if school_id:
             q = q.filter(model.school_id == school_id)
         # Unpack each result row positionally (year, month, total). Do NOT use

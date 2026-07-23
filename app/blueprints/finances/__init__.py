@@ -89,7 +89,8 @@ def index():
     rev_q = (db.session.query(
         func.coalesce(func.sum(Revenue.amount), 0).label('total')
     ).execution_options(include_all_years=True)
-     .filter(extract('year', Revenue.date) == year))
+     .filter(extract('year', Revenue.date) == year,
+             Revenue.refunded_at.is_(None)))
     if sid:
         rev_q = rev_q.filter(Revenue.school_id == sid)
 
@@ -112,7 +113,8 @@ def index():
         extract('month', Revenue.date).label('m'),
         func.sum(Revenue.amount).label('total')
     ).execution_options(include_all_years=True)
-     .filter(extract('year', Revenue.date) == year))
+     .filter(extract('year', Revenue.date) == year,
+             Revenue.refunded_at.is_(None)))
     if sid:
         rev_chart_q = rev_chart_q.filter(Revenue.school_id == sid)
     monthly_rev = {r.m: float(r.total) for r in rev_chart_q.group_by('m').all()}
@@ -135,7 +137,8 @@ def index():
     if sid:
         recent_rev_q = recent_rev_q.filter_by(school_id=sid)
         recent_exp_q = recent_exp_q.filter_by(school_id=sid)
-    recent_rev = (recent_rev_q.filter(Revenue.amount > 0)
+    recent_rev = (recent_rev_q.filter(Revenue.amount > 0,
+                                      Revenue.refunded_at.is_(None))
                   .order_by(Revenue.date.desc(), Revenue.id.desc()).limit(5).all())
     recent_exp = (recent_exp_q.filter(Expense.amount > 0)
                   .order_by(Expense.date.desc(), Expense.id.desc()).limit(5).all())
@@ -163,7 +166,8 @@ def revenues():
     cat_id = request.args.get('category_id', type=int)
 
     query = (Revenue.query.execution_options(include_all_years=True)
-             .filter(extract('year', Revenue.date) == year))
+             .filter(extract('year', Revenue.date) == year,
+                     Revenue.refunded_at.is_(None)))
     if month:
         query = query.filter(extract('month', Revenue.date) == month)
     if cat_id:

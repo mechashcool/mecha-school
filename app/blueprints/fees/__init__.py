@@ -9,8 +9,9 @@ from datetime import date, datetime as dt
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
+from werkzeug.exceptions import HTTPException
 
-from app.models import (db, FeeRecord, FeeInstallment, FeeType, Student, AcademicYear, SchoolSettings, Revenue, RevenueCategory, Section, Grade, School)
+from app.models import (db, FeeRecord, FeeInstallment, FeeType, Student, AcademicYear, SchoolSettings, Revenue, RevenueCategory, Section, Grade, School, FeeRefundEvent)
 from app.utils.decorators import (permission_required, get_current_school,
                                    get_active_year, get_view_year, historical_guard,
                                    admin_required)
@@ -58,6 +59,8 @@ def _overdue_installments_query(school, *, search='', fee_type_filter='all',
         .filter(
             (FeeInstallment.amount - func.coalesce(FeeInstallment.received_amount, 0)) > 0
         )
+        # Cancelled fees are not collectible and never count as overdue.
+        .filter(FeeRecord.cancelled_at.is_(None))
     )
 
     if school:
@@ -537,6 +540,218 @@ def resolve_payment_amount_for_receipt(inst, op_ref=None):
     return fallback
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+#  REFUND / FULL-FEE CANCELLATION — reversal of the canonical payment pathway
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# There is no separate payment/allocation table: a payment "allocation" is one
+# ``Revenue`` row tagged ``... - قسط #{no} - {inst.receipt_no} [TXN:{op_ref}]``
+# (see stage_installment_payment). A refund therefore:
+#   1. finds the EXACT active (non-refunded) Revenue rows for the installment,
+#      identified only by that installment's globally-unique ``receipt_no`` +
+#      the ``[TXN:...]`` tag — never by timestamp or amount heuristics;
+#   2. flags those rows refunded (``refunded_at`` + ``refund_event_id``) so they
+#      drop out of every active-income total while remaining as history;
+#   3. restores the installment's ``received_amount`` / status / paid fields;
+#   4. writes one ``FeeRefundEvent`` audit row.
+# All of this is staged in the current session; the CALLER owns the row lock and
+# the atomic commit — mirroring the payment pathway's contract exactly.
+
+
+def _extract_op_ref(description):
+    m = _PAYMENT_TXN_RE.search(description or '')
+    return m.group(1) if m else None
+
+
+def _active_allocations_for_installment(inst):
+    """Return the exact active (non-refunded) ``Revenue`` allocation rows that
+    were credited to THIS installment.
+
+    Matched only by the installment's own globally-unique ``receipt_no`` embedded
+    in the Revenue description together with a ``[TXN:...]`` tag — the sole exact
+    linkage the payment pathway records. Historical payments written before the
+    TXN tag existed carry no such link and are deliberately NOT matched (never
+    guessed / grouped). ``bypass_tenant_scope`` is used ONLY to see all academic
+    years; cross-school access is prevented by the explicit ``school_id`` filter.
+    """
+    if not inst.receipt_no:
+        return []
+    fragment = f'- {inst.receipt_no} [TXN:'
+    rows = (
+        Revenue.query
+        .execution_options(bypass_tenant_scope=True)
+        .filter(Revenue.school_id == inst.school_id,
+                Revenue.refunded_at.is_(None),
+                Revenue.description.like(f'%{fragment}%'))
+        .all()
+    )
+    # Exact substring re-check in Python — receipt numbers are RCP-YYYYMMDD-XXXXXX
+    # (no LIKE wildcards), but this keeps the match provably exact regardless.
+    return [r for r in rows if fragment in (r.description or '')]
+
+
+def _installment_refund_preview(inst):
+    """Compute the confirmation payload + whether a safe exact refund is possible.
+
+    Returns dict with refundable flag, the identifiable active amount, and the
+    installment's current figures. A refund is only offered when the identifiable
+    tagged active allocations sum to EXACTLY the installment's current
+    ``received_amount`` — otherwise part of the received money is unlinked
+    (historical) and must not be guessed; the caller shows a clear message and
+    changes nothing.
+    """
+    received = Decimal(str(inst.received_amount or 0))
+    allocs   = _active_allocations_for_installment(inst)
+    identifiable = sum((Decimal(str(r.amount)) for r in allocs), Decimal('0'))
+    op_refs = sorted({_extract_op_ref(r.description) for r in allocs
+                      if _extract_op_ref(r.description)})
+    refundable = bool(allocs) and identifiable == received and received > 0
+    return {
+        'received':      received,
+        'identifiable':  identifiable,
+        'op_refs':       op_refs,
+        'allocations':   allocs,
+        'refundable':    refundable,
+    }
+
+
+def refund_installment(inst, *, reason, performed_by):
+    """Reverse ONE installment's complete active received amount.
+
+    Stages all mutations in the current db.session and returns the created
+    ``FeeRefundEvent``; the CALLER owns the (already-acquired) row lock and the
+    commit. Raises ``FeeValidationError`` — changing nothing — when the received
+    amount cannot be reversed exactly (no linked active allocations, or a
+    historical/unlinked component). Idempotent under the row lock: a second call
+    finds no active allocations and is rejected.
+    """
+    prev = _installment_refund_preview(inst)
+    if not prev['refundable']:
+        raise FeeValidationError(
+            'لا يمكن استرجاع هذا القسط تلقائياً: المبلغ المستلم لا يطابق دفعات '
+            'مسجّلة قابلة للاسترجاع بدقة (قد يكون سجلاً تاريخياً غير مرتبط بعملية دفع). '
+            'لم يتم تغيير أي بيانات مالية.'
+        )
+    allocs = prev['allocations']
+    total  = prev['identifiable']
+
+    event = FeeRefundEvent(
+        school_id        = inst.school_id,
+        academic_year_id = inst.academic_year_id,
+        student_id       = inst.fee_record.student_id,
+        fee_record_id    = inst.fee_record_id,
+        installment_id   = inst.id,
+        event_type       = 'installment_refund',
+        amount           = total,
+        reason           = reason,
+        op_refs          = ','.join(prev['op_refs']),
+        performed_by     = performed_by,
+    )
+    db.session.add(event)
+    db.session.flush()  # need event.id for the reversal links
+
+    now = dt.utcnow()
+    for r in allocs:
+        r.refunded_at     = now
+        r.refund_event_id = event.id
+
+    # Restore the installment to its pre-payment state for THIS active amount.
+    new_received = Decimal(str(inst.received_amount or 0)) - total
+    inst.received_amount = new_received if new_received > 0 else Decimal('0')
+    if inst.received_amount <= 0:
+        # Fully unpaid again → clear the paid markers so it reads as pending/
+        # overdue and is payable normally. receipt_no is intentionally KEPT so
+        # the original op-based receipts stay reachable and show "مسترجع".
+        inst.paid_date      = None
+        inst.payment_method = None
+    inst.recompute_status()
+    return event
+
+
+def cancel_fee_record(rec, locked_installments, *, reason, performed_by):
+    """Cancel a whole fee and reverse every active allocation across all its
+    installments. Stages mutations; the CALLER owns the lock and commit.
+
+    Refuses (raising ``FeeValidationError``, changing nothing) when any
+    installment holds received money that is not fully linked to reversible
+    tagged allocations — the same "never guess historical money" rule as
+    single-installment refund.
+    """
+    if rec.cancelled_at is not None:
+        raise FeeValidationError('هذا الرسم ملغى بالفعل.')
+
+    # Pre-flight: every received amount must be exactly reversible before we
+    # touch anything, so cancellation never leaves active revenue stranded.
+    plan = []
+    for inst in locked_installments:
+        prev = _installment_refund_preview(inst)
+        if prev['received'] > 0 and not prev['refundable']:
+            raise FeeValidationError(
+                f'لا يمكن إلغاء الرسم: القسط رقم {inst.installment_no} يحتوي مبلغاً '
+                'مستلماً غير مرتبط بعملية دفع قابلة للاسترجاع بدقة (سجل تاريخي). '
+                'لم يتم تغيير أي بيانات مالية.'
+            )
+        plan.append((inst, prev))
+
+    event = FeeRefundEvent(
+        school_id        = rec.school_id,
+        academic_year_id = rec.academic_year_id,
+        student_id       = rec.student_id,
+        fee_record_id    = rec.id,
+        installment_id   = None,
+        event_type       = 'fee_cancellation',
+        amount           = Decimal('0'),
+        reason           = reason,
+        op_refs          = '',
+        performed_by     = performed_by,
+    )
+    db.session.add(event)
+    db.session.flush()
+
+    now = dt.utcnow()
+    total = Decimal('0')
+    all_ops = set()
+    for inst, prev in plan:
+        for r in prev['allocations']:
+            r.refunded_at     = now
+            r.refund_event_id = event.id
+            total += Decimal(str(r.amount))
+        all_ops.update(prev['op_refs'])
+        inst.received_amount = Decimal('0')
+        inst.paid_date       = None
+        inst.payment_method  = None
+        inst.status          = 'cancelled'
+
+    event.amount  = total
+    event.op_refs = ','.join(sorted(all_ops))
+
+    rec.cancelled_at        = now
+    rec.cancelled_by        = performed_by
+    rec.cancellation_reason = reason
+    return event
+
+
+def _op_refund_status(inst, op_ref):
+    """Refund status of ONE payment operation as it touched this installment,
+    for the receipt header: 'refunded' (all its rows reversed), 'partial' (some),
+    or None (none). School-scoped; all years."""
+    if not op_ref:
+        return None
+    rows = (
+        Revenue.query
+        .execution_options(bypass_tenant_scope=True)
+        .filter(Revenue.school_id == inst.school_id,
+                Revenue.description.like(f'%[TXN:{op_ref}]%'))
+        .all()
+    )
+    if not rows:
+        return None
+    refunded = sum(1 for r in rows if r.refunded_at is not None)
+    if refunded == 0:
+        return None
+    return 'refunded' if refunded == len(rows) else 'partial'
+
+
 @fees_bp.route('/')
 @login_required
 @permission_required('manage_fees')
@@ -589,6 +804,10 @@ def index():
     query = FeeRecord.query.join(Student).outerjoin(
         total_paid_sub, FeeRecord.id == total_paid_sub.c.fee_record_id
     )
+
+    # Cancelled fees are preserved as history (visible on the student statement)
+    # but are not active fees, outstanding balances, or collectible amounts.
+    query = query.filter(FeeRecord.cancelled_at.is_(None))
 
     # School scoping
     if school:
@@ -1248,6 +1467,11 @@ def pay_installment(inst_id):
             return jsonify({'status': 'error',
                             'message': 'ليس لديك صلاحية الوصول إلى بيانات هذه البناية'}), 403
 
+        # A cancelled fee is preserved as history but rejects all new payments.
+        if inst.fee_record and inst.fee_record.is_cancelled:
+            return jsonify({'status': 'error',
+                            'message': 'هذا الرسم ملغى ولا يقبل مدفوعات جديدة.'}), 400
+
         # Capture the student name NOW, while the eagerly-loaded relationship is
         # still live. After db.session.commit() SQLAlchemy expires all attributes;
         # a subsequent lazy-reload of fee_record goes through the year-scoped ORM
@@ -1399,6 +1623,259 @@ def pay_installment(inst_id):
                         'message': 'حدث خطأ في معالجة الدفع. يرجى المحاولة مرة أخرى.'}), 500
 
 
+def _load_installment_for_refund(inst_id):
+    """Load an installment (all years, ORM school scope applies) with its fee +
+    student eager-loaded, and enforce building/student access. Returns the
+    installment or aborts/raises via the caller's error handling."""
+    inst = (
+        FeeInstallment.query
+        .execution_options(include_all_years=True)
+        .options(joinedload(FeeInstallment.fee_record).joinedload(FeeRecord.student))
+        .filter(FeeInstallment.id == inst_id)
+        .first_or_404()
+    )
+    _student = inst.fee_record.student if inst.fee_record else None
+    if not user_can_access_student(current_user, get_current_school(), _student):
+        abort(403)
+    return inst, _student
+
+
+@fees_bp.route('/installment/<int:inst_id>/refund-preview')
+@login_required
+@permission_required('refund_payments')
+def refund_preview(inst_id):
+    """Confirmation data for an installment refund (read-only, no mutation)."""
+    inst, student = _load_installment_for_refund(inst_id)
+    prev = _installment_refund_preview(inst)
+    rec = inst.fee_record
+    return jsonify({
+        'status':            'success',
+        'student_name':      student.full_name if student else '—',
+        'student_code':      student.student_id if student else '',
+        'fee_type':          rec.fee_type.name if rec and rec.fee_type else '—',
+        'installment_no':    inst.installment_no,
+        'amount':            float(inst.amount or 0),
+        'received':          float(prev['received']),
+        'remaining':         float(Decimal(str(inst.amount or 0)) - prev['received']),
+        'refund_amount':     float(prev['identifiable']),
+        'op_refs':           prev['op_refs'],
+        'refundable':        prev['refundable'],
+        'is_cancelled':      bool(rec and rec.is_cancelled),
+        'message': None if prev['refundable'] else (
+            'لا يوجد مبلغ نشط قابل للاسترجاع لهذا القسط، أو أن المبلغ المستلم غير '
+            'مرتبط بعملية دفع قابلة للاسترجاع بدقة (سجل تاريخي).'
+        ),
+    })
+
+
+@fees_bp.route('/installment/<int:inst_id>/refund', methods=['POST'])
+@login_required
+@historical_guard
+@permission_required('refund_payments')
+def refund_installment_route(inst_id):
+    """Refund one installment's complete active received amount, atomically."""
+    try:
+        inst, student = _load_installment_for_refund(inst_id)
+
+        reason = (request.form.get('reason') or '').strip()
+        if not reason:
+            return jsonify({'status': 'error', 'message': 'سبب الاسترجاع مطلوب.'}), 400
+
+        _student_id = student.id if student else None
+        _school_id  = inst.school_id
+        _inst_no    = inst.installment_no
+        _fee_id     = inst.fee_record_id
+
+        # Row-lock this installment (serializes concurrent refund/pay attempts)
+        # and refresh from the latest committed state before reversing.
+        locked = (
+            db.session.query(FeeInstallment)
+            .execution_options(include_all_years=True)
+            .with_for_update()
+            .filter(FeeInstallment.id == inst.id)
+            .populate_existing()
+            .options(joinedload(FeeInstallment.fee_record))
+            .first()
+        )
+        if locked is None:
+            db.session.rollback()
+            return jsonify({'status': 'error', 'message': 'القسط غير موجود.'}), 404
+
+        event = refund_installment(locked, reason=reason, performed_by=current_user.id)
+        refunded_amount = float(event.amount or 0)
+        db.session.commit()
+
+        # ── Post-commit side effects (best effort — never disturb the commit) ──
+        try:
+            log_action('refund', 'fee_installment', inst_id,
+                       details=f"amount={refunded_amount} ops={event.op_refs} reason={reason}")
+        except Exception:
+            _log.exception('[fees] refund audit log failed inst_id=%s', inst_id)
+        if _student_id is not None:
+            _notify_fee_parents(
+                _student_id,
+                'تم استرجاع دفعة',
+                f'تم استرجاع مبلغ {refunded_amount} لقسط الرسوم رقم {_inst_no}. '
+                f'أصبح القسط مستحقاً مرة أخرى.',
+                screen='fees', fee_record_id=_fee_id, installment_id=inst_id,
+            )
+
+        return jsonify({
+            'status':  'success',
+            'message': f'تم استرجاع مبلغ {refunded_amount} بنجاح. أصبح القسط قابلاً للدفع من جديد.',
+        })
+
+    except HTTPException:
+        db.session.rollback()
+        raise  # 403/404 from access checks must not be masked as 500
+    except FeeValidationError as _exc:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(_exc)}), 400
+    except Exception:
+        db.session.rollback()
+        _log.exception('[fees] refund processing error inst_id=%s', inst_id)
+        return jsonify({'status': 'error',
+                        'message': 'حدث خطأ أثناء معالجة الاسترجاع. يرجى المحاولة مرة أخرى.'}), 500
+
+
+def _load_fee_for_cancel(fee_id):
+    rec = (
+        FeeRecord.query
+        .execution_options(include_all_years=True)
+        .options(joinedload(FeeRecord.student), joinedload(FeeRecord.fee_type))
+        .filter(FeeRecord.id == fee_id)
+        .first_or_404()
+    )
+    if not user_can_access_student(current_user, get_current_school(), rec.student):
+        abort(403)
+    return rec
+
+
+@fees_bp.route('/fee/<int:fee_id>/cancel-preview')
+@login_required
+@permission_required('cancel_fees')
+def cancel_fee_preview(fee_id):
+    """Confirmation data for a full-fee cancellation (read-only, no mutation)."""
+    rec = _load_fee_for_cancel(fee_id)
+    insts = (FeeInstallment.query
+             .execution_options(include_all_years=True)
+             .filter(FeeInstallment.fee_record_id == rec.id)
+             .order_by(FeeInstallment.installment_no).all())
+
+    rows, all_ops, total_refund, blocking = [], set(), Decimal('0'), None
+    paid = Decimal('0')
+    for inst in insts:
+        prev = _installment_refund_preview(inst)
+        paid += prev['received']
+        if prev['received'] > 0 and not prev['refundable']:
+            blocking = (f'القسط رقم {inst.installment_no} يحتوي مبلغاً مستلماً غير '
+                        'مرتبط بعملية دفع قابلة للاسترجاع بدقة (سجل تاريخي).')
+        total_refund += prev['identifiable']
+        all_ops.update(prev['op_refs'])
+        rows.append({
+            'installment_no': inst.installment_no,
+            'amount':         float(inst.amount or 0),
+            'received':       float(prev['received']),
+            'refundable':     prev['refundable'] or prev['received'] == 0,
+        })
+
+    net = Decimal(str(rec.net_amount))
+    return jsonify({
+        'status':         'success',
+        'student_name':   rec.student.full_name if rec.student else '—',
+        'student_code':   rec.student.student_id if rec.student else '',
+        'fee_type':       rec.fee_type.name if rec.fee_type else '—',
+        'total':          float(rec.total_amount or 0),
+        'discount':       float(rec.discount or 0),
+        'net':            float(net),
+        'paid':           float(paid),
+        'remaining':      float(net - paid),
+        'refund_amount':  float(total_refund),
+        'op_refs':        sorted(all_ops),
+        'installments':   rows,
+        'is_cancelled':   bool(rec.is_cancelled),
+        'cancellable':    (blocking is None) and not rec.is_cancelled,
+        'message':        ('هذا الرسم ملغى بالفعل.' if rec.is_cancelled else blocking),
+    })
+
+
+@fees_bp.route('/fee/<int:fee_id>/cancel', methods=['POST'])
+@login_required
+@historical_guard
+@permission_required('cancel_fees')
+def cancel_fee_route(fee_id):
+    """Cancel a whole fee and reverse every active allocation, atomically."""
+    try:
+        rec = _load_fee_for_cancel(fee_id)
+
+        reason = (request.form.get('reason') or '').strip()
+        if not reason:
+            return jsonify({'status': 'error', 'message': 'سبب الإلغاء مطلوب.'}), 400
+        if rec.is_cancelled:
+            return jsonify({'status': 'error', 'message': 'هذا الرسم ملغى بالفعل.'}), 400
+
+        _student_id = rec.student_id
+        _school_id  = rec.school_id
+
+        # Lock the fee's installments for the whole reversal (concurrency guard).
+        locked_installments = (
+            db.session.query(FeeInstallment)
+            .execution_options(include_all_years=True)
+            .with_for_update()
+            .filter(FeeInstallment.fee_record_id == rec.id)
+            .populate_existing()
+            .order_by(FeeInstallment.installment_no)
+            .all()
+        )
+        # Re-read the fee under the same transaction to re-check cancelled state.
+        locked_rec = (
+            db.session.query(FeeRecord)
+            .execution_options(include_all_years=True)
+            .with_for_update()
+            .filter(FeeRecord.id == rec.id)
+            .populate_existing()
+            .first()
+        )
+        if locked_rec is None:
+            db.session.rollback()
+            return jsonify({'status': 'error', 'message': 'الرسم غير موجود.'}), 404
+
+        event = cancel_fee_record(locked_rec, locked_installments,
+                                  reason=reason, performed_by=current_user.id)
+        refunded_amount = float(event.amount or 0)
+        db.session.commit()
+
+        try:
+            log_action('cancel', 'fee_record', fee_id,
+                       details=f"reversed={refunded_amount} ops={event.op_refs} reason={reason}")
+        except Exception:
+            _log.exception('[fees] cancel audit log failed fee_id=%s', fee_id)
+        if _student_id is not None:
+            _notify_fee_parents(
+                _student_id,
+                'تم إلغاء رسم',
+                f'تم إلغاء الرسم بالكامل واسترجاع المبالغ المدفوعة عليه ({refunded_amount}).',
+                screen='fees', fee_record_id=fee_id,
+            )
+
+        return jsonify({
+            'status':  'success',
+            'message': f'تم إلغاء الرسم بالكامل بنجاح. المبلغ المسترجع: {refunded_amount}.',
+        })
+
+    except HTTPException:
+        db.session.rollback()
+        raise  # 403/404 from access checks must not be masked as 500
+    except FeeValidationError as _exc:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(_exc)}), 400
+    except Exception:
+        db.session.rollback()
+        _log.exception('[fees] cancel processing error fee_id=%s', fee_id)
+        return jsonify({'status': 'error',
+                        'message': 'حدث خطأ أثناء إلغاء الرسم. يرجى المحاولة مرة أخرى.'}), 500
+
+
 @fees_bp.route('/installment/<int:inst_id>/receipt')
 @login_required
 @permission_required('record_payments')
@@ -1441,9 +1918,12 @@ def generate_receipt(inst_id):
     # distinct payment operation prints as a distinct, reproducible receipt;
     # historical untagged payments keep the installment's own receipt number.
     _receipt_label = _resolved_op or inst.receipt_no
+    # Show a refund stamp when the resolved operation was reversed (fully/partly).
+    _refund_status = _op_refund_status(inst, _resolved_op)
     pdf_bytes = generate_fee_receipt(inst, school_settings, print_date=date.today(),
                                      actual_paid=_actual_paid,
-                                     receipt_no_override=_resolved_op)
+                                     receipt_no_override=_resolved_op,
+                                     refund_status=_refund_status)
 
     if not pdf_bytes:
         abort(500, "PDF generation failed")
@@ -1495,6 +1975,9 @@ def export_excel():
     query = FeeRecord.query.join(Student).outerjoin(
         total_paid_sub, FeeRecord.id == total_paid_sub.c.fee_record_id
     )
+
+    # Cancelled fees are excluded from the active fees export.
+    query = query.filter(FeeRecord.cancelled_at.is_(None))
 
     # Building scope — restricted users only export their buildings' fees.
     query = apply_building_scope_to_fees(query, current_user, get_current_school())
@@ -1625,6 +2108,9 @@ def print_list():
         .outerjoin(total_paid_sub, FeeRecord.id == total_paid_sub.c.fee_record_id)
     )
 
+    # Cancelled fees are excluded from the active fees print list.
+    query = query.filter(FeeRecord.cancelled_at.is_(None))
+
     if school:
         query = query.filter(FeeRecord.school_id == school.id)
 
@@ -1754,12 +2240,15 @@ def student_statement(student_id):
             _inst_map.setdefault(_i.fee_record_id, []).append(_i)
         fee_entries = [(r, _inst_map.get(r.id, [])) for r in fee_records]
 
-    grand_total = sum(float(r.total_amount) for r, _ in fee_entries)
-    grand_disc  = sum(float(r.discount or 0) for r, _ in fee_entries)
+    # Cancelled fees remain visible on the statement as history but are excluded
+    # from the active grand totals (they are no longer owed or collectible).
+    _active_entries = [(r, insts) for r, insts in fee_entries if not r.is_cancelled]
+    grand_total = sum(float(r.total_amount) for r, _ in _active_entries)
+    grand_disc  = sum(float(r.discount or 0) for r, _ in _active_entries)
     grand_net   = grand_total - grand_disc
     grand_paid  = sum(
         sum(float(i.received_amount or 0) for i in insts)
-        for _, insts in fee_entries
+        for _, insts in _active_entries
     )
     grand_rem   = grand_net - grand_paid
 

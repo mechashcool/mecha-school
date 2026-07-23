@@ -32,6 +32,9 @@ def _year_monthly(model, date_col, amount_col, year, school_id=None):
                 func.coalesce(func.sum(amount_col), 0).label('t'))
             .execution_options(include_all_years=True)
             .filter(extract('year', date_col) == year))
+    if model is Revenue:
+        # Refunded revenue allocations are no longer active income.
+        q = q.filter(Revenue.refunded_at.is_(None))
     if school_id:
         q = q.filter(model.school_id == school_id)
     rows = q.group_by('m').all()
@@ -70,7 +73,8 @@ def index():
     # works independently of which academic year the records were assigned to.
     rev_q = (db.session.query(func.coalesce(func.sum(Revenue.amount), 0))
              .execution_options(include_all_years=True)
-             .filter(extract('year', Revenue.date) == year))
+             .filter(extract('year', Revenue.date) == year,
+                     Revenue.refunded_at.is_(None)))
     if school_id:
         rev_q = rev_q.filter(Revenue.school_id == school_id)
     total_rev = float(rev_q.scalar())
@@ -155,7 +159,8 @@ def financial():
 
     rev_q = (db.session.query(func.coalesce(func.sum(Revenue.amount), 0))
              .execution_options(include_all_years=True)
-             .filter(extract('year', Revenue.date) == year))
+             .filter(extract('year', Revenue.date) == year,
+                     Revenue.refunded_at.is_(None)))
     if school_id:
         rev_q = rev_q.filter(Revenue.school_id == school_id)
     exp_q = (db.session.query(func.coalesce(func.sum(Expense.amount), 0))
@@ -177,7 +182,8 @@ def financial():
                     func.coalesce(func.sum(Revenue.amount), 0).label('total'))
                  .execution_options(include_all_years=True)
                  .join(Revenue, Revenue.category_id == RevenueCategory.id)
-                 .filter(extract('year', Revenue.date) == year))
+                 .filter(extract('year', Revenue.date) == year,
+                         Revenue.refunded_at.is_(None)))
     if school_id:
         rev_cat_q = rev_cat_q.filter(Revenue.school_id == school_id)
     rev_cats = [(name, float(total)) for name, total in

@@ -102,7 +102,8 @@ def investor_dashboard():
     rev_total = float(
         db.session.query(func.coalesce(func.sum(Revenue.amount), 0))
         .execution_options(include_all_years=True)
-        .filter(Revenue.school_id == sid, extract('year', Revenue.date) == year)
+        .filter(Revenue.school_id == sid, extract('year', Revenue.date) == year,
+                Revenue.refunded_at.is_(None))
         .scalar() or 0
     )
     exp_total = float(
@@ -116,7 +117,8 @@ def investor_dashboard():
         int(m): float(t) for m, t in
         db.session.query(extract('month', Revenue.date), func.sum(Revenue.amount))
         .execution_options(include_all_years=True)
-        .filter(Revenue.school_id == sid, extract('year', Revenue.date) == year)
+        .filter(Revenue.school_id == sid, extract('year', Revenue.date) == year,
+                Revenue.refunded_at.is_(None))
         .group_by(extract('month', Revenue.date)).all()
     }
     exp_by_month = {
@@ -265,7 +267,8 @@ def investor_revenues():
         return to_err
 
     query = (Revenue.query.execution_options(include_all_years=True)
-             .filter(Revenue.school_id == sid))
+             .filter(Revenue.school_id == sid,
+                     Revenue.refunded_at.is_(None)))
 
     if date_from or date_to:
         # Explicit date range replaces the year/month default so ranges that

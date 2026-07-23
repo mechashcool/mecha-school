@@ -158,10 +158,12 @@ def parent_child_profile(student_id):
             'date':      e.exam_date.isoformat() if e.exam_date else None,
         }
 
-    # Fee summary across all academic years
+    # Fee summary across all academic years. Cancelled fees are excluded — they
+    # are no longer active fees, outstanding balances, or collectible amounts.
     fee_records  = (FeeRecord.query
                     .execution_options(include_all_years=True)
                     .filter_by(student_id=s.id)
+                    .filter(FeeRecord.cancelled_at.is_(None))
                     .all())
     total_fees = sum(float(r.net_amount) for r in fee_records)
     total_paid = sum(float(r.total_paid)  for r in fee_records)
@@ -269,6 +271,7 @@ def parent_child_fees(student_id):
                .options(joinedload(FeeRecord.fee_type),
                         joinedload(FeeRecord.academic_year))
                .filter_by(student_id=s.id)
+               .filter(FeeRecord.cancelled_at.is_(None))
                .order_by(FeeRecord.id.desc())
                .all())
 
