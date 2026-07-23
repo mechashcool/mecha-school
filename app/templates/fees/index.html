@@ -187,8 +187,9 @@
     </a>
 
     {% if current_user.is_school_admin or current_user.is_super_admin %}
-    <!-- "تذكيرات الأقساط" outlined — opens the reminder settings card below -->
-    <button type="button" class="fees-btn fees-btn-outline" id="feeReminderShortcut">
+    <!-- "تذكيرات الأقساط" outlined — opens the reminder settings modal -->
+    <button type="button" class="fees-btn fees-btn-outline"
+            data-bs-toggle="modal" data-bs-target="#feeReminderModal">
       <i class="bi bi-bell-fill"></i>
       <span>تذكيرات الأقساط</span>
     </button>
@@ -240,27 +241,35 @@
   </div>
 </div>
 
-<!-- ── Fee Reminder Settings (admin-only) ─────────────────────────────── -->
+<!-- ── Fee Reminder Settings modal (admin-only) ───────────────────────── -->
 {% if current_user.is_school_admin or current_user.is_super_admin %}
 {% set _reminder_school = school if school and school.__class__.__name__ == 'School' else none %}
-<div class="card mb-4" id="feeReminderCard">
-  <div class="card-header d-flex align-items-center justify-content-between"
-       style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#feeReminderCollapse"
-       aria-expanded="false" aria-controls="feeReminderCollapse">
-    <span>
-      <i class="bi bi-bell-fill text-accent me-1"></i>إعدادات تذكير الأقساط
-      {% if _reminder_school %}
-        {% if _reminder_school.fee_reminder_enabled %}
-        <span class="badge bg-success ms-2" style="font-size:11px">مفعّل</span>
-        {% else %}
-        <span class="badge bg-secondary ms-2" style="font-size:11px">معطّل</span>
-        {% endif %}
-      {% endif %}
-    </span>
-    <i class="bi bi-chevron-down" style="font-size:13px"></i>
-  </div>
-  <div class="collapse" id="feeReminderCollapse">
-    <div class="card-body">
+<div class="modal fade" id="feeReminderModal" tabindex="-1"
+     aria-labelledby="feeReminderModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content" style="border:none;border-radius:14px;overflow:hidden">
+
+      <!-- Header -->
+      <div class="modal-header"
+           style="background:linear-gradient(135deg,#0f2540 0%,#1a3a5c 100%);
+                  padding:18px 24px;border:none">
+        <h5 class="modal-title mb-0" id="feeReminderModalLabel"
+            style="color:#fff;font-size:16px;font-weight:800">
+          <i class="bi bi-bell-fill me-2"></i>إعدادات تذكير الأقساط
+          {% if _reminder_school %}
+            {% if _reminder_school.fee_reminder_enabled %}
+            <span class="badge bg-success ms-2" style="font-size:11px">مفعّل</span>
+            {% else %}
+            <span class="badge bg-secondary ms-2" style="font-size:11px">معطّل</span>
+            {% endif %}
+          {% endif %}
+        </h5>
+        <button type="button" class="btn-close btn-close-white ms-auto"
+                data-bs-dismiss="modal" aria-label="إغلاق"></button>
+      </div>
+
+      <!-- Body -->
+      <div class="modal-body" style="padding:24px 28px">
 
       {% if _reminder_school %}
       <div class="alert alert-light border mb-3 py-2" style="font-size:13px">
@@ -345,6 +354,7 @@
 
         </div>
       </form>
+      </div>
     </div>
   </div>
 </div>
@@ -709,7 +719,7 @@
   });
 })();
 
-// ── Auto-expand reminder card on save success ─────────────────────────────────
+// ── Auto-open reminder modal on save success ──────────────────────────────────
 (function () {
   var flashEls = document.querySelectorAll('.alert');
   var hasReminderFlash = false;
@@ -717,29 +727,11 @@
     if (el.textContent.indexOf('تذكير الأقساط') !== -1) hasReminderFlash = true;
   });
   if (hasReminderFlash) {
-    var collapseEl = document.getElementById('feeReminderCollapse');
-    if (collapseEl && window.bootstrap) {
-      new bootstrap.Collapse(collapseEl, { toggle: false }).show();
-    } else if (collapseEl) {
-      collapseEl.classList.add('show');
+    var modalEl = document.getElementById('feeReminderModal');
+    if (modalEl && window.bootstrap) {
+      bootstrap.Modal.getOrCreateInstance(modalEl).show();
     }
   }
-})();
-
-// ── Reminder shortcut button — expand + scroll to the settings card ───────────
-(function () {
-  var btn = document.getElementById('feeReminderShortcut');
-  var collapseEl = document.getElementById('feeReminderCollapse');
-  var cardEl = document.getElementById('feeReminderCard');
-  if (!btn || !collapseEl) return;
-  btn.addEventListener('click', function () {
-    if (window.bootstrap) {
-      new bootstrap.Collapse(collapseEl, { toggle: false }).show();
-    } else {
-      collapseEl.classList.add('show');
-    }
-    (cardEl || collapseEl).scrollIntoView({ behavior: 'smooth', block: 'start' });
-  });
 })();
 
 // ── Fee reminder settings — live preview + validation ─────────────────────────
