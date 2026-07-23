@@ -95,10 +95,6 @@
       </div>
 
       <div class="col-md-3">
-        <div class="text-muted" style="font-size:12px">نفّذ العملية</div>
-        <div class="fw-600">{{ event.performer.full_name if event.performer else '—' }}</div>
-      </div>
-      <div class="col-md-3">
         <div class="text-muted" style="font-size:12px">تاريخ ووقت التنفيذ</div>
         <div class="fw-600">{{ event.created_at.strftime('%Y-%m-%d %H:%M') if event.created_at else '—' }}</div>
       </div>

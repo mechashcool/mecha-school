@@ -63,15 +63,6 @@
         </select>
       </div>
       <div class="col-md-2">
-        <label class="form-label mb-1" style="font-size:12.5px">المنفِّذ</label>
-        <select name="employee" class="form-select">
-          <option value="all" {% if employee_filter == 'all' %}selected{% endif %}>الكل</option>
-          {% for uid, uname in employee_opts %}
-          <option value="{{ uid }}" {% if employee_filter == uid|string %}selected{% endif %}>{{ uname }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="col-md-2">
         <label class="form-label mb-1" style="font-size:12.5px">السنة الدراسية</label>
         <select name="academic_year" class="form-select">
           <option value="all" {% if year_filter == 'all' %}selected{% endif %}>الكل</option>
@@ -124,7 +115,6 @@
           <th>الإيصال الأصلي</th>
           <th>مرجع العملية</th>
           <th>السبب</th>
-          <th>المنفِّذ</th>
           <th>السنة</th>
           <th>التفاصيل</th>
         </tr>
@@ -187,9 +177,6 @@
               {{ ev.reason if ev.reason|length <= 50 else ev.reason[:50] ~ '…' }}
             </span>
           </td>
-          <td class="text-muted" style="font-size:12.5px;white-space:nowrap">
-            {{ ev.performer.full_name if ev.performer else '—' }}
-          </td>
           <td style="font-size:12px;white-space:nowrap">
             {{ ev.academic_year.name if ev.academic_year else '—' }}
           </td>
@@ -202,7 +189,7 @@
         </tr>
         {% else %}
         <tr>
-          <td colspan="13" class="text-center text-muted py-5">
+          <td colspan="12" class="text-center text-muted py-5">
             <i class="bi bi-clock-history" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
             لا توجد عمليات استرجاع أو إلغاء مطابقة للفلاتر المحددة
           </td>

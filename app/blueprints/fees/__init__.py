@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload, contains_eager
 from werkzeug.exceptions import HTTPException
 
-from app.models import (db, FeeRecord, FeeInstallment, FeeType, Student, AcademicYear, SchoolSettings, Revenue, RevenueCategory, Section, Grade, School, FeeRefundEvent, User)
+from app.models import (db, FeeRecord, FeeInstallment, FeeType, Student, AcademicYear, SchoolSettings, Revenue, RevenueCategory, Section, Grade, School, FeeRefundEvent)
 from app.utils.decorators import (permission_required, any_permission_required,
                                    get_current_school, get_active_year, get_view_year,
                                    historical_guard, admin_required)
@@ -727,7 +727,7 @@ def _refund_block_message(prev):
     return None
 
 
-def refund_installment(inst, *, reason, performed_by):
+def refund_installment(inst, *, reason):
     """Reverse ONE installment's complete active received amount.
 
     Stages all mutations in the current db.session and returns the created
@@ -735,7 +735,8 @@ def refund_installment(inst, *, reason, performed_by):
     commit. Raises ``FeeValidationError`` — changing nothing — when the received
     amount cannot be reversed exactly (no linked active allocations, or a
     historical/unlinked component). Idempotent under the row lock: a second call
-    finds no active allocations and is rejected.
+    finds no active allocations and is rejected. The identity of the user
+    performing the refund is intentionally not recorded on the event.
     """
     prev = _installment_refund_preview(inst)
     if not prev['refundable']:
@@ -758,7 +759,6 @@ def refund_installment(inst, *, reason, performed_by):
         amount           = total,
         reason           = reason,
         op_refs          = ','.join(prev['op_refs']),
-        performed_by     = performed_by,
     )
     db.session.add(event)
     db.session.flush()  # need event.id for the reversal links
@@ -781,7 +781,7 @@ def refund_installment(inst, *, reason, performed_by):
     return event
 
 
-def cancel_fee_record(rec, locked_installments, *, reason, performed_by):
+def cancel_fee_record(rec, locked_installments, *, reason):
     """Cancel a whole fee and reverse every active allocation across all its
     installments. Stages mutations; the CALLER owns the lock and commit.
 
@@ -790,6 +790,8 @@ def cancel_fee_record(rec, locked_installments, *, reason, performed_by):
     unique-``receipt_no`` fallback. Refuses (raising ``FeeValidationError``,
     changing nothing) when ANY installment holds received money that cannot be
     reconciled exactly, naming that installment number and the unmatched amount.
+    The identity of the user performing the cancellation is intentionally not
+    recorded on the fee record or the event.
     """
     if rec.cancelled_at is not None:
         raise FeeValidationError('هذا الرسم ملغى بالفعل.')
@@ -819,7 +821,6 @@ def cancel_fee_record(rec, locked_installments, *, reason, performed_by):
         amount           = Decimal('0'),
         reason           = reason,
         op_refs          = '',
-        performed_by     = performed_by,
     )
     db.session.add(event)
     db.session.flush()
@@ -842,7 +843,6 @@ def cancel_fee_record(rec, locked_installments, *, reason, performed_by):
     event.op_refs = ','.join(sorted(all_ops))
 
     rec.cancelled_at        = now
-    rec.cancelled_by        = performed_by
     rec.cancellation_reason = reason
     return event
 
@@ -1839,20 +1839,20 @@ def refund_installment_route(inst_id):
             db.session.rollback()
             return jsonify({'status': 'error', 'message': 'القسط غير موجود.'}), 404
 
-        event = refund_installment(locked, reason=reason, performed_by=current_user.id)
+        event = refund_installment(locked, reason=reason)
         refunded_amount = float(event.amount or 0)
         db.session.commit()
 
         # ── Post-commit side effects (best effort) ─────────────────────────────
-        # The refund is ALREADY committed here. Audit-log and parent-notification
-        # failures must never turn a successfully committed financial refund into
-        # a reported failure, so each is isolated in its own try/except and the
-        # success response is returned regardless.
-        try:
-            log_action('refund', 'fee_installment', inst_id,
-                       details=f"amount={refunded_amount} ops={event.op_refs} reason={reason}")
-        except Exception:
-            _log.exception('[fees] refund audit log failed inst_id=%s', inst_id)
+        # The refund is ALREADY committed here. Parent-notification failures must
+        # never turn a successfully committed financial refund into a reported
+        # failure, so they are isolated in a try/except and the success response
+        # is returned regardless.
+        #
+        # No AuditLog entry is written for a refund: the executor's identity must
+        # not be recorded anywhere for this operation. The refund itself is fully
+        # preserved as history in FeeRefundEvent (reason, timestamp, amount,
+        # student, fee, installment, op refs) and the reversed Revenue rows.
         if _student_id is not None:
             try:
                 _notify_fee_parents(
@@ -1997,16 +1997,14 @@ def cancel_fee_route(fee_id):
             db.session.rollback()
             return jsonify({'status': 'error', 'message': 'الرسم غير موجود.'}), 404
 
-        event = cancel_fee_record(locked_rec, locked_installments,
-                                  reason=reason, performed_by=current_user.id)
+        event = cancel_fee_record(locked_rec, locked_installments, reason=reason)
         refunded_amount = float(event.amount or 0)
         db.session.commit()
 
-        try:
-            log_action('cancel', 'fee_record', fee_id,
-                       details=f"reversed={refunded_amount} ops={event.op_refs} reason={reason}")
-        except Exception:
-            _log.exception('[fees] cancel audit log failed fee_id=%s', fee_id)
+        # No AuditLog entry is written for a full-fee cancellation: the executor's
+        # identity must not be recorded anywhere for this operation. The
+        # cancellation itself is fully preserved as history in FeeRefundEvent and
+        # on the FeeRecord (cancelled_at + cancellation_reason).
         if _student_id is not None:
             _notify_fee_parents(
                 _student_id,
@@ -2538,7 +2536,6 @@ def refunds_history():
     status_filter      = request.args.get('status', 'all')
     fee_type_filter    = request.args.get('fee_type', 'all')
     installment_filter = request.args.get('installment', 'all')
-    employee_filter    = request.args.get('employee', 'all')
     year_filter        = request.args.get('academic_year', 'all')
     date_from          = request.args.get('date_from', '').strip()
     date_to            = request.args.get('date_to', '').strip()
@@ -2554,7 +2551,6 @@ def refunds_history():
             contains_eager(FeeRefundEvent.student),
             contains_eager(FeeRefundEvent.fee_record).joinedload(FeeRecord.fee_type),
             contains_eager(FeeRefundEvent.installment),
-            joinedload(FeeRefundEvent.performer),
             joinedload(FeeRefundEvent.academic_year),
         )
     )
@@ -2591,12 +2587,6 @@ def refunds_history():
     if installment_filter != 'all':
         try:
             q = q.filter(FeeInstallment.installment_no == int(installment_filter))
-        except (ValueError, TypeError):
-            pass
-
-    if employee_filter != 'all':
-        try:
-            q = q.filter(FeeRefundEvent.performed_by == int(employee_filter))
         except (ValueError, TypeError):
             pass
 
@@ -2638,7 +2628,7 @@ def refunds_history():
     ]
 
     # ── Filter option data (scoped to this school's events only) ──────────────
-    fee_type_opts, employee_opts, inst_numbers, years = [], [], [], []
+    fee_type_opts, inst_numbers, years = [], [], []
     if school:
         fee_type_opts = (
             db.session.query(FeeType.id, FeeType.name)
@@ -2647,13 +2637,6 @@ def refunds_history():
             .join(FeeRefundEvent, FeeRefundEvent.fee_record_id == FeeRecord.id)
             .filter(FeeRefundEvent.school_id == school.id)
             .distinct().order_by(FeeType.name).all()
-        )
-        employee_opts = (
-            db.session.query(User.id, User.full_name)
-            .execution_options(include_all_years=True)
-            .join(FeeRefundEvent, FeeRefundEvent.performed_by == User.id)
-            .filter(FeeRefundEvent.school_id == school.id)
-            .distinct().order_by(User.full_name).all()
         )
         inst_numbers = [
             r[0] for r in
@@ -2671,7 +2654,7 @@ def refunds_history():
     filter_args = {
         'q': search, 'op_type': op_type, 'status': status_filter,
         'fee_type': fee_type_filter, 'installment': installment_filter,
-        'employee': employee_filter, 'academic_year': year_filter,
+        'academic_year': year_filter,
         'date_from': date_from, 'date_to': date_to, 'ref': ref,
     }
 
@@ -2680,14 +2663,13 @@ def refunds_history():
         events=events,
         event_rows=event_rows,
         fee_type_opts=fee_type_opts,
-        employee_opts=employee_opts,
         inst_numbers=inst_numbers,
         years=years,
         status_labels=_REFUND_STATUS_LABELS,
         # echo filters back to the form
         search=search, op_type=op_type, status_filter=status_filter,
         fee_type_filter=fee_type_filter, installment_filter=installment_filter,
-        employee_filter=employee_filter, year_filter=year_filter,
+        year_filter=year_filter,
         date_from=date_from, date_to=date_to, ref=ref,
         filter_args=filter_args,
     )
@@ -2713,7 +2695,6 @@ def refund_event_detail(event_id):
             joinedload(FeeRefundEvent.student),
             joinedload(FeeRefundEvent.fee_record).joinedload(FeeRecord.fee_type),
             joinedload(FeeRefundEvent.installment).joinedload(FeeInstallment.collector),
-            joinedload(FeeRefundEvent.performer),
             joinedload(FeeRefundEvent.academic_year),
         )
         .filter(FeeRefundEvent.id == event_id)

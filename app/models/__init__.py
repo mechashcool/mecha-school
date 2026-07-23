@@ -1105,8 +1105,9 @@ class FeeRecord(db.Model):
     # Full-fee cancellation (see FeeRefundEvent). A cancelled fee is preserved
     # as financial history but no longer counts as an active fee, outstanding
     # balance, collectible amount, or paid income, and rejects new payments.
+    # The identity of the user who performed the cancellation is deliberately
+    # NOT stored — only the fact (cancelled_at) and the reason are retained.
     cancelled_at        = db.Column(db.DateTime, nullable=True)
-    cancelled_by        = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     cancellation_reason = db.Column(db.Text, nullable=True)
 
     installments  = db.relationship('FeeInstallment', backref='fee_record', lazy='dynamic',
@@ -1114,7 +1115,6 @@ class FeeRecord(db.Model):
     academic_year = db.relationship('AcademicYear', backref='fee_records')
     school        = db.relationship('School', foreign_keys=[school_id],
                                     backref=db.backref('fee_records', lazy='dynamic'))
-    canceller     = db.relationship('User', foreign_keys=[cancelled_by])
 
     # Uniqueness is enforced ONLY across ACTIVE (non-cancelled) fees: a student
     # may hold at most one non-cancelled fee of a given type per academic year,
@@ -1274,7 +1274,9 @@ class FeeRefundEvent(db.Model):
     amount           = db.Column(db.Numeric(12, 2), nullable=False, default=0)
     reason           = db.Column(db.Text, nullable=False)
     op_refs          = db.Column(db.Text, nullable=True)
-    performed_by     = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    # The identity of the user who performed the refund / cancellation is
+    # deliberately NOT stored on the operation record. Only the fact, the reason,
+    # the timestamp and the financial linkage are retained.
     created_at       = db.Column(db.DateTime, default=datetime.utcnow)
 
     school        = db.relationship('School', foreign_keys=[school_id])
@@ -1282,7 +1284,6 @@ class FeeRefundEvent(db.Model):
     student       = db.relationship('Student', foreign_keys=[student_id])
     fee_record    = db.relationship('FeeRecord', foreign_keys=[fee_record_id])
     installment   = db.relationship('FeeInstallment', foreign_keys=[installment_id])
-    performer     = db.relationship('User', foreign_keys=[performed_by])
 
 
 # ═════════════════════════════════════════════════════════════════════════════
