@@ -1773,10 +1773,18 @@ def refund_installment_route(inst_id):
 
         # Row-lock this installment (serializes concurrent refund/pay attempts)
         # and refresh from the latest committed state before reversing.
+        #
+        # `of=FeeInstallment` is REQUIRED: joinedload(fee_record) emits a LEFT
+        # OUTER JOIN to fee_records, and PostgreSQL rejects a plain
+        # `SELECT ... FOR UPDATE` over the nullable side of an outer join
+        # ("FOR UPDATE cannot be applied to the nullable side of an outer join").
+        # `FOR UPDATE OF fee_installments` locks only the installment row (the
+        # non-nullable primary table) while still eager-loading fee_record so
+        # refund_installment can read fee_record.student_id across all years.
         locked = (
             db.session.query(FeeInstallment)
             .execution_options(include_all_years=True)
-            .with_for_update()
+            .with_for_update(of=FeeInstallment)
             .filter(FeeInstallment.id == inst.id)
             .populate_existing()
             .options(joinedload(FeeInstallment.fee_record))
@@ -1790,20 +1798,27 @@ def refund_installment_route(inst_id):
         refunded_amount = float(event.amount or 0)
         db.session.commit()
 
-        # ── Post-commit side effects (best effort — never disturb the commit) ──
+        # ── Post-commit side effects (best effort) ─────────────────────────────
+        # The refund is ALREADY committed here. Audit-log and parent-notification
+        # failures must never turn a successfully committed financial refund into
+        # a reported failure, so each is isolated in its own try/except and the
+        # success response is returned regardless.
         try:
             log_action('refund', 'fee_installment', inst_id,
                        details=f"amount={refunded_amount} ops={event.op_refs} reason={reason}")
         except Exception:
             _log.exception('[fees] refund audit log failed inst_id=%s', inst_id)
         if _student_id is not None:
-            _notify_fee_parents(
-                _student_id,
-                'تم استرجاع دفعة',
-                f'تم استرجاع مبلغ {refunded_amount} لقسط الرسوم رقم {_inst_no}. '
-                f'أصبح القسط مستحقاً مرة أخرى.',
-                screen='fees', fee_record_id=_fee_id, installment_id=inst_id,
-            )
+            try:
+                _notify_fee_parents(
+                    _student_id,
+                    'تم استرجاع دفعة',
+                    f'تم استرجاع مبلغ {refunded_amount} لقسط الرسوم رقم {_inst_no}. '
+                    f'أصبح القسط مستحقاً مرة أخرى.',
+                    screen='fees', fee_record_id=_fee_id, installment_id=inst_id,
+                )
+            except Exception:
+                _log.exception('[fees] refund parent notification failed inst_id=%s', inst_id)
 
         return jsonify({
             'status':  'success',
@@ -1816,10 +1831,16 @@ def refund_installment_route(inst_id):
     except FeeValidationError as _exc:
         db.session.rollback()
         return jsonify({'status': 'error', 'message': str(_exc)}), 400
-    except Exception:
+    except Exception as _exc:
+        # Nothing committed on this path — the whole transaction is rolled back,
+        # leaving every installment/Revenue/refund-event row unchanged. The full
+        # traceback is logged server-side; the client gets a friendly message
+        # plus a stable machine-readable code (never the raw internals).
         db.session.rollback()
-        _log.exception('[fees] refund processing error inst_id=%s', inst_id)
+        _log.exception('[fees] refund processing error inst_id=%s (%s)',
+                       inst_id, type(_exc).__name__)
         return jsonify({'status': 'error',
+                        'error_code': 'refund_execution_failed',
                         'message': 'حدث خطأ أثناء معالجة الاسترجاع. يرجى المحاولة مرة أخرى.'}), 500
 
 
