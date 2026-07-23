@@ -2,6 +2,94 @@
 {% block title %}سجل الاسترجاعات والإلغاءات{% endblock %}
 {% block page_title %}سجل الاسترجاعات والإلغاءات{% endblock %}
 
+{% block extra_css %}
+<style>
+/* ── Filters: equal field heights + tidy alignment ─────────────────────────── */
+.rh-filters .form-label { font-size: 12.5px; margin-bottom: 4px; color: var(--text-muted); font-weight: 600; }
+.rh-filters .form-control,
+.rh-filters .form-select { height: 40px; }
+.rh-filter-actions { display: flex; gap: 8px; }
+.rh-filter-actions .btn { height: 40px; display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; }
+
+/* ── Results table ─────────────────────────────────────────────────────────── */
+.rh-wrap { overflow: visible; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.rh-table { min-width: 1000px; margin: 0; }
+.rh-table th, .rh-table td { vertical-align: middle; }
+.rh-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
+
+.rh-date { white-space: nowrap; font-size: 12.5px; }
+.rh-date .tm { color: var(--text-muted); font-size: 11px; }
+
+.rh-student { min-width: 168px; }
+.rh-student .nm { font-weight: 600; white-space: nowrap; }
+.rh-student .cd { color: var(--text-muted); font-size: 11.5px; white-space: nowrap; }
+
+.rh-fee { min-width: 132px; }
+.rh-fee .ft { white-space: nowrap; }
+.rh-fee .inst { color: var(--text-muted); font-size: 11.5px; white-space: nowrap; }
+
+.rh-amount { white-space: nowrap; font-weight: 600; }
+.rh-compact { white-space: nowrap; text-align: center; }
+
+.rh-refs { min-width: 156px; }
+.rh-refs .line { display: block; }
+.rh-refs .lbl { color: var(--text-muted); font-size: 10.5px; }
+.rh-refs .rh-mono { word-break: keep-all; }
+
+.rh-reason { max-width: 260px; min-width: 190px; }
+.rh-reason .txt {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; font-size: 12.5px; line-height: 1.55;
+}
+
+/* Operation-type badge */
+.rh-op { font-weight: 600; padding: 4px 11px; border-radius: 20px; font-size: 11.5px; display: inline-block; white-space: nowrap; }
+.rh-op-cancel { background: #fdeeee; color: var(--danger); }
+.rh-op-refund { background: #fdf6e8; color: #b07410; }
+
+/* Actions column — always visible; pinned so overflow never hides it */
+.rh-table th.rh-actions,
+.rh-table td.rh-actions {
+  white-space: nowrap; text-align: center;
+  position: sticky; inset-inline-start: 0; left: 0; z-index: 2;
+  background: var(--card-bg);
+  box-shadow: 6px 0 6px -6px rgba(15, 37, 64, .12);
+}
+.rh-table thead th.rh-actions { background: #f8fafc; }
+.rh-table tbody tr:hover td.rh-actions { background: #f6f9fd; }
+.rh-detail-btn { white-space: nowrap; }
+
+/* ── Stacked cards on small screens ────────────────────────────────────────── */
+@media (max-width: 820px) {
+  .rh-wrap { overflow-x: visible; }
+  .rh-table { min-width: 0; }
+  .rh-table thead { display: none; }
+  .rh-table, .rh-table tbody, .rh-table tr, .rh-table td { display: block; width: 100%; }
+  .rh-table tr {
+    border: 1px solid var(--border); border-radius: 12px;
+    margin-bottom: 12px; padding: 4px 2px; background: var(--card-bg);
+  }
+  .rh-table tbody tr:hover { background: var(--card-bg); }
+  .rh-table td {
+    border: none; padding: 8px 14px;
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+    text-align: end;
+  }
+  .rh-table td::before {
+    content: attr(data-label); font-weight: 700; color: var(--text-muted);
+    font-size: 12px; white-space: nowrap; text-align: start;
+  }
+  .rh-reason { max-width: none; }
+  .rh-reason .txt { -webkit-line-clamp: 5; text-align: end; }
+  .rh-table td.rh-actions {
+    position: static; box-shadow: none; justify-content: center; padding-top: 10px;
+  }
+  .rh-table td.rh-actions::before { display: none; }
+  .rh-detail-btn { width: 100%; }
+}
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page-header">
   <div>
@@ -21,22 +109,22 @@
 <!-- ── Filters ─────────────────────────────────────────────────────────────── -->
 <div class="card mb-4">
   <div class="card-body py-3">
-    <form method="GET" class="row g-3 align-items-end">
-      <div class="col-md-3">
-        <label class="form-label mb-1" style="font-size:12.5px">بحث (اسم الطالب أو الرقم)</label>
+    <form method="GET" class="row g-3 align-items-end rh-filters">
+      <div class="col-12 col-md-6 col-lg-4 col-xl-3">
+        <label class="form-label">بحث (اسم الطالب أو الرقم)</label>
         <input type="text" name="q" value="{{ search }}" class="form-control"
                placeholder="اسم الطالب أو رقمه">
       </div>
-      <div class="col-md-2">
-        <label class="form-label mb-1" style="font-size:12.5px">نوع العملية</label>
+      <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+        <label class="form-label">نوع العملية</label>
         <select name="op_type" class="form-select">
           <option value="all" {% if op_type == 'all' %}selected{% endif %}>الكل</option>
           <option value="installment_refund" {% if op_type == 'installment_refund' %}selected{% endif %}>استرجاع مبلغ قسط</option>
           <option value="fee_cancellation" {% if op_type == 'fee_cancellation' %}selected{% endif %}>إلغاء رسم بالكامل</option>
         </select>
       </div>
-      <div class="col-md-2">
-        <label class="form-label mb-1" style="font-size:12.5px">الحالة</label>
+      <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+        <label class="form-label">الحالة</label>
         <select name="status" class="form-select">
           <option value="all" {% if status_filter == 'all' %}selected{% endif %}>الكل</option>
           {% for code, label in status_labels.items() %}
@@ -44,8 +132,8 @@
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-2">
-        <label class="form-label mb-1" style="font-size:12.5px">نوع الرسم</label>
+      <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+        <label class="form-label">نوع الرسم</label>
         <select name="fee_type" class="form-select">
           <option value="all" {% if fee_type_filter == 'all' %}selected{% endif %}>الكل</option>
           {% for ft_id, ft_name in fee_type_opts %}
@@ -53,8 +141,8 @@
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-2">
-        <label class="form-label mb-1" style="font-size:12.5px">رقم القسط</label>
+      <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+        <label class="form-label">رقم القسط</label>
         <select name="installment" class="form-select">
           <option value="all" {% if installment_filter == 'all' %}selected{% endif %}>الكل</option>
           {% for n in inst_numbers %}
@@ -62,8 +150,8 @@
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-2">
-        <label class="form-label mb-1" style="font-size:12.5px">السنة الدراسية</label>
+      <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+        <label class="form-label">السنة الدراسية</label>
         <select name="academic_year" class="form-select">
           <option value="all" {% if year_filter == 'all' %}selected{% endif %}>الكل</option>
           {% for y in years %}
@@ -71,23 +159,25 @@
           {% endfor %}
         </select>
       </div>
-      <div class="col-md-2">
-        <label class="form-label mb-1" style="font-size:12.5px">من تاريخ</label>
+      <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+        <label class="form-label">من تاريخ</label>
         <input type="date" name="date_from" value="{{ date_from }}" class="form-control">
       </div>
-      <div class="col-md-2">
-        <label class="form-label mb-1" style="font-size:12.5px">إلى تاريخ</label>
+      <div class="col-6 col-md-4 col-lg-3 col-xl-2">
+        <label class="form-label">إلى تاريخ</label>
         <input type="date" name="date_to" value="{{ date_to }}" class="form-control">
       </div>
-      <div class="col-md-2">
-        <label class="form-label mb-1" style="font-size:12.5px">مرجع/إيصال</label>
+      <div class="col-12 col-md-6 col-lg-4 col-xl-3">
+        <label class="form-label">مرجع/إيصال</label>
         <input type="text" name="ref" value="{{ ref }}" class="form-control"
                placeholder="مرجع العملية أو رقم الإيصال">
       </div>
-      <div class="col-md-2 d-flex gap-2">
-        <button class="btn btn-primary flex-grow-1"><i class="bi bi-search me-1"></i>عرض</button>
-        <a href="{{ url_for('fees.refunds_history') }}" class="btn btn-outline-secondary"
-           title="مسح الفلاتر"><i class="bi bi-x-lg"></i></a>
+      <div class="col-12 col-lg-auto ms-lg-auto">
+        <div class="rh-filter-actions">
+          <button class="btn btn-primary flex-grow-1"><i class="bi bi-search me-1"></i>عرض</button>
+          <a href="{{ url_for('fees.refunds_history') }}" class="btn btn-outline-secondary"
+             title="مسح الفلاتر"><i class="bi bi-x-lg me-1"></i>مسح</a>
+        </div>
       </div>
     </form>
   </div>
@@ -101,8 +191,8 @@
       إجمالي النتائج: <strong>{{ events.total }}</strong>
     </span>
   </div>
-  <div class="table-wrapper">
-    <table class="table table-hover mb-0">
+  <div class="table-wrapper rh-wrap">
+    <table class="table table-hover rh-table">
       <thead>
         <tr>
           <th>التاريخ والوقت</th>
@@ -110,13 +200,11 @@
           <th>الحالة</th>
           <th>الطالب</th>
           <th>نوع الرسم</th>
-          <th>القسط</th>
           <th>المبلغ</th>
-          <th>الإيصال الأصلي</th>
-          <th>مرجع العملية</th>
+          <th>المراجع</th>
           <th>السبب</th>
           <th>السنة</th>
-          <th>التفاصيل</th>
+          <th class="rh-actions">التفاصيل</th>
         </tr>
       </thead>
       <tbody>
@@ -124,72 +212,67 @@
         {% set ev = row.event %}
         {% set status_code = row.status[0] %}
         <tr>
-          <td style="white-space:nowrap;font-size:12.5px">
+          <td class="rh-date" data-label="التاريخ والوقت">
             {{ ev.created_at.strftime('%Y-%m-%d') if ev.created_at else '—' }}
-            <div class="text-muted" style="font-size:11px">
-              {{ ev.created_at.strftime('%H:%M') if ev.created_at else '' }}
-            </div>
+            <span class="tm">{{ ev.created_at.strftime('%H:%M') if ev.created_at else '' }}</span>
           </td>
-          <td style="white-space:nowrap">
+          <td data-label="نوع العملية">
             {% if ev.event_type == 'fee_cancellation' %}
-            <span class="badge" style="background:#fef0f0;color:#e03e3e;font-weight:600">
-              <i class="bi bi-x-octagon me-1"></i>{{ row.type_label }}
-            </span>
+            <span class="rh-op rh-op-cancel"><i class="bi bi-x-octagon me-1"></i>{{ row.type_label }}</span>
             {% else %}
-            <span class="badge" style="background:#fff8ec;color:#c47f17;font-weight:600">
-              <i class="bi bi-arrow-counterclockwise me-1"></i>{{ row.type_label }}
-            </span>
+            <span class="rh-op rh-op-refund"><i class="bi bi-arrow-counterclockwise me-1"></i>{{ row.type_label }}</span>
             {% endif %}
             {% if row.legacy %}
             <span class="badge bg-secondary" style="font-size:10px" title="تم التعرّف على الدفعة عبر رقم الإيصال (دفعة قديمة قبل مرجع العملية)">قديمة</span>
             {% endif %}
           </td>
-          <td style="white-space:nowrap">
+          <td data-label="الحالة">
             {% if status_code == 'cancelled' %}
             <span class="badge-status badge-overdue">{{ row.status[1] }}</span>
             {% elif status_code == 'repaid' %}
             <span class="badge-status badge-paid">{{ row.status[1] }}</span>
             {% else %}
-            <span class="badge-status badge-partial">{{ row.status[1] }}</span>
+            <span class="badge-status badge-pending">{{ row.status[1] }}</span>
             {% endif %}
           </td>
-          <td>
-            <div class="fw-600">{{ ev.student.full_name if ev.student else '—' }}</div>
-            <div class="text-muted" style="font-size:11.5px">{{ ev.student.student_id if ev.student else '' }}</div>
+          <td class="rh-student" data-label="الطالب">
+            <div class="nm">{{ ev.student.full_name if ev.student else '—' }}</div>
+            <div class="cd">{{ ev.student.student_id if ev.student else '' }}</div>
           </td>
-          <td>{{ ev.fee_record.fee_type.name if ev.fee_record and ev.fee_record.fee_type else '—' }}</td>
-          <td class="text-center">
-            {% if ev.installment %}القسط {{ ev.installment.installment_no }}{% else %}—{% endif %}
+          <td class="rh-fee" data-label="نوع الرسم">
+            <div class="ft">{{ ev.fee_record.fee_type.name if ev.fee_record and ev.fee_record.fee_type else '—' }}</div>
+            {% if ev.installment %}<div class="inst">القسط {{ ev.installment.installment_no }}</div>{% endif %}
           </td>
-          <td class="fw-600 {{ 'text-danger' if status_code == 'cancelled' else 'text-warning' }}">
+          <td class="rh-amount {{ 'text-danger' if status_code == 'cancelled' else 'text-warning' }}"
+              data-label="المبلغ">
             {{ '{:,.0f}'.format(ev.amount or 0) }}
           </td>
-          <td><code style="font-size:11px">{{ ev.installment.receipt_no if ev.installment and ev.installment.receipt_no else '—' }}</code></td>
-          <td>
-            {% if ev.op_refs %}
-            <code style="font-size:11px">{{ ev.op_refs }}</code>
-            {% else %}
-            <span class="text-muted" style="font-size:11.5px">—</span>
-            {% endif %}
-          </td>
-          <td style="max-width:220px">
-            <span style="font-size:12.5px" title="{{ ev.reason }}">
-              {{ ev.reason if ev.reason|length <= 50 else ev.reason[:50] ~ '…' }}
+          <td class="rh-refs" data-label="المراجع">
+            <span class="line">
+              <span class="lbl">إيصال:</span>
+              <span class="rh-mono">{{ ev.installment.receipt_no if ev.installment and ev.installment.receipt_no else '—' }}</span>
+            </span>
+            <span class="line">
+              <span class="lbl">مرجع:</span>
+              <span class="rh-mono">{{ ev.op_refs.replace(',', '، ') if ev.op_refs else '—' }}</span>
             </span>
           </td>
-          <td style="font-size:12px;white-space:nowrap">
+          <td class="rh-reason" data-label="السبب">
+            <div class="txt" title="{{ ev.reason }}">{{ ev.reason }}</div>
+          </td>
+          <td class="rh-compact" data-label="السنة">
             {{ ev.academic_year.name if ev.academic_year else '—' }}
           </td>
-          <td>
+          <td class="rh-actions" data-label="">
             <a href="{{ url_for('fees.refund_event_detail', event_id=ev.id) }}"
-               class="btn btn-sm btn-outline-primary" title="عرض التفاصيل">
-              <i class="bi bi-eye"></i>
+               class="btn btn-sm btn-outline-primary rh-detail-btn">
+              <i class="bi bi-eye me-1"></i>عرض التفاصيل
             </a>
           </td>
         </tr>
         {% else %}
         <tr>
-          <td colspan="12" class="text-center text-muted py-5">
+          <td colspan="10" class="text-center text-muted py-5">
             <i class="bi bi-clock-history" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
             لا توجد عمليات استرجاع أو إلغاء مطابقة للفلاتر المحددة
           </td>
