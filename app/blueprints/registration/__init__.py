@@ -38,6 +38,10 @@ from app.utils.helpers import save_uploaded_file, ALLOWED_IMAGE_EXTENSIONS
 from app.utils.registration_tokens import (hash_token, verify_token,
                                            generate_token, normalize_name,
                                            normalize_text)
+# Reuse the SAME school-scoped residential-area helpers as the internal Add
+# Student form (single source of truth for loading + fail-closed validation).
+from app.blueprints.students import (_school_residential_areas,
+                                     _validate_residential_area_for_school)
 
 registration_bp = Blueprint(
     'registration', __name__,
@@ -48,13 +52,21 @@ registration_bp = Blueprint(
 # The ONLY form keys accepted from the public form. Anything else (fee/account/
 # device/internal fields, or unknown injected keys) causes the submission to be
 # rejected. document_type[] is read via getlist.
+# PUBLIC_ALLOWED_FIELDS covers the config-driven student/guardian fields. The
+# extra literals are the always-present form plumbing plus the two public-safe,
+# config/school-scoped inputs that are NOT part of PUBLIC_ALLOWED_FIELDS:
+#   - notes             : the "ملاحظات" section textarea (public-safe section)
+#   - residential_area_id: the same school-scoped residential-area selector the
+#                          internal Add Student form uses (validated server-side)
 _ALLOWED_FORM_KEYS = (PUBLIC_ALLOWED_FIELDS | {
     'csrf_token', 'submission_nonce', 'desired_grade_id', 'full_name',
-    'document_type[]',
+    'notes', 'residential_area_id', 'document_type[]',
 })
 _ALLOWED_FILE_KEYS = {'photo', 'document_file[]'}
 
 # Fields that must NEVER be accepted publicly — presence is treated as tampering.
+# (residential_area_id is intentionally NOT here: it is an allow-listed, school-
+# scoped, server-validated selector — see _ALLOWED_FORM_KEYS above.)
 _FORBIDDEN_KEYS = {
     # financial
     'create_fee', 'fee_type_id', 'fee_notes', 'num_installments', 'discount',
@@ -65,7 +77,7 @@ _FORBIDDEN_KEYS = {
     'permissions',
     # device / internal placement / identifiers
     'employee_no_string', 'device_id', 'all_devices', 'section_id',
-    'building_id', 'rfid_tag_id', 'residential_area_id', 'student_id', 'status',
+    'building_id', 'rfid_tag_id', 'student_id', 'status',
 }
 
 _ALLOWED_DOC_EXTS = {'pdf', 'jpg', 'jpeg', 'png'}
@@ -175,6 +187,9 @@ def form(token):
     grades = _active_grades(school, year)
     form_cfg = get_student_form_config(school.id)
     enabled_features = get_enabled_features(school.id)
+    # Same school-scoped, active-only residential areas the internal Add Student
+    # form uses. Empty list → the selector is not rendered (identical fallback).
+    residential_areas = _school_residential_areas(school.id, active_only=True)
 
     def _render(values, error=None, nonce=None):
         if error:
@@ -183,6 +198,7 @@ def form(token):
             'registration/form.html',
             school=school, grades=grades, form_cfg=form_cfg,
             enabled_features=enabled_features, token=token,
+            residential_areas=residential_areas,
             sf=values or {},
             submission_nonce=nonce or secrets.token_urlsafe(16),
         )
@@ -234,6 +250,18 @@ def form(token):
             dob = datetime.strptime(dob_str, '%Y-%m-%d').date()
         except ValueError:
             return _render(request.form, 'تاريخ الميلاد غير صالح.', nonce=nonce)
+
+    # Residential area (optional) — server-side validated against THIS school's
+    # active areas. A foreign-school / inactive / injected id fails closed to None
+    # (reuses the same validator as the internal Add Student form).
+    residential_area_id_val = None
+    _raw_area_id = request.form.get('residential_area_id', type=int)
+    if _raw_area_id:
+        residential_area_id_val = _validate_residential_area_for_school(
+            _raw_area_id, school.id)
+        if residential_area_id_val is None:
+            return _render(request.form,
+                           'يرجى اختيار منطقة سكن صالحة لهذه المدرسة.', nonce=nonce)
 
     # ── Idempotency: same rendered form (same nonce) must not duplicate ────────
     if nonce:
@@ -300,6 +328,7 @@ def form(token):
         address=normalize_text(request.form.get('address')) or None,
         phone=normalize_text(request.form.get('phone')) or None,
         notes=normalize_text(request.form.get('notes')) or None,
+        residential_area_id=residential_area_id_val,
         student_photo_path=photo_path,
         guardian_name=normalize_name(request.form.get('guardian_name')) or None,
         guardian_phone=normalize_text(request.form.get('guardian_phone')) or None,

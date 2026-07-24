@@ -3247,6 +3247,10 @@ class StudentRegistrationRequest(db.Model):
     phone              = db.Column(db.String(30),  nullable=True)
     notes              = db.Column(db.Text,        nullable=True)
     student_photo_path = db.Column(db.String(255), nullable=True)
+    # Optional same-school residential-area selection (reuses the internal Add
+    # Student selector). Validated server-side against the school's active areas.
+    residential_area_id = db.Column(db.Integer, db.ForeignKey('residential_areas.id'),
+                                    nullable=True, index=True)
 
     # ── Submitted guardian data ────────────────────────────────────────────────
     guardian_name     = db.Column(db.String(200), nullable=True)
@@ -3275,6 +3279,7 @@ class StudentRegistrationRequest(db.Model):
     school           = db.relationship('School', foreign_keys=[school_id])
     academic_year    = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
     desired_grade    = db.relationship('Grade', foreign_keys=[desired_grade_id])
+    residential_area = db.relationship('ResidentialArea', foreign_keys=[residential_area_id])
     reviewer         = db.relationship('User', foreign_keys=[reviewed_by])
     approved_student = db.relationship('Student', foreign_keys=[approved_student_id])
     linked_parent    = db.relationship('User', foreign_keys=[linked_parent_id])

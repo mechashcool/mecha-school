@@ -168,19 +168,7 @@
           </div>
           {% endif %}
 
-          {% if residential_areas_list %}
-          <div class="col-md-4">
-            <label class="form-label"><i class="bi bi-geo-alt me-1"></i>منطقة السكن</label>
-            <select name="residential_area_id" id="wizResidentialArea" class="form-select">
-              <option value="">— بدون منطقة —</option>
-              {% for a in residential_areas_list %}
-              <option value="{{ a.id }}" {{ 'selected' if sf.get('residential_area_id') == a.id|string }}>
-                {{ a.name }}
-              </option>
-              {% endfor %}
-            </select>
-          </div>
-          {% endif %}
+          {{ sfields.residential_area_field(residential_areas_list, sf) }}
 
           {{ sfields.student_address_field(form_cfg, sf) }}
         </div>

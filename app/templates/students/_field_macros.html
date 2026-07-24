@@ -19,7 +19,7 @@
           <div class="col-md-6">
             <label class="form-label">الاسم الكامل <span class="text-danger">*</span></label>
             <input type="text" name="full_name" class="form-control" required
-                   value="{{ sf.get('full_name', '') }}">
+                   value="{{ sf.get('full_name') or '' }}">
           </div>
 
           {% if form_cfg.field_visible('date_of_birth') %}
@@ -29,7 +29,7 @@
             </label>
             <input type="date" name="date_of_birth" class="form-control"
                    {% if form_cfg.field_required('date_of_birth') %}required{% endif %}
-                   value="{{ sf.get('date_of_birth', '') }}">
+                   value="{{ sf.get('date_of_birth') or '' }}">
           </div>
           {% endif %}
 
@@ -54,7 +54,7 @@
             </label>
             <input type="text" name="nationality" class="form-control"
                    {% if form_cfg.field_required('nationality') %}required{% endif %}
-                   value="{{ sf.get('nationality', '') }}">
+                   value="{{ sf.get('nationality') or '' }}">
           </div>
           {% endif %}
 
@@ -65,7 +65,7 @@
             </label>
             <input type="tel" name="phone" class="form-control"
                    {% if form_cfg.field_required('phone') %}required{% endif %}
-                   value="{{ sf.get('phone', '') }}">
+                   value="{{ sf.get('phone') or '' }}">
           </div>
           {% endif %}
 {% endmacro %}
@@ -79,7 +79,28 @@
               {% if form_cfg.field_required('address') %}<span class="text-danger">*</span>{% endif %}
             </label>
             <textarea name="address" class="form-control" rows="2"
-                      {% if form_cfg.field_required('address') %}required{% endif %}>{{ sf.get('address', '') }}</textarea>
+                      {% if form_cfg.field_required('address') %}required{% endif %}>{{ sf.get('address') or '' }}</textarea>
+          </div>
+          {% endif %}
+{% endmacro %}
+
+
+{# residential area — same school-scoped selector as the internal Add Student
+   form. `areas` is the school's ACTIVE ResidentialArea rows (already isolated to
+   the school by the caller). Renders nothing when the school has no areas
+   (identical fallback to the internal form — the free-text address stays). #}
+{% macro residential_area_field(areas, sf) %}
+          {% if areas %}
+          <div class="col-md-4">
+            <label class="form-label"><i class="bi bi-geo-alt me-1"></i>منطقة السكن</label>
+            <select name="residential_area_id" id="wizResidentialArea" class="form-select">
+              <option value="">— بدون منطقة —</option>
+              {% for a in areas %}
+              <option value="{{ a.id }}" {{ 'selected' if sf.get('residential_area_id') == a.id|string }}>
+                {{ a.name }}
+              </option>
+              {% endfor %}
+            </select>
           </div>
           {% endif %}
 {% endmacro %}
@@ -92,7 +113,7 @@
       <div class="card-header"><i class="bi bi-sticky-fill text-accent"></i>ملاحظات</div>
       <div class="card-body">
         <textarea name="notes" class="form-control" rows="3"
-                  placeholder="أي ملاحظات إضافية...">{{ sf.get('notes', '') }}</textarea>
+                  placeholder="أي ملاحظات إضافية...">{{ sf.get('notes') or '' }}</textarea>
       </div>
     </div>
     {% endif %}
@@ -174,7 +195,7 @@
             </label>
             <input type="text" name="guardian_name" class="form-control"
                    {% if form_cfg.field_required('guardian_name') %}required{% endif %}
-                   value="{{ sf.get('guardian_name', '') }}">
+                   value="{{ sf.get('guardian_name') or '' }}">
           </div>
           {% endif %}
           {% if form_cfg.field_visible('guardian_relation') %}
@@ -198,7 +219,7 @@
             </label>
             <input type="tel" name="guardian_phone" class="form-control"
                    {% if form_cfg.field_required('guardian_phone') %}required{% endif %}
-                   value="{{ sf.get('guardian_phone', '') }}">
+                   value="{{ sf.get('guardian_phone') or '' }}">
           </div>
           {% endif %}
           {% if form_cfg.field_visible('guardian_email') %}
@@ -208,7 +229,7 @@
             </label>
             <input type="email" name="guardian_email" class="form-control"
                    {% if form_cfg.field_required('guardian_email') %}required{% endif %}
-                   value="{{ sf.get('guardian_email', '') }}">
+                   value="{{ sf.get('guardian_email') or '' }}">
           </div>
           {% endif %}
         </div>

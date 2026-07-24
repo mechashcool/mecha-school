@@ -729,6 +729,11 @@ def _before_flush(session_, flush_context, instances):
                 if not _rr_same_school(_RRGrade, obj.desired_grade_id):
                     raise ValueError(
                         'Registration request desired_grade_id must belong to the same school')
+                if getattr(obj, 'residential_area_id', None) is not None:
+                    from app.models import ResidentialArea as _RRArea
+                    if not _rr_same_school(_RRArea, obj.residential_area_id):
+                        raise ValueError(
+                            'Registration request residential_area_id must belong to the same school')
                 if not _rr_same_school(_RRStudent, obj.approved_student_id):
                     raise ValueError(
                         'Registration request approved_student_id must belong to the same school')
