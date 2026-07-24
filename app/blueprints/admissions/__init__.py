@@ -9,7 +9,7 @@ auto-filters by school and every route also 404s a cross-school id.
 from __future__ import annotations
 
 from flask import (Blueprint, render_template, redirect, url_for, flash,
-                   request, abort)
+                   request, abort, make_response)
 from flask_login import login_required, current_user
 
 from app.models import db, StudentRegistrationRequest, Section, Grade
@@ -120,19 +120,29 @@ def approve(request_id):
         return redirect(url_for('admissions.detail', request_id=request_id))
 
     if result.get('already'):
+        # Idempotent re-approval (e.g. staff refreshed the POST): the account
+        # already exists and the one-time plaintext is gone — never re-derivable.
         flash('تم اعتماد هذا الطلب مسبقاً.', 'info')
-    elif result.get('parent_created'):
-        # One-time display of the new parent's credentials to staff (never stored
-        # as plaintext, never shown to the public). Staff hand these to the guardian.
-        flash(
-            'تم اعتماد الطلب وإنشاء حساب ولي الأمر. '
-            f"اسم المستخدم: {result['parent_username']} — "
-            f"كلمة المرور: {result['parent_password']}. "
-            'يرجى حفظ هذه البيانات وتسليمها لولي الأمر (لن تظهر مرة أخرى).',
-            'success')
-    else:
-        flash('تم اعتماد الطلب وربط الطالب بحساب ولي الأمر الحالي.', 'success')
+        return redirect(url_for('admissions.detail', request_id=request_id))
 
+    if result.get('parent_created') and result.get('parent_password'):
+        # New parent account: render a PERSISTENT one-time credential panel
+        # (no redirect, no flash → the base auto-dismiss timer cannot remove it).
+        # The plaintext lives only in THIS response — never stored, never in the
+        # URL/flash/log/audit. no-store keeps it out of caches and bfcache. Staff
+        # confirm they copied it before navigating away.
+        resp = make_response(render_template(
+            'admissions/approved_credentials.html',
+            request_id=request_id,
+            parent_username=result['parent_username'],
+            parent_password=result['parent_password']))
+        resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, private'
+        resp.headers['Pragma'] = 'no-cache'
+        resp.headers['Expires'] = '0'
+        return resp
+
+    # Existing-parent link (or no parent role): no password is shown or reset.
+    flash('تم اعتماد الطلب وربط الطالب بحساب ولي الأمر الحالي.', 'success')
     return redirect(url_for('admissions.detail', request_id=request_id))
 
 
