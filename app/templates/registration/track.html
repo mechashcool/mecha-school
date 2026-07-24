@@ -34,9 +34,62 @@
       </div>
     {% endif %}
 
+    {# ── Tracking link — the current page URL (server-generated) ── #}
+    <div class="mt-4">
+      <label class="form-label fw-bold mb-2">
+        <i class="bi bi-link-45deg text-accent"></i> رابط متابعة الطلب
+      </label>
+      <div class="input-group">
+        <input type="text" id="trackUrl" class="form-control" readonly
+               value="{{ request.url }}" onclick="this.select();"
+               style="direction:ltr; text-overflow:ellipsis;">
+        <button type="button" class="btn btn-accent" onclick="copyTrackUrl()">
+          <i class="bi bi-clipboard-check me-1"></i>نسخ رابط المتابعة
+        </button>
+      </div>
+      <div id="trackCopyFeedback" class="small text-success mt-2" style="display:none;">
+        <i class="bi bi-check-lg me-1"></i>تم نسخ الرابط بنجاح
+      </div>
+    </div>
+
     <div class="text-muted small mt-3">
       احتفظ بهذا الرابط لمتابعة حالة طلبك. لا تشاركه مع أحد.
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function copyTrackUrl() {
+    var input = document.getElementById('trackUrl');
+    var fb = document.getElementById('trackCopyFeedback');
+    var url = (input && input.value) ? input.value : window.location.href;
+    function show(ok) {
+      if (!fb) return;
+      if (ok) {
+        fb.className = 'small text-success mt-2';
+        fb.innerHTML = '<i class="bi bi-check-lg me-1"></i>تم نسخ الرابط بنجاح';
+      } else {
+        fb.className = 'small text-danger mt-2';
+        fb.innerHTML = '<i class="bi bi-exclamation-triangle me-1"></i>تعذّر النسخ، يرجى نسخ الرابط يدوياً.';
+      }
+      fb.style.display = 'block';
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(function () { show(true); },
+                                             function () { show(false); });
+    } else {
+      // Fallback for browsers without the async Clipboard API.
+      try {
+        input.removeAttribute('readonly');
+        input.select();
+        input.setSelectionRange(0, url.length);
+        var ok = document.execCommand('copy');
+        input.setAttribute('readonly', 'readonly');
+        show(ok);
+      } catch (e) { show(false); }
+    }
+  }
+</script>
 {% endblock %}
