@@ -364,6 +364,23 @@ def create_app(config_name=None):
                 'unread_chat':                     _counts['unread_chat'],
             }
 
+            # Pending external-registration requests for the CURRENT school only,
+            # shown as a static sidebar badge (server-rendered each load; no polling).
+            _pending_reg = 0
+            try:
+                if current_user.has_permission('view_students'):
+                    from app.models import StudentRegistrationRequest
+                    from app.utils.decorators import get_current_school
+                    _reg_school = get_current_school()
+                    if _reg_school is not None:
+                        _pending_reg = (StudentRegistrationRequest.query
+                                        .filter_by(school_id=_reg_school.id,
+                                                   status='pending').count())
+            except Exception:
+                db.session.rollback()
+                _pending_reg = 0
+            sidebar_counts['pending_registration_requests'] = _pending_reg
+
         # True when a school user is viewing a historical (non-current) year.
         # Injected into all templates so they can hide write-action buttons.
         try:

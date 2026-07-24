@@ -370,6 +370,9 @@
           <a href="{{ url_for('admissions.index') }}"
              class="{{ 'active' if request.blueprint == 'admissions' }}">
             <i class="bi bi-link-45deg"></i> طلبات التسجيل الخارجي
+            {% if sidebar_counts.pending_registration_requests %}
+            <span class="nav-badge">{{ sidebar_counts.pending_registration_requests }}</span>
+            {% endif %}
           </a>
         </li>
         {% endif %}
