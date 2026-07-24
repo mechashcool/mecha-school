@@ -214,15 +214,95 @@ def school_detail(school_id):
 
     return render_template(
         'super_admin/school_detail.html',
-        school          = school,
-        stats           = stats,
-        billing_records = billing_records,
-        users           = users,
-        all_years       = all_years,
-        investor        = investor,
-        billing_types   = SchoolBilling.BILLING_TYPES,
-        today           = _date.today(),
+        school            = school,
+        stats             = stats,
+        billing_records   = billing_records,
+        users             = users,
+        all_years         = all_years,
+        investor          = investor,
+        billing_types     = SchoolBilling.BILLING_TYPES,
+        today             = _date.today(),
+        registration_link = _registration_link(school),
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  EXTERNAL (PUBLIC) STUDENT-REGISTRATION LINK
+#  Only the super admin may enable/disable/regenerate/view the link. The raw
+#  token is stored ONLY as a sha256 hash (lookup) + Fernet ciphertext (recovery)
+#  and is never written to logs or audit details.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _registration_link(school):
+    """Decrypt and return the school's active public registration URL, or None.
+
+    Returns None when the feature has never been set up or the stored token can
+    no longer be decrypted (e.g. SECRET_KEY-derived key rotated) — in which case
+    the super admin must regenerate to obtain a fresh copyable link.
+    """
+    if not school.registration_token_hash or not school.registration_token_encrypted:
+        return None
+    from app.utils.registration_tokens import decrypt_token
+    raw = decrypt_token(school.registration_token_encrypted)
+    if not raw:
+        return None
+    return url_for('registration.form', token=raw, _external=True)
+
+
+def _issue_registration_token(school):
+    """Generate a fresh token and persist its hash + encrypted copy on the school.
+    Overwrites any previous token, invalidating the previous link immediately."""
+    from app.utils.registration_tokens import (generate_token, hash_token,
+                                                encrypt_token)
+    raw = generate_token()
+    school.registration_token_hash      = hash_token(raw)
+    school.registration_token_encrypted = encrypt_token(raw)
+    school.registration_token_created_at = _dt.utcnow()
+
+
+@super_admin_bp.route('/schools/<int:school_id>/registration/enable', methods=['POST'])
+@login_required
+@super_admin_required
+def enable_registration(school_id):
+    school = School.query.get_or_404(school_id)
+    school.external_registration_enabled = True
+    # Generate a link on first enable; keep the existing one when re-enabling.
+    if not school.registration_token_hash:
+        _issue_registration_token(school)
+    db.session.commit()
+    log_action('edit', 'school', school.id,
+               details=f'تفعيل رابط التسجيل الخارجي لمدرسة "{school.school_name}"')
+    flash('تم تفعيل رابط التسجيل الخارجي.', 'success')
+    return redirect(url_for('super_admin.school_detail', school_id=school_id))
+
+
+@super_admin_bp.route('/schools/<int:school_id>/registration/disable', methods=['POST'])
+@login_required
+@super_admin_required
+def disable_registration(school_id):
+    school = School.query.get_or_404(school_id)
+    school.external_registration_enabled = False
+    db.session.commit()
+    log_action('edit', 'school', school.id,
+               details=f'تعطيل رابط التسجيل الخارجي لمدرسة "{school.school_name}"')
+    flash('تم تعطيل رابط التسجيل الخارجي.', 'warning')
+    return redirect(url_for('super_admin.school_detail', school_id=school_id))
+
+
+@super_admin_bp.route('/schools/<int:school_id>/registration/regenerate', methods=['POST'])
+@login_required
+@super_admin_required
+def regenerate_registration(school_id):
+    school = School.query.get_or_404(school_id)
+    _issue_registration_token(school)
+    # Regenerating implies the feature is in use — keep it enabled.
+    school.external_registration_enabled = True
+    db.session.commit()
+    log_action('edit', 'school', school.id,
+               details=f'إعادة توليد رابط التسجيل الخارجي لمدرسة "{school.school_name}" '
+                       '(تم إبطال الرابط السابق)')
+    flash('تم إنشاء رابط تسجيل جديد وإبطال الرابط السابق فوراً.', 'success')
+    return redirect(url_for('super_admin.school_detail', school_id=school_id))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

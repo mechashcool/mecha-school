@@ -33,6 +33,7 @@ def _models():
         SchoolVideo, SchoolAnnouncement,
         SchoolBuilding, UserBuildingAccess,
         ResidentialArea,
+        StudentRegistrationRequest, StudentRegistrationRequestDocument,
     )
 
     school_scoped = (
@@ -51,6 +52,9 @@ def _models():
         SchoolVideo, SchoolAnnouncement,
         SchoolBuilding, UserBuildingAccess,
         ResidentialArea,
+        # External (public) student-registration intake — school-scoped only so
+        # staff see all of their school's requests regardless of the view year.
+        StudentRegistrationRequest, StudentRegistrationRequestDocument,
     )
     # Student, StudentDocument, StudentSuspension are school-scoped only —
     # they persist across academic years so that a year rollover does not
@@ -698,6 +702,48 @@ def _before_flush(session_, flush_context, instances):
                     raise ValueError(
                         'Student residential_area_id must belong to the same school'
                     )
+
+            # External registration requests are school-scoped (NOT year-scoped),
+            # so the year-scoped relationship validator above does not cover them.
+            # Validate their cross-school relationships here — fail closed — so a
+            # grade / student / parent / academic-year from another school is
+            # rejected regardless of the code path that set it.
+            cls_name = obj.__class__.__name__
+            if cls_name == 'StudentRegistrationRequest':
+                from app.models import (AcademicYear, Grade as _RRGrade,
+                                        Student as _RRStudent, User as _RRUser)
+                _rr_sid = getattr(obj, 'school_id', None)
+
+                def _rr_same_school(model, ident):
+                    if ident is None:
+                        return True
+                    row = session_.get(
+                        model, ident,
+                        execution_options={'bypass_tenant_scope': True},
+                    )
+                    return row is not None and getattr(row, 'school_id', None) == _rr_sid
+
+                if not _rr_same_school(AcademicYear, obj.academic_year_id):
+                    raise ValueError(
+                        'Registration request academic_year_id must belong to the same school')
+                if not _rr_same_school(_RRGrade, obj.desired_grade_id):
+                    raise ValueError(
+                        'Registration request desired_grade_id must belong to the same school')
+                if not _rr_same_school(_RRStudent, obj.approved_student_id):
+                    raise ValueError(
+                        'Registration request approved_student_id must belong to the same school')
+                if not _rr_same_school(_RRUser, obj.linked_parent_id):
+                    raise ValueError(
+                        'Registration request linked_parent_id must belong to the same school')
+            elif cls_name == 'StudentRegistrationRequestDocument':
+                from app.models import StudentRegistrationRequest as _RRReq
+                req = session_.get(
+                    _RRReq, obj.request_id,
+                    execution_options={'bypass_tenant_scope': True},
+                )
+                if req is None or req.school_id != getattr(obj, 'school_id', None):
+                    raise ValueError(
+                        'Registration document must belong to the same school as its request')
 
 
 def register_tenant_guards(app):

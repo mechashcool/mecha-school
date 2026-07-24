@@ -1,0 +1,184 @@
+{% extends "shared/base.html" %}
+{% block title %}طلب تسجيل{% endblock %}
+{% block page_title %}طلب تسجيل خارجي{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">طلب تسجيل: {{ req.full_name }}</h1>
+    <p class="page-subtitle">
+      {% if req.status == 'pending' %}<span class="badge bg-warning text-dark">قيد المراجعة</span>
+      {% elif req.status == 'approved' %}<span class="badge bg-success">معتمد</span>
+      {% else %}<span class="badge bg-danger">مرفوض</span>{% endif %}
+      &nbsp;·&nbsp; {{ req.created_at | to_baghdad('%Y-%m-%d %H:%M') if req.created_at else '' }}
+    </p>
+  </div>
+  <div>
+    <a href="{{ url_for('admissions.index') }}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-arrow-right"></i> رجوع
+    </a>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-7">
+    <div class="card mb-4">
+      <div class="card-header">بيانات الطالب</div>
+      <div class="card-body">
+        <dl class="row mb-0">
+          <dt class="col-sm-4 text-muted">الاسم الكامل</dt><dd class="col-sm-8">{{ req.full_name }}</dd>
+          <dt class="col-sm-4 text-muted">الصف المطلوب</dt><dd class="col-sm-8">{{ grade.name if grade else '—' }}</dd>
+          <dt class="col-sm-4 text-muted">تاريخ الميلاد</dt><dd class="col-sm-8">{{ req.date_of_birth or '—' }}</dd>
+          <dt class="col-sm-4 text-muted">الجنس</dt><dd class="col-sm-8">{{ 'ذكر' if req.gender == 'male' else 'أنثى' if req.gender == 'female' else '—' }}</dd>
+          <dt class="col-sm-4 text-muted">الجنسية</dt><dd class="col-sm-8">{{ req.nationality or '—' }}</dd>
+          <dt class="col-sm-4 text-muted">الهاتف</dt><dd class="col-sm-8" dir="ltr">{{ req.phone or '—' }}</dd>
+          <dt class="col-sm-4 text-muted">العنوان</dt><dd class="col-sm-8">{{ req.address or '—' }}</dd>
+          <dt class="col-sm-4 text-muted">ملاحظات</dt><dd class="col-sm-8">{{ req.notes or '—' }}</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-header">بيانات ولي الأمر</div>
+      <div class="card-body">
+        <dl class="row mb-0">
+          <dt class="col-sm-4 text-muted">الاسم</dt><dd class="col-sm-8">{{ req.guardian_name or '—' }}</dd>
+          <dt class="col-sm-4 text-muted">صلة القرابة</dt><dd class="col-sm-8">{{ req.guardian_relation or '—' }}</dd>
+          <dt class="col-sm-4 text-muted">الهاتف</dt><dd class="col-sm-8" dir="ltr">{{ req.guardian_phone or '—' }}</dd>
+          <dt class="col-sm-4 text-muted">البريد</dt><dd class="col-sm-8" dir="ltr">{{ req.guardian_email or '—' }}</dd>
+        </dl>
+      </div>
+    </div>
+
+    {% set docs = req.documents.all() %}
+    {% if req.student_photo_path or docs %}
+    <div class="card">
+      <div class="card-header">المستندات والصور</div>
+      <div class="card-body">
+        <ul class="list-unstyled mb-0">
+          {% if req.student_photo_path %}
+          <li class="mb-2">
+            <i class="bi bi-image text-accent me-1"></i>
+            <a href="{{ upload_url(req.student_photo_path) }}" target="_blank" rel="noopener">صورة الطالب</a>
+          </li>
+          {% endif %}
+          {% for d in docs %}
+          <li class="mb-2">
+            <i class="bi bi-paperclip text-accent me-1"></i>
+            <a href="{{ upload_url(d.file_path) }}" target="_blank" rel="noopener">{{ d.document_type }}</a>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="col-lg-5">
+    {% if req.status == 'pending' %}
+    {# ── Approve ── #}
+    <div class="card mb-4">
+      <div class="card-header">اعتماد الطلب</div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('admissions.approve', request_id=req.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+
+          {% if sections %}
+          <div class="mb-3">
+            <label class="form-label">الشعبة (اختياري)</label>
+            <select name="section_id" class="form-select">
+              <option value="">— بدون تعيين —</option>
+              {% for s in sections %}
+              <option value="{{ s.id }}">شعبة {{ s.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          {% endif %}
+
+          <div class="mb-3">
+            <label class="form-label d-block">حساب ولي الأمر</label>
+            {% if parent_match %}
+            <input type="hidden" name="link_parent_id" value="{{ parent_match.id }}">
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="parent_choice"
+                     id="pcLink" value="link" checked>
+              <label class="form-check-label" for="pcLink">
+                ربط بحساب موجود:
+                <strong>{{ parent_match.full_name }}</strong>
+                (<span dir="ltr">{{ parent_match.username }}</span>)
+                <div class="text-muted small">لن يتم تغيير أو إظهار كلمة المرور الحالية.</div>
+              </label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="parent_choice"
+                     id="pcNew" value="new">
+              <label class="form-check-label" for="pcNew">إنشاء حساب ولي أمر جديد</label>
+            </div>
+            {% else %}
+            <input type="hidden" name="parent_choice" value="new">
+            <div class="text-muted small">
+              لا يوجد حساب ولي أمر مطابق برقم الهاتف — سيتم إنشاء حساب جديد وعرض بياناته لك مرة واحدة.
+            </div>
+            {% endif %}
+          </div>
+
+          <button type="submit" class="btn btn-success w-100"
+                  onclick="return confirm('سيتم إنشاء الطالب رسمياً. هل تريد المتابعة؟');">
+            <i class="bi bi-check-lg me-1"></i>اعتماد وإنشاء الطالب
+          </button>
+        </form>
+      </div>
+    </div>
+
+    {# ── Reject ── #}
+    <div class="card">
+      <div class="card-header">رفض الطلب</div>
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('admissions.reject', request_id=req.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+          <div class="mb-3">
+            <label class="form-label">سبب الرفض (يظهر لولي الأمر)</label>
+            <textarea name="rejection_reason" class="form-control" rows="2"
+                      placeholder="اختياري"></textarea>
+          </div>
+          <button type="submit" class="btn btn-outline-danger w-100">
+            <i class="bi bi-x-lg me-1"></i>رفض الطلب
+          </button>
+        </form>
+      </div>
+    </div>
+
+    {% elif req.status == 'approved' %}
+    <div class="card">
+      <div class="card-header">تم الاعتماد</div>
+      <div class="card-body">
+        <p class="text-muted">تم إنشاء الطالب رسمياً.</p>
+        {% if req.approved_student_id %}
+        <a href="{{ url_for('students.view', student_id=req.approved_student_id) }}"
+           class="btn btn-outline-primary w-100 mb-2">
+          <i class="bi bi-person me-1"></i>ملف الطالب
+        </a>
+        {% if current_user.has_permission('manage_fees') %}
+        <a href="{{ url_for('fees.create', student_id=req.approved_student_id) }}"
+           class="btn btn-outline-success w-100">
+          <i class="bi bi-cash-coin me-1"></i>إضافة رسم للطالب
+        </a>
+        {% endif %}
+        {% endif %}
+      </div>
+    </div>
+
+    {% else %}
+    <div class="card">
+      <div class="card-header">مرفوض</div>
+      <div class="card-body">
+        <p class="mb-1">تم رفض هذا الطلب.</p>
+        {% if req.rejection_reason %}
+        <p class="text-muted small mb-0">السبب: {{ req.rejection_reason }}</p>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

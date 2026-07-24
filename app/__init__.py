@@ -131,6 +131,10 @@ def create_app(config_name=None):
     from app.blueprints.media             import media_bp
     # Public pages — no authentication required (e.g. /privacy)
     from app.blueprints.public_pages      import public_pages_bp
+    # External (public) student registration — no login; secure per-school link
+    from app.blueprints.registration      import registration_bp
+    # Admissions — staff review of external registration requests
+    from app.blueprints.admissions        import admissions_bp
     # Ops — /ops/health liveness + guarded /ops/metrics & /ops/health/deep (P3)
     from app.blueprints.ops               import ops_bp
 
@@ -170,6 +174,8 @@ def create_app(config_name=None):
     app.register_blueprint(live_bp,                url_prefix='/live')
     app.register_blueprint(media_bp)          # route already includes the /media prefix
     app.register_blueprint(public_pages_bp)   # public routes — no login required
+    app.register_blueprint(registration_bp)   # public registration — routes include /register
+    app.register_blueprint(admissions_bp,     url_prefix='/admissions')
     app.register_blueprint(ops_bp)            # routes already include the /ops prefix
 
     # ── CSRF exemptions ───────────────────────────────────────────────────────

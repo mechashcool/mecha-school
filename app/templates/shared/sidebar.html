@@ -365,6 +365,14 @@
           </a>
         </li>
         {% endif %}
+        {% if current_user.has_permission('view_students') %}
+        <li class="nav-item">
+          <a href="{{ url_for('admissions.index') }}"
+             class="{{ 'active' if request.blueprint == 'admissions' }}">
+            <i class="bi bi-link-45deg"></i> طلبات التسجيل الخارجي
+          </a>
+        </li>
+        {% endif %}
       </ul>
     </li>
     {% endif %}

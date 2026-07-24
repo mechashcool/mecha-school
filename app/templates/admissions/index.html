@@ -1,0 +1,71 @@
+{% extends "shared/base.html" %}
+{% block title %}طلبات التسجيل الخارجي{% endblock %}
+{% block page_title %}طلبات التسجيل الخارجي{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">طلبات التسجيل الخارجي</h1>
+    <p class="page-subtitle">مراجعة واعتماد طلبات التسجيل الواردة عبر رابط المدرسة العام</p>
+  </div>
+</div>
+
+<ul class="nav nav-pills mb-3 gap-2">
+  {% set tabs = [('pending','قيد المراجعة', counts.pending), ('approved','معتمدة', counts.approved), ('rejected','مرفوضة', counts.rejected), ('all','الكل', none)] %}
+  {% for key, label, cnt in tabs %}
+  <li class="nav-item">
+    <a class="nav-link {{ 'active' if status == key }}"
+       href="{{ url_for('admissions.index', status=key) }}">
+      {{ label }}{% if cnt is not none %} <span class="badge bg-light text-dark">{{ cnt }}</span>{% endif %}
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+
+<div class="card">
+  <div class="card-body p-0">
+    {% if requests %}
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>الطالب</th>
+            <th>ولي الأمر</th>
+            <th>الهاتف</th>
+            <th>الحالة</th>
+            <th>تاريخ الطلب</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in requests %}
+          <tr>
+            <td class="fw-semibold">{{ r.full_name }}</td>
+            <td>{{ r.guardian_name or '—' }}</td>
+            <td dir="ltr">{{ r.guardian_phone or '—' }}</td>
+            <td>
+              {% if r.status == 'pending' %}<span class="badge bg-warning text-dark">قيد المراجعة</span>
+              {% elif r.status == 'approved' %}<span class="badge bg-success">معتمد</span>
+              {% else %}<span class="badge bg-danger">مرفوض</span>{% endif %}
+            </td>
+            <td>{{ r.created_at | to_baghdad('%Y-%m-%d %H:%M') if r.created_at else '—' }}</td>
+            <td class="text-end">
+              <a href="{{ url_for('admissions.detail', request_id=r.id) }}"
+                 class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-eye"></i> عرض
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="text-center text-muted py-5">
+      <i class="bi bi-inbox" style="font-size:40px"></i>
+      <p class="mt-2 mb-0">لا توجد طلبات في هذا التصنيف.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

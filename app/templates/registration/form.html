@@ -1,0 +1,76 @@
+{% extends "registration/_public_base.html" %}
+{% import 'students/_field_macros.html' as sfields %}
+{% block title %}تسجيل طالب{% endblock %}
+
+{% block content %}
+<form method="POST" action="{{ url_for('registration.form', token=token) }}"
+      enctype="multipart/form-data" novalidate>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+  <input type="hidden" name="submission_nonce" value="{{ submission_nonce }}">
+
+  {# ── Student information (same config-driven fields as Add Student) ── #}
+  <div class="card mb-4">
+    <div class="card-header"><i class="bi bi-person-fill text-accent"></i>بيانات الطالب</div>
+    <div class="card-body">
+      <div class="row g-3">
+        {{ sfields.student_identity_fields(form_cfg, sf) }}
+
+        <div class="col-md-6">
+          <label class="form-label">الصف الدراسي المطلوب <span class="text-danger">*</span></label>
+          <select name="desired_grade_id" class="form-select" required>
+            <option value="">— اختر الصف —</option>
+            {% for g in grades %}
+            <option value="{{ g.id }}" {{ 'selected' if sf.get('desired_grade_id') == g.id|string }}>{{ g.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        {{ sfields.student_address_field(form_cfg, sf) }}
+      </div>
+    </div>
+  </div>
+
+  {# ── Photo + documents (self-guarded by section/feature) ── #}
+  {% if (form_cfg.public_section_visible('student_photo') and 'students.photo_upload' in enabled_features)
+        or (form_cfg.public_section_visible('student_documents') and 'students.documents_upload' in enabled_features) %}
+  <div class="row g-4">
+    {{ sfields.student_photo_card(form_cfg, enabled_features) }}
+    {{ sfields.student_documents_card(form_cfg, enabled_features) }}
+  </div>
+  {% endif %}
+
+  {# ── Guardian information ── #}
+  {{ sfields.guardian_card(form_cfg, sf) }}
+
+  <div class="mt-3">
+    {{ sfields.student_notes_card(form_cfg, sf) }}
+  </div>
+
+  <div class="d-grid mt-2">
+    <button type="submit" class="btn btn-accent btn-lg">
+      <i class="bi bi-send me-1"></i>إرسال طلب التسجيل
+    </button>
+    <div class="text-muted small text-center mt-2">
+      بعد الإرسال ستحصل على رابط لمتابعة حالة الطلب. المدرسة تراجع الطلب قبل اعتماده.
+    </div>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Clone the first document row (mirrors the internal Add Student behaviour).
+  (function(){
+    var addBtn = document.getElementById('add-document-row');
+    var host   = document.getElementById('document-rows');
+    if(!addBtn || !host){ return; }
+    addBtn.addEventListener('click', function(){
+      var rows = host.querySelectorAll('.document-row');
+      if(rows.length >= 10){ return; }
+      var clone = rows[0].cloneNode(true);
+      clone.querySelectorAll('select, input').forEach(function(el){ el.value = ''; });
+      host.appendChild(clone);
+    });
+  })();
+</script>
+{% endblock %}

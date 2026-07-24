@@ -224,6 +224,73 @@
             </form>
           </div>
         </div>
+
+        {# External (public) student-registration link — super-admin only #}
+        <div class="card border-0 shadow-sm mb-3">
+          <div class="card-header bg-white d-flex justify-content-between align-items-center">
+            <strong><i class="bi bi-link-45deg me-2"></i>رابط التسجيل الخارجي</strong>
+            {% if school.external_registration_enabled %}
+            <span class="badge bg-success">مفعّل</span>
+            {% else %}
+            <span class="badge bg-secondary">معطّل</span>
+            {% endif %}
+          </div>
+          <div class="card-body">
+            <p class="text-muted small mb-3">
+              رابط عام يستخدمه أولياء الأمور لتقديم طلب تسجيل طالب. يراجع طاقم المدرسة الطلبات
+              ويعتمدها. الرابط سري — لا تنشره إلا للجهة المقصودة.
+            </p>
+
+            {% if school.external_registration_enabled and registration_link %}
+            <label class="form-label small">الرابط الحالي</label>
+            <div class="input-group input-group-sm mb-3">
+              <input type="text" id="regLinkInput" class="form-control" readonly
+                     value="{{ registration_link }}"
+                     onclick="this.select();">
+              <button type="button" class="btn btn-outline-primary"
+                      onclick="(function(b){navigator.clipboard.writeText(document.getElementById('regLinkInput').value).then(function(){b.innerHTML='<i class=\'bi bi-check-lg\'></i>';setTimeout(function(){b.innerHTML='<i class=\'bi bi-clipboard\'></i>';},1500);});})(this)">
+                <i class="bi bi-clipboard"></i>
+              </button>
+            </div>
+            {% elif school.external_registration_enabled and not registration_link %}
+            <div class="alert alert-warning small py-2">
+              تعذّر استرجاع الرابط الحالي. يرجى إعادة توليد الرابط للحصول على نسخة صالحة للنسخ.
+            </div>
+            {% endif %}
+
+            <div class="d-flex flex-wrap gap-2">
+              {% if not school.external_registration_enabled %}
+              <form method="POST"
+                    action="{{ url_for('super_admin.enable_registration', school_id=school.id) }}">
+                <input type="hidden" name="csrf_token"
+                       value="{{ csrf_token() if csrf_token is defined else '' }}">
+                <button type="submit" class="btn btn-sm btn-success">
+                  <i class="bi bi-toggle-on me-1"></i>تفعيل الرابط
+                </button>
+              </form>
+              {% else %}
+              <form method="POST"
+                    action="{{ url_for('super_admin.disable_registration', school_id=school.id) }}">
+                <input type="hidden" name="csrf_token"
+                       value="{{ csrf_token() if csrf_token is defined else '' }}">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">
+                  <i class="bi bi-toggle-off me-1"></i>تعطيل الرابط
+                </button>
+              </form>
+              {% endif %}
+
+              <form method="POST"
+                    action="{{ url_for('super_admin.regenerate_registration', school_id=school.id) }}"
+                    onsubmit="return confirm('سيؤدي إنشاء رابط جديد إلى إبطال الرابط الحالي فوراً. هل تريد المتابعة؟');">
+                <input type="hidden" name="csrf_token"
+                       value="{{ csrf_token() if csrf_token is defined else '' }}">
+                <button type="submit" class="btn btn-sm btn-outline-danger">
+                  <i class="bi bi-arrow-repeat me-1"></i>إعادة توليد الرابط
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>

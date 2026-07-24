@@ -1,0 +1,42 @@
+{% extends "registration/_public_base.html" %}
+{% block title %}حالة طلب التسجيل{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header"><i class="bi bi-clipboard-check text-accent"></i>حالة طلب التسجيل</div>
+  <div class="card-body">
+    <p class="mb-3">
+      اسم الطالب: <strong>{{ req.full_name }}</strong>
+    </p>
+
+    {% if req.status == 'pending' %}
+      <div class="alert alert-warning d-flex align-items-center gap-2 mb-0">
+        <i class="bi bi-hourglass-split fs-5"></i>
+        <div>طلبك قيد المراجعة من قبل إدارة المدرسة. يرجى المتابعة لاحقاً عبر هذا الرابط.</div>
+      </div>
+    {% elif req.status == 'approved' %}
+      <div class="alert alert-success d-flex align-items-center gap-2 mb-0">
+        <i class="bi bi-check-circle fs-5"></i>
+        <div>
+          تم قبول طلب التسجيل. يرجى مراجعة إدارة المدرسة لاستكمال الإجراءات واستلام
+          بيانات الدخول الخاصة بولي الأمر.
+        </div>
+      </div>
+    {% elif req.status == 'rejected' %}
+      <div class="alert alert-danger mb-0">
+        <div class="d-flex align-items-center gap-2 mb-1">
+          <i class="bi bi-x-circle fs-5"></i>
+          <strong>تم رفض طلب التسجيل.</strong>
+        </div>
+        {% if req.rejection_reason %}
+        <div class="small">السبب: {{ req.rejection_reason }}</div>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    <div class="text-muted small mt-3">
+      احتفظ بهذا الرابط لمتابعة حالة طلبك. لا تشاركه مع أحد.
+    </div>
+  </div>
+</div>
+{% endblock %}

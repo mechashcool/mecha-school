@@ -192,6 +192,17 @@ def resolve_upload_owner(value: str | None) -> dict | None:
     if row:
         return owner(row, section_id=getattr(row, 'section_id', None), kind='homework')
 
+    # External-registration intake files (documents + submitted student photo).
+    # No Student exists yet, so ownership is the request's school only; same-school
+    # staff (not parent/teacher/investor) may view — enforced by can_access_upload.
+    row = first('StudentRegistrationRequestDocument', 'file_path')
+    if row:
+        return owner(row, kind='registration_document')
+
+    row = first('StudentRegistrationRequest', 'student_photo_path')
+    if row:
+        return owner(row, kind='registration_photo')
+
     row = first('Student', 'photo')
     if row:
         return owner(row, student_id=getattr(row, 'id', None), kind='student_photo')

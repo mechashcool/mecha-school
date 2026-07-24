@@ -72,6 +72,30 @@ FIELD_LABELS = {
 
 
 # ---------------------------------------------------------------------------
+# PUBLIC (external registration) allow-list
+# ---------------------------------------------------------------------------
+# The external registration link reuses the internal Add Student fields, but ONLY
+# these safe, parent-appropriate sections/fields may ever render or be accepted.
+# Everything else — parent-account creation, existing-parent linking, attendance
+# device, internal class/section assignment, and any financial / permission /
+# internal-identifier field — is internal-only and is rejected server-side even
+# if injected into the request. This is the single authority shared by the public
+# template and the public POST handler.
+
+PUBLIC_ALLOWED_SECTIONS = {
+    'guardian_info',
+    'student_photo',
+    'student_documents',
+    'notes',
+}
+
+PUBLIC_ALLOWED_FIELDS = {
+    'date_of_birth', 'gender', 'nationality', 'phone', 'address',
+    'guardian_name', 'guardian_phone', 'guardian_email', 'guardian_relation',
+}
+
+
+# ---------------------------------------------------------------------------
 # Config wrapper
 # ---------------------------------------------------------------------------
 
@@ -101,6 +125,34 @@ class StudentFormConfig:
 
     def field_required(self, key: str) -> bool:
         return key in self._required_fields
+
+    # ------------------------------------------------------------------
+    # PUBLIC (external registration) API — intersect config with the
+    # allow-list so a field/section is public only when the school shows it
+    # AND it is safe to expose publicly.
+    # ------------------------------------------------------------------
+
+    def public_section_visible(self, key: str) -> bool:
+        return key in PUBLIC_ALLOWED_SECTIONS and self.section_visible(key)
+
+    def public_field_visible(self, key: str) -> bool:
+        return key in PUBLIC_ALLOWED_FIELDS and self.field_visible(key)
+
+    def public_field_required(self, key: str) -> bool:
+        return self.public_field_visible(key) and self.field_required(key)
+
+    def validate_public(self, form_data: dict) -> list:
+        """Validate a PUBLIC submission: only allow-listed, publicly-visible
+        required fields are enforced. Returns a list of Arabic error messages."""
+        errors = []
+        for field in self._required_fields:
+            if not self.public_field_visible(field):
+                continue
+            value = (form_data.get(field) or '').strip()
+            if not value:
+                label = FIELD_LABELS.get(field, field)
+                errors.append(f'الحقل "{label}" مطلوب.')
+        return errors
 
     # Convenience: validate a POST dict against the current config.
     # Returns a list of Arabic error messages (empty = ok).

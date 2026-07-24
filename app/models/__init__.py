@@ -109,6 +109,17 @@ class School(db.Model):
     package_id  = db.Column(db.Integer, db.ForeignKey('feature_packages.id', ondelete='SET NULL'),
                             nullable=True)
 
+    # Optional per-school feature: external (public) student-registration link.
+    # Default OFF so existing schools behave exactly as before. Only the Super
+    # Admin enables/disables/regenerates the link.
+    external_registration_enabled = db.Column(db.Boolean, default=False, nullable=False,
+                                              server_default=db.false())
+    # sha256(raw token) — used for lookup + verification at the public entry point.
+    registration_token_hash       = db.Column(db.String(64), unique=True, nullable=True)
+    # Fernet-encrypted raw token — authorized Super-Admin recovery (copy link later).
+    registration_token_encrypted  = db.Column(db.Text, nullable=True)
+    registration_token_created_at = db.Column(db.DateTime, nullable=True)
+
     is_active   = db.Column(db.Boolean, default=True)
     created_at  = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at  = db.Column(db.DateTime, default=datetime.utcnow,
@@ -3193,3 +3204,120 @@ class MobileModuleView(db.Model):
 
     def __repr__(self):
         return f'<MobileModuleView user={self.user_id} module={self.module}>'
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  EXTERNAL STUDENT REGISTRATION  — public intake requests + their documents
+# ═════════════════════════════════════════════════════════════════════════════
+
+class StudentRegistrationRequest(db.Model):
+    """
+    A public (external) pre-registration application submitted by a guardian via
+    the school's secure registration link, BEFORE any Student exists.
+
+    School staff review each request; on approval the internal creation logic
+    produces the real Student (and documents) and creates/links the guardian's
+    parent account. School-scoped (NOT year-scoped) so staff see all of their
+    school's requests regardless of the selected view year; academic_year_id
+    records the target year resolved server-side at submission time.
+
+    Security: contains NO credentials — the public site never stores a plaintext
+    password. tracking_token_hash is sha256 of the per-request tracking token
+    (the raw token lives only in the guardian's URL, never in the database).
+    """
+    __tablename__ = 'student_registration_requests'
+    __school_scoped__ = True
+
+    STATUSES = ('pending', 'approved', 'rejected')
+
+    id               = db.Column(db.Integer, primary_key=True)
+    school_id        = db.Column(db.Integer, db.ForeignKey('schools.id'),
+                                 nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'),
+                                 nullable=False, index=True)
+    desired_grade_id = db.Column(db.Integer, db.ForeignKey('grades.id'),
+                                 nullable=False, index=True)
+
+    # ── Submitted student data (mirrors the public-allowed Add Student fields) ──
+    full_name          = db.Column(db.String(200), nullable=False)
+    date_of_birth      = db.Column(db.Date,        nullable=True)
+    gender             = db.Column(db.String(10),  nullable=True)
+    nationality        = db.Column(db.String(80),  nullable=True)
+    address            = db.Column(db.Text,        nullable=True)
+    phone              = db.Column(db.String(30),  nullable=True)
+    notes              = db.Column(db.Text,        nullable=True)
+    student_photo_path = db.Column(db.String(255), nullable=True)
+
+    # ── Submitted guardian data ────────────────────────────────────────────────
+    guardian_name     = db.Column(db.String(200), nullable=True)
+    guardian_phone    = db.Column(db.String(30),  nullable=True)
+    guardian_email    = db.Column(db.String(180), nullable=True)
+    guardian_relation = db.Column(db.String(50),  nullable=True)
+
+    # ── Workflow / review ───────────────────────────────────────────────────────
+    status              = db.Column(db.String(20), nullable=False, default='pending',
+                                    server_default='pending', index=True)
+    tracking_token_hash = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    submission_nonce    = db.Column(db.String(64), nullable=True)
+    rejection_reason    = db.Column(db.Text, nullable=True)   # parent-facing only
+    internal_notes      = db.Column(db.Text, nullable=True)   # staff-only, never shown to parent
+    submission_ip       = db.Column(db.String(64), nullable=True)  # abuse audit, never displayed
+
+    reviewed_at            = db.Column(db.DateTime, nullable=True)
+    reviewed_by            = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    approved_student_id    = db.Column(db.Integer, db.ForeignKey('students.id'), nullable=True)
+    linked_parent_id       = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    parent_account_created = db.Column(db.Boolean, default=False)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    school           = db.relationship('School', foreign_keys=[school_id])
+    academic_year    = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    desired_grade    = db.relationship('Grade', foreign_keys=[desired_grade_id])
+    reviewer         = db.relationship('User', foreign_keys=[reviewed_by])
+    approved_student = db.relationship('Student', foreign_keys=[approved_student_id])
+    linked_parent    = db.relationship('User', foreign_keys=[linked_parent_id])
+    documents        = db.relationship('StudentRegistrationRequestDocument',
+                                       backref='request', lazy='dynamic',
+                                       cascade='all, delete-orphan')
+
+    __table_args__ = (
+        db.CheckConstraint("status IN ('pending','approved','rejected')",
+                           name='ck_reg_request_status'),
+        db.UniqueConstraint('school_id', 'submission_nonce',
+                            name='uq_reg_request_school_nonce'),
+        db.Index('ix_reg_request_school_status', 'school_id', 'status'),
+    )
+
+    def __repr__(self):
+        return (f'<StudentRegistrationRequest {self.id} '
+                f'school={self.school_id} status={self.status}>')
+
+
+class StudentRegistrationRequestDocument(db.Model):
+    """
+    A document uploaded with a public registration request (before a Student
+    exists). Converted into a StudentDocument for the created student on
+    approval. school_id is stored so upload_access can resolve ownership and
+    enforce school isolation on downloads.
+    """
+    __tablename__ = 'student_registration_request_documents'
+    __school_scoped__ = True
+
+    id            = db.Column(db.Integer, primary_key=True)
+    request_id    = db.Column(db.Integer,
+                              db.ForeignKey('student_registration_requests.id',
+                                            ondelete='CASCADE'),
+                              nullable=False, index=True)
+    school_id     = db.Column(db.Integer, db.ForeignKey('schools.id'),
+                              nullable=False, index=True)
+    document_type = db.Column(db.String(100), nullable=False)
+    file_path     = db.Column(db.String(255), nullable=False)
+    uploaded_at   = db.Column(db.DateTime, default=datetime.utcnow)
+
+    school = db.relationship('School', foreign_keys=[school_id])
+
+    def __repr__(self):
+        return (f'<StudentRegistrationRequestDocument {self.id} '
+                f'request={self.request_id}>')

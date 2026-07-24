@@ -16,6 +16,14 @@ class Config:
     # Dedicated signing key for mobile JWTs. Falls back to SECRET_KEY when unset
     # so existing deployments keep working, but a distinct key is recommended.
     JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY') or None
+    # Fernet key used to encrypt each school's public registration token at rest
+    # so the Super Admin can copy the active link at any time. When unset, a key
+    # is derived deterministically from SECRET_KEY (see
+    # app/utils/registration_tokens.py). A dedicated, stable key is recommended
+    # in production: if SECRET_KEY rotates, existing links stay VALID (the sha256
+    # lookup hash is unaffected) but become non-recoverable for copy until
+    # regenerated.
+    REGISTRATION_TOKEN_KEY = os.environ.get('REGISTRATION_TOKEN_KEY') or None
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER', 'app/static/uploads')
     MAX_CONTENT_LENGTH = int(os.environ.get('MAX_CONTENT_LENGTH', 16 * 1024 * 1024))

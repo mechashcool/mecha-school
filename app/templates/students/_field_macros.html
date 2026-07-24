@@ -1,0 +1,218 @@
+{#
+  Shared student/guardian field markup — single source of truth for BOTH the
+  internal "إضافة طالب" wizard (students/create_wizard.html) and the public
+  external-registration form (registration/form.html).
+
+  Each macro is config-driven (form_cfg = StudentFormConfig) and self-guards its
+  own field/section visibility, so a school's Add Student configuration changes
+  flow through to both forms automatically. `sf` is the value-repopulation dict
+  (request.form on re-render, or {} on a fresh page).
+
+  Only student + guardian information and photo/document uploads live here — no
+  fee, account, device, class/section, or other internal field is ever included,
+  so these macros are safe to render on the public form.
+#}
+
+{# full_name + date_of_birth + gender + nationality + phone — column blocks only.
+   The caller supplies the surrounding <div class="row g-3"> wrapper. #}
+{% macro student_identity_fields(form_cfg, sf) %}
+          <div class="col-md-6">
+            <label class="form-label">الاسم الكامل <span class="text-danger">*</span></label>
+            <input type="text" name="full_name" class="form-control" required
+                   value="{{ sf.get('full_name', '') }}">
+          </div>
+
+          {% if form_cfg.field_visible('date_of_birth') %}
+          <div class="col-md-6">
+            <label class="form-label">تاريخ الميلاد
+              {% if form_cfg.field_required('date_of_birth') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <input type="date" name="date_of_birth" class="form-control"
+                   {% if form_cfg.field_required('date_of_birth') %}required{% endif %}
+                   value="{{ sf.get('date_of_birth', '') }}">
+          </div>
+          {% endif %}
+
+          {% if form_cfg.field_visible('gender') %}
+          <div class="col-md-6">
+            <label class="form-label">الجنس
+              {% if form_cfg.field_required('gender') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <select name="gender" class="form-select"
+                    {% if form_cfg.field_required('gender') %}required{% endif %}>
+              <option value="">— اختر —</option>
+              <option value="male"   {{ 'selected' if sf.get('gender') == 'male' }}>ذكر</option>
+              <option value="female" {{ 'selected' if sf.get('gender') == 'female' }}>أنثى</option>
+            </select>
+          </div>
+          {% endif %}
+
+          {% if form_cfg.field_visible('nationality') %}
+          <div class="col-md-6">
+            <label class="form-label">الجنسية
+              {% if form_cfg.field_required('nationality') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <input type="text" name="nationality" class="form-control"
+                   {% if form_cfg.field_required('nationality') %}required{% endif %}
+                   value="{{ sf.get('nationality', '') }}">
+          </div>
+          {% endif %}
+
+          {% if form_cfg.field_visible('phone') %}
+          <div class="col-md-6">
+            <label class="form-label">رقم الهاتف
+              {% if form_cfg.field_required('phone') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <input type="tel" name="phone" class="form-control"
+                   {% if form_cfg.field_required('phone') %}required{% endif %}
+                   value="{{ sf.get('phone', '') }}">
+          </div>
+          {% endif %}
+{% endmacro %}
+
+
+{# address — full-width column block (caller supplies the row wrapper). #}
+{% macro student_address_field(form_cfg, sf) %}
+          {% if form_cfg.field_visible('address') %}
+          <div class="col-12">
+            <label class="form-label">العنوان
+              {% if form_cfg.field_required('address') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <textarea name="address" class="form-control" rows="2"
+                      {% if form_cfg.field_required('address') %}required{% endif %}>{{ sf.get('address', '') }}</textarea>
+          </div>
+          {% endif %}
+{% endmacro %}
+
+
+{# notes — full card (self-guards section visibility). #}
+{% macro student_notes_card(form_cfg, sf) %}
+    {% if form_cfg.section_visible('notes') %}
+    <div class="card mb-4">
+      <div class="card-header"><i class="bi bi-sticky-fill text-accent"></i>ملاحظات</div>
+      <div class="card-body">
+        <textarea name="notes" class="form-control" rows="3"
+                  placeholder="أي ملاحظات إضافية...">{{ sf.get('notes', '') }}</textarea>
+      </div>
+    </div>
+    {% endif %}
+{% endmacro %}
+
+
+{# student photo — full col+card (self-guards section + feature flag). #}
+{% macro student_photo_card(form_cfg, enabled_features) %}
+      {% if form_cfg.section_visible('student_photo') and 'students.photo_upload' in enabled_features %}
+      <div class="col-lg-5">
+        <div class="card mb-4">
+          <div class="card-header"><i class="bi bi-camera-fill text-accent"></i>صورة الطالب</div>
+          <div class="card-body text-center">
+            <div class="mb-3" style="width:120px;height:120px;border-radius:12px;
+                  background:var(--bg);display:flex;align-items:center;justify-content:center;
+                  margin:0 auto;font-size:40px;color:var(--text-muted)" id="photoPreviewWrap">
+              <i class="bi bi-person-fill" id="photoPreviewIcon"></i>
+              <img id="photoPreviewImg" class="rounded-12 d-none"
+                   style="width:120px;height:120px;object-fit:cover" alt="">
+            </div>
+            <input type="file" name="photo" id="photoInput"
+                   class="form-control form-control-sm" accept="image/*">
+          </div>
+        </div>
+      </div>
+      {% endif %}
+{% endmacro %}
+
+
+{# student documents — full col+card with the first dynamic row + add button
+   (self-guards section + feature flag). JS in each host page clones .document-row. #}
+{% macro student_documents_card(form_cfg, enabled_features) %}
+      {% if form_cfg.section_visible('student_documents') and 'students.documents_upload' in enabled_features %}
+      <div class="col-lg-7">
+        <div class="card mb-4">
+          <div class="card-header"><i class="bi bi-folder-fill text-accent"></i>مستندات الطالب</div>
+          <div class="card-body">
+            <div id="document-rows">
+              <div class="row g-3 align-items-end mb-3 document-row">
+                <div class="col-6">
+                  <label class="form-label">نوع المستند</label>
+                  <select name="document_type[]" class="form-select">
+                    <option value="">— اختر النوع —</option>
+                    <option value="الهوية الوطنية">الهوية الوطنية</option>
+                    <option value="بطاقة السكن">بطاقة السكن</option>
+                    <option value="الوثيقة الدراسية">الوثيقة الدراسية</option>
+                    <option value="التقرير الطبي">التقرير الطبي</option>
+                  </select>
+                </div>
+                <div class="col-6">
+                  <label class="form-label">اختر الملف</label>
+                  <input type="file" name="document_file[]" class="form-control"
+                         accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+                </div>
+              </div>
+            </div>
+            <button type="button" id="add-document-row" class="btn btn-sm btn-outline-primary">
+              <i class="bi bi-plus-lg"></i> إضافة مستند آخر
+            </button>
+            <div class="text-muted mt-2" style="font-size:12px">يمكنك رفع أكثر من مستند في نفس الوقت.</div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+{% endmacro %}
+
+
+{# guardian information — full card (self-guards section + each field). #}
+{% macro guardian_card(form_cfg, sf) %}
+  {% if form_cfg.section_visible('guardian_info') %}
+    <div class="card">
+      <div class="card-header"><i class="bi bi-people-fill text-accent"></i>بيانات ولي الأمر</div>
+      <div class="card-body">
+        <div class="row g-3">
+          {% if form_cfg.field_visible('guardian_name') %}
+          <div class="col-md-6">
+            <label class="form-label">اسم ولي الأمر
+              {% if form_cfg.field_required('guardian_name') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <input type="text" name="guardian_name" class="form-control"
+                   {% if form_cfg.field_required('guardian_name') %}required{% endif %}
+                   value="{{ sf.get('guardian_name', '') }}">
+          </div>
+          {% endif %}
+          {% if form_cfg.field_visible('guardian_relation') %}
+          <div class="col-md-6">
+            <label class="form-label">صلة القرابة
+              {% if form_cfg.field_required('guardian_relation') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <select name="guardian_relation" class="form-select"
+                    {% if form_cfg.field_required('guardian_relation') %}required{% endif %}>
+              <option value="">— اختر —</option>
+              {% for rel in ['أب','أم','أخ','أخت','جد','جدة','عم','عمة','خال','خالة','آخر'] %}
+              <option value="{{ rel }}" {{ 'selected' if sf.get('guardian_relation') == rel }}>{{ rel }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          {% endif %}
+          {% if form_cfg.field_visible('guardian_phone') %}
+          <div class="col-md-6">
+            <label class="form-label">هاتف ولي الأمر
+              {% if form_cfg.field_required('guardian_phone') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <input type="tel" name="guardian_phone" class="form-control"
+                   {% if form_cfg.field_required('guardian_phone') %}required{% endif %}
+                   value="{{ sf.get('guardian_phone', '') }}">
+          </div>
+          {% endif %}
+          {% if form_cfg.field_visible('guardian_email') %}
+          <div class="col-md-6">
+            <label class="form-label">بريد ولي الأمر
+              {% if form_cfg.field_required('guardian_email') %}<span class="text-danger">*</span>{% endif %}
+            </label>
+            <input type="email" name="guardian_email" class="form-control"
+                   {% if form_cfg.field_required('guardian_email') %}required{% endif %}
+                   value="{{ sf.get('guardian_email', '') }}">
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+{% endmacro %}
