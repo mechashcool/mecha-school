@@ -78,15 +78,28 @@ def detail(request_id):
     grade = Grade.query.filter_by(id=req.desired_grade_id,
                                   school_id=school.id).first()
 
-    # Sections of the active year for staff to assign at approval (school-scoped).
+    # Complete academic hierarchy for the approval cascade — SAME source/scope as
+    # the internal Add Student wizard: stage labels + active-year grades (each
+    # carrying its stage) + active-year sections. All strictly school + active-year
+    # scoped so no other school's / year's / inactive structure is exposed.
+    stages = ['ابتدائية', 'متوسطة', 'إعدادية']
+    grades = []
     sections = []
     if year:
-        grade_ids = [g.id for g in Grade.query.execution_options(include_all_years=True)
-                     .filter_by(school_id=school.id, academic_year_id=year.id).all()]
+        grades = (Grade.query.execution_options(include_all_years=True)
+                  .filter_by(school_id=school.id, academic_year_id=year.id)
+                  .order_by(Grade.name).all())
+        grade_ids = [g.id for g in grades]
         if grade_ids:
             sections = (Section.query
                         .filter(Section.grade_id.in_(grade_ids))
                         .order_by(Section.name).all())
+
+    # Preselect the applicant's originally requested grade only when it is still a
+    # valid grade of THIS school's active year (server-side check).
+    preselect_grade_id = (req.desired_grade_id
+                          if req.desired_grade_id in {g.id for g in grades}
+                          else None)
 
     # Same-school existing-parent suggestion by normalized phone (staff confirm).
     match = None
@@ -94,7 +107,8 @@ def detail(request_id):
         match = find_matching_parent(school.id, req.guardian_phone)
 
     return render_template('admissions/detail.html',
-                           req=req, grade=grade, sections=sections,
+                           req=req, grade=grade, stages=stages, grades=grades,
+                           sections=sections, preselect_grade_id=preselect_grade_id,
                            parent_match=match)
 
 

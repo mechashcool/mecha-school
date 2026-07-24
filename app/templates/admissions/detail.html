@@ -83,15 +83,52 @@
         <form method="POST" action="{{ url_for('admissions.approve', request_id=req.id) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
 
-          {% if sections %}
-          <div class="mb-3">
-            <label class="form-label">الشعبة (اختياري)</label>
-            <select name="section_id" class="form-select">
-              <option value="">— بدون تعيين —</option>
-              {% for s in sections %}
-              <option value="{{ s.id }}">شعبة {{ s.name }}</option>
-              {% endfor %}
-            </select>
+          {# Complete academic placement — SAME cascade as the internal Add Student
+             form (المرحلة → الصف → الشعبة). Only section_id is submitted; المرحلة/الصف
+             are client-side filters. The applicant's requested grade is preselected
+             when still valid; staff may review/correct before approving. #}
+          {% if grades %}
+          <label class="form-label d-block">التعيين الدراسي</label>
+          <div class="row g-2 mb-2">
+            <div class="col-md-4">
+              <label class="form-label small text-muted">المرحلة</label>
+              <select id="fStage" class="form-select">
+                <option value="">— كل المراحل —</option>
+                {% for st in stages %}
+                <option value="{{ st }}">
+                  {% if st == 'ابتدائية' %}المرحلة الابتدائية
+                  {% elif st == 'متوسطة' %}المرحلة المتوسطة
+                  {% else %}المرحلة الإعدادية{% endif %}
+                </option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label small text-muted">الصف</label>
+              <select id="fGrade" class="form-select">
+                <option value="">— اختر الصف —</option>
+                {% for g in grades %}
+                <option value="{{ g.id }}" data-stage="{{ g.stage or '' }}"
+                        {{ 'selected' if preselect_grade_id and g.id == preselect_grade_id }}>{{ g.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label small text-muted">الشعبة</label>
+              <select name="section_id" id="fSection" class="form-select">
+                <option value="">— بدون تعيين —</option>
+                {% for s in sections %}
+                <option value="{{ s.id }}" data-grade-id="{{ s.grade_id }}">شعبة {{ s.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <div class="text-muted small mb-3">
+            اختر المرحلة ثم الصف ثم الشعبة. إن لم تكن المدرسة تستخدم الشعب، يمكن الاعتماد بدون شعبة.
+          </div>
+          {% else %}
+          <div class="alert alert-warning small py-2 mb-3">
+            لا توجد مراحل أو صفوف معرّفة للعام الدراسي الحالي — سيتم إنشاء الطالب بدون تعيين صف/شعبة.
           </div>
           {% endif %}
 
@@ -181,4 +218,14 @@
     {% endif %}
   </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+{# Reuse the SAME Stage → Grade → Section cascade as the internal Add Student form. #}
+{% include 'shared/_class_cascade_js.html' %}
+<script>
+  // Disable the section selector until a grade is chosen; the requested grade is
+  // preselected server-side, so on load the stage is derived and section enabled.
+  initClassCascade('fStage', 'fGrade', 'fSection', { disableSectionUntilGrade: true });
+</script>
 {% endblock %}

@@ -458,47 +458,12 @@
 {% endblock %}
 
 {% block extra_js %}
+{# Shared Stage → Grade → Section cascade (single source, also used by admissions). #}
+{% include 'shared/_class_cascade_js.html' %}
 <script>
 /* ════════════ Stage → Grade → Section cascade (reused from form.html) ════════════ */
-(function () {
-  const stageEl = document.getElementById('fStage');
-  const gradeEl = document.getElementById('fGrade');
-  const sectionEl = document.getElementById('fSection');
-  if (!stageEl || !gradeEl || !sectionEl) return;
-
-  const gradeOpts = Array.from(gradeEl.options).slice(1);
-  const sectionOpts = Array.from(sectionEl.options).slice(1);
-
-  function filterSections() {
-    const gradeId = gradeEl.value;
-    for (const opt of sectionOpts) opt.hidden = gradeId ? opt.dataset.gradeId !== gradeId : false;
-    const sel = sectionEl.selectedOptions[0];
-    if (sel && sel.hidden) sectionEl.value = '';
-  }
-  function filterGrades() {
-    const stage = stageEl.value.trim();
-    for (const opt of gradeOpts) opt.hidden = stage ? opt.dataset.stage.trim() !== stage : false;
-    const sel = gradeEl.selectedOptions[0];
-    if (sel && sel.hidden) gradeEl.value = '';
-    filterSections();
-  }
-  stageEl.addEventListener('change', filterGrades);
-  gradeEl.addEventListener('change', filterSections);
-
-  // Restore grade/stage from a preserved section selection (after a server error).
-  const selSection = sectionEl.selectedOptions[0];
-  if (selSection && selSection.value) {
-    const gid = selSection.dataset.gradeId;
-    const gOpt = gradeOpts.find(o => o.value === gid);
-    if (gOpt) {
-      gradeEl.value = gid;
-      if (gOpt.dataset.stage) stageEl.value = gOpt.dataset.stage.trim();
-    }
-  }
-  filterGrades();
-  // Re-apply the preserved section after filtering (filterGrades may have cleared it).
-  if (selSection && selSection.value) sectionEl.value = selSection.value;
-})();
+// Shared implementation — defined in shared/_class_cascade_js.html (included above).
+initClassCascade('fStage', 'fGrade', 'fSection');
 
 /* ════════════ Document rows (reused from form.html) ════════════ */
 (function () {

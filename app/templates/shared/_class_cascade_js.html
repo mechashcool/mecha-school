@@ -1,0 +1,70 @@
+{# Shared Stage → Grade → Section cascade — SINGLE source used by the internal
+   Add Student wizard and the admissions approval card. Pure client-side filtering
+   via data-stage / data-grade-id (no API, no server round-trip). Only the section
+   <select> carries name="section_id"; stage/grade are filter-only.
+
+   initClassCascade(stageId, gradeId, sectionId, opts):
+     * filters grades by the chosen stage and sections by the chosen grade;
+     * clears a stale lower selection when an upper one changes;
+     * restores from a preserved SECTION (wizard re-render) OR derives the stage
+       from a preselected GRADE (admissions requested-grade preselect);
+     * opts.disableSectionUntilGrade: disable the section selector until a grade
+       is chosen (used by admissions; OFF by default so the wizard is unchanged).
+#}
+<script>
+function initClassCascade(stageId, gradeId, sectionId, opts) {
+  opts = opts || {};
+  var stageEl = document.getElementById(stageId);
+  var gradeEl = document.getElementById(gradeId);
+  var sectionEl = document.getElementById(sectionId);
+  if (!stageEl || !gradeEl || !sectionEl) return;
+
+  var gradeOpts = Array.prototype.slice.call(gradeEl.options, 1);
+  var sectionOpts = Array.prototype.slice.call(sectionEl.options, 1);
+
+  function filterSections() {
+    var g = gradeEl.value;
+    for (var i = 0; i < sectionOpts.length; i++) {
+      sectionOpts[i].hidden = g ? (sectionOpts[i].dataset.gradeId !== g) : false;
+    }
+    var sel = sectionEl.selectedOptions[0];
+    if (sel && sel.hidden) sectionEl.value = '';
+    if (opts.disableSectionUntilGrade) sectionEl.disabled = !g;
+  }
+  function filterGrades() {
+    var st = (stageEl.value || '').trim();
+    for (var i = 0; i < gradeOpts.length; i++) {
+      var os = (gradeOpts[i].dataset.stage || '').trim();
+      gradeOpts[i].hidden = st ? (os !== st) : false;
+    }
+    var sel = gradeEl.selectedOptions[0];
+    if (sel && sel.hidden) gradeEl.value = '';
+    filterSections();
+  }
+
+  stageEl.addEventListener('change', filterGrades);
+  gradeEl.addEventListener('change', filterSections);
+
+  // Restore from a preserved SECTION selection (wizard re-render after an error),
+  // otherwise derive the stage from a preselected GRADE (admissions preselect).
+  var selSection = sectionEl.selectedOptions[0];
+  if (selSection && selSection.value) {
+    var gid = selSection.dataset.gradeId, gOpt = null;
+    for (var i = 0; i < gradeOpts.length; i++) {
+      if (gradeOpts[i].value === gid) { gOpt = gradeOpts[i]; break; }
+    }
+    if (gOpt) {
+      gradeEl.value = gid;
+      if (gOpt.dataset.stage) stageEl.value = gOpt.dataset.stage.trim();
+    }
+  } else {
+    var selGrade = gradeEl.selectedOptions[0];
+    if (selGrade && selGrade.value && selGrade.dataset.stage) {
+      stageEl.value = selGrade.dataset.stage.trim();
+    }
+  }
+  filterGrades();
+  // Re-apply the preserved section (filterGrades may have cleared it).
+  if (selSection && selSection.value) sectionEl.value = selSection.value;
+}
+</script>
