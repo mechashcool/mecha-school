@@ -26,6 +26,10 @@ from app.utils.audit import log_action
 students_bp = Blueprint('students', __name__,
                          template_folder='../../templates/students')
 
+# Maximum number of documents a student may have uploaded through the Add
+# Student form. Mirrored by the client-side row limit in create_wizard.html.
+MAX_STUDENT_DOCUMENTS = 4
+
 
 def _is_teacher():
     return (current_user.is_authenticated and
@@ -493,6 +497,18 @@ def create():
             for _err in _cfg_errors:
                 flash(_err, 'danger')
             return _re_render('')
+
+        # ── Cap student documents at MAX_STUDENT_DOCUMENTS ───────────────────
+        # Mirrors the client-side row limit so a hand-crafted submission with
+        # extra document rows is rejected BEFORE any upload or DB write. Only
+        # rows with an actual file count as documents.
+        if (is_feature_enabled(school.id, 'students.documents_upload')
+                and form_cfg.section_visible('student_documents')):
+            _submitted_docs = [f for f in request.files.getlist('document_file[]')
+                               if f and f.filename]
+            if len(_submitted_docs) > MAX_STUDENT_DOCUMENTS:
+                return _re_render(
+                    f'يمكن رفع {MAX_STUDENT_DOCUMENTS} مستندات كحد أقصى للطالب.')
 
         # ── Residential area (optional) — validated BEFORE any upload/DB write ─
         # Empty is allowed (no area). A non-empty value must resolve to an active

@@ -65,13 +65,21 @@
     var addBtn = document.getElementById('add-document-row');
     var host   = document.getElementById('document-rows');
     if(!addBtn || !host){ return; }
+    var MAX_DOCS = 4;
+    function syncAddBtn(){
+      var atMax = host.querySelectorAll('.document-row').length >= MAX_DOCS;
+      addBtn.disabled = atMax;
+      addBtn.style.display = atMax ? 'none' : '';
+    }
     addBtn.addEventListener('click', function(){
       var rows = host.querySelectorAll('.document-row');
-      if(rows.length >= 10){ return; }
+      if(rows.length >= MAX_DOCS){ return; }
       var clone = rows[0].cloneNode(true);
       clone.querySelectorAll('select, input').forEach(function(el){ el.value = ''; });
       host.appendChild(clone);
+      syncAddBtn();
     });
+    syncAddBtn();
   })();
 </script>
 {% endblock %}

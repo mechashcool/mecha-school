@@ -82,7 +82,7 @@ _FORBIDDEN_KEYS = {
 
 _ALLOWED_DOC_EXTS = {'pdf', 'jpg', 'jpeg', 'png'}
 _MAX_UPLOAD_BYTES = 5 * 1024 * 1024      # 5 MB per file
-_MAX_DOCS = 10
+_MAX_DOCS = 4
 _MAX_TEXT_LEN = 255
 
 # Magic-byte signatures for the approved upload types — actual content, not the
