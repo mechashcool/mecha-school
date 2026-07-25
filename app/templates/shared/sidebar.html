@@ -720,7 +720,7 @@
 
     {# ═══ Group: System ═════════════════════════════════════════════════ #}
     {% set _can_school_settings = current_user.has_permission('manage_white_label') or current_user.has_permission('manage_settings') %}
-    {% if current_user.has_permission('manage_users') or _can_school_settings or current_user.has_permission('view_audit_log') %}
+    {% if current_user.has_permission('manage_users') or _can_school_settings %}
     <li class="nav-group" data-group="system">
       <button type="button" class="nav-group-toggle" aria-expanded="false">
         <i class="bi bi-gear-fill group-icon"></i> النظام
@@ -749,14 +749,6 @@
           <a href="{{ url_for('admin.school_settings') }}"
              class="{{ 'active' if request.endpoint == 'admin.school_settings' }}">
             <i class="bi bi-building-gear"></i> هوية المدرسة
-          </a>
-        </li>
-        {% endif %}
-        {% if current_user.has_permission('view_audit_log') %}
-        <li class="nav-item">
-          <a href="{{ url_for('audit.index') }}"
-             class="{{ 'active' if request.blueprint == 'audit' }}">
-            <i class="bi bi-journal-text"></i> سجل العمليات
           </a>
         </li>
         {% endif %}

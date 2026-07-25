@@ -108,7 +108,10 @@ PERMISSION_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ]),
     ('التقارير والتدقيق', [
         ('view_reports',            'عرض التقارير والإحصائيات'),
-        ('view_audit_log',          'عرض سجل العمليات'),
+        # view_audit_log is intentionally NOT grantable: the audit log is a
+        # platform-level surface restricted to the super admin (see
+        # audit.index → super_admin_required). Keeping it out of the catalog
+        # prevents a misleading toggle that would grant no access.
     ]),
     # Academic-year management deliberately stays admin-tier (no grantable
     # permission): changing year structure affects every year-scoped record.
@@ -166,7 +169,8 @@ LANDING_PAGES: list[tuple[tuple, str, str | None]] = [
     (('view_notifications',
       'manage_notifications'),                   'notifications.index',      'notifications'),
     (('view_reports',),                          'reports.index',            'reports'),
-    (('view_audit_log',),                        'audit.index',              None),
+    # audit.index is super-admin-only and is never a landing target for
+    # school-scoped roles (see super_admin_required on audit.index).
     (('manage_users',),                          'admin.users_list',         None),
     (('manage_white_label', 'manage_settings'),  'admin.school_settings',    None),
 ]
