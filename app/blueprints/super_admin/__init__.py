@@ -212,6 +212,11 @@ def school_detail(school_id):
 
     investor = _get_school_investor(school_id)
 
+    # Custom (non built-in) roles the Super Admin can toggle for this school.
+    custom_roles = [r for r in Role.query.order_by(Role.label).all()
+                    if not r.is_builtin]
+    assigned_role_ids = {r.id for r in school.custom_roles}
+
     return render_template(
         'super_admin/school_detail.html',
         school            = school,
@@ -223,7 +228,39 @@ def school_detail(school_id):
         billing_types     = SchoolBilling.BILLING_TYPES,
         today             = _date.today(),
         registration_link = _registration_link(school),
+        custom_roles      = custom_roles,
+        assigned_role_ids = assigned_role_ids,
     )
+
+
+@super_admin_bp.route('/schools/<int:school_id>/custom-roles', methods=['POST'])
+@login_required
+@super_admin_required
+def update_custom_roles(school_id):
+    """Set exactly which custom roles are available to this school.
+
+    Only custom (non built-in) roles are accepted; any built-in role id posted
+    is ignored, so this endpoint can never change built-in role behaviour.
+    Toggling a role for one school never touches its assignment to any other
+    school and never alters the role's permissions or configuration.
+    """
+    school = School.query.get_or_404(school_id)
+
+    posted_ids = set(request.form.getlist('role_ids', type=int))
+    # Restrict to genuine custom roles — a built-in role id posted by a tampered
+    # form is silently dropped (built-in roles are never stored in role_schools).
+    selected = [r for r in Role.query.filter(Role.id.in_(posted_ids)).all()
+                if posted_ids and not r.is_builtin] if posted_ids else []
+
+    school.custom_roles = selected
+    db.session.commit()
+
+    log_action('edit', 'school', school.id,
+               details=(f'تحديث الأدوار المخصصة لمدرسة "{school.school_name}" '
+                        f'({len(selected)} دور)'))
+    flash('تم تحديث الأدوار المخصصة لهذه المدرسة.', 'success')
+    return redirect(url_for('super_admin.school_detail', school_id=school_id)
+                    + '#custom-roles')
 
 
 # ─────────────────────────────────────────────────────────────────────────────

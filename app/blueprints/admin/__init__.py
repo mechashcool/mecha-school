@@ -117,12 +117,18 @@ def _is_school_scoped_manager():
     return current_user.has_permission('manage_users')
 
 
-def _assignable_roles(existing_role_name=None):
+def _assignable_roles(existing_role_name=None, school_id=None):
     """Return roles shown in the Create/Edit User form dropdown.
 
     Roles in HIDDEN_FROM_CREATE_FORM_ROLES are suppressed unless the user
     being edited already holds one of them, which keeps the edit form valid
     for existing accounts without breaking their role assignment.
+
+    When ``school_id`` is provided (a school-scoped context), custom roles are
+    filtered to those the Super Admin has made available to that school. A
+    custom role the edited user already holds is always kept so an existing
+    account is never broken even if its role was later unassigned from the
+    school. Built-in system roles are never school-gated.
     """
     roles = Role.query.order_by(Role.id).all()
     return [
@@ -130,6 +136,9 @@ def _assignable_roles(existing_role_name=None):
         if _is_role_assignable_by_current_user(role)
         and (role.name not in HIDDEN_FROM_CREATE_FORM_ROLES
              or role.name == existing_role_name)
+        and (school_id is None
+             or role.name == existing_role_name
+             or role.is_available_to_school(school_id))
     ]
 
 
@@ -615,8 +624,13 @@ def users_list():
 
     users = query.order_by(User.created_at.desc())\
                  .paginate(page=page, per_page=20, error_out=False)
-    roles = (Role.query.order_by(Role.id).all()
-             if current_user.is_super_admin else _non_super_visible_roles())
+    if current_user.is_super_admin:
+        roles = Role.query.order_by(Role.id).all()
+    else:
+        # A school-scoped manager sees, in the filter, only built-in roles plus
+        # the custom roles the Super Admin made available to their school.
+        roles = [r for r in _non_super_visible_roles()
+                 if r.is_available_to_school(current_user.school_id)]
     all_schools = (School.query.filter_by(is_active=True).order_by(School.id).all()
                    if current_user.is_super_admin else [])
     return render_template('admin/users_list.html',
@@ -632,7 +646,13 @@ def create_user():
     is_school_manager = _is_school_scoped_manager()
     school = get_current_school()
 
-    roles = _assignable_roles()
+    # A school-scoped manager can only assign custom roles the Super Admin has
+    # made available to their own school. The Super Admin picks the target
+    # school dynamically in the form, so the full list is offered and the
+    # per-school filtering is applied client-side (data-schools) plus a
+    # server-side re-check on POST.
+    roles = _assignable_roles(
+        school_id=None if current_user.is_super_admin else current_user.school_id)
     year = get_active_year(school.id) if school else None
 
     all_students = _student_options(school, year)
@@ -673,6 +693,15 @@ def create_user():
 
         if role_obj.name == SUPER_ADMIN_ROLE:
             assigned_school_id = None
+
+        # A custom role may only be assigned to a school the Super Admin has
+        # made it available to. Enforced server-side for everyone (including
+        # the Super Admin) — a client cannot bypass it by posting a role_id
+        # that is not offered for the selected school.
+        if (not role_obj.is_builtin
+                and not role_obj.is_available_to_school(assigned_school_id)):
+            flash('هذا الدور غير متاح للمدرسة المختارة.', 'danger')
+            return redirect(url_for('admin.create_user'))
 
         # Auto-generate username when left blank and role supports it
         if (not username and password and assigned_school_id and role_obj
@@ -868,7 +897,9 @@ def edit_user(user_id):
         flash('لا يمكن تعديل هذا الحساب لأنه محذوف.', 'danger')
         return redirect(url_for('admin.users_list'))
 
-    roles = _assignable_roles(existing_role_name=user.role.name if user.role else None)
+    roles = _assignable_roles(
+        existing_role_name=user.role.name if user.role else None,
+        school_id=None if current_user.is_super_admin else current_user.school_id)
 
     # Super-admin: full permission list. School managers cannot edit extra
     # permissions from School User Management.
@@ -911,6 +942,11 @@ def edit_user(user_id):
             }
 
     if request.method == 'POST':
+        # Snapshot before mutation so custom-role availability is enforced only
+        # on an actual change (never disrupting an already-assigned account).
+        prev_role_id   = user.role_id
+        prev_school_id = user.school_id
+
         user.full_name = request.form.get('full_name', user.full_name).strip()
 
         # Super admin and school managers can change the username.
@@ -973,6 +1009,16 @@ def edit_user(user_id):
                 flash('Selected school is invalid.', 'danger')
                 return redirect(url_for('admin.edit_user', user_id=user.id))
             user.school_id = new_school_id
+
+        # Re-check custom-role availability against the FINAL school, but only
+        # when the role or the school actually changed. An unchanged assignment
+        # is grandfathered so an existing user is never blocked from other edits
+        # even if their custom role was later unassigned from the school.
+        if (user.role and not user.role.is_builtin
+                and (user.role.id != prev_role_id or user.school_id != prev_school_id)
+                and not user.role.is_available_to_school(user.school_id)):
+            flash('هذا الدور غير متاح للمدرسة المختارة.', 'danger')
+            return redirect(url_for('admin.edit_user', user_id=user.id))
 
         user_year = get_active_year(user.school_id) if user.school_id else None
 

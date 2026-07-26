@@ -466,6 +466,32 @@ class Role(db.Model):
     permissions = db.relationship('Permission', secondary='role_permissions',
                                   backref=db.backref('roles', lazy='dynamic'))
     users       = db.relationship('User', back_populates='role', lazy='dynamic')
+    # Schools explicitly allowed to use this custom role. Managed per-school
+    # from the Super Admin school-details page. Built-in system roles never use
+    # this table and are always available (see is_available_to_school).
+    schools     = db.relationship('School', secondary='role_schools',
+                                  lazy='selectin',
+                                  backref=db.backref('custom_roles', lazy='selectin'))
+
+    @property
+    def is_builtin(self):
+        """True for the fixed system roles that are never school-scoped."""
+        from app.utils.permissions_catalog import BUILTIN_ROLE_NAMES
+        return (self.name or '') in BUILTIN_ROLE_NAMES
+
+    def is_available_to_school(self, school_id):
+        """Whether this role may be assigned to a user of the given school.
+
+        Built-in system roles are always available (unchanged behaviour).
+        A custom role is available only to the schools explicitly linked via
+        role_schools. A NULL school_id (super-admin account) is not a school
+        context and is never gated here.
+        """
+        if self.is_builtin:
+            return True
+        if school_id is None:
+            return False
+        return any(s.id == school_id for s in self.schools)
 
     def __repr__(self):
         return f'<Role {self.name}>'
@@ -475,6 +501,15 @@ role_permissions = db.Table(
     'role_permissions',
     db.Column('role_id',       db.Integer, db.ForeignKey('roles.id'),       primary_key=True),
     db.Column('permission_id', db.Integer, db.ForeignKey('permissions.id'), primary_key=True),
+)
+
+# Custom-role → school assignment (many-to-many). A row means the custom role
+# is offered to that school's user-creation forms. Built-in roles never use
+# this table; custom roles marked all_schools ignore it.
+role_schools = db.Table(
+    'role_schools',
+    db.Column('role_id',   db.Integer, db.ForeignKey('roles.id',   ondelete='CASCADE'), primary_key=True),
+    db.Column('school_id', db.Integer, db.ForeignKey('schools.id', ondelete='CASCADE'), primary_key=True),
 )
 
 user_permissions = db.Table(

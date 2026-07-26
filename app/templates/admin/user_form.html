@@ -73,6 +73,9 @@
                 <option value="">— اختر الدور —</option>
                 {% for role in roles %}
                 <option value="{{ role.id }}"
+                        data-builtin="{{ 1 if role.is_builtin else 0 }}"
+                        data-existing="{{ 1 if user and user.role_id == role.id else 0 }}"
+                        data-schools="{{ role.schools|map(attribute='id')|join(',') }}"
                         {{ 'selected' if user and user.role_id == role.id }}>
                   {{ role.label }}
                 </option>
@@ -462,6 +465,33 @@
   }
   roleSelect.addEventListener('change', togglePanels);
   togglePanels();
+
+  // Super-admin only: the school is chosen in this same form, so custom roles
+  // that are not available to the selected school are hidden from the dropdown.
+  // Built-in roles and the account's existing role are always kept. This is a
+  // usability filter only — the server re-validates availability on submit.
+  const schoolSelect = document.querySelector('select[name="school_id"]');
+  if (schoolSelect) {
+    function filterRolesBySchool() {
+      const schoolId = schoolSelect.value;
+      Array.from(roleSelect.options).forEach(opt => {
+        if (!opt.value) return; // placeholder
+        const builtin  = opt.dataset.builtin === '1';
+        const existing = opt.dataset.existing === '1';
+        const schools  = (opt.dataset.schools || '').split(',').filter(Boolean);
+        const ok = builtin || existing || (schoolId && schools.includes(schoolId));
+        opt.hidden = !ok;
+        opt.disabled = !ok;
+      });
+      const cur = roleSelect.selectedOptions[0];
+      if (cur && cur.value && cur.hidden) {
+        roleSelect.value = '';
+        togglePanels();
+      }
+    }
+    schoolSelect.addEventListener('change', filterRolesBySchool);
+    filterRolesBySchool();
+  }
 
   // Building access: show the checklist only when "restricted" is selected.
   const bamAll        = document.getElementById('bamAll');
