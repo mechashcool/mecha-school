@@ -65,6 +65,23 @@ def _school_or_abort():
     return school
 
 
+def _can_manage(holiday, school):
+    """
+    Authorization for managing a single holiday record.
+
+    - A global holiday (school_id IS NULL) may be managed only by a super admin.
+      School managers must not modify, toggle, or delete global holidays because
+      that would affect every school.
+    - A school-specific holiday may be managed only by its owning school.
+
+    This preserves the existing per-school isolation and closes the path that
+    previously let a school manager edit a global holiday.
+    """
+    if holiday.school_id is None:
+        return bool(current_user.is_super_admin)
+    return holiday.school_id == school.id
+
+
 def _holidays_for_school(school_id):
     """
     Return holidays for this school + global holidays, newest first.
@@ -166,7 +183,10 @@ def add():
     end_date     = _parse_date('end_date')
     holiday_type = (request.form.get('holiday_type') or 'official').strip()
     notes        = (request.form.get('notes') or '').strip() or None
-    is_global    = bool(request.form.get('is_global'))
+    # Only a super admin may create a global holiday. For a school manager the
+    # 'is_global' field is not rendered; any forged value is ignored here so the
+    # holiday is always created school-specific.
+    is_global    = bool(request.form.get('is_global')) and current_user.is_super_admin
     year_id_raw  = request.form.get('academic_year_id') or None
 
     if not name:
@@ -219,8 +239,9 @@ def edit(holiday_id):
         .get_or_404(holiday_id)
     )
 
-    # Only allow editing holidays that belong to this school or are global
-    if holiday.school_id is not None and holiday.school_id != school.id:
+    # Only the owning school may edit a school-specific holiday; global holidays
+    # may be edited only by a super admin (school managers are blocked).
+    if not _can_manage(holiday, school):
         flash('لا يمكنك تعديل هذه العطلة.', 'danger')
         return redirect(url_for('school_calendar.index'))
 
@@ -230,7 +251,9 @@ def edit(holiday_id):
         end_date     = _parse_date('end_date')
         holiday_type = (request.form.get('holiday_type') or 'official').strip()
         notes        = (request.form.get('notes') or '').strip() or None
-        is_global    = bool(request.form.get('is_global'))
+        # Only a super admin may set/keep a holiday global. A forged 'is_global'
+        # from a school manager is ignored, keeping the holiday school-specific.
+        is_global    = bool(request.form.get('is_global')) and current_user.is_super_admin
         year_id_raw  = request.form.get('academic_year_id') or None
 
         if not name or not start_date or not end_date:
@@ -289,7 +312,7 @@ def toggle(holiday_id):
         .execution_options(bypass_tenant_scope=True)
         .get_or_404(holiday_id)
     )
-    if holiday.school_id is not None and holiday.school_id != school.id:
+    if not _can_manage(holiday, school):
         flash('لا يمكنك تعديل هذه العطلة.', 'danger')
         return redirect(url_for('school_calendar.index'))
 
@@ -313,7 +336,7 @@ def delete(holiday_id):
         .execution_options(bypass_tenant_scope=True)
         .get_or_404(holiday_id)
     )
-    if holiday.school_id is not None and holiday.school_id != school.id:
+    if not _can_manage(holiday, school):
         flash('لا يمكنك حذف هذه العطلة.', 'danger')
         return redirect(url_for('school_calendar.index'))
 

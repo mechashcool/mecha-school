@@ -109,12 +109,14 @@
             <label class="form-label">ملاحظات</label>
             <textarea name="notes" class="form-control" rows="2" placeholder="اختياري"></textarea>
           </div>
+          {% if current_user.is_super_admin %}
           <div class="mb-3 form-check">
             <input class="form-check-input" type="checkbox" name="is_global" id="isGlobal">
             <label class="form-check-label" for="isGlobal">
               عطلة عامة (تنطبق على جميع المدارس)
             </label>
           </div>
+          {% endif %}
           <button type="submit" class="btn btn-success w-100">
             <i class="bi bi-calendar-plus me-1"></i>إضافة العطلة
           </button>
@@ -291,12 +293,14 @@
             <label class="form-label">ملاحظات</label>
             <textarea name="notes" id="editNotes" class="form-control" rows="2"></textarea>
           </div>
+          {% if current_user.is_super_admin %}
           <div class="form-check">
             <input class="form-check-input" type="checkbox" name="is_global" id="editGlobal">
             <label class="form-check-label" for="editGlobal">
               عطلة عامة (تنطبق على جميع المدارس)
             </label>
           </div>
+          {% endif %}
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
@@ -337,7 +341,10 @@
       o.selected = (o.value === btn.dataset.year);
     });
 
-    document.getElementById('editGlobal').checked = (btn.dataset.global === '1');
+    var editGlobal = document.getElementById('editGlobal');
+    if (editGlobal) {
+      editGlobal.checked = (btn.dataset.global === '1');
+    }
   });
 })();
 </script>
