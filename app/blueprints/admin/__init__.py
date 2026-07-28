@@ -2758,11 +2758,10 @@ def school_settings():
         school.phone           = request.form.get('phone',   '').strip() or None
         school.email           = request.form.get('email',   '').strip() or None
         school.website         = request.form.get('website', '').strip() or None
-        school.currency_code   = request.form.get('currency_code',   'IQD').strip() or 'IQD'
-        school.currency_symbol = request.form.get('currency_symbol', 'د.ع').strip() or 'د.ع'
-        school.timezone        = request.form.get('timezone', 'Asia/Baghdad').strip()
         school.locale          = request.form.get('locale',  'ar').strip() or 'ar'
-        school.receipt_footer  = request.form.get('receipt_footer', '').strip() or None
+        # currency_code, currency_symbol, timezone and receipt_footer are no longer
+        # editable from this page. Their fields are not submitted, so we intentionally
+        # do NOT reassign them here — the existing stored values are preserved as-is.
 
         logo_file = request.files.get('logo')
         if logo_file and logo_file.filename:

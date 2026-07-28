@@ -82,45 +82,6 @@
 
       <div class="card mb-4">
         <div class="card-header">
-          <i class="bi bi-currency-exchange text-accent"></i>العملة والمنطقة الزمنية
-        </div>
-        <div class="card-body">
-          <div class="row g-3">
-            <div class="col-md-4">
-              <label class="form-label">رمز العملة</label>
-              <input type="text" name="currency_code" maxlength="10"
-                     value="{{ settings.currency_code or 'IQD' }}"
-                     class="form-control" placeholder="IQD">
-            </div>
-            <div class="col-md-4">
-              <label class="form-label">رمز العرض</label>
-              <input type="text" name="currency_symbol" maxlength="10"
-                     value="{{ settings.currency_symbol or 'د.ع' }}"
-                     class="form-control" placeholder="د.ع">
-            </div>
-            <div class="col-md-4">
-              <label class="form-label">المنطقة الزمنية</label>
-              <input type="text" name="timezone" maxlength="50"
-                     value="{{ settings.timezone or 'Asia/Baghdad' }}"
-                     class="form-control" placeholder="Asia/Baghdad">
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="card mb-4">
-        <div class="card-header">
-          <i class="bi bi-card-text text-accent"></i>تذييل الإيصالات والمستندات
-        </div>
-        <div class="card-body">
-          <textarea name="receipt_footer" class="form-control" rows="3"
-                    placeholder="شكراً لتعاملكم معنا — للاستفسار: 07712345678">{{ settings.receipt_footer or '' }}</textarea>
-          <small class="text-muted">يظهر في أسفل الإيصالات وكشوف الرواتب.</small>
-        </div>
-      </div>
-
-      <div class="card mb-4">
-        <div class="card-header">
           <i class="bi bi-clock-history text-accent"></i>إعدادات الحضور والغياب
         </div>
         <div class="card-body d-flex align-items-center justify-content-between gap-3">
