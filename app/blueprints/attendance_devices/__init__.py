@@ -46,7 +46,7 @@ from app.models import (db, AttendanceDevice, DeviceEventLog,
                         Student, Employee)
 from app.services.hikvision import sync_device, test_connection
 from app.utils.decorators import (admin_required, permission_required,
-                                   any_permission_required,
+                                   any_permission_required, super_admin_required,
                                    get_active_year, get_current_school,
                                    action_required, section_required)
 
@@ -181,6 +181,7 @@ def index():
 
 @attendance_devices_bp.route('/aiface-live-status', methods=['GET'])
 @login_required
+@super_admin_required
 @any_permission_required('view_attendance_devices', 'manage_attendance_devices')
 def aiface_live_status():
     """
@@ -271,6 +272,7 @@ def aiface_live_status():
 
 @attendance_devices_bp.route('/<int:device_id>/aiface-pull-logs', methods=['POST'])
 @login_required
+@super_admin_required
 @permission_required('manage_attendance_devices')
 def ajax_aiface_pull_logs(device_id):
     """
@@ -375,6 +377,7 @@ def ajax_aiface_pull_logs(device_id):
 
 @attendance_devices_bp.route('/new', methods=['GET', 'POST'])
 @login_required
+@super_admin_required
 @permission_required('manage_attendance_devices')
 @action_required('attendance_devices', 'add_device')
 def new_device():
@@ -400,6 +403,7 @@ def new_device():
 
 @attendance_devices_bp.route('/<int:device_id>/edit', methods=['GET', 'POST'])
 @login_required
+@super_admin_required
 @permission_required('manage_attendance_devices')
 @action_required('attendance_devices', 'edit_device')
 def edit_device(device_id):
@@ -419,6 +423,7 @@ def edit_device(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/delete', methods=['POST'])
 @login_required
+@super_admin_required
 @permission_required('manage_attendance_devices')
 @action_required('attendance_devices', 'delete_device')
 def delete_device(device_id):
@@ -432,6 +437,7 @@ def delete_device(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/toggle', methods=['POST'])
 @login_required
+@super_admin_required
 @permission_required('manage_attendance_devices')
 def toggle_device(device_id):
     school = _school_or_abort()
@@ -449,6 +455,7 @@ def toggle_device(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/test-connection', methods=['POST'])
 @login_required
+@super_admin_required
 @permission_required('manage_attendance_devices')
 @action_required('attendance_devices', 'test_connection')
 def ajax_test_connection(device_id):
@@ -560,6 +567,7 @@ def ajax_test_connection(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/sync', methods=['POST'])
 @login_required
+@super_admin_required
 @permission_required('manage_attendance_devices')
 @action_required('attendance_devices', 'sync')
 def ajax_sync(device_id):
@@ -587,6 +595,7 @@ def ajax_sync(device_id):
 
 @attendance_devices_bp.route('/<int:device_id>/logs', methods=['GET'])
 @login_required
+@super_admin_required
 @any_permission_required('view_attendance_devices', 'manage_attendance_devices')
 @action_required('attendance_devices', 'view_logs')
 def logs(device_id):

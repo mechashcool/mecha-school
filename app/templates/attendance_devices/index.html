@@ -8,7 +8,7 @@
     <h1 class="page-title">أجهزة الحضور</h1>
     <p class="page-subtitle">إدارة أجهزة Hikvision لتسجيل الحضور والانصراف</p>
   </div>
-  {% if school_cfg.action_enabled('attendance_devices', 'add_device') %}
+  {% if current_user.is_super_admin and school_cfg.action_enabled('attendance_devices', 'add_device') %}
   <a href="{{ url_for('attendance_devices.new_device') }}" class="btn btn-primary">
     <i class="bi bi-plus-circle me-1"></i>إضافة جهاز
   </a>
@@ -25,7 +25,8 @@
 
 {% if devices %}
 
-{# ── AI Face live WebSocket status panel ──────────────────────────────────── #}
+{# ── AI Face live WebSocket status panel (Super Admin only) ────────────────── #}
+{% if current_user.is_super_admin %}
 <div class="card mb-3" id="aiface-status-card">
   <div class="card-header d-flex align-items-center justify-content-between py-2">
     <span><i class="bi bi-broadcast me-1 text-primary"></i>حالة اتصال AI Face (WebSocket)</span>
@@ -35,6 +36,7 @@
     <p class="text-muted small p-3 mb-0">جارٍ تحميل حالة الاتصال…</p>
   </div>
 </div>
+{% endif %}
 
 <div class="card">
   <div class="table-responsive">
@@ -45,10 +47,10 @@
           <th>عنوان IP</th>
           <th>الرقم التسلسلي</th>
           <th>الحالة</th>
-          <th>WS / AI Face</th>
+          {% if current_user.is_super_admin %}<th>WS / AI Face</th>{% endif %}
           <th>آخر مزامنة</th>
           <th>الربط</th>
-          <th>الإجراءات</th>
+          {% if current_user.is_super_admin %}<th>الإجراءات</th>{% endif %}
         </tr>
       </thead>
       <tbody>
@@ -69,7 +71,9 @@
             <span class="badge bg-secondary">معطّل</span>
             {% endif %}
           </td>
+          {% if current_user.is_super_admin %}
           <td id="ws-status-{{ dev.device_sn }}" class="small text-muted">—</td>
+          {% endif %}
           <td class="text-muted small">
             {{ dev.last_sync_at.strftime('%Y-%m-%d %H:%M') if dev.last_sync_at else '—' }}
           </td>
@@ -83,6 +87,7 @@
           {% else %}
           <td class="text-muted small">—</td>
           {% endif %}
+          {% if current_user.is_super_admin %}
           <td>
             <div class="d-flex gap-1 flex-wrap">
               <!-- Test connection -->
@@ -139,6 +144,7 @@
               {% endif %}
             </div>
           </td>
+          {% endif %}
         </tr>
         {% endfor %}
       </tbody>
@@ -149,7 +155,7 @@
 <div class="text-center py-5 text-muted">
   <i class="bi bi-camera-video-off" style="font-size:3rem"></i>
   <p class="mt-3">لا توجد أجهزة مضافة بعد.</p>
-  {% if school_cfg.action_enabled('attendance_devices', 'add_device') %}
+  {% if current_user.is_super_admin and school_cfg.action_enabled('attendance_devices', 'add_device') %}
   <a href="{{ url_for('attendance_devices.new_device') }}" class="btn btn-primary">
     <i class="bi bi-plus-circle me-1"></i>إضافة جهاز
   </a>
@@ -175,6 +181,7 @@
 {% endblock %}
 
 {% block extra_js %}
+{% if current_user.is_super_admin %}
 <script>
 (function () {
   const modal      = new bootstrap.Modal(document.getElementById('resultModal'));
@@ -597,4 +604,5 @@
   });
 })();
 </script>
+{% endif %}
 {% endblock %}
