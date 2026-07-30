@@ -138,7 +138,7 @@
 
   /* ── Print (A4, RTL) — show only the review, hide app chrome & buttons ── */
   @media print {
-    @page { size: A4 portrait; margin: 12mm; }
+    @page { size: A4 portrait; margin: 10mm; }
     body { background: #fff !important; }
     body * { visibility: hidden !important; }
     .print-area, .print-area * { visibility: visible !important; }
@@ -150,6 +150,22 @@
     .rv-header, .rv-section-hd, .rv-header-badge, .rv-header-avatar {
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }
+
+    /* Compact, professional A4 spacing — trims blank space so sections pack
+       tightly and a small section is less likely to spill onto a new page. */
+    .print-area .card { border: none !important; box-shadow: none !important; }
+    .print-area .card-body { padding: 0 !important; }
+    .rv-print-header { padding-bottom: 8px !important; margin-bottom: 10px !important; }
+    .rv-header { padding: 12px 16px !important; margin-bottom: 10px !important; }
+    .rv-section { margin-bottom: 8px !important; }
+    .rv-section-hd { padding: 6px 12px !important; font-size: 12px !important; }
+    .rv-field { padding: 5px 12px !important; }
+    .rv-field-label { font-size: 10px !important; margin-bottom: 1px !important; }
+    .rv-field-value { font-size: 12px !important; line-height: 1.35 !important; }
+    .rv-cred-value { font-size: 12.5px !important; }
+
+    /* اسم المستخدم | كلمة المرور — two equal-width cells on the same row. */
+    .rv-cred-grid { grid-template-columns: 1fr 1fr !important; }
   }
 </style>
 {% endblock %}
@@ -1018,11 +1034,17 @@
       // and not masked) so the authorized creator can record it before saving.
       const uname = txt('username');
       const upass = txt('user_password');
+      // Account metadata in the standard field grid…
       let s4 = '<div class="rv-grid">';
       s4 += fld('نوع الحساب', '<span class="badge bg-success">حساب دخول تلقائي</span>');
-      s4 += fld('اسم المستخدم', uname ? `<span class="rv-cred-value">${uname}</span>` : '(يُولَّد تلقائياً)');
       s4 += fld('الدور', 'تدريسي');
       s4 += fld('حالة الحساب', '<span class="badge bg-success">فعّال</span>');
+      s4 += '</div>';
+      // …then username + password paired in their own two-cell row so they print
+      // side by side (equal widths) instead of stacked. rv-cred-grid is forced to
+      // two equal columns only in @media print; on screen it uses the normal grid.
+      s4 += '<div class="rv-grid rv-cred-grid">';
+      s4 += fld('اسم المستخدم', uname ? `<span class="rv-cred-value">${uname}</span>` : '(يُولَّد تلقائياً)');
       s4 += fld('كلمة المرور', upass ? `<span class="rv-cred-value">${upass}</span>` : '');
       s4 += '</div>';
       html += sec('bi-person-lock', 'حساب النظام', s4, 'account');
