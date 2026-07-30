@@ -79,6 +79,18 @@ def _form_context(employee=None):
 
     roles = _available_roles()
 
+    # ── Auto-generated employee (teacher) login credentials — create only ─────
+    # Mirrors the Add Student flow: a fresh pair is produced on each render of the
+    # create wizard and shown read-only. On a re-render after a validation error
+    # the submitted values take precedence in the template, so the SAME
+    # credentials persist through the wizard until save. Not generated for the
+    # edit form (employee is not None), where the linked account already exists.
+    gen_employee_username = None
+    gen_employee_password = None
+    if employee is None:
+        gen_employee_username = code_generator.generate_parent_username()
+        gen_employee_password = code_generator.generate_parent_password()
+
     existing_subject_ids    = []
     existing_section_ids    = []
     existing_homeroom_ids   = []
@@ -120,6 +132,8 @@ def _form_context(employee=None):
         linked_user             = linked_user,
         existing_device_mapping = existing_device_mapping,
         max_employee_documents  = MAX_EMPLOYEE_DOCUMENTS,
+        gen_employee_username   = gen_employee_username,
+        gen_employee_password   = gen_employee_password,
     )
 
 
@@ -305,9 +319,64 @@ def _handle_employee_post(employee):
         if photo_path:
             employee.photo = photo_path
 
+    # ── Mandatory linked teacher account (CREATE flow only) ───────────────────
+    # Every new employee automatically receives a login account. It is created in
+    # the SAME transaction as the employee (before the single commit below), so
+    # the two are atomic: if the account cannot be built the whole request rolls
+    # back — no partial employee, no orphan user. The role is ALWAYS the built-in
+    # teacher role resolved server-side; no role id is read from the request, so a
+    # forged/added role field cannot change it. Credentials reuse the Add Student
+    # generator: the read-only values submitted by the wizard are trusted only
+    # after re-validating format + global uniqueness, otherwise regenerated here.
+    _new_emp_username = None
+    _new_emp_password = None
+    if is_create:
+        teacher_role = Role.query.filter_by(name='teacher').first()
+        if not teacher_role:
+            db.session.rollback()
+            _log.error('Employee create aborted: built-in teacher role missing.')
+            flash('تعذّر إنشاء حساب الموظف: دور "تدريسي" غير موجود في النظام. '
+                  'يرجى مراجعة مسؤول النظام.', 'danger')
+            return render_template(_tmpl, error_step='account', **_form_context(None))
+
+        _new_emp_username = request.form.get('username', '').strip()
+        _new_emp_password = request.form.get('user_password', '').strip()
+        if not (code_generator.is_valid_parent_username(_new_emp_username)
+                and code_generator.parent_username_available(_new_emp_username)):
+            _new_emp_username = code_generator.generate_parent_username()
+        if not code_generator.is_valid_parent_password(_new_emp_password):
+            _new_emp_password = code_generator.generate_parent_password()
+
+        try:
+            emp_user = User(
+                username=_new_emp_username,
+                full_name=employee.full_name,
+                role_id=teacher_role.id,
+                school_id=school.id if school else None,
+                is_active=True,
+            )
+            emp_user.set_password(_new_emp_password)
+            db.session.add(emp_user)
+            db.session.flush()
+            employee.user_id = emp_user.id
+        except Exception:
+            db.session.rollback()
+            _log.exception('Employee linked-account creation failed (create flow).')
+            flash('تعذّر إنشاء حساب الدخول للموظف. لم يتم حفظ الموظف. '
+                  'يرجى المحاولة مرة أخرى.', 'danger')
+            return render_template(_tmpl, error_step='account', **_form_context(None))
+
     db.session.commit()
     flash_msgs = [('success',
                    f'تم {"إضافة" if is_create else "تحديث"} بيانات الموظف {employee.full_name}.')]
+    if is_create and _new_emp_username:
+        # One-time display to the authorized creator. Plaintext is shown here only
+        # (never stored in the DB — the User row holds a bcrypt hash — and never
+        # written to logs, audit details, or the URL).
+        flash_msgs.append(('success',
+            'تم إنشاء حساب دخول للموظف بدور تدريسي. '
+            f'اسم المستخدم: {_new_emp_username} — كلمة المرور: {_new_emp_password}. '
+            'يرجى حفظ هذه البيانات وتسليمها للموظف.'))
 
     # ── Wizard documents (create only) ───────────────────────────────────────
     if is_create:
@@ -342,11 +411,14 @@ def _handle_employee_post(employee):
             db.session.commit()
             flash_msgs.append(('success', f'تم رفع {doc_saved} مستند(ات) بنجاح.'))
 
-    # ── User account ──────────────────────────────────────────────────────────
+    # ── Linked login account — EDIT flow only ─────────────────────────────────
+    # The CREATE flow already created the mandatory teacher account atomically
+    # above. For edits we keep the existing behaviour unchanged: optionally create
+    # a teacher/parent account, or update the already-linked account.
     create_account = request.form.get('create_account')
     reset_password = request.form.get('reset_password')
 
-    if create_account and not employee.user_id:
+    if (not is_create) and create_account and not employee.user_id:
         username      = request.form.get('username', '').strip()
         raw_password  = request.form.get('user_password', '').strip()
         role_id       = request.form.get('role_id', type=int)
@@ -386,7 +458,7 @@ def _handle_employee_post(employee):
             db.session.commit()
             flash_msgs.append(('success', 'تم إنشاء حساب النظام للموظف.'))
 
-    elif employee.user_id:
+    elif (not is_create) and employee.user_id:
         linked_user = (User.query
                        .execution_options(bypass_tenant_scope=True)
                        .get(employee.user_id))

@@ -403,49 +403,30 @@
       <div class="card-header"><i class="bi bi-person-lock text-accent"></i>حساب النظام</div>
       <div class="card-body">
 
-        <div class="form-check mb-3">
-          <input class="form-check-input" type="checkbox" name="create_account"
-                 id="chkCreateAccount" value="1"
-                 {{ 'checked' if sf.get('create_account') == '1' }}
-                 onchange="document.getElementById('accountFields').classList.toggle('d-none',!this.checked)">
-          <label class="form-check-label fw-semibold" for="chkCreateAccount">
-            إنشاء حساب دخول للموظف
-          </label>
-        </div>
-
-        <div id="accountFields" class="{{ '' if sf.get('create_account') == '1' else 'd-none' }}">
-          <p class="text-muted small mb-3">
-            <i class="bi bi-info-circle me-1"></i>
-            أدخل كلمة المرور فقط وسيتم توليد اسم المستخدم تلقائياً بصيغة <code>XXX-EMP-000001</code>.
-            يمكنك أيضاً كتابة اسم مستخدم مخصص. إذا تركت كلمة المرور فارغة، لن يُنشأ الحساب.
-          </p>
-          <div class="row g-3">
-            <div class="col-md-4">
-              <label class="form-label">اسم المستخدم <span class="text-muted fw-400">(اختياري — يُولَّد تلقائياً)</span></label>
-              <input type="text" name="username" class="form-control"
-                     autocomplete="off" placeholder="اتركه فارغاً للتوليد التلقائي"
-                     value="{{ sf.get('username', '') }}">
-            </div>
-            <div class="col-md-4">
-              <label class="form-label">كلمة المرور</label>
-              <input type="password" name="user_password" class="form-control" autocomplete="new-password">
-            </div>
-            <div class="col-md-4">
-              <label class="form-label">الدور الوظيفي <span class="text-danger">*</span></label>
-              <select name="role_id" class="form-select">
-                <option value="">— اختر —</option>
-                {% for role in roles %}
-                <option value="{{ role.id }}" {{ 'selected' if sf.get('role_id') == role.id|string }}>{{ role.name }}</option>
-                {% endfor %}
-              </select>
-            </div>
-            <div class="col-md-6 d-flex align-items-end">
-              <div class="form-check">
-                <input class="form-check-input" type="checkbox" name="user_is_active"
-                       id="chkUserActive" value="1" checked>
-                <label class="form-check-label" for="chkUserActive">الحساب فعّال</label>
-              </div>
-            </div>
+        <p class="text-muted small mb-3">
+          <i class="bi bi-info-circle me-1"></i>
+          سيتم إنشاء حساب دخول للموظف تلقائياً بدور <strong>تدريسي</strong>.
+          اسم المستخدم وكلمة المرور مُولَّدان تلقائياً — احفظهما وسلّمهما للموظف بعد الحفظ.
+        </p>
+        {# Credentials are generated server-side and shown read-only. The role is
+           always the built-in teacher role — no role selector is submitted, and
+           the server ignores any role sent in the request for this flow. #}
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label class="form-label">اسم المستخدم</label>
+            <input type="text" name="username" class="form-control" readonly
+                   autocomplete="off"
+                   value="{{ sf.get('username') or gen_employee_username }}">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">كلمة المرور</label>
+            <input type="text" name="user_password" class="form-control" readonly
+                   autocomplete="off"
+                   value="{{ sf.get('user_password') or gen_employee_password }}">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">الدور</label>
+            <input type="text" class="form-control" readonly value="تدريسي">
           </div>
         </div>
 
@@ -952,23 +933,16 @@
     // ── Section 4: System Account ──
     const accountStep = document.querySelector('[data-step-key="account"]');
     if (accountStep) {
-      const createAcct = form.querySelector('[name="create_account"]');
-      let s4 = '';
-      if (createAcct && createAcct.checked) {
-        const uname    = txt('username');
-        const isActive = form.querySelector('[name="user_is_active"]');
-        s4 = '<div class="rv-grid">';
-        s4 += fld('نوع الحساب', '<span class="badge bg-success">إنشاء حساب دخول</span>');
-        s4 += fld('اسم المستخدم', uname || '(يُولَّد تلقائياً)');
-        s4 += fld('الدور الوظيفي', selTextByName('role_id'));
-        s4 += fld('حالة الحساب', (isActive && isActive.checked)
-          ? '<span class="badge bg-success">فعّال</span>'
-          : '<span class="badge bg-secondary">غير فعّال</span>');
-        s4 += fld('كلمة المرور', '••••••••');
-        s4 += '</div>';
-      } else {
-        s4 = '<div class="rv-empty"><i class="bi bi-person-x"></i>لن يُنشأ حساب دخول للموظف.</div>';
-      }
+      // Account creation is always on for new employees: a linked teacher
+      // account with auto-generated credentials is created on save.
+      const uname = txt('username');
+      let s4 = '<div class="rv-grid">';
+      s4 += fld('نوع الحساب', '<span class="badge bg-success">حساب دخول تلقائي</span>');
+      s4 += fld('اسم المستخدم', uname || '(يُولَّد تلقائياً)');
+      s4 += fld('الدور', 'تدريسي');
+      s4 += fld('حالة الحساب', '<span class="badge bg-success">فعّال</span>');
+      s4 += fld('كلمة المرور', txt('user_password') ? '••••••••' : '');
+      s4 += '</div>';
       html += sec('bi-person-lock', 'حساب النظام', s4, 'account');
     }
 
