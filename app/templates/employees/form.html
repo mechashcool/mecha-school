@@ -30,26 +30,14 @@
               <input type="text" name="full_name" class="form-control" required
                      value="{{ employee.full_name if employee else '' }}">
             </div>
-            {% if school_cfg.field_visible('employees', 'job_title') %}
-            <div class="col-md-6">
-              <label class="form-label">المسمى الوظيفي{% if school_cfg.field_required('employees', 'job_title') %} <span class="text-danger">*</span>{% endif %}</label>
-              <input type="text" name="job_title" class="form-control"
-                     {{ 'required' if school_cfg.field_required('employees', 'job_title') }}
-                     value="{{ employee.job_title if employee else '' }}">
-            </div>
-            {% elif employee and employee.job_title %}
-            <input type="hidden" name="job_title" value="{{ employee.job_title }}">
-            {% endif %}
-            {% if school_cfg.field_visible('employees', 'department') %}
-            <div class="col-md-6">
-              <label class="form-label">القسم</label>
-              <input type="text" name="department" class="form-control"
-                     value="{{ employee.department if employee else '' }}"
-                     placeholder="مثال: التدريس، المالية، الإدارة...">
-            </div>
-            {% elif employee and employee.department %}
-            <input type="hidden" name="department" value="{{ employee.department }}">
-            {% endif %}
+            {% with job_titles        = emp_job_titles,
+                    other             = emp_class_other,
+                    desired_job        = employee.job_title if employee else '',
+                    desired_job_custom = '',
+                    desired_dep        = employee.department if employee else '',
+                    desired_dep_custom = '' %}
+              {% include 'employees/_classification_fields.html' %}
+            {% endwith %}
             {% if school_cfg.field_visible('employees', 'gender') %}
             <div class="col-md-6">
               <label class="form-label">الجنس</label>
@@ -553,6 +541,9 @@
 {% endblock %}
 
 {% block extra_js %}
+{% with classification_map = emp_classification_map, other = emp_class_other %}
+  {% include 'employees/_classification_js.html' %}
+{% endwith %}
 <script>
 (function () {
   var grades = [

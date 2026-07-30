@@ -79,6 +79,25 @@ def _form_context(employee=None):
 
     roles = _available_roles()
 
+    # ── Employee classification (job title / specialty) ───────────────────────
+    # Selectable job titles = defaults + this school's custom titles. The full
+    # {title: [specialties…, 'أخرى']} map drives the dependent specialty dropdown
+    # client-side. An existing employee whose saved values fall outside those
+    # lists (grandfathered free-text) is merged in so edit can preselect them.
+    from app.utils import employee_classification as _ec
+    school_id  = school.id if school else None
+    job_titles = _ec.selectable_job_titles(school_id)
+    class_map  = _ec.classification_map(school_id)
+    cur_job    = employee.job_title  if employee else None
+    cur_dep    = employee.department if employee else None
+    if cur_job and cur_job != _ec.OTHER and cur_job not in job_titles:
+        job_titles = job_titles + [cur_job]
+    if cur_job and cur_job != _ec.OTHER:
+        _base = [s for s in class_map.get(cur_job, []) if s != _ec.OTHER]
+        if cur_dep and cur_dep not in _base:
+            _base.append(cur_dep)
+        class_map[cur_job] = _base + [_ec.OTHER]
+
     # ── Auto-generated employee (teacher) login credentials — create only ─────
     # Mirrors the Add Student flow: a fresh pair is produced on each render of the
     # create wizard and shown read-only. On a re-render after a validation error
@@ -134,6 +153,11 @@ def _form_context(employee=None):
         max_employee_documents  = MAX_EMPLOYEE_DOCUMENTS,
         gen_employee_username   = gen_employee_username,
         gen_employee_password   = gen_employee_password,
+        emp_job_titles          = job_titles,
+        emp_classification_map  = class_map,
+        emp_class_other         = _ec.OTHER,
+        emp_cur_job             = cur_job,
+        emp_cur_dep             = cur_dep,
     )
 
 
@@ -170,6 +194,90 @@ def _save_teacher_assignments(emp):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Classification (job title / specialty) resolution
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _resolve_classification(employee, emp_cfg, school):
+    """Resolve and validate the submitted job title + specialty server-side.
+
+    Returns ``(job_title, department, pending_title, pending_specialty, error)``:
+      * job_title / department  — final text to store (may be None / '').
+      * pending_title           — a new custom job title to persist for the
+                                  school on success, else None.
+      * pending_specialty       — ``(job_title, value)`` custom specialty to
+                                  persist for the school on success, else None.
+      * error                   — an Arabic message string when validation fails
+                                  (caller re-renders the form); None on success.
+
+    Never trusts the browser dropdown: every submitted value is validated against
+    the school's own default/custom options (or the employee's grandfathered
+    value). A title or specialty belonging to another school cannot be accepted —
+    it is neither a default nor present in THIS school's custom store, so it is
+    rejected.
+    """
+    from app.utils import employee_classification as ec
+    school_id = school.id if school else None
+
+    pending_title = None
+    pending_specialty = None
+
+    # ── Job title ─────────────────────────────────────────────────────────────
+    if emp_cfg.field_visible('employees', 'job_title'):
+        raw = request.form.get('job_title', '').strip()
+        preserved_job = employee.job_title if employee else None
+        if raw == ec.OTHER:
+            custom = ec.normalize_display(request.form.get('job_title_custom', ''))
+            if not custom:
+                return None, None, None, None, 'يرجى كتابة المسمى الوظيفي.'
+            job_title = custom
+            if not ec.job_title_exists(school_id, custom):
+                pending_title = custom
+        elif raw:
+            if not ec.is_valid_job_title(school_id, raw, preserved_job):
+                return None, None, None, None, 'المسمى الوظيفي المحدد غير صالح.'
+            job_title = raw
+        else:
+            job_title = None
+    else:
+        # Field hidden for this school — preserve the existing value untouched.
+        job_title = employee.job_title if employee else None
+
+    if (emp_cfg.field_visible('employees', 'job_title')
+            and emp_cfg.field_required('employees', 'job_title')
+            and not job_title):
+        return None, None, None, None, 'المسمى الوظيفي مطلوب.'
+
+    # ── Specialty / department ────────────────────────────────────────────────
+    if emp_cfg.field_visible('employees', 'department'):
+        raw_dep = request.form.get('department', '').strip()
+        # Preserved specialty is only honoured when the job title is unchanged.
+        preserved_dep = None
+        if (employee and employee.department
+                and employee.job_title and job_title
+                and ec._norm_key(employee.job_title) == ec._norm_key(job_title)):
+            preserved_dep = employee.department
+        if raw_dep == ec.OTHER:
+            custom = ec.normalize_display(request.form.get('department_custom', ''))
+            if not custom:
+                return None, None, None, None, 'يرجى كتابة القسم / الاختصاص.'
+            if not job_title:
+                return None, None, None, None, 'يرجى اختيار المسمى الوظيفي أولاً.'
+            department = custom
+            if not ec.specialty_exists(school_id, job_title, custom):
+                pending_specialty = (job_title, custom)
+        elif raw_dep:
+            if not ec.is_valid_specialty(school_id, job_title or '', raw_dep, preserved_dep):
+                return None, None, None, None, 'القسم / الاختصاص غير صالح للمسمى الوظيفي المحدد.'
+            department = raw_dep
+        else:
+            department = ''
+    else:
+        department = employee.department if employee else ''
+
+    return job_title, department, pending_title, pending_specialty, None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Shared POST handler
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -184,18 +292,17 @@ def _handle_employee_post(employee):
     full_name = request.form.get('full_name', '').strip()
     email     = request.form.get('email', '').strip() or None
 
-    # job_title: read from form only when visible; preserve existing value when hidden
-    if emp_cfg.field_visible('employees', 'job_title'):
-        job_title = request.form.get('job_title', '').strip() or None
-    else:
-        job_title = (employee.job_title if employee else None)
-
     if not full_name:
         flash('يرجى ملء حقل الاسم الكامل.', 'danger')
         return render_template(_tmpl, error_step='basic', **_form_context(employee))
 
-    if emp_cfg.field_visible('employees', 'job_title') and emp_cfg.field_required('employees', 'job_title') and not job_title:
-        flash('المسمى الوظيفي مطلوب.', 'danger')
+    # Job title + specialty ("القسم / الاختصاص"): resolved and validated
+    # server-side against THIS school's default/custom options. pending_* hold
+    # any new custom option to persist for the school AFTER a successful save.
+    (job_title, department, _pending_title, _pending_specialty,
+     _class_error) = _resolve_classification(employee, emp_cfg, school)
+    if _class_error:
+        flash(_class_error, 'danger')
         return render_template(_tmpl, error_step='basic', **_form_context(employee))
 
     if email:
@@ -255,7 +362,7 @@ def _handle_employee_post(employee):
             employee_id   = code_generator.generate_employee_id(school.id),
             full_name     = full_name,
             job_title     = job_title,
-            department    = request.form.get('department', '').strip(),
+            department    = department,
             gender        = request.form.get('gender', ''),
             date_of_birth = dob,
             nationality   = request.form.get('nationality', '').strip(),
@@ -296,7 +403,7 @@ def _handle_employee_post(employee):
     else:
         employee.full_name     = full_name
         employee.job_title     = job_title if job_title is not None else employee.job_title
-        employee.department    = request.form.get('department', '').strip()
+        employee.department    = department
         employee.gender        = request.form.get('gender', employee.gender)
         employee.date_of_birth = dob if dob else employee.date_of_birth
         employee.nationality   = request.form.get('nationality', '').strip()
@@ -365,6 +472,18 @@ def _handle_employee_post(employee):
             flash('تعذّر إنشاء حساب الدخول للموظف. لم يتم حفظ الموظف. '
                   'يرجى المحاولة مرة أخرى.', 'danger')
             return render_template(_tmpl, error_step='account', **_form_context(None))
+
+    # Persist any new custom job title / specialty for THIS school only, in the
+    # same transaction as the employee so it is saved atomically with the record
+    # (and rolled back with it on any failure above). school_id is the trusted
+    # server-side context — a custom value can never be attached to another school.
+    if school and (_pending_title or _pending_specialty):
+        from app.utils import employee_classification as _ec
+        if _pending_title:
+            _ec.add_custom_job_title(school.id, _pending_title)
+        if _pending_specialty:
+            _ec.add_custom_specialty(school.id, _pending_specialty[0],
+                                     _pending_specialty[1])
 
     db.session.commit()
     flash_msgs = [('success',
@@ -517,6 +636,41 @@ def _handle_employee_post(employee):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Employee-list filter context (job title / specialty)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _employee_filter_context(school):
+    """Build filter dropdown data for the employee list, scoped to this school.
+
+    Options combine default titles/specialties, the school's custom options, and
+    the distinct values actually used by the school's employees.
+    """
+    from app.utils import employee_classification as ec
+    school_id = school.id if school else None
+
+    db_job_titles: list[str] = []
+    db_pairs: list[tuple[str, str]] = []
+    if school:
+        rows = (db.session.query(Employee.job_title, Employee.department)
+                .filter(Employee.school_id == school.id)
+                .distinct().all())
+        _seen_jt = set()
+        for jt, dep in rows:
+            if jt and jt not in _seen_jt:
+                _seen_jt.add(jt)
+                db_job_titles.append(jt)
+            if jt or dep:
+                db_pairs.append((jt or '', dep or ''))
+
+    fctx = ec.build_filter_context(school_id, db_job_titles, db_pairs)
+    return {
+        'filter_job_titles':      fctx['job_titles'],
+        'filter_spec_map':        fctx['spec_map'],
+        'filter_all_specialties': fctx['all_specialties'],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Routes
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -526,6 +680,8 @@ def _handle_employee_post(employee):
 def index():
     page   = request.args.get('page', 1, type=int)
     search = request.args.get('q', '')
+    job_filter = request.args.get('job_title', '').strip()
+    dep_filter = request.args.get('department', '').strip()
     school = get_current_school()
     query  = Employee.query
     if school:
@@ -537,10 +693,18 @@ def index():
                 Employee.employee_id.ilike(f'%{search}%'),
             )
         )
+    # Server-side classification filters (exact match, scoped to this school).
+    if job_filter:
+        query = query.filter(Employee.job_title == job_filter)
+    if dep_filter:
+        query = query.filter(Employee.department == dep_filter)
     employees = (query.order_by(Employee.created_at.desc())
                  .paginate(page=page, per_page=20, error_out=False))
+    filter_ctx = _employee_filter_context(school)
     return render_template('employees/index.html',
-                           employees=employees, search=search)
+                           employees=employees, search=search,
+                           filter_job=job_filter, filter_dep=dep_filter,
+                           **filter_ctx)
 
 
 @employees_bp.route('/search')
@@ -556,6 +720,8 @@ def search():
 
     q      = request.args.get('q', '').strip()
     page   = request.args.get('page', 1, type=int)
+    job_filter = request.args.get('job_title', '').strip()
+    dep_filter = request.args.get('department', '').strip()
 
     query = Employee.query.filter_by(school_id=school.id)
     if q:
@@ -566,6 +732,11 @@ def search():
             Employee.job_title.ilike(like),
             Employee.department.ilike(like),
         ))
+    # Classification filters — exact match, already scoped to this school above.
+    if job_filter:
+        query = query.filter(Employee.job_title == job_filter)
+    if dep_filter:
+        query = query.filter(Employee.department == dep_filter)
     paginated = query.order_by(Employee.created_at.desc()).paginate(
         page=page, per_page=20, error_out=False)
 

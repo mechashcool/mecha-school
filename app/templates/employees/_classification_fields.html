@@ -1,0 +1,49 @@
+{# ── Employee classification fields: job title + dependent specialty ──────────
+   Shared by the create wizard and the edit form. Both host it inside a
+   `.row g-3` grid, so it emits two `col-md-6` columns.
+
+   Expected context:
+     school_cfg          – per-school field visibility config
+     job_titles          – selectable job titles (defaults + custom + preserved)
+     other               – the 'أخرى' sentinel label
+     employee            – the employee being edited (None on create)
+     desired_job         – job title value to preselect ('' / 'أخرى' / a title)
+     desired_job_custom  – custom job-title text to restore (error re-render)
+     desired_dep         – specialty value to preselect
+     desired_dep_custom  – custom specialty text to restore (error re-render)
+   The dependent specialty <select> is populated client-side (see
+   _classification_js.html); `data-desired` carries the value to reselect. #}
+
+{% if school_cfg.field_visible('employees', 'job_title') %}
+<div class="col-md-6">
+  <label class="form-label">المسمى الوظيفي{% if school_cfg.field_required('employees', 'job_title') %} <span class="text-danger">*</span>{% endif %}</label>
+  <select name="job_title" class="form-select emp-job-title"
+          {{ 'required' if school_cfg.field_required('employees', 'job_title') }}>
+    <option value="">— اختر —</option>
+    {% for t in job_titles %}
+    <option value="{{ t }}" {{ 'selected' if desired_job == t }}>{{ t }}</option>
+    {% endfor %}
+    <option value="{{ other }}" {{ 'selected' if desired_job == other }}>{{ other }}</option>
+  </select>
+  <input type="text" name="job_title_custom" class="form-control mt-2 d-none emp-job-title-custom"
+         placeholder="اكتب المسمى الوظيفي" autocomplete="off"
+         value="{{ desired_job_custom or '' }}">
+</div>
+{% elif employee and employee.job_title %}
+<input type="hidden" name="job_title" value="{{ employee.job_title }}">
+{% endif %}
+
+{% if school_cfg.field_visible('employees', 'department') %}
+<div class="col-md-6">
+  <label class="form-label">القسم / الاختصاص</label>
+  <select name="department" class="form-select emp-department"
+          data-desired="{{ desired_dep or '' }}">
+    <option value="">— اختر —</option>
+  </select>
+  <input type="text" name="department_custom" class="form-control mt-2 d-none emp-department-custom"
+         placeholder="اكتب القسم / الاختصاص" autocomplete="off"
+         value="{{ desired_dep_custom or '' }}">
+</div>
+{% elif employee and employee.department %}
+<input type="hidden" name="department" value="{{ employee.department }}">
+{% endif %}

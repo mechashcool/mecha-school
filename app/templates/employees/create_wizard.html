@@ -207,23 +207,14 @@
                    value="{{ sf.get('full_name', '') }}">
           </div>
 
-          {% if school_cfg.field_visible('employees', 'job_title') %}
-          <div class="col-md-6">
-            <label class="form-label">المسمى الوظيفي{% if school_cfg.field_required('employees', 'job_title') %} <span class="text-danger">*</span>{% endif %}</label>
-            <input type="text" name="job_title" class="form-control"
-                   {{ 'required' if school_cfg.field_required('employees', 'job_title') }}
-                   value="{{ sf.get('job_title', '') }}">
-          </div>
-          {% endif %}
-
-          {% if school_cfg.field_visible('employees', 'department') %}
-          <div class="col-md-6">
-            <label class="form-label">القسم</label>
-            <input type="text" name="department" class="form-control"
-                   value="{{ sf.get('department', '') }}"
-                   placeholder="مثال: التدريس، المالية، الإدارة...">
-          </div>
-          {% endif %}
+          {% with job_titles        = emp_job_titles,
+                  other             = emp_class_other,
+                  desired_job        = sf.get('job_title', ''),
+                  desired_job_custom = sf.get('job_title_custom', ''),
+                  desired_dep        = sf.get('department', ''),
+                  desired_dep_custom = sf.get('department_custom', '') %}
+            {% include 'employees/_classification_fields.html' %}
+          {% endwith %}
 
           {% if school_cfg.field_visible('employees', 'gender') %}
           <div class="col-md-6">
@@ -656,6 +647,9 @@
 {% endblock %}
 
 {% block extra_js %}
+{% with classification_map = emp_classification_map, other = emp_class_other %}
+  {% include 'employees/_classification_js.html' %}
+{% endwith %}
 <script>
 /* ════════════ Photo preview ════════════ */
 (function () {
@@ -915,9 +909,22 @@
     const photoUrl = hasPhoto ? URL.createObjectURL(photoEl.files[0]) : '';
 
     // Header
+    // Classification: when 'أخرى' is chosen the real value lives in the paired
+    // custom text input, so resolve it here for display/print.
+    const OTHER_LBL = {{ emp_class_other|tojson }};
+    const resolveClass = (selName, customName) => {
+      const sel = form.querySelector(`[name="${selName}"]`);
+      if (!sel) return '';
+      const v = (sel.value || '').trim();
+      if (v === OTHER_LBL) {
+        const ci = form.querySelector(`[name="${customName}"]`);
+        return ci ? (ci.value || '').trim() : '';
+      }
+      return v;
+    };
     const empName  = txt('full_name') || 'موظف جديد';
-    const jobTitle = txt('job_title');
-    const dept     = txt('department');
+    const jobTitle = resolveClass('job_title', 'job_title_custom');
+    const dept     = resolveClass('department', 'department_custom');
     const avatarHtml = hasPhoto
       ? `<img style="width:64px;height:64px;border-radius:12px;object-fit:cover;border:2px solid rgba(255,255,255,.35);flex-shrink:0" src="${photoUrl}" alt="">`
       : `<div class="rv-header-avatar"><i class="bi bi-person-badge-fill"></i></div>`;
@@ -935,7 +942,7 @@
     let s1 = '<div class="rv-grid">';
     s1 += fld('الاسم الكامل', txt('full_name'), 'highlight');
     s1 += fld('المسمى الوظيفي', jobTitle);
-    s1 += fld('القسم', dept);
+    s1 += fld('القسم / الاختصاص', dept);
     s1 += fld('الجنس', genderMap[txt('gender')] || '');
     s1 += fld('رقم الهاتف', txt('phone'));
     s1 += fld('البريد الإلكتروني', txt('email'));

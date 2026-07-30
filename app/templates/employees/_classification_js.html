@@ -1,0 +1,66 @@
+{# ── Dependent specialty dropdown + "أخرى" custom inputs ──────────────────────
+   Populates each `.emp-department` <select> from the job title picked in the
+   matching `.emp-job-title` <select>, using the school-scoped map below. Shows a
+   small text input only when 'أخرى' is chosen. No page reload. RTL-friendly.
+   Expected context: classification_map – {job_title: [specialties…, 'أخرى']}. #}
+<script>
+(function () {
+  var OTHER = {{ other|tojson }};
+  var MAP   = {{ classification_map|tojson }};
+
+  function specialtiesFor(title) {
+    if (!title) return [];               // no job title yet → no specialty options
+    if (title === OTHER) return [OTHER]; // custom job title → let user add via أخرى
+    return MAP[title] || [OTHER];        // unknown/custom title → allow أخرى
+  }
+
+  document.querySelectorAll('.emp-job-title').forEach(function (jobSel) {
+    var scope     = jobSel.closest('form') || document;
+    var jobCustom = scope.querySelector('.emp-job-title-custom');
+    var depSel    = scope.querySelector('.emp-department');
+    var depCustom = scope.querySelector('.emp-department-custom');
+
+    function toggleCustom(sel, inp) {
+      if (!sel || !inp) return;
+      var isOther = sel.value === OTHER;
+      inp.classList.toggle('d-none', !isOther);
+      if (isOther) { inp.setAttribute('required', 'required'); }
+      else         { inp.removeAttribute('required'); }
+    }
+
+    function fillDepartments(desired) {
+      if (!depSel) return;
+      var specs = specialtiesFor(jobSel.value);
+      depSel.innerHTML = '<option value="">— اختر —</option>';
+      specs.forEach(function (s) {
+        var o = document.createElement('option');
+        o.value = s; o.textContent = s;
+        depSel.appendChild(o);
+      });
+      // Reselect the desired value only when the new list still contains it —
+      // otherwise leave it unselected so a valid specialty must be re-chosen.
+      if (desired) {
+        var has = Array.prototype.some.call(depSel.options, function (o) {
+          return o.value === desired;
+        });
+        depSel.value = has ? desired : '';
+      }
+      toggleCustom(depSel, depCustom);
+    }
+
+    jobSel.addEventListener('change', function () {
+      toggleCustom(jobSel, jobCustom);
+      // Keep the current specialty if it is still valid under the new title;
+      // clear it (forcing a new pick) when it is not.
+      fillDepartments(depSel ? depSel.value : null);
+    });
+    if (depSel) {
+      depSel.addEventListener('change', function () { toggleCustom(depSel, depCustom); });
+    }
+
+    // Initial paint — restore the preselected specialty (data-desired).
+    toggleCustom(jobSel, jobCustom);
+    fillDepartments(depSel ? depSel.getAttribute('data-desired') : null);
+  });
+})();
+</script>

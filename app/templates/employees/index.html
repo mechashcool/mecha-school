@@ -203,11 +203,28 @@
   margin: 0 0 4px;
 }
 
+/* Classification filters row */
+.esearch-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 14px;
+  max-width: 620px;
+}
+.esearch-filter-field { flex: 1; min-width: 180px; }
+.esearch-filter-field .form-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
 /* Responsive */
 @media (max-width: 600px) {
   .esearch-header  { padding: 12px 16px; }
   .esearch-body    { padding: 14px 16px 16px; }
   .esearch-input-row { max-width: 100%; }
+  .esearch-filters { max-width: 100%; }
 }
 </style>
 
@@ -219,7 +236,7 @@
     </div>
     <div class="esearch-header-text">
       <div class="esearch-panel-title">البحث عن موظف</div>
-      <div class="esearch-panel-sub">ابحث بالاسم أو رقم الموظف أو المسمى الوظيفي أو القسم</div>
+      <div class="esearch-panel-sub">ابحث بالاسم أو رقم الموظف أو المسمى الوظيفي أو القسم / الاختصاص</div>
     </div>
     <div class="esearch-count-badge">
       <i class="bi bi-people-fill"></i>
@@ -250,7 +267,27 @@
       <span class="esearch-hint-chip"><i class="bi bi-person"></i>الاسم</span>
       <span class="esearch-hint-chip"><i class="bi bi-hash"></i>رقم الموظف</span>
       <span class="esearch-hint-chip"><i class="bi bi-briefcase"></i>المسمى الوظيفي</span>
-      <span class="esearch-hint-chip"><i class="bi bi-diagram-3"></i>القسم</span>
+      <span class="esearch-hint-chip"><i class="bi bi-diagram-3"></i>القسم / الاختصاص</span>
+    </div>
+
+    {# ── Classification filters (server-side, scoped to this school) ── #}
+    <div class="esearch-filters">
+      <div class="esearch-filter-field">
+        <label class="form-label" for="emp-filter-job">المسمى الوظيفي</label>
+        <select id="emp-filter-job" class="form-select form-select-sm">
+          <option value="">الكل</option>
+          {% for t in filter_job_titles %}
+          <option value="{{ t }}" {{ 'selected' if filter_job == t }}>{{ t }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="esearch-filter-field">
+        <label class="form-label" for="emp-filter-dep">القسم / الاختصاص</label>
+        <select id="emp-filter-dep" class="form-select form-select-sm"
+                data-desired="{{ filter_dep or '' }}">
+          <option value="">الكل</option>
+        </select>
+      </div>
     </div>
   </div>
 </div>
@@ -261,7 +298,7 @@
       <thead>
         <tr>
           <th>رقم الموظف</th><th>الاسم</th><th>المسمى الوظيفي</th>
-          <th>القسم</th><th>الراتب الأساسي</th><th>الحالة</th><th>الإجراءات</th>
+          <th>القسم / الاختصاص</th><th>الراتب الأساسي</th><th>الحالة</th><th>الإجراءات</th>
         </tr>
       </thead>
       <tbody id="emp-table-body">
@@ -336,10 +373,37 @@
   const pageInfo      = document.getElementById('emp-page-info');
   const paginationEl  = document.getElementById('emp-pagination');
   const paginationWrap= document.getElementById('emp-pagination-wrapper');
+  const jobFilter     = document.getElementById('emp-filter-job');
+  const depFilter     = document.getElementById('emp-filter-dep');
 
   const SEARCH_URL    = "{{ url_for('employees.search') }}";
   const IS_HISTORICAL = {{ 'true' if is_historical_year else 'false' }};
   const CAN_EDIT      = {{ 'false' if is_historical_year else 'true' }};
+
+  // Classification filter data (scoped to this school, built server-side).
+  const FILTER_SPEC_MAP  = {{ filter_spec_map|tojson }};
+  const FILTER_ALL_SPECS = {{ filter_all_specialties|tojson }};
+
+  // Populate the specialty filter: narrowed to the picked job title, or the
+  // full school list when no job title is selected. Keeps the current value if
+  // still present. Never triggers a search by itself.
+  function fillDepFilter(desired) {
+    if (!depFilter) return;
+    const jt = jobFilter ? jobFilter.value : '';
+    const specs = jt ? (FILTER_SPEC_MAP[jt] || []) : FILTER_ALL_SPECS;
+    depFilter.innerHTML = '<option value="">الكل</option>';
+    specs.forEach(function (s) {
+      const o = document.createElement('option');
+      o.value = s; o.textContent = s;
+      depFilter.appendChild(o);
+    });
+    if (desired) {
+      const has = Array.prototype.some.call(depFilter.options, function (o) {
+        return o.value === desired;
+      });
+      depFilter.value = has ? desired : '';
+    }
+  }
 
   let currentPage = 1;
   let debounceTimer = null;
@@ -438,7 +502,11 @@
 
     spinner.classList.remove('d-none');
 
-    const url = `${SEARCH_URL}?q=${encodeURIComponent(q)}&page=${currentPage}`;
+    const jt = jobFilter ? jobFilter.value : '';
+    const dp = depFilter ? depFilter.value : '';
+    const url = `${SEARCH_URL}?q=${encodeURIComponent(q)}&page=${currentPage}`
+              + `&job_title=${encodeURIComponent(jt)}`
+              + `&department=${encodeURIComponent(dp)}`;
     activeXhr = new XMLHttpRequest();
     activeXhr.open('GET', url, true);
     activeXhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
@@ -478,6 +546,19 @@
     doSearch(parseInt(link.dataset.page, 10));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   });
+
+  // ── Classification filters ──
+  if (jobFilter) {
+    jobFilter.addEventListener('change', function () {
+      fillDepFilter(null);   // job changed → reset specialty options + selection
+      doSearch(1);
+    });
+  }
+  if (depFilter) {
+    depFilter.addEventListener('change', function () { doSearch(1); });
+  }
+  // Initial paint of the specialty options, restoring any server-selected value.
+  fillDepFilter(depFilter ? depFilter.getAttribute('data-desired') : null);
 
   // If page loaded with a search term (e.g. back-navigation), fire immediately
   if (searchInput.value.trim()) {
