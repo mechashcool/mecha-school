@@ -32,6 +32,11 @@ employees_bp = Blueprint('employees', __name__,
 # allow-list, so a crafted POST cannot bypass the restricted dropdown.
 _ACCOUNT_ROLE_NAMES = ('teacher', 'parent')
 
+# Maximum number of documents that may be attached in the "Add New Employee"
+# wizard. Enforced BOTH in the create wizard UI (add-row button) and server-side
+# in _handle_employee_post so a forged/manually-modified POST cannot exceed it.
+MAX_EMPLOYEE_DOCUMENTS = 5
+
 
 def _available_roles():
     """Roles selectable for an employee login account from the employee page.
@@ -114,6 +119,7 @@ def _form_context(employee=None):
         existing_homeroom_ids   = existing_homeroom_ids,
         linked_user             = linked_user,
         existing_device_mapping = existing_device_mapping,
+        max_employee_documents  = MAX_EMPLOYEE_DOCUMENTS,
     )
 
 
@@ -210,6 +216,21 @@ def _handle_employee_post(employee):
             salary_start = dt.strptime(sal_start_str, '%Y-%m-%d').date()
         except ValueError:
             pass
+
+    # ── Enforce the employee-document limit BEFORE creating anything ──────────
+    # Document rows exist only in the create wizard (the edit form has none), so
+    # this guard applies to create. Validate the count up-front — before the
+    # Employee row is inserted or any file is uploaded — so a forged/tampered
+    # request that exceeds the ceiling is rejected without partially creating the
+    # employee or uploading any document. The wizard UI enforces the same
+    # MAX_EMPLOYEE_DOCUMENTS ceiling; this is the independent server-side check.
+    if is_create:
+        _submitted_doc_files = [f for f in request.files.getlist('doc_file[]')
+                                if f and f.filename]
+        if len(_submitted_doc_files) > MAX_EMPLOYEE_DOCUMENTS:
+            flash(f'يمكن إضافة {MAX_EMPLOYEE_DOCUMENTS} مستندات كحد أقصى.', 'danger')
+            return render_template(_tmpl, error_step='documents',
+                                   **_form_context(employee))
 
     photo_path = None
     if 'photo' in request.files and request.files['photo'].filename:

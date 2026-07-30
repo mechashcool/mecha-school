@@ -634,6 +634,7 @@
 (function () {
   const addBtn = document.getElementById('addEmpDocRow');
   const rows   = document.getElementById('empDocRows');
+  const MAX    = {{ max_employee_documents }};
   const OPTS   = `<option value="">— اختر النوع —</option>
     <option value="هوية">هوية وطنية</option>
     <option value="شهادة">شهادة دراسية</option>
@@ -643,7 +644,17 @@
 
   if (!addBtn || !rows) return;
 
+  // Keep the add button in sync with the row count: hidden + disabled once the
+  // MAX ceiling is reached, available again after a row is deleted.
+  const countRows   = () => rows.querySelectorAll('.emp-doc-row').length;
+  const refreshBtn  = () => {
+    const atMax = countRows() >= MAX;
+    addBtn.disabled = atMax;
+    addBtn.classList.toggle('d-none', atMax);
+  };
+
   addBtn.addEventListener('click', () => {
+    if (countRows() >= MAX) return;   // never create a row beyond the ceiling
     const row = document.createElement('div');
     row.className = 'row g-3 align-items-end mb-3 emp-doc-row';
     row.innerHTML = `
@@ -662,12 +673,17 @@
         </button>
       </div>`;
     rows.appendChild(row);
+    refreshBtn();
   });
 
   rows.addEventListener('click', e => {
-    if (e.target.closest('.remove-emp-doc-row'))
+    if (e.target.closest('.remove-emp-doc-row')) {
       e.target.closest('.emp-doc-row')?.remove();
+      refreshBtn();
+    }
   });
+
+  refreshBtn();   // reflect the initial row count on load
 })();
 
 /* ════════════ Teacher assignment: stage → grade → content filter ════════════ */
