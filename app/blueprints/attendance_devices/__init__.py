@@ -62,7 +62,15 @@ _BAGHDAD_TZ         = ZoneInfo('Asia/Baghdad')
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _school_or_abort():
-    if not current_user.is_authenticated or not current_user.is_admin_user:
+    # Authorization is enforced per-route by the permission decorators
+    # (permission_required('manage_attendance_devices') /
+    #  any_permission_required('view_attendance_devices',
+    #                          'manage_attendance_devices')), which run before
+    # this helper and already bypass for admin tiers via User.has_permission.
+    # This guard therefore only resolves the trusted server-side school context;
+    # it must NOT re-gate on is_admin_user, otherwise a non-admin role that was
+    # granted the attendance-devices permission would still be blocked here.
+    if not current_user.is_authenticated:
         abort(403)
     school = get_current_school()
     if not school or not hasattr(school, 'id'):
