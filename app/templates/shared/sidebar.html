@@ -798,6 +798,12 @@
             <i class="bi bi-building-gear"></i> هوية المدرسة
           </a>
         </li>
+        <li class="nav-item">
+          <a href="{{ url_for('attendance_devices.index') }}"
+             class="{{ 'active' if request.blueprint == 'attendance_devices' }}">
+            <i class="bi bi-camera-video"></i> أجهزة الحضور
+          </a>
+        </li>
       </ul>
     </li>
     {% endif %}
