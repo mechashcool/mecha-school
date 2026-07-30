@@ -122,6 +122,35 @@
     .rv-fee-stat { border-inline-start: none; border-bottom: 1px solid var(--border); }
     .rv-grid { grid-template-columns: 1fr; }
   }
+
+  /* Credential value — clearly readable on screen and in print. */
+  .rv-cred-value { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 14px; letter-spacing: .5px; }
+
+  /* ── Print branding header (screen-hidden, print-only) — reused from the
+        Add Student review print pattern (students/_review_styles.html) ── */
+  .rv-print-header { display: none; align-items: center; gap: 14px;
+    padding-bottom: 12px; margin-bottom: 16px; border-bottom: 2px solid var(--primary); }
+  .rv-print-header img { height: 54px; width: auto; object-fit: contain; }
+  .rv-print-header .ph-name { font-size: 18px; font-weight: 800; color: var(--primary); }
+  .rv-print-header .ph-sub  { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+  .rv-print-header .ph-date { margin-inline-start: auto; font-size: 12px; color: var(--text-muted); }
+
+  /* ── Print (A4, RTL) — show only the review, hide app chrome & buttons ── */
+  @media print {
+    @page { size: A4 portrait; margin: 12mm; }
+    body { background: #fff !important; }
+    body * { visibility: hidden !important; }
+    .print-area, .print-area * { visibility: visible !important; }
+    .print-area { position: absolute; inset: 0; width: 100%; padding: 0; }
+    .no-print, .no-print * { display: none !important; }
+    .rv-print-header { display: flex !important; }
+    .rv-edit-link { display: none !important; }
+    .rv-header, .rv-section { break-inside: avoid; page-break-inside: avoid; }
+    .rv-header, .rv-section-hd, .rv-header-badge, .rv-header-avatar {
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
+  }
 </style>
 {% endblock %}
 
@@ -564,21 +593,41 @@
 
   <!-- ════════════ STEP 6 — Review ════════════ -->
   <section class="wizard-step" data-step-key="review" data-step-title="المراجعة">
-    <div class="card">
-      <div class="card-header"><i class="bi bi-clipboard-check-fill text-accent"></i>مراجعة البيانات قبل الحفظ</div>
-      <div class="card-body" id="reviewContent">
-        <!-- filled by JS when this step is entered -->
+    {# The review content is wrapped in .print-area so the shared print pattern
+       (see @media print above, reused from the Add Student review) prints only
+       this block on A4/RTL and hides all app chrome. #}
+    <div class="print-area">
+      <div class="rv-print-header">
+        {% if current_school and current_school.logo_path %}
+        <img src="{{ resolve_photo_url(current_school.logo_path) }}" alt="شعار المدرسة">
+        {% endif %}
+        <div>
+          <div class="ph-name">{{ (current_school.school_name_ar or current_school.school_name) if current_school else 'المدرسة' }}</div>
+          <div class="ph-sub">مراجعة بيانات الموظف الجديد</div>
+        </div>
+        <div class="ph-date">تاريخ الإصدار: <span id="wizPrintDate"></span></div>
+      </div>
+      <div class="card">
+        <div class="card-header no-print"><i class="bi bi-clipboard-check-fill text-accent"></i>مراجعة البيانات قبل الحفظ</div>
+        <div class="card-body" id="reviewContent">
+          <!-- filled by JS when this step is entered -->
+        </div>
       </div>
     </div>
   </section>
 
   <!-- ════════════ Navigation ════════════ -->
-  <div class="wiz-nav">
+  <div class="wiz-nav no-print">
     <button type="button" class="btn btn-outline-secondary px-4" id="wizPrev" style="display:none">
       <i class="bi bi-arrow-right me-1"></i>السابق
     </button>
     <div class="spacer"></div>
     <a href="{{ url_for('employees.index') }}" class="btn btn-link text-muted">إلغاء</a>
+    <!-- Print (review step only). type="button" so it never submits/creates. -->
+    <button type="button" class="btn btn-outline-secondary px-4" id="wizPrint"
+            style="display:none" onclick="window.print()">
+      <i class="bi bi-printer me-2"></i>طباعة
+    </button>
     <button type="button" class="btn btn-primary px-4" id="wizNext">
       التالي<i class="bi bi-arrow-left ms-1"></i>
     </button>
@@ -752,18 +801,31 @@
   const btnPrev  = document.getElementById('wizPrev');
   const btnNext  = document.getElementById('wizNext');
   const btnSubmit = document.getElementById('wizSubmit');
+  const btnPrint = document.getElementById('wizPrint');
   if (!steps.length) return;
 
   let current    = 0;
   let maxReached = 0;
 
-  // Build step indicator from steps actually rendered in the DOM.
+  // Build step indicator from steps actually rendered in the DOM. Every
+  // indicator (numbered circle + title) is clickable and keyboard-activatable.
   steps.forEach((s, i) => {
     const ind = document.createElement('div');
-    ind.className = 'wiz-step-ind';
+    ind.className = 'wiz-step-ind clickable';
     ind.dataset.idx = i;
+    ind.setAttribute('role', 'button');
+    ind.setAttribute('tabindex', '0');
+    ind.setAttribute('aria-label', `الانتقال إلى الخطوة ${i + 1}: ${s.dataset.stepTitle || ''}`);
     ind.innerHTML = `<div class="dot">${i + 1}</div><div class="lbl">${s.dataset.stepTitle || ''}</div>`;
-    ind.addEventListener('click', () => { if (i <= maxReached) goTo(i); });
+    ind.addEventListener('click', () => navigateToStep(i));
+    // Enter/Space on a focused indicator opens that step — never submits the
+    // form (the indicators live outside <form>, and we preventDefault regardless).
+    ind.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault();
+        navigateToStep(i);
+      }
+    });
     progress.appendChild(ind);
   });
   const indicators = Array.from(progress.children);
@@ -779,6 +841,21 @@
     const bad = firstInvalidControl(steps[i]);
     if (bad) { bad.reportValidity(); return false; }
     return true;
+  }
+
+  // Shared step navigation used by both indicator clicks and keyboard.
+  // Backward/same → always allowed. Forward → runs the SAME per-step
+  // client-side validation as the Next button, stopping on the first invalid
+  // step. Never submits or creates the employee, and never regenerates the
+  // read-only account credentials (it only toggles which step is visible).
+  function navigateToStep(i) {
+    if (i === current) return;
+    if (i < current) { goTo(i); return; }
+    for (let k = current; k < i; k++) {
+      const bad = firstInvalidControl(steps[k]);
+      if (bad) { goTo(k); bad.reportValidity(); return; }
+    }
+    goTo(i);
   }
 
   function buildReview() {
@@ -935,13 +1012,18 @@
     if (accountStep) {
       // Account creation is always on for new employees: a linked teacher
       // account with auto-generated credentials is created on save.
+      // Read the SAME values shown read-only on the "حساب النظام" step — no new
+      // credentials are generated here, and navigating between steps never
+      // regenerates them. The password is shown in visible plaintext (not a hash
+      // and not masked) so the authorized creator can record it before saving.
       const uname = txt('username');
+      const upass = txt('user_password');
       let s4 = '<div class="rv-grid">';
       s4 += fld('نوع الحساب', '<span class="badge bg-success">حساب دخول تلقائي</span>');
-      s4 += fld('اسم المستخدم', uname || '(يُولَّد تلقائياً)');
+      s4 += fld('اسم المستخدم', uname ? `<span class="rv-cred-value">${uname}</span>` : '(يُولَّد تلقائياً)');
       s4 += fld('الدور', 'تدريسي');
       s4 += fld('حالة الحساب', '<span class="badge bg-success">فعّال</span>');
-      s4 += fld('كلمة المرور', txt('user_password') ? '••••••••' : '');
+      s4 += fld('كلمة المرور', upass ? `<span class="rv-cred-value">${upass}</span>` : '');
       s4 += '</div>';
       html += sec('bi-person-lock', 'حساب النظام', s4, 'account');
     }
@@ -985,14 +1067,16 @@
     if (i > maxReached) maxReached = i;
     steps.forEach((s, idx) => s.classList.toggle('current', idx === i));
     indicators.forEach((ind, idx) => {
-      ind.classList.toggle('active',    idx === i);
-      ind.classList.toggle('done',      idx < i);
-      ind.classList.toggle('clickable', idx <= maxReached);
+      ind.classList.toggle('active', idx === i);
+      ind.classList.toggle('done',   idx < i);
+      if (idx === i) ind.setAttribute('aria-current', 'step');
+      else ind.removeAttribute('aria-current');
     });
     btnPrev.style.display  = i === 0 ? 'none' : '';
     const last = i === steps.length - 1;
     btnNext.style.display   = last ? 'none' : '';
     btnSubmit.style.display = last ? '' : 'none';
+    if (btnPrint) btnPrint.style.display = last ? '' : 'none';   // print only on Review
     if (steps[i].dataset.stepKey === 'review') buildReview();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -1015,6 +1099,58 @@
     btnSubmit.disabled = true;
     btnSubmit.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>جارٍ الحفظ...';
   });
+
+  // ── Enter-key navigation ─────────────────────────────────────────────────
+  // Steps 1–5: Enter behaves like the Next button (same validation, moves
+  // forward, never submits). Review step: Enter performs the final submit
+  // exactly like the Save button (with the same duplicate-submit guard). Enter
+  // is left to its native behaviour inside textareas, selects, file inputs,
+  // buttons/links, combobox/listbox/autocomplete controls, and anything marked
+  // data-wizard-enter-optout.
+  function enterIsExempt(t) {
+    if (!t) return true;
+    const tag = (t.tagName || '').toLowerCase();
+    if (tag === 'textarea' || tag === 'select' || tag === 'button' || tag === 'a') return true;
+    if (t.type === 'file') return true;
+    if (t.isContentEditable) return true;
+    if (t.closest && t.closest('[data-wizard-enter-optout]')) return true;
+    const role = t.getAttribute && t.getAttribute('role');
+    if (role === 'button' || role === 'combobox' || role === 'listbox'
+        || role === 'searchbox' || role === 'menu' || role === 'menuitem') return true;
+    if (t.getAttribute && t.getAttribute('aria-autocomplete')) return true;
+    return false;
+  }
+  // Listen on document so Review-step Enter works even when focus rests on the
+  // page body (the Review step has no inputs). Strictly scoped to the wizard
+  // form or the bare page body, so Enter on any OTHER control on the page (e.g. a
+  // navbar search box, the step indicators, sidebar links) is never hijacked.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    const t = e.target;
+    const inForm = form.contains(t);
+    const onBody = (t === document.body || t === document.documentElement);
+    if (!inForm && !onBody) return;
+    if (enterIsExempt(t)) return;          // let Enter do its native job
+    e.preventDefault();                    // block implicit form submission
+    const onReview = steps[current] && steps[current].dataset.stepKey === 'review';
+    if (onReview) {
+      if (submitting) return;              // ignore repeated Enter once saving
+      // Same path as clicking the Save button (fires the submit handler above,
+      // which validates every step and applies the duplicate-submit guard).
+      if (typeof form.requestSubmit === 'function') form.requestSubmit(btnSubmit);
+      else btnSubmit.click();
+    } else {
+      btnNext.click();                     // reuse the existing Next handler
+    }
+  });
+
+  // Fill the print-header issue date (local, no backend call). Credentials are
+  // untouched by this — it only writes a date string into the print header.
+  const _pd = document.getElementById('wizPrintDate');
+  if (_pd) {
+    const _n = new Date();
+    _pd.textContent = `${_n.getFullYear()}-${String(_n.getMonth() + 1).padStart(2, '0')}-${String(_n.getDate()).padStart(2, '0')}`;
+  }
 
   // Land on the step the server flagged as invalid (or step 1).
   const errKey  = progress.dataset.errorStep || 'basic';
