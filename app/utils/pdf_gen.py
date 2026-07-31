@@ -872,7 +872,8 @@ def generate_single_employee_attendance_pdf(emp_row, date_from: str, date_to: st
     from reportlab.lib.pagesizes import A4, portrait
     from reportlab.lib.units import cm
     from reportlab.lib import colors
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle,
+                                    Paragraph, Spacer, Image, HRFlowable)
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.colors import HexColor
     from reportlab.pdfbase import pdfmetrics
@@ -896,22 +897,68 @@ def generate_single_employee_attendance_pdf(emp_row, date_from: str, date_to: st
                             leftMargin=1.5 * cm, rightMargin=1.5 * cm,
                             topMargin=1.5 * cm, bottomMargin=1.5 * cm)
 
-    title_s = ParagraphStyle('te', fontName=fn_b, fontSize=13, alignment=1,
-                              textColor=HexColor('#1a3a5c'))
-    sub_s = ParagraphStyle('se', fontName=fn, fontSize=10, alignment=1,
-                            textColor=HexColor('#555555'))
-    th_s = ParagraphStyle('the', fontName=fn_b, fontSize=8, alignment=1, textColor=WHITE)
-    td_s = ParagraphStyle('tde', fontName=fn, fontSize=8, alignment=1)
+    # Explicit `leading` on every style prevents Arabic lines from touching /
+    # overlapping (the previous header stacked default-leading paragraphs).
+    school_s    = ParagraphStyle('sch', fontName=fn_b, fontSize=16, alignment=1,
+                                 leading=20, textColor=HexColor('#1a3a5c'))
+    brand_s     = ParagraphStyle('brand', fontName=fn, fontSize=8, alignment=1,
+                                 leading=11, textColor=HexColor('#888888'))
+    rpt_title_s = ParagraphStyle('rpt', fontName=fn_b, fontSize=13, alignment=1,
+                                 leading=17, textColor=HexColor('#1a3a5c'))
+    info_s      = ParagraphStyle('info', fontName=fn, fontSize=9, alignment=2,
+                                 leading=13, textColor=HexColor('#222222'))
+    th_s = ParagraphStyle('the', fontName=fn_b, fontSize=8, alignment=1,
+                          leading=11, textColor=WHITE)
+    td_s = ParagraphStyle('tde', fontName=fn, fontSize=8, alignment=1, leading=11)
 
     elements = []
+
+    # ── Header: logo → school name → Core School identity → report title ──────
+    if school and getattr(school, 'logo_path', None):
+        _logo_path = _resolve_logo_for_pdf(school.logo_path)
+        if _logo_path:
+            try:
+                _logo = Image(_logo_path, width=1.8 * cm, height=1.8 * cm)
+                _logo.hAlign = 'CENTER'
+                elements.append(_logo)
+                elements.append(Spacer(1, 0.12 * cm))
+            except Exception:
+                pass
+
     school_name = (school.school_name_ar or school.school_name) if school else ''
     if school_name:
-        elements.append(Paragraph(ar(school_name), title_s))
-        elements.append(Spacer(1, 0.2 * cm))
-    elements.append(Paragraph(ar(emp.full_name), title_s))
-    elements.append(Paragraph(ar(f"{emp.department or '—'} | {emp.job_title or '—'}"), sub_s))
-    elements.append(Paragraph(ar(f'{date_from}  —  {date_to}'), sub_s))
-    elements.append(Spacer(1, 0.5 * cm))
+        elements.append(Paragraph(ar(school_name), school_s))
+    elements.append(Paragraph(ar('Core School — نظام إدارة المدارس'), brand_s))
+    elements.append(Spacer(1, 0.15 * cm))
+    elements.append(Paragraph(ar('سجل حضور الموظف'), rpt_title_s))
+    elements.append(Spacer(1, 0.2 * cm))
+    elements.append(HRFlowable(width='100%', thickness=1,
+                               color=HexColor('#1a3a5c'), spaceBefore=0, spaceAfter=8))
+
+    # ── Employee info card: labelled 2-column grid (no overlapping text) ──────
+    def _info(label, value):
+        return Paragraph(ar(f'{label}: {value}'), info_s)
+
+    _emp_code = getattr(emp, 'employee_id', None) or '—'
+    _gen_date = datetime.now().strftime('%Y-%m-%d')
+    info_rows = [
+        [_info('الرقم الوظيفي', _emp_code),        _info('الاسم', emp.full_name)],
+        [_info('المسمى الوظيفي', emp.job_title or '—'), _info('القسم', emp.department or '—')],
+        [_info('تاريخ الإصدار', _gen_date),        _info('الفترة', f'{date_from}  —  {date_to}')],
+    ]
+    info_tbl = Table(info_rows, colWidths=[9 * cm, 9 * cm])
+    info_tbl.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), HexColor('#f0f4f8')),
+        ('BOX', (0, 0), (-1, -1), 0.5, HexColor('#c7d2de')),
+        ('INNERGRID', (0, 0), (-1, -1), 0.5, HexColor('#dde5ee')),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+    ]))
+    elements.append(info_tbl)
+    elements.append(Spacer(1, 0.4 * cm))
 
     # Summary row
     _on_leave_count = emp_row.get('on_leave', 0)
@@ -985,7 +1032,21 @@ def generate_single_employee_attendance_pdf(emp_row, date_from: str, date_to: st
     d_tbl.setStyle(TableStyle(sc))
     elements.append(d_tbl)
 
-    doc.build(elements)
+    # ── Footer: Core School attribution + generation time + page number ───────
+    def _draw_footer(canvas, doc_):
+        canvas.saveState()
+        page_w = doc_.pagesize[0]
+        canvas.setFillColor(HexColor('#888888'))
+        canvas.setFont(fn, 7.5)
+        canvas.drawCentredString(page_w / 2.0, 1.0 * cm,
+                                 ar('تم إنشاء هذا التقرير بواسطة Core School'))
+        canvas.setFont(fn, 7)
+        canvas.setFillColor(HexColor('#aaaaaa'))
+        canvas.drawRightString(page_w - 1.5 * cm, 1.0 * cm, str(canvas.getPageNumber()))
+        canvas.drawString(1.5 * cm, 1.0 * cm, datetime.now().strftime('%Y-%m-%d %H:%M'))
+        canvas.restoreState()
+
+    doc.build(elements, onFirstPage=_draw_footer, onLaterPages=_draw_footer)
     return buf_emp.getvalue()
 
 
