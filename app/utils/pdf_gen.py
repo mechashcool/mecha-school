@@ -1055,24 +1055,20 @@ def generate_single_employee_attendance_pdf(emp_row, date_from: str, date_to: st
         'on_leave': HexColor('#eef6ef'),
     }
 
-    d_headers = ['ملاحظات', 'الجهاز', 'المصدر', 'الحالة',
-                 'وقت الانصراف', 'وقت الحضور', 'التاريخ', '#']
-    # Redistributed for portrait A4 — wider date/status/source/device/notes,
-    # tight row-number and time columns; sums to the full usable width.
-    _frac = [0.196, 0.147, 0.120, 0.125, 0.103, 0.103, 0.157, 0.049]
+    d_headers = ['ملاحظات', 'الحالة', 'وقت الانصراف', 'وقت الحضور', 'التاريخ', '#']
+    # Redistributed for portrait A4 after dropping المصدر/الجهاز — extra width to
+    # notes/status/date/times, tight row-number; sums to the full usable width.
+    _frac = [0.300, 0.150, 0.135, 0.135, 0.220, 0.060]
     d_widths = [USABLE_W * f for f in _frac]
 
-    STATUS_CELL = 3   # 0-based index of the الحالة column (matches d_headers)
+    STATUS_CELL = 1   # 0-based index of the الحالة column (matches d_headers)
     detail_data = [[Paragraph(ar(h), th_s) for h in d_headers]]
     status_by_row = []
     for i, day in enumerate(emp_row.get('daily', []), 1):
         status = day.get('status', '')
-        dev = day.get('device')
         st_style = st_text.get(status, td_s)
         detail_data.append([
             Paragraph(ar(day.get('notes') or '—'), td_s),
-            Paragraph(ar(dev.name if dev else '—'), td_s),
-            Paragraph(ar(day.get('source') or '—'), td_s),
             Paragraph(ar(STATUS_AR.get(status, status)), st_style),
             Paragraph(day['check_out'].strftime('%H:%M') if day.get('check_out') else '—', td_s),
             Paragraph(day['check_in'].strftime('%H:%M') if day.get('check_in') else '—', td_s),
