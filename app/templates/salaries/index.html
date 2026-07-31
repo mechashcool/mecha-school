@@ -13,7 +13,7 @@
 #payroll-print-section { display: none; }
 
 @media print {
-  @page { size: A4 landscape; margin: 14mm 12mm; }
+  @page { size: A4 landscape; margin: 9mm; }
 
   /* Hide layout chrome */
   nav#sidebar,
@@ -21,8 +21,17 @@
   header#topbar,
   div#flash-container { display: none !important; }
 
-  /* Strip main-content margins so no blank space precedes the report */
-  main#main-content { margin: 0 !important; padding: 0 !important; }
+  /* Strip main-content spacing AND the screen min-height / animation.
+     Without resetting min-height, calc(100vh - topbar) forces the main
+     container to ~one full page tall in print and pushes the footer onto
+     an otherwise-empty second sheet. */
+  main#main-content {
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: 0 !important;
+    height: auto !important;
+    animation: none !important;
+  }
 
   /* Hide every sibling of the print section inside main */
   main#main-content > *:not(#payroll-print-section) { display: none !important; }
@@ -32,124 +41,162 @@
     position: static;
     direction: rtl;
     font-family: 'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif;
-    font-size: 11pt;
+    font-size: 10pt;
     color: #1e2b3a;
     background: #fff;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 
+  /* ── Header ─────────────────────────────────────────────────────────── */
   .pr-header {
     display: flex;
     justify-content: space-between;
-    align-items: flex-start;
-    border-bottom: 3px solid #1a3a5c;
-    padding-bottom: 8px;
-    margin-bottom: 10px;
+    align-items: center;
+    gap: 16px;
+    border-bottom: 2.5px solid #0f2540;
+    padding-bottom: 7px;
+    margin-bottom: 8px;
+  }
+  .pr-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .pr-logo {
+    height: 46px;
+    width: 46px;
+    object-fit: contain;
+    border-radius: 6px;
+    flex-shrink: 0;
   }
   .pr-school-name {
-    font-size: 17pt;
+    font-size: 15pt;
     font-weight: 900;
     color: #0f2540;
+    line-height: 1.15;
+    word-break: break-word;
   }
   .pr-school-sub {
-    font-size: 9pt;
+    font-size: 8pt;
     color: #6b7a8d;
-    margin-top: 2px;
+    margin-top: 1px;
+    letter-spacing: .2px;
   }
-  .pr-report-title {
-    text-align: left;
+  .pr-title {
+    text-align: center;
+    flex: 0 0 auto;
   }
-  .pr-report-title h2 {
+  .pr-title h2 {
     font-size: 14pt;
-    font-weight: 700;
-    color: #1a3a5c;
+    font-weight: 800;
+    color: #0f2540;
     margin: 0;
   }
-  .pr-report-title p {
+  .pr-title .pr-period {
     font-size: 9.5pt;
-    color: #6b7a8d;
+    color: #1a3a5c;
+    font-weight: 700;
     margin: 2px 0 0;
   }
-
-  .pr-filters {
-    background: #f0f4f8;
-    border-radius: 6px;
-    padding: 5px 12px;
-    font-size: 9pt;
+  .pr-meta {
+    flex: 1 1 0;
+    text-align: left;
+    font-size: 8pt;
     color: #4a5568;
-    margin-bottom: 8px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
+    line-height: 1.5;
   }
-  .pr-filters span { font-weight: 700; color: #1a3a5c; }
+  .pr-meta b { color: #0f2540; font-weight: 700; }
 
+  /* ── Table ──────────────────────────────────────────────────────────── */
   .pr-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 10pt;
+    font-size: 9.5pt;
+    table-layout: fixed;
   }
   .pr-table thead tr {
-    background: #1a3a5c;
-    color: #fff;
+    background: #0f2540 !important;
+    color: #fff !important;
   }
   .pr-table thead th {
-    padding: 7px 8px;
+    padding: 6px 7px;
     text-align: right;
     font-weight: 700;
-    font-size: 9.5pt;
-    border: 1px solid #22508a;
+    font-size: 9pt;
+    border: 1px solid #1a3a5c;
     white-space: nowrap;
   }
-  .pr-table tbody tr:nth-child(even) { background: #f8fbff; }
-  .pr-table tbody tr:hover { background: #eef3fa; }
+  .pr-table tbody tr:nth-child(even) { background: #f4f7fb !important; }
   .pr-table tbody td {
-    padding: 6px 8px;
-    border: 1px solid #dde3ec;
+    padding: 5px 7px;
+    border: 1px solid #d5dde8;
     vertical-align: middle;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
+  .pr-name { font-weight: 700; word-break: break-word; }
+  .pr-sub  { font-size: 8.5pt; color: #4a5568; word-break: break-word; }
+
   .pr-table tfoot tr {
-    background: #0f2540;
-    color: #fff;
-    font-weight: 700;
+    background: #eaf0f7 !important;
+    color: #0f2540 !important;
+    font-weight: 800;
   }
   .pr-table tfoot td {
-    padding: 8px 8px;
-    border: 1px solid #22508a;
-    font-size: 10.5pt;
+    padding: 7px;
+    border: 1px solid #1a3a5c;
+    border-top: 2.5px solid #0f2540;
+    font-size: 10pt;
   }
 
-  .pr-num  { text-align: left; font-variant-numeric: tabular-nums; }
-  .pr-allow  { color: #1aab6d; font-weight: 700; }
-  .pr-deduct { color: #c0392b; font-weight: 700; }
-  .pr-net    { font-weight: 900; font-size: 11pt; }
+  .pr-num  { text-align: left; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .pr-allow  { color: #157347; font-weight: 700; }
+  .pr-deduct { color: #b02a37; font-weight: 700; }
+  .pr-net    { font-weight: 900; }
 
   .pr-status-draft     { color: #92400e; font-size: 8.5pt; font-weight: 700; }
   .pr-status-approved  { color: #1d4ed8; font-size: 8.5pt; font-weight: 700; }
-  .pr-status-paid      { color: #166534; font-size: 8.5pt; font-weight: 700; }
+  .pr-status-paid      { color: #157347; font-size: 8.5pt; font-weight: 700; }
   .pr-status-cancelled { color: #7f1d1d; font-size: 8.5pt; font-weight: 700; text-decoration: line-through; }
 
+  /* ── Summary strip ──────────────────────────────────────────────────── */
   .pr-summary {
-    margin-top: 10px;
+    margin-top: 9px;
     display: flex;
-    gap: 20px;
-    flex-wrap: wrap;
-    border-top: 2px solid #dde3ec;
-    padding-top: 8px;
-    font-size: 9.5pt;
+    gap: 6px;
+    flex-wrap: nowrap;
   }
-  .pr-summary-item { text-align: center; }
-  .pr-summary-item .val { font-size: 12pt; font-weight: 900; color: #1a3a5c; display: block; }
-  .pr-summary-item .lbl { font-size: 8.5pt; color: #6b7a8d; }
+  .pr-summary-item {
+    flex: 1 1 0;
+    text-align: center;
+    border: 1px solid #d5dde8;
+    border-top: 2px solid #0f2540;
+    padding: 5px 6px;
+    background: #f8fafc !important;
+  }
+  .pr-summary-item .val { font-size: 11pt; font-weight: 900; color: #0f2540; display: block; }
+  .pr-summary-item .lbl { font-size: 7.5pt; color: #6b7a8d; }
 
+  /* ── Footer ─────────────────────────────────────────────────────────── */
   .pr-footer {
-    margin-top: 12px;
-    border-top: 1px solid #dde3ec;
-    padding-top: 6px;
+    margin-top: 10px;
+    border-top: 1px solid #d5dde8;
+    padding-top: 5px;
     display: flex;
     justify-content: space-between;
-    font-size: 8pt;
-    color: #9aabb8;
+    font-size: 7.5pt;
+    color: #8a99a8;
   }
+
+  /* ── Pagination control ─────────────────────────────────────────────── */
+  .pr-table thead { display: table-header-group; }
+  .pr-table tfoot { display: table-footer-group; }
+  .pr-table tr    { break-inside: avoid; page-break-inside: avoid; }
+  .pr-summary,
+  .pr-footer      { break-inside: avoid; page-break-inside: avoid; }
 }
 </style>
 {% endblock extra_css %}
@@ -361,32 +408,46 @@
      ═══════════════════════════════════════════════════════════════════════════ -->
 <div id="payroll-print-section" aria-hidden="true">
 
+  {% set _pr_logo = resolve_photo_url(current_school.logo_path) if (current_school and current_school.logo_path) else None %}
+
   <!-- Header -->
   <div class="pr-header">
-    <div>
-      <div class="pr-school-name">{{ current_school.name if current_school else 'المدرسة' }}</div>
-      <div class="pr-school-sub">نظام ميكا لإدارة المدارس</div>
+    <div class="pr-brand">
+      {% if _pr_logo %}<img class="pr-logo" src="{{ _pr_logo }}" alt="">{% endif %}
+      <div>
+        <div class="pr-school-name">{{ current_school.name if current_school else 'المدرسة' }}</div>
+        <div class="pr-school-sub">Core School — نظام إدارة المدارس</div>
+      </div>
     </div>
-    <div class="pr-report-title">
+    <div class="pr-title">
       <h2>مسير الرواتب الشهري</h2>
-      <p>{{ arabic_months[month] }} {{ year }}</p>
+      <div class="pr-period">{{ arabic_months[month] }} {{ year }}</div>
     </div>
-  </div>
-
-  <!-- Active filters summary -->
-  <div class="pr-filters">
-    <div>الفترة: <span>{{ arabic_months[month] }} {{ year }}</span></div>
-    {% if dept_filter %}<div>القسم: <span>{{ dept_filter }}</span></div>{% endif %}
-    {% if status_filter %}<div>الحالة: <span>{{ status_labels.get(status_filter, status_filter) }}</span></div>{% endif %}
-    <div>عدد السجلات: <span>{{ records|length }}</span></div>
-    <div>تاريخ الطباعة: <span id="pr-print-date"></span></div>
+    <div class="pr-meta">
+      {% if active_year %}<div>العام الدراسي: <b>{{ active_year.name }}</b></div>{% endif %}
+      {% if dept_filter %}<div>القسم: <b>{{ dept_filter }}</b></div>{% endif %}
+      {% if status_filter %}<div>الحالة: <b>{{ status_labels.get(status_filter, status_filter) }}</b></div>{% endif %}
+      <div>عدد الموظفين: <b>{{ records|length }}</b></div>
+      <div>تاريخ الإصدار: <b id="pr-print-date"></b></div>
+    </div>
   </div>
 
   <!-- Main table -->
   <table class="pr-table">
+    <colgroup>
+      <col style="width:26px">
+      <col style="width:20%">
+      <col style="width:15%">
+      <col style="width:11%">
+      <col style="width:11%">
+      <col style="width:10%">
+      <col style="width:10%">
+      <col style="width:11%">
+      <col style="width:9%">
+    </colgroup>
     <thead>
       <tr>
-        <th style="width:32px">#</th>
+        <th style="text-align:center">#</th>
         <th>اسم الموظف</th>
         <th>المسمى الوظيفي</th>
         <th>القسم</th>
@@ -400,10 +461,10 @@
     <tbody>
       {% for rec in records %}
       <tr>
-        <td style="text-align:center;color:#9aabb8;font-size:9pt">{{ loop.index }}</td>
-        <td style="font-weight:700">{{ rec.employee_name }}</td>
-        <td style="font-size:9.5pt;color:#4a5568">{{ rec.job_title or '—' }}</td>
-        <td style="font-size:9.5pt;color:#4a5568">{{ rec.department or '—' }}</td>
+        <td style="text-align:center;color:#9aabb8;font-size:8.5pt">{{ loop.index }}</td>
+        <td class="pr-name">{{ rec.employee_name }}</td>
+        <td class="pr-sub">{{ rec.job_title or '—' }}</td>
+        <td class="pr-sub">{{ rec.department or '—' }}</td>
         <td class="pr-num">{{ '{:,.0f}'.format(rec.base_salary) }}</td>
         <td class="pr-num pr-allow">{% if rec.allowances and rec.allowances > 0 %}{{ '{:,.0f}'.format(rec.allowances) }}{% else %}—{% endif %}</td>
         <td class="pr-num pr-deduct">{% if rec.deductions and rec.deductions > 0 %}{{ '{:,.0f}'.format(rec.deductions) }}{% else %}—{% endif %}</td>
@@ -478,7 +539,7 @@
 
   <!-- Footer -->
   <div class="pr-footer">
-    <div>{{ current_school.name if current_school else '' }} &mdash; نظام ميكا</div>
+    <div>تم إنشاء هذا التقرير بواسطة Core School</div>
     <div>تمت الطباعة بواسطة: {{ current_user.full_name if current_user.is_authenticated else '' }}</div>
   </div>
 </div>
