@@ -885,165 +885,239 @@ def generate_single_employee_attendance_pdf(emp_row, date_from: str, date_to: st
     ar = _shape_arabic_text
     emp = emp_row['employee']
 
-    HEADER_BG    = HexColor('#1a3a5c')
-    ALT_BG       = HexColor('#f0f4f8')
-    ABSENT_BG    = HexColor('#ffe0e0')
-    LATE_BG      = HexColor('#fff3cd')
-    ON_LEAVE_BG  = HexColor('#e8f5e9')
-    WHITE        = colors.white
+    # ── Core School payroll-print palette (navy / white / light-gray) ─────────
+    NAVY       = HexColor('#0f2540')   # headers, title, accent borders
+    NAVY_SOFT  = HexColor('#1a3a5c')   # secondary navy
+    LABEL_NAVY = HexColor('#5b6b7d')   # subtle field labels
+    CARD_BG    = HexColor('#eef3f9')   # light-blue label / card background
+    STRIP_BG   = HexColor('#f8fafc')   # summary value background
+    ZEBRA_BG   = HexColor('#f4f7fb')   # alternating table rows
+    BORDER     = HexColor('#d5dde8')   # thin professional borders
+    GREEN      = HexColor('#157347')   # present / positive
+    TEAL       = HexColor('#2e7d32')   # on-leave
+    AMBER      = HexColor('#b26a00')   # late
+    RED        = HexColor('#b02a37')   # absent
+    DARK       = HexColor('#1e2b3a')   # strong value text
+    WHITE      = colors.white
 
-    buf_emp = BytesIO()
-    doc = SimpleDocTemplate(buf_emp, pagesize=portrait(A4),
-                            leftMargin=1.5 * cm, rightMargin=1.5 * cm,
-                            topMargin=1.5 * cm, bottomMargin=1.5 * cm)
+    # ── Margins ~1.3 cm → usable width ≈ 18.4 cm (≈ 88% of the A4 width) ──────
+    L_MARGIN = 1.3 * cm
+    doc = SimpleDocTemplate(buf_emp := BytesIO(), pagesize=portrait(A4),
+                            leftMargin=L_MARGIN, rightMargin=L_MARGIN,
+                            topMargin=1.2 * cm, bottomMargin=1.35 * cm)
+    USABLE_W = A4[0] - 2 * L_MARGIN
 
-    # Explicit `leading` on every style prevents Arabic lines from touching /
-    # overlapping (the previous header stacked default-leading paragraphs).
-    school_s    = ParagraphStyle('sch', fontName=fn_b, fontSize=16, alignment=1,
-                                 leading=20, textColor=HexColor('#1a3a5c'))
-    brand_s     = ParagraphStyle('brand', fontName=fn, fontSize=8, alignment=1,
-                                 leading=11, textColor=HexColor('#888888'))
-    rpt_title_s = ParagraphStyle('rpt', fontName=fn_b, fontSize=13, alignment=1,
-                                 leading=17, textColor=HexColor('#1a3a5c'))
-    info_s      = ParagraphStyle('info', fontName=fn, fontSize=9, alignment=2,
-                                 leading=13, textColor=HexColor('#222222'))
-    th_s = ParagraphStyle('the', fontName=fn_b, fontSize=8, alignment=1,
+    # Explicit `leading` on every style keeps Arabic lines from touching.
+    sch_s   = ParagraphStyle('sch', fontName=fn_b, fontSize=15, alignment=2,
+                             leading=18, textColor=NAVY)            # right
+    title_s = ParagraphStyle('ttl', fontName=fn_b, fontSize=16, alignment=1,
+                             leading=20, textColor=NAVY)            # center
+    period_s = ParagraphStyle('per', fontName=fn, fontSize=9, alignment=1,
+                              leading=12, textColor=LABEL_NAVY)     # center
+    brand_s  = ParagraphStyle('brand', fontName=fn_b, fontSize=10, alignment=0,
+                              leading=13, textColor=NAVY)           # left
+    brand_sub = ParagraphStyle('brandsub', fontName=fn, fontSize=7.5, alignment=0,
+                               leading=10, textColor=LABEL_NAVY)    # left
+    th_s = ParagraphStyle('the', fontName=fn_b, fontSize=8.5, alignment=1,
                           leading=11, textColor=WHITE)
-    td_s = ParagraphStyle('tde', fontName=fn, fontSize=8, alignment=1, leading=11)
+    td_s = ParagraphStyle('tde', fontName=fn, fontSize=8, alignment=1, leading=10.5,
+                          textColor=DARK)
 
     elements = []
 
-    # ── Header: logo → school name → Core School identity → report title ──────
+    # ── Three-part header table: [Core School | title | logo+school] ──────────
+    _logo_flow = None
     if school and getattr(school, 'logo_path', None):
         _logo_path = _resolve_logo_for_pdf(school.logo_path)
         if _logo_path:
             try:
-                _logo = Image(_logo_path, width=1.8 * cm, height=1.8 * cm)
-                _logo.hAlign = 'CENTER'
-                elements.append(_logo)
-                elements.append(Spacer(1, 0.12 * cm))
+                _logo_flow = Image(_logo_path, width=1.6 * cm, height=1.6 * cm)
+                _logo_flow.hAlign = 'RIGHT'
             except Exception:
-                pass
+                _logo_flow = None
 
     school_name = (school.school_name_ar or school.school_name) if school else ''
-    if school_name:
-        elements.append(Paragraph(ar(school_name), school_s))
-    elements.append(Paragraph(ar('Core School — نظام إدارة المدارس'), brand_s))
-    elements.append(Spacer(1, 0.15 * cm))
-    elements.append(Paragraph(ar('سجل حضور الموظف'), rpt_title_s))
-    elements.append(Spacer(1, 0.2 * cm))
-    elements.append(HRFlowable(width='100%', thickness=1,
-                               color=HexColor('#1a3a5c'), spaceBefore=0, spaceAfter=8))
+    _gen_date = datetime.now().strftime('%Y-%m-%d')
 
-    # ── Employee info card: labelled 2-column grid (no overlapping text) ──────
-    def _info(label, value):
-        return Paragraph(ar(f'{label}: {value}'), info_s)
+    # Right cell (read first in RTL): logo stacked above school name.
+    right_cell = []
+    if _logo_flow is not None:
+        right_cell.append(_logo_flow)
+        right_cell.append(Spacer(1, 0.08 * cm))
+    if school_name:
+        right_cell.append(Paragraph(ar(school_name), sch_s))
+    if not right_cell:
+        right_cell = [Paragraph(ar('المدرسة'), sch_s)]
+
+    center_cell = [
+        Paragraph(ar('سجل حضور الموظف'), title_s),
+        Spacer(1, 0.06 * cm),
+        Paragraph(ar(f'{date_from}  —  {date_to}'), period_s),
+    ]
+    left_cell = [
+        Paragraph('Core School', brand_s),
+        Paragraph(ar('نظام إدارة المدارس'), brand_sub),
+        Spacer(1, 0.05 * cm),
+        Paragraph(ar(f'تاريخ الإصدار: {_gen_date}'), brand_sub),
+    ]
+
+    header_tbl = Table([[left_cell, center_cell, right_cell]],
+                       colWidths=[USABLE_W * 0.28, USABLE_W * 0.44, USABLE_W * 0.28])
+    header_tbl.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 2),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 2),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    elements.append(header_tbl)
+    elements.append(Spacer(1, 0.15 * cm))
+    elements.append(HRFlowable(width='100%', thickness=1.4, color=NAVY,
+                               spaceBefore=0, spaceAfter=10))
+
+    # ── Employee information card (labels subtle navy, values strong dark) ────
+    lbl_s = ParagraphStyle('lbl', fontName=fn, fontSize=8.5, alignment=2,
+                           leading=12, textColor=LABEL_NAVY)
+    val_s = ParagraphStyle('val', fontName=fn_b, fontSize=9.5, alignment=2,
+                           leading=12.5, textColor=DARK)
+
+    def _L(t):
+        return Paragraph(ar(t), lbl_s)
+
+    def _V(t):
+        return Paragraph(ar(str(t)), val_s)
 
     _emp_code = getattr(emp, 'employee_id', None) or '—'
-    _gen_date = datetime.now().strftime('%Y-%m-%d')
+    # 4 columns per row read right→left as: [label, value]  |  [label, value]
     info_rows = [
-        [_info('الرقم الوظيفي', _emp_code),        _info('الاسم', emp.full_name)],
-        [_info('المسمى الوظيفي', emp.job_title or '—'), _info('القسم', emp.department or '—')],
-        [_info('تاريخ الإصدار', _gen_date),        _info('الفترة', f'{date_from}  —  {date_to}')],
+        [_V(_emp_code), _L('الرقم الوظيفي'), _V(emp.full_name), _L('اسم الموظف')],
+        [_V(emp.department or '—'), _L('القسم / الاختصاص'), _V(emp.job_title or '—'), _L('المسمى الوظيفي')],
+        [_V(_gen_date), _L('تاريخ الإصدار'), _V(f'{date_from}  —  {date_to}'), _L('الفترة')],
     ]
-    info_tbl = Table(info_rows, colWidths=[9 * cm, 9 * cm])
+    _cw = [USABLE_W * 0.20, USABLE_W * 0.16, USABLE_W * 0.48, USABLE_W * 0.16]
+    info_tbl = Table(info_rows, colWidths=_cw)
     info_tbl.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, -1), HexColor('#f0f4f8')),
-        ('BOX', (0, 0), (-1, -1), 0.5, HexColor('#c7d2de')),
-        ('INNERGRID', (0, 0), (-1, -1), 0.5, HexColor('#dde5ee')),
+        ('BACKGROUND', (1, 0), (1, -1), CARD_BG),   # label columns tinted
+        ('BACKGROUND', (3, 0), (3, -1), CARD_BG),
+        ('BOX', (0, 0), (-1, -1), 0.6, BORDER),
+        ('INNERGRID', (0, 0), (-1, -1), 0.5, BORDER),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('TOPPADDING', (0, 0), (-1, -1), 5),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-        ('LEFTPADDING', (0, 0), (-1, -1), 8),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ('LEFTPADDING', (0, 0), (-1, -1), 7),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 7),
     ]))
     elements.append(info_tbl)
     elements.append(Spacer(1, 0.4 * cm))
 
-    # Summary row
+    # ── Attendance summary strip (label above, value below, color-coded) ──────
     _on_leave_count = emp_row.get('on_leave', 0)
     summary_headers = ['أيام العمل', 'حاضر', 'متأخر', 'غائب', 'مجاز', 'انصراف', 'نسبة الحضور']
     summary_values  = [emp_row['working_days'], emp_row['present'], emp_row['late'],
                        emp_row['absent'], _on_leave_count, emp_row['checked_out'],
                        f"{emp_row['rate']}%"]
-    summary_data = [
-        [Paragraph(ar(h), ParagraphStyle('ssh', fontName=fn_b, fontSize=9,
-                                          alignment=1, textColor=WHITE))
-         for h in summary_headers],
-        [Paragraph(ar(str(v)), ParagraphStyle('ssv', fontName=fn_b, fontSize=11,
-                                               alignment=1, textColor=HexColor('#1a3a5c')))
-         for v in summary_values],
-    ]
-    s_tbl = Table(summary_data, colWidths=[2.4*cm]*7)
+    val_colors = [NAVY, GREEN, AMBER, RED, TEAL, NAVY_SOFT, NAVY]
+    val_sizes  = [12, 12, 12, 12, 12, 12, 14]
+    lbl_row = [Paragraph(ar(h), ParagraphStyle('sh', fontName=fn_b, fontSize=8,
+                                               alignment=1, leading=11, textColor=NAVY))
+               for h in summary_headers]
+    val_row = [Paragraph(ar(str(v)), ParagraphStyle(f'sv{i}', fontName=fn_b,
+               fontSize=val_sizes[i], alignment=1, leading=val_sizes[i] + 3,
+               textColor=val_colors[i])) for i, v in enumerate(summary_values)]
+    s_tbl = Table([lbl_row, val_row], colWidths=[USABLE_W / 7.0] * 7)
     s_tbl.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), HEADER_BG),
-        ('FONTNAME', (0, 0), (-1, -1), fn),
+        ('BACKGROUND', (0, 0), (-1, 0), CARD_BG),      # label row light-blue
+        ('BACKGROUND', (0, 1), (-1, 1), STRIP_BG),     # value row near-white
+        ('LINEABOVE', (0, 0), (-1, 0), 1.4, NAVY),     # navy accent on top
+        ('BOX', (0, 0), (-1, -1), 0.6, BORDER),
+        ('INNERGRID', (0, 0), (-1, -1), 0.5, BORDER),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 6),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ('GRID', (0, 0), (-1, -1), 0.3, HexColor('#cccccc')),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
     ]))
     elements.append(s_tbl)
-    elements.append(Spacer(1, 0.5 * cm))
+    elements.append(Spacer(1, 0.45 * cm))
 
+    # ── Daily attendance table (full width; subtle status-cell tint) ──────────
     STATUS_AR = {'present': 'حاضر', 'absent': 'غائب', 'late': 'متأخر', 'on_leave': 'مجاز'}
+    # Status cell text styles (bold, color-coded) + subtle per-status cell tint.
+    st_text = {
+        'present':  ParagraphStyle('stp', fontName=fn_b, fontSize=8, alignment=1, leading=10.5, textColor=GREEN),
+        'late':     ParagraphStyle('stl', fontName=fn_b, fontSize=8, alignment=1, leading=10.5, textColor=AMBER),
+        'absent':   ParagraphStyle('sta', fontName=fn_b, fontSize=8, alignment=1, leading=10.5, textColor=RED),
+        'on_leave': ParagraphStyle('sto', fontName=fn_b, fontSize=8, alignment=1, leading=10.5, textColor=TEAL),
+    }
+    st_bg = {
+        'present':  HexColor('#eef7f0'),
+        'late':     HexColor('#fdf6e3'),
+        'absent':   HexColor('#fdecec'),
+        'on_leave': HexColor('#eef6ef'),
+    }
+
     d_headers = ['ملاحظات', 'الجهاز', 'المصدر', 'الحالة',
                  'وقت الانصراف', 'وقت الحضور', 'التاريخ', '#']
-    d_widths = [3*cm, 2.5*cm, 2*cm, 2*cm, 2.5*cm, 2.5*cm, 2.8*cm, 1*cm]
+    # Redistributed for portrait A4 — wider date/status/source/device/notes,
+    # tight row-number and time columns; sums to the full usable width.
+    _frac = [0.196, 0.147, 0.120, 0.125, 0.103, 0.103, 0.157, 0.049]
+    d_widths = [USABLE_W * f for f in _frac]
 
+    STATUS_CELL = 3   # 0-based index of the الحالة column (matches d_headers)
     detail_data = [[Paragraph(ar(h), th_s) for h in d_headers]]
-    row_bgs = []
+    status_by_row = []
     for i, day in enumerate(emp_row.get('daily', []), 1):
         status = day.get('status', '')
         dev = day.get('device')
+        st_style = st_text.get(status, td_s)
         detail_data.append([
             Paragraph(ar(day.get('notes') or '—'), td_s),
             Paragraph(ar(dev.name if dev else '—'), td_s),
             Paragraph(ar(day.get('source') or '—'), td_s),
-            Paragraph(ar(STATUS_AR.get(status, status)), td_s),
+            Paragraph(ar(STATUS_AR.get(status, status)), st_style),
             Paragraph(day['check_out'].strftime('%H:%M') if day.get('check_out') else '—', td_s),
             Paragraph(day['check_in'].strftime('%H:%M') if day.get('check_in') else '—', td_s),
             Paragraph(day['date'].strftime('%Y-%m-%d') if day.get('date') else '', td_s),
             Paragraph(str(i), td_s),
         ])
-        if status == 'absent':
-            row_bgs.append((i, ABSENT_BG))
-        elif status == 'late':
-            row_bgs.append((i, LATE_BG))
-        elif status == 'on_leave':
-            row_bgs.append((i, ON_LEAVE_BG))
-        elif i % 2 == 0:
-            row_bgs.append((i, ALT_BG))
+        status_by_row.append((i, status))
 
     sc = [
-        ('BACKGROUND', (0, 0), (-1, 0), HEADER_BG),
+        ('BACKGROUND', (0, 0), (-1, 0), NAVY),
         ('FONTNAME', (0, 0), (-1, -1), fn),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('GRID', (0, 0), (-1, -1), 0.3, HexColor('#cccccc')),
+        ('LINEBELOW', (0, 0), (-1, 0), 0.8, NAVY),
+        ('GRID', (0, 0), (-1, -1), 0.4, BORDER),
         ('TOPPADDING', (0, 0), (-1, -1), 4),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
     ]
-    for ri, bg in row_bgs:
-        sc.append(('BACKGROUND', (0, ri), (-1, ri), bg))
+    # Subtle zebra first, then a light tint only on the status cell so the row
+    # stays clean while the status column remains easy to scan.
+    for ri, status in status_by_row:
+        if ri % 2 == 0:
+            sc.append(('BACKGROUND', (0, ri), (-1, ri), ZEBRA_BG))
+        if status in st_bg:
+            sc.append(('BACKGROUND', (STATUS_CELL, ri), (STATUS_CELL, ri), st_bg[status]))
 
     d_tbl = Table(detail_data, colWidths=d_widths, repeatRows=1)
     d_tbl.setStyle(TableStyle(sc))
     elements.append(d_tbl)
 
-    # ── Footer: Core School attribution + generation time + page number ───────
+    # ── Footer: thin separator + Core School attribution + date + page number ─
     def _draw_footer(canvas, doc_):
         canvas.saveState()
         page_w = doc_.pagesize[0]
-        canvas.setFillColor(HexColor('#888888'))
+        y = 1.02 * cm
+        canvas.setStrokeColor(BORDER)
+        canvas.setLineWidth(0.5)
+        canvas.line(L_MARGIN, y + 0.32 * cm, page_w - L_MARGIN, y + 0.32 * cm)
+        canvas.setFillColor(HexColor('#7a8794'))
         canvas.setFont(fn, 7.5)
-        canvas.drawCentredString(page_w / 2.0, 1.0 * cm,
-                                 ar('تم إنشاء هذا التقرير بواسطة Core School'))
+        canvas.drawCentredString(page_w / 2.0, y, ar('تم إنشاء هذا التقرير بواسطة Core School'))
         canvas.setFont(fn, 7)
-        canvas.setFillColor(HexColor('#aaaaaa'))
-        canvas.drawRightString(page_w - 1.5 * cm, 1.0 * cm, str(canvas.getPageNumber()))
-        canvas.drawString(1.5 * cm, 1.0 * cm, datetime.now().strftime('%Y-%m-%d %H:%M'))
+        canvas.setFillColor(HexColor('#9aa7b3'))
+        canvas.drawRightString(page_w - L_MARGIN, y, str(canvas.getPageNumber()))
+        canvas.drawString(L_MARGIN, y, datetime.now().strftime('%Y-%m-%d %H:%M'))
         canvas.restoreState()
 
     doc.build(elements, onFirstPage=_draw_footer, onLaterPages=_draw_footer)
