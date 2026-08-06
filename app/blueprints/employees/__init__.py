@@ -77,6 +77,21 @@ def _form_context(employee=None):
                  .order_by(Section.name).all() if grade_ids else [])
     grade_map = {g.id: g for g in grades}
 
+    # Grade → its own sections, for the create-wizard teacher step. Built from the
+    # SAME school+year scoped grade/section lists loaded above, so the client can
+    # never be offered a grade or section belonging to another school or year. The
+    # ids are still re-validated server-side on POST (_wizard_teacher_selection).
+    wizard_ta_grades = [
+        {
+            'id':       g.id,
+            'name':     g.name,
+            'stage':    g.stage or '',
+            'sections': [{'id': s.id, 'name': s.name}
+                         for s in sections if s.grade_id == g.id],
+        }
+        for g in grades
+    ]
+
     roles = _available_roles()
 
     # ── Employee classification (job title / specialty) ───────────────────────
@@ -151,6 +166,7 @@ def _form_context(employee=None):
         linked_user             = linked_user,
         existing_device_mapping = existing_device_mapping,
         max_employee_documents  = MAX_EMPLOYEE_DOCUMENTS,
+        wizard_ta_grades        = wizard_ta_grades,
         gen_employee_username   = gen_employee_username,
         gen_employee_password   = gen_employee_password,
         emp_job_titles          = job_titles,
@@ -191,6 +207,157 @@ def _save_teacher_assignments(emp):
             ))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Create-wizard teacher assignments (multi grade → multi section)
+#
+#  The "Add New Employee" wizard submits every teaching / homeroom section as an
+#  explicit "<grade_id>:<section_id>" pair, so the grade a section was chosen
+#  under is part of the request instead of being inferred from the section id.
+#  Storage is unchanged and identical to what the School User Management screen
+#  writes: homeroom → Section.teacher_id, teaching → teacher_subjects rows
+#  (subject × section). No new table, model, or parallel assignment store.
+#
+#  Only the create wizard uses these helpers; the employee EDIT form keeps using
+#  _save_teacher_assignments above, unchanged.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Generic Arabic messages — never echo the submitted ids, model names, or the
+# underlying exception back to the browser.
+_TA_ERR_READ    = 'تعذّر قراءة تكليفات التدريسي المحددة. يرجى إعادة الاختيار.'
+_TA_ERR_SECTION = ('الصفوف أو الشعب المحددة غير صالحة أو لا تعود لهذه المدرسة '
+                   'أو للعام الدراسي الحالي. يرجى إعادة الاختيار.')
+_TA_ERR_SUBJECT = ('المواد الدراسية المحددة غير صالحة أو لا تعود لهذه المدرسة '
+                   'أو للعام الدراسي الحالي. يرجى إعادة الاختيار.')
+_TA_ERR_NO_YEAR = 'لا يمكن حفظ تكليفات التدريسي بدون عام دراسي فعّال.'
+
+
+def _parse_grade_section_pairs(field_name):
+    """Parse ``"<grade_id>:<section_id>"`` tokens submitted under *field_name*.
+
+    Returns a list of ``(grade_id, section_id)`` int tuples. Any token that is
+    not exactly two integers is rejected — a malformed/forged value never
+    silently degrades into "section only" (which would let the server infer the
+    grade from the section instead of verifying the submitted relationship).
+    """
+    pairs = []
+    for raw in request.form.getlist(field_name):
+        raw = (raw or '').strip()
+        if not raw:
+            continue
+        parts = raw.split(':')
+        if len(parts) != 2:
+            raise ValueError(_TA_ERR_READ)
+        try:
+            pairs.append((int(parts[0]), int(parts[1])))
+        except (TypeError, ValueError):
+            raise ValueError(_TA_ERR_READ)
+    return pairs
+
+
+def _wizard_teacher_selection(school, year):
+    """Validate the create-wizard teacher selection against the trusted context.
+
+    Every submitted grade, section, and subject is re-checked against THIS
+    school's own rows for THIS academic year, and every section must really
+    belong to the grade it was submitted under. Ids are never trusted from the
+    request: a forged grade/section/subject id from another school (or another
+    year, or a section paired with the wrong grade) is rejected before anything
+    is written.
+
+    Returns ``(homeroom_section_ids, teaching_section_ids, subject_ids)`` with
+    duplicates removed, or raises ``ValueError`` carrying a friendly Arabic
+    message for the caller to flash.
+    """
+    hr_pairs    = _parse_grade_section_pairs('wiz_homeroom[]')
+    ts_pairs    = _parse_grade_section_pairs('wiz_teaching[]')
+    subject_ids = [i for i in request.form.getlist('subject_ids', type=int) if i]
+
+    if not (hr_pairs or ts_pairs or subject_ids):
+        return [], [], []
+
+    if not (school and year):
+        raise ValueError(_TA_ERR_NO_YEAR)
+
+    # Allow-lists built from the trusted server-side school/year context. The
+    # explicit school_id + academic_year_id filters (with the ORM tenant scope
+    # bypassed) mirror the School User Management validation exactly, so the
+    # result cannot depend on implicit request-scope state.
+    valid_grade_ids = {
+        r[0] for r in db.session.query(Grade.id)
+        .execution_options(bypass_tenant_scope=True)
+        .filter(Grade.school_id == school.id,
+                Grade.academic_year_id == year.id).all()
+    }
+    section_grade = {
+        r[0]: r[1] for r in db.session.query(Section.id, Section.grade_id)
+        .execution_options(bypass_tenant_scope=True)
+        .filter(Section.school_id == school.id,
+                Section.academic_year_id == year.id).all()
+    }
+    valid_subject_ids = {
+        r[0] for r in db.session.query(Subject.id)
+        .execution_options(bypass_tenant_scope=True)
+        .filter(Subject.school_id == school.id,
+                Subject.academic_year_id == year.id).all()
+    }
+
+    def _clean_pairs(pairs):
+        """Verify each pair and collapse duplicate grade/section combinations."""
+        out, seen = [], set()
+        for grade_id, section_id in pairs:
+            if (grade_id not in valid_grade_ids
+                    or section_grade.get(section_id) != grade_id):
+                raise ValueError(_TA_ERR_SECTION)
+            if section_id in seen:
+                continue
+            seen.add(section_id)
+            out.append(section_id)
+        return out
+
+    homeroom_ids = _clean_pairs(hr_pairs)
+    teaching_ids = _clean_pairs(ts_pairs)
+
+    clean_subjects, seen_subjects = [], set()
+    for subject_id in subject_ids:
+        if subject_id not in valid_subject_ids:
+            raise ValueError(_TA_ERR_SUBJECT)
+        if subject_id in seen_subjects:
+            continue
+        seen_subjects.add(subject_id)
+        clean_subjects.append(subject_id)
+
+    return homeroom_ids, teaching_ids, clean_subjects
+
+
+def _save_wizard_teacher_assignments(emp, school, year):
+    """Persist the validated create-wizard teacher assignments for *emp*.
+
+    Uses the existing relationships only:
+      * homeroom  → ``Section.teacher_id``
+      * teaching  → ``teacher_subjects`` (employee_id, subject_id, section_id)
+
+    Homeroom and teaching stay separate: a taught section never sets
+    ``teacher_id``. No commit here — the caller commits once, together with the
+    employee, the linked user account, the photo, and the documents.
+    """
+    homeroom_ids, teaching_ids, subject_ids = _wizard_teacher_selection(school, year)
+
+    if homeroom_ids:
+        # Re-assert the school/year filter on the write itself so the UPDATE can
+        # only ever touch rows already proven to belong to this school and year.
+        (Section.query
+         .execution_options(bypass_tenant_scope=True)
+         .filter(Section.id.in_(homeroom_ids),
+                 Section.school_id == school.id,
+                 Section.academic_year_id == year.id)
+         .update({'teacher_id': emp.id}, synchronize_session=False))
+
+    rows = [{'employee_id': emp.id, 'subject_id': subject_id, 'section_id': section_id}
+            for section_id in teaching_ids for subject_id in subject_ids]
+    if rows:
+        db.session.execute(teacher_subjects.insert(), rows)
+
+    return homeroom_ids, teaching_ids, subject_ids
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -284,6 +451,7 @@ def _resolve_classification(employee, emp_cfg, school):
 def _handle_employee_post(employee):
     from app.utils.school_config import get_school_config
     school    = get_current_school()
+    year      = get_active_year(school.id) if school else None
     is_create = employee is None
     emp_cfg   = get_school_config(school.id if school else None)
     # Create uses the multi-step wizard; edit keeps the single form.
@@ -485,6 +653,58 @@ def _handle_employee_post(employee):
             _ec.add_custom_specialty(school.id, _pending_specialty[0],
                                      _pending_specialty[1])
 
+    # ── Wizard documents + teacher assignments (CREATE flow only) ─────────────
+    # Both are staged in the SAME transaction as the employee row and its linked
+    # teacher account, before the single commit below. If either fails the whole
+    # request is rolled back: no partial employee, no orphan user account, no
+    # half-written assignments. employee.id is already available from the flush.
+    _doc_saved     = 0
+    _doc_warnings  = []
+    _ta_no_subject = False
+    if is_create:
+        from app.models import EmployeeDocument
+        _ALLOWED_DOC_EXTS = {'pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'}
+        doc_types = request.form.getlist('doc_type[]')
+        doc_files = request.files.getlist('doc_file[]')
+        for i, f in enumerate(doc_files):
+            if not f or not f.filename:
+                continue
+            doc_type = doc_types[i].strip() if i < len(doc_types) else ''
+            _raw = f.filename.rsplit('/', 1)[-1].rsplit('\\', 1)[-1]
+            title = doc_type or _raw.rsplit('.', 1)[0] or 'مستند'
+            file_path = save_uploaded_file(
+                f, 'employee_docs',
+                allowed_exts=_ALLOWED_DOC_EXTS,
+            )
+            if not file_path:
+                _doc_warnings.append(
+                    f'تعذّر رفع المستند "{title}" — تأكد من أن صيغة الملف مقبولة.')
+                continue
+            db.session.add(EmployeeDocument(
+                employee_id=employee.id,
+                school_id=school.id if school else None,
+                title=title,
+                file_path=file_path,
+                doc_type=doc_type or None,
+            ))
+            _doc_saved += 1
+
+        try:
+            _hr_ids, _ts_ids, _subj_ids = _save_wizard_teacher_assignments(
+                employee, school, year)
+            _ta_no_subject = bool(_ts_ids and not _subj_ids)
+        except ValueError as _ta_err:
+            # Forged / stale / cross-school selection — reject the whole create.
+            db.session.rollback()
+            flash(str(_ta_err), 'danger')
+            return render_template(_tmpl, error_step='teacher', **_form_context(None))
+        except Exception:
+            db.session.rollback()
+            _log.exception('Wizard teacher assignment save failed (create flow).')
+            flash('تعذّر حفظ تكليفات التدريسي. لم يتم حفظ الموظف. '
+                  'يرجى المحاولة مرة أخرى.', 'danger')
+            return render_template(_tmpl, error_step='teacher', **_form_context(None))
+
     db.session.commit()
     flash_msgs = [('success',
                    f'تم {"إضافة" if is_create else "تحديث"} بيانات الموظف {employee.full_name}.')]
@@ -497,38 +717,17 @@ def _handle_employee_post(employee):
             f'اسم المستخدم: {_new_emp_username} — كلمة المرور: {_new_emp_password}. '
             'يرجى حفظ هذه البيانات وتسليمها للموظف.'))
 
-    # ── Wizard documents (create only) ───────────────────────────────────────
+    # ── Wizard documents / teacher assignments outcome (create only) ─────────
+    # The rows themselves were already staged and committed atomically above.
     if is_create:
-        from app.models import EmployeeDocument
-        _ALLOWED_DOC_EXTS = {'pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'}
-        doc_types  = request.form.getlist('doc_type[]')
-        doc_files  = request.files.getlist('doc_file[]')
-        doc_saved  = 0
-        for i, f in enumerate(doc_files):
-            if not f or not f.filename:
-                continue
-            doc_type = doc_types[i].strip() if i < len(doc_types) else ''
-            _raw = f.filename.rsplit('/', 1)[-1].rsplit('\\', 1)[-1]
-            title = doc_type or _raw.rsplit('.', 1)[0] or 'مستند'
-            file_path = save_uploaded_file(
-                f, 'employee_docs',
-                allowed_exts=_ALLOWED_DOC_EXTS,
-            )
-            if not file_path:
-                flash_msgs.append(('warning',
-                    f'تعذّر رفع المستند "{title}" — تأكد من أن صيغة الملف مقبولة.'))
-                continue
-            db.session.add(EmployeeDocument(
-                employee_id=employee.id,
-                school_id=school.id if school else None,
-                title=title,
-                file_path=file_path,
-                doc_type=doc_type or None,
-            ))
-            doc_saved += 1
-        if doc_saved:
-            db.session.commit()
-            flash_msgs.append(('success', f'تم رفع {doc_saved} مستند(ات) بنجاح.'))
+        for _w in _doc_warnings:
+            flash_msgs.append(('warning', _w))
+        if _doc_saved:
+            flash_msgs.append(('success', f'تم رفع {_doc_saved} مستند(ات) بنجاح.'))
+        if _ta_no_subject:
+            flash_msgs.append(('warning',
+                'لم يتم ربط الشعب التي يدرسها لعدم اختيار أي مادة دراسية. '
+                'يمكنك إضافة المواد لاحقاً من صفحة تعديل الموظف.'))
 
     # ── Linked login account — EDIT flow only ─────────────────────────────────
     # The CREATE flow already created the mandatory teacher account atomically
@@ -617,8 +816,11 @@ def _handle_employee_post(employee):
                 if changed:
                     db.session.commit()
 
-    # ── Teacher assignments ───────────────────────────────────────────────────
-    if request.form.get('save_teacher_section'):
+    # ── Teacher assignments — EDIT flow only ─────────────────────────────────
+    # The create wizard already saved its assignments atomically (above) using
+    # the grade→section pairs it submits; this path stays exactly as it was for
+    # the employee edit form.
+    if (not is_create) and request.form.get('save_teacher_section'):
         try:
             _save_teacher_assignments(employee)
             db.session.commit()

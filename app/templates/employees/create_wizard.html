@@ -58,6 +58,57 @@
   }
   .wiz-nav .spacer { flex: 1; }
 
+  /* ── Employee documents: each type selector visibly paired with its file ── */
+  .emp-doc-row {
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; margin-bottom: 10px; background: var(--card-bg);
+  }
+  .emp-doc-row .form-label { font-size: 11.5px; font-weight: 700; margin-bottom: 3px; }
+  .emp-doc-actions { display: flex; align-items: flex-end; padding-bottom: 1px; }
+
+  /* ── Teacher assignments (create wizard only) ── */
+  .ta-area-hd {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: 13.5px; font-weight: 800; color: var(--primary);
+    padding-bottom: 7px; margin-bottom: 10px;
+    border-bottom: 1.5px solid var(--border);
+  }
+  .ta-area-hint {
+    margin-inline-start: auto; font-size: 11.5px;
+    font-weight: 600; color: var(--text-muted);
+  }
+  .ta-picker { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .ta-picker select { max-width: 320px; }
+  .ta-cards { display: flex; flex-wrap: wrap; gap: 10px; }
+  .ta-card {
+    flex: 1 1 260px; max-width: 100%;
+    border: 1.5px solid var(--border); border-radius: 10px; overflow: hidden;
+  }
+  .ta-card-hd {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 11px; background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .ta-card-title { font-size: 13px; font-weight: 800; color: var(--primary); }
+  .ta-card-stage { font-size: 10.5px; font-weight: 600; color: var(--text-muted); }
+  .ta-card-tools { margin-inline-start: auto; display: flex; align-items: center; gap: 4px; }
+  .ta-card-body { padding: 9px 11px; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  .ta-card-body .form-check-label { font-size: 12.5px; }
+  .ta-empty {
+    color: var(--text-muted); font-size: 12.5px; font-style: italic;
+    display: flex; align-items: center; gap: 7px; padding: 6px 2px;
+  }
+  .ta-subject-box {
+    max-height: 260px; overflow-y: auto;
+    border: 1.5px solid var(--border); border-radius: 10px; padding: 10px 12px;
+  }
+  .ta-subj-group + .ta-subj-group { margin-top: 10px; }
+  .ta-subj-grade {
+    font-size: 11.5px; font-weight: 800; color: var(--text-muted);
+    margin-bottom: 5px;
+  }
+  .ta-subj-group .form-check-label { font-size: 12.5px; }
+
   /* ── Professional Review ── */
   .rv-header {
     background: var(--primary); border-radius: 14px; padding: 20px 24px;
@@ -117,6 +168,29 @@
     padding: 14px 16px; color: var(--text-muted); font-size: 12.5px;
     display: flex; align-items: center; gap: 8px; font-style: italic;
   }
+
+  /* ── Review: teacher assignments grouped by grade ── */
+  .rv-ta-block { padding: 10px 16px; border-bottom: 1px solid var(--border); }
+  .rv-ta-block:last-child { border-bottom: none; }
+  .rv-ta-label {
+    font-size: 11px; font-weight: 700; color: var(--text-muted); margin-bottom: 6px;
+  }
+  .rv-ta-inline { font-size: 13.5px; font-weight: 700; color: var(--text); line-height: 1.7; }
+  .rv-ta-grades { display: flex; flex-wrap: wrap; gap: 8px; }
+  .rv-ta-grade {
+    flex: 1 1 220px; border: 1px solid var(--border); border-radius: 8px;
+    padding: 7px 10px; background: var(--bg);
+    break-inside: avoid; page-break-inside: avoid;
+  }
+  .rv-ta-grade-name {
+    font-size: 12.5px; font-weight: 800; color: var(--primary); margin-bottom: 4px;
+  }
+  .rv-ta-secs { display: flex; flex-wrap: wrap; gap: 5px; }
+  .rv-ta-sec {
+    font-size: 12px; font-weight: 700; color: var(--text);
+    border: 1px solid var(--border); border-radius: 20px;
+    padding: 1px 9px; background: var(--card-bg);
+  }
   @media (max-width: 575px) {
     .rv-fee-summary { flex-direction: column; }
     .rv-fee-stat { border-inline-start: none; border-bottom: 1px solid var(--border); }
@@ -166,6 +240,24 @@
 
     /* اسم المستخدم | كلمة المرور — two equal-width cells on the same row. */
     .rv-cred-grid { grid-template-columns: 1fr 1fr !important; }
+
+    /* Teacher assignments: keep each grade with its own sections on one page,
+       and print the sections compactly as "أ، ب" instead of screen chips. */
+    .rv-ta-block { padding: 6px 12px !important; }
+    .rv-ta-label { font-size: 10px !important; margin-bottom: 3px !important; }
+    .rv-ta-inline { font-size: 12px !important; line-height: 1.4 !important; }
+    .rv-ta-grades { gap: 6px !important; }
+    .rv-ta-grade {
+      border: none !important; background: none !important;
+      padding: 2px 0 !important; flex: 1 1 45% !important;
+    }
+    .rv-ta-grade-name { font-size: 11.5px !important; margin-bottom: 1px !important; }
+    .rv-ta-secs { display: block !important; }
+    .rv-ta-sec {
+      border: none !important; background: none !important;
+      padding: 0 !important; font-size: 11.5px !important; font-weight: 600 !important;
+    }
+    .rv-ta-sec + .rv-ta-sec::before { content: '، '; }
   }
 </style>
 {% endblock %}
@@ -359,11 +451,14 @@
            data-step-title="{{ 'الصورة والمستندات' if school_cfg.section_visible('employees', 'photo') else 'الملاحظات والمستندات' }}">
 
     {% if school_cfg.section_visible('employees', 'photo') %}
-    <div class="row g-4 mb-4">
-      <div class="col-lg-5">
-        <div class="card h-100">
+    {# Photo + notes side by side. Cards are NOT stretched to equal height
+       (no h-100) — that is what previously left a large blank area under the
+       short notes field. Each card is now only as tall as its content. #}
+    <div class="row g-3 mb-3 align-items-start">
+      <div class="col-lg-4">
+        <div class="card">
           <div class="card-header"><i class="bi bi-camera-fill text-accent"></i>صورة الموظف</div>
-          <div class="card-body text-center">
+          <div class="card-body text-center py-3">
             <div class="mb-3" style="width:120px;height:120px;border-radius:12px;
                   background:var(--bg);display:flex;align-items:center;justify-content:center;
                   margin:0 auto;font-size:40px;color:var(--text-muted)" id="photoPreviewWrap">
@@ -376,51 +471,59 @@
           </div>
         </div>
       </div>
-      <div class="col-lg-7">
-        <div class="card h-100">
+      <div class="col-lg-8">
+        <div class="card">
           <div class="card-header"><i class="bi bi-sticky-fill text-accent"></i>ملاحظات</div>
-          <div class="card-body">
-            <textarea name="notes" class="form-control" rows="5"
+          <div class="card-body py-3">
+            <textarea name="notes" class="form-control" rows="4"
                       placeholder="أي ملاحظات إضافية...">{{ sf.get('notes', '') }}</textarea>
+            <div class="form-text">لا يوجد حد لطول الملاحظات — يتم حفظ النص كاملاً.</div>
           </div>
         </div>
       </div>
     </div>
     {% else %}
-    <div class="card mb-4">
+    <div class="card mb-3">
       <div class="card-header"><i class="bi bi-sticky-fill text-accent"></i>ملاحظات</div>
-      <div class="card-body">
+      <div class="card-body py-3">
         <textarea name="notes" class="form-control" rows="4"
                   placeholder="أي ملاحظات إضافية...">{{ sf.get('notes', '') }}</textarea>
+        <div class="form-text">لا يوجد حد لطول الملاحظات — يتم حفظ النص كاملاً.</div>
       </div>
     </div>
     {% endif %}
 
     <div class="card mb-4">
-      <div class="card-header"><i class="bi bi-folder-fill text-accent"></i>مستندات الموظف</div>
-      <div class="card-body">
+      <div class="card-header">
+        <i class="bi bi-folder-fill text-accent"></i>مستندات الموظف
+        <span class="badge bg-light text-dark ms-auto" id="empDocCount"></span>
+      </div>
+      <div class="card-body py-3">
         <p class="text-muted small mb-3">
           <i class="bi bi-info-circle me-1"></i>
           يمكنك رفع مستندات الموظف الآن أو تركها فارغة وإضافتها لاحقاً.
-          الصيغ المقبولة: PDF, JPG, PNG, DOC, DOCX.
+          الصيغ المقبولة: PDF, JPG, PNG, DOC, DOCX — بحد أقصى {{ max_employee_documents }} مستندات.
         </p>
         <div id="empDocRows">
-          <div class="row g-3 align-items-end mb-3 emp-doc-row">
-            <div class="col-md-6">
-              <label class="form-label">نوع المستند</label>
-              <select name="doc_type[]" class="form-select">
-                <option value="">— اختر النوع —</option>
-                <option value="هوية">هوية وطنية</option>
-                <option value="شهادة">شهادة دراسية</option>
-                <option value="عقد">عقد عمل</option>
-                <option value="شهادة خبرة">شهادة خبرة</option>
-                <option value="أخرى">أخرى</option>
-              </select>
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">الملف</label>
-              <input type="file" name="doc_file[]" class="form-control"
-                     accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+          <div class="emp-doc-row">
+            <div class="row g-2 align-items-end">
+              <div class="col-md-5">
+                <label class="form-label">نوع المستند</label>
+                <select name="doc_type[]" class="form-select form-select-sm">
+                  <option value="">— اختر النوع —</option>
+                  <option value="هوية">هوية وطنية</option>
+                  <option value="شهادة">شهادة دراسية</option>
+                  <option value="عقد">عقد عمل</option>
+                  <option value="شهادة خبرة">شهادة خبرة</option>
+                  <option value="أخرى">أخرى</option>
+                </select>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label">الملف</label>
+                <input type="file" name="doc_file[]" class="form-control form-control-sm"
+                       accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+              </div>
+              <div class="col-md-1 emp-doc-actions"></div>
             </div>
           </div>
         </div>
@@ -477,112 +580,117 @@
     <div class="card">
       <div class="card-header"><i class="bi bi-journal-bookmark-fill text-accent"></i>إعدادات التدريسي</div>
       <div class="card-body">
-        <input type="hidden" name="save_teacher_section" value="1">
 
         {% if sections or subjects %}
 
-        {# Stage / Grade filter row #}
-        <div class="row g-3 mb-3 align-items-end">
-          <div class="col-md-5" id="taStageCol">
-            <label class="form-label fw-semibold small text-muted">المرحلة الدراسية</label>
-            <select id="taStageFilter" class="form-select">
-              <option value="">— اختر المرحلة —</option>
+        {# ─── 1. Homeroom / class supervisor ─────────────────────────────────
+             Kept deliberately separate from "الشعب التي يدرسها": teaching a
+             section never makes the employee its homeroom supervisor. #}
+        <div class="ta-area mb-4">
+          <div class="ta-area-hd">
+            <i class="bi bi-person-check-fill"></i>
+            <span>الصفوف الرئيسية / مشرف الصف</span>
+            <span class="ta-area-hint">اختياري — مستقل تماماً عن الشعب التي يدرسها</span>
+          </div>
+          <div class="ta-picker">
+            <select class="form-select form-select-sm" data-ta-picker="homeroom"
+                    aria-label="اختر صفاً لإضافته إلى الإشراف">
+              <option value="">— اختر صفاً لإضافته —</option>
             </select>
+            <button type="button" class="btn btn-sm btn-outline-primary"
+                    data-ta-add="homeroom">
+              <i class="bi bi-plus-lg"></i> إضافة صف
+            </button>
           </div>
-          <div class="col-md-5">
-            <label class="form-label fw-semibold small text-muted">الصف الدراسي</label>
-            <select id="taGradeFilter" class="form-select" disabled>
-              <option value="">— اختر الصف —</option>
+          <div class="ta-cards" data-ta-cards="homeroom"></div>
+          <div class="ta-empty" data-ta-empty="homeroom">
+            <i class="bi bi-dash-circle"></i>لم يُحدَّد أي صف للإشراف.
+          </div>
+        </div>
+
+        {# ─── 2. Teaching grades → sections ──────────────────────────────────
+             One card per selected grade; the sections inside a card belong to
+             that grade only, and each checkbox submits "<grade_id>:<section_id>"
+             so the relationship is part of the request, never inferred. #}
+        <div class="ta-area mb-4">
+          <div class="ta-area-hd">
+            <i class="bi bi-diagram-3-fill"></i>
+            <span>الصفوف والشعب التي يُدرّسها</span>
+            <span class="ta-area-hint">يمكن اختيار أكثر من صف، ولكل صف أكثر من شعبة</span>
+          </div>
+          <div class="ta-picker">
+            <select class="form-select form-select-sm" data-ta-picker="teaching"
+                    aria-label="اختر صفاً لإضافته إلى الشعب التي يدرسها">
+              <option value="">— اختر صفاً لإضافته —</option>
             </select>
+            <button type="button" class="btn btn-sm btn-outline-primary"
+                    data-ta-add="teaching">
+              <i class="bi bi-plus-lg"></i> إضافة صف
+            </button>
+          </div>
+          <div class="ta-cards" data-ta-cards="teaching"></div>
+          <div class="ta-empty" data-ta-empty="teaching">
+            <i class="bi bi-dash-circle"></i>لم تُحدَّد أي شعبة للتدريس.
           </div>
         </div>
 
-        <p id="taSelectHint" class="text-muted small mb-3">
-          <i class="bi bi-arrow-up-circle me-1"></i>
-          اختر المرحلة والصف لعرض الشعب والمواد الخاصة بهذا الصف.
-        </p>
-
-        {# Homeroom sections — one panel per grade #}
-        <div id="taHomeroomWrap" style="display:none">
-          <h6 class="fw-semibold mb-2">الصفوف الرئيسية (مشرف الصف)</h6>
-          {% for grade in grades %}
-          {% set gs = sections | selectattr('grade_id', 'equalto', grade.id) | list %}
-          {% if gs %}
-          <div class="ta-grade-homeroom" data-gid="{{ grade.id }}" style="display:none">
-            <div class="d-flex flex-wrap gap-2 mb-3">
-              {% for sec in gs %}
-              <div class="form-check form-check-inline">
-                <input class="form-check-input" type="checkbox"
-                       name="homeroom_section_ids" value="{{ sec.id }}"
-                       id="hr_sec_{{ sec.id }}">
-                <label class="form-check-label" for="hr_sec_{{ sec.id }}">{{ sec.name }}</label>
-              </div>
-              {% endfor %}
-            </div>
-          </div>
-          {% endif %}
-          {% endfor %}
-        </div>
-
-        {# Teaching sections — one panel per grade #}
-        <div id="taSectionsWrap" style="display:none">
-          <h6 class="fw-semibold mb-2">الشعب التي يُدرّسها</h6>
-          {% for grade in grades %}
-          {% set gs = sections | selectattr('grade_id', 'equalto', grade.id) | list %}
-          {% if gs %}
-          <div class="ta-grade-sections" data-gid="{{ grade.id }}" style="display:none">
-            <div class="d-flex flex-wrap gap-2 mb-3">
-              {% for sec in gs %}
-              <div class="form-check form-check-inline">
-                <input class="form-check-input" type="checkbox"
-                       name="teaching_section_ids" value="{{ sec.id }}"
-                       id="ts_sec_{{ sec.id }}">
-                <label class="form-check-label" for="ts_sec_{{ sec.id }}">{{ sec.name }}</label>
-              </div>
-              {% endfor %}
-            </div>
-          </div>
-          {% endif %}
-          {% endfor %}
-        </div>
-
-        {# Subjects — one panel per grade #}
+        {# ─── 3. Subjects ────────────────────────────────────────────────────
+             Only this school's subjects for the active year, grouped by their
+             grade for readability. Selection itself is school-wide (unchanged
+             teacher_subjects semantics). #}
         {% if subjects %}
-        <div id="taSubjectsWrap" style="display:none">
-          <h6 class="fw-semibold mb-2">المواد الدراسية</h6>
-          {% for grade in grades %}
-          {% set gsubjs = subjects | selectattr('grade_id', 'equalto', grade.id) | list %}
-          {% if gsubjs %}
-          <div class="ta-grade-subjects" data-gid="{{ grade.id }}" style="display:none">
-            <div class="d-flex flex-wrap gap-2 mb-2">
-              {% for subj in gsubjs %}
-              <div class="form-check form-check-inline">
-                <input class="form-check-input" type="checkbox"
-                       name="subject_ids" value="{{ subj.id }}"
-                       id="subj_{{ subj.id }}">
-                <label class="form-check-label" for="subj_{{ subj.id }}">{{ subj.name }}</label>
-              </div>
-              {% endfor %}
-            </div>
+        <div class="ta-area">
+          <div class="ta-area-hd">
+            <i class="bi bi-journals"></i>
+            <span>المواد الدراسية</span>
+            <span class="ta-area-hint">يمكن اختيار أكثر من مادة</span>
           </div>
-          {% endif %}
-          {% endfor %}
-          {# Subjects with no grade_id — shown whenever any grade is selected #}
-          {% set ung = subjects | selectattr('grade_id', 'none') | list %}
-          {% if ung %}
-          <div class="ta-ungrouped-subjects" style="display:none">
-            <div class="d-flex flex-wrap gap-2 mb-2">
-              {% for subj in ung %}
-              <div class="form-check form-check-inline">
-                <input class="form-check-input" type="checkbox"
-                       name="subject_ids" value="{{ subj.id }}"
-                       id="subj_ung_{{ subj.id }}">
-                <label class="form-check-label" for="subj_ung_{{ subj.id }}">{{ subj.name }}</label>
-              </div>
-              {% endfor %}
-            </div>
+          <div class="mb-2" style="max-width:320px">
+            <input type="search" class="form-control form-control-sm" id="taSubjSearch"
+                   placeholder="ابحث باسم المادة أو الصف..." data-wizard-enter-optout>
           </div>
-          {% endif %}
+          <div class="ta-subject-box">
+            {% for grade in grades %}
+            {% set gsubjs = subjects | selectattr('grade_id', 'equalto', grade.id) | list %}
+            {% if gsubjs %}
+            <div class="ta-subj-group">
+              <div class="ta-subj-grade">{{ grade.name }}</div>
+              <div class="d-flex flex-wrap gap-2">
+                {% for subj in gsubjs %}
+                <div class="form-check form-check-inline ta-subj-item"
+                     data-search="{{ (subj.name ~ ' ' ~ grade.name)|lower }}">
+                  <input class="form-check-input" type="checkbox"
+                         name="subject_ids" value="{{ subj.id }}"
+                         id="subj_{{ subj.id }}">
+                  <label class="form-check-label" for="subj_{{ subj.id }}">{{ subj.name }}</label>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+            {% set ung = subjects | selectattr('grade_id', 'none') | list %}
+            {% if ung %}
+            <div class="ta-subj-group">
+              <div class="ta-subj-grade">مواد عامة (غير مرتبطة بصف)</div>
+              <div class="d-flex flex-wrap gap-2">
+                {% for subj in ung %}
+                <div class="form-check form-check-inline ta-subj-item"
+                     data-search="{{ subj.name|lower }}">
+                  <input class="form-check-input" type="checkbox"
+                         name="subject_ids" value="{{ subj.id }}"
+                         id="subj_ung_{{ subj.id }}">
+                  <label class="form-check-label" for="subj_ung_{{ subj.id }}">{{ subj.name }}</label>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+            {% endif %}
+          </div>
+          <div class="form-text mt-2">
+            <i class="bi bi-info-circle me-1"></i>
+            تُربط المواد المختارة بالشعب التي يُدرّسها — يلزم اختيار مادة واحدة على الأقل لحفظ تلك الشعب.
+          </div>
         </div>
         {% endif %}
 
@@ -686,31 +794,36 @@
 
   // Keep the add button in sync with the row count: hidden + disabled once the
   // MAX ceiling is reached, available again after a row is deleted.
+  const counter     = document.getElementById('empDocCount');
   const countRows   = () => rows.querySelectorAll('.emp-doc-row').length;
   const refreshBtn  = () => {
-    const atMax = countRows() >= MAX;
+    const n = countRows();
+    const atMax = n >= MAX;
     addBtn.disabled = atMax;
     addBtn.classList.toggle('d-none', atMax);
+    if (counter) counter.textContent = `${n} / ${MAX}`;
   };
 
   addBtn.addEventListener('click', () => {
     if (countRows() >= MAX) return;   // never create a row beyond the ceiling
     const row = document.createElement('div');
-    row.className = 'row g-3 align-items-end mb-3 emp-doc-row';
+    row.className = 'emp-doc-row';
     row.innerHTML = `
-      <div class="col-md-5">
-        <label class="form-label">نوع المستند</label>
-        <select name="doc_type[]" class="form-select">${OPTS}</select>
-      </div>
-      <div class="col-md-6">
-        <label class="form-label">الملف</label>
-        <input type="file" name="doc_file[]" class="form-control"
-               accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
-      </div>
-      <div class="col-md-1 d-flex align-items-end pb-1">
-        <button type="button" class="btn btn-danger btn-sm w-100 remove-emp-doc-row" title="إزالة">
-          <i class="bi bi-trash"></i>
-        </button>
+      <div class="row g-2 align-items-end">
+        <div class="col-md-5">
+          <label class="form-label">نوع المستند</label>
+          <select name="doc_type[]" class="form-select form-select-sm">${OPTS}</select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">الملف</label>
+          <input type="file" name="doc_file[]" class="form-control form-control-sm"
+                 accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+        </div>
+        <div class="col-md-1 emp-doc-actions">
+          <button type="button" class="btn btn-outline-danger btn-sm w-100 remove-emp-doc-row" title="إزالة">
+            <i class="bi bi-trash"></i>
+          </button>
+        </div>
       </div>`;
     rows.appendChild(row);
     refreshBtn();
@@ -726,82 +839,169 @@
   refreshBtn();   // reflect the initial row count on load
 })();
 
-/* ════════════ Teacher assignment: stage → grade → content filter ════════════ */
+/* ════════════ Teacher assignments: multi grade → multi section ════════════
+   TA_GRADES is built server-side from THIS school's grades/sections for the
+   active academic year only. Every section checkbox submits the explicit
+   "<grade_id>:<section_id>" pair, so the grade a section was picked under
+   travels with the request and is re-verified server-side.
+   Homeroom and teaching are two independent areas that never affect each other.
+   Removing a grade card removes only that card's inputs from the DOM, so no
+   stale value is ever submitted. Nothing here reloads the page or touches the
+   generated account credentials. */
+const TA_GRADES = {{ wizard_ta_grades|tojson }};
+
 (function () {
-  var grades = [
-    {% for g in grades %}{"id":{{ g.id }},"name":{{ g.name|tojson }},"stage":{{ (g.stage or "")|tojson }}},{% endfor %}
-  ];
+  const AREAS = {
+    homeroom: { field: 'wiz_homeroom[]', idp: 'hr' },
+    teaching: { field: 'wiz_teaching[]', idp: 'ts' }
+  };
 
-  var stageSel = document.getElementById('taStageFilter');
-  var gradeSel = document.getElementById('taGradeFilter');
-  var stageCol = document.getElementById('taStageCol');
-  var hint     = document.getElementById('taSelectHint');
-  var hrWrap   = document.getElementById('taHomeroomWrap');
-  var secWrap  = document.getElementById('taSectionsWrap');
-  var subjWrap = document.getElementById('taSubjectsWrap');
+  const esc = s => String(s).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  if (!stageSel) return;
+  // Grades that actually have sections are the only ones worth offering.
+  const usable = TA_GRADES.filter(g => g.sections && g.sections.length);
 
-  var stages = [], seen = {};
-  grades.forEach(function(g) {
-    var s = g.stage || '';
-    if (!seen[s]) { seen[s] = true; stages.push(s); }
+  Object.keys(AREAS).forEach(area => {
+    const cfg     = AREAS[area];
+    const picker  = document.querySelector(`[data-ta-picker="${area}"]`);
+    const addBtn  = document.querySelector(`[data-ta-add="${area}"]`);
+    const cards   = document.querySelector(`[data-ta-cards="${area}"]`);
+    const empty   = document.querySelector(`[data-ta-empty="${area}"]`);
+    if (!picker || !addBtn || !cards) return;
+
+    // Fill the picker, grouped by stage when the school uses stages.
+    const stages = [];
+    usable.forEach(g => { if (!stages.includes(g.stage || '')) stages.push(g.stage || ''); });
+    const useGroups = stages.length > 1 || (stages.length === 1 && stages[0] !== '');
+    if (useGroups) {
+      stages.forEach(st => {
+        const og = document.createElement('optgroup');
+        og.label = st || 'بدون مرحلة';
+        usable.filter(g => (g.stage || '') === st).forEach(g => {
+          const o = document.createElement('option');
+          o.value = g.id; o.textContent = g.name;
+          og.appendChild(o);
+        });
+        picker.appendChild(og);
+      });
+    } else {
+      usable.forEach(g => {
+        const o = document.createElement('option');
+        o.value = g.id; o.textContent = g.name;
+        picker.appendChild(o);
+      });
+    }
+
+    const isAdded = gid => !!cards.querySelector(`.ta-card[data-gid="${gid}"]`);
+
+    function refresh() {
+      // A grade already shown as a card cannot be added twice.
+      Array.from(picker.options).forEach(o => {
+        if (o.value) o.disabled = isAdded(o.value);
+      });
+      const any = cards.querySelector('.ta-card');
+      if (empty) empty.style.display = any ? 'none' : '';
+      const allDisabled = Array.from(picker.options).every(o => !o.value || o.disabled);
+      addBtn.disabled = allDisabled;
+      picker.disabled = allDisabled;
+    }
+
+    function addGrade(gid) {
+      const g = usable.find(x => String(x.id) === String(gid));
+      if (!g || isAdded(g.id)) return;
+      const card = document.createElement('div');
+      card.className = 'ta-card';
+      card.dataset.gid = g.id;
+      card.innerHTML = `
+        <div class="ta-card-hd">
+          <span class="ta-card-title">${esc(g.name)}</span>
+          ${g.stage ? `<span class="ta-card-stage">${esc(g.stage)}</span>` : ''}
+          <span class="ta-card-tools">
+            <button type="button" class="btn btn-sm btn-link p-0 ta-all"
+                    style="font-size:11.5px;text-decoration:none">تحديد الكل</button>
+            <button type="button" class="btn btn-sm btn-outline-danger py-0 px-1 ta-del"
+                    title="إزالة هذا الصف" aria-label="إزالة الصف ${esc(g.name)}">
+              <i class="bi bi-x-lg"></i>
+            </button>
+          </span>
+        </div>
+        <div class="ta-card-body">
+          ${g.sections.map(s => `
+            <div class="form-check form-check-inline m-0">
+              <input class="form-check-input" type="checkbox"
+                     name="${cfg.field}" value="${g.id}:${s.id}"
+                     id="${cfg.idp}_${g.id}_${s.id}">
+              <label class="form-check-label" for="${cfg.idp}_${g.id}_${s.id}">${esc(s.name)}</label>
+            </div>`).join('')}
+        </div>`;
+      cards.appendChild(card);
+      refresh();
+    }
+
+    addBtn.addEventListener('click', () => {
+      if (picker.value) { addGrade(picker.value); picker.value = ''; }
+    });
+    // Choosing from the picker adds immediately — no page reload, no submit.
+    picker.addEventListener('change', () => {
+      if (picker.value) { addGrade(picker.value); picker.value = ''; }
+    });
+
+    cards.addEventListener('click', e => {
+      const del = e.target.closest('.ta-del');
+      if (del) {
+        // Removes this grade's inputs entirely — unrelated grades untouched.
+        del.closest('.ta-card')?.remove();
+        refresh();
+        return;
+      }
+      const all = e.target.closest('.ta-all');
+      if (all) {
+        const body = all.closest('.ta-card').querySelector('.ta-card-body');
+        const boxes = Array.from(body.querySelectorAll('input[type="checkbox"]'));
+        const turnOn = boxes.some(b => !b.checked);
+        boxes.forEach(b => { b.checked = turnOn; });
+        all.textContent = turnOn ? 'إلغاء التحديد' : 'تحديد الكل';
+      }
+    });
+
+    refresh();
   });
 
-  var multiStage = stages.length > 1 || (stages.length === 1 && stages[0] !== '');
-
-  if (multiStage) {
-    stages.forEach(function(s) {
-      var o = document.createElement('option');
-      o.value = s; o.textContent = s || 'بدون مرحلة';
-      stageSel.appendChild(o);
-    });
-  } else {
-    if (stageCol) stageCol.style.display = 'none';
-    grades.forEach(function(g) {
-      var o = document.createElement('option');
-      o.value = g.id; o.textContent = g.name;
-      gradeSel.appendChild(o);
-    });
-    gradeSel.disabled = false;
-  }
-
-  function refreshGrades() {
-    gradeSel.innerHTML = '<option value="">— اختر الصف —</option>';
-    gradeSel.disabled = true;
-    var sv = stageSel.value;
-    if (!sv) { refreshContent(null); return; }
-    grades.filter(function(g) { return (g.stage || '') === sv; })
-      .forEach(function(g) {
-        var o = document.createElement('option');
-        o.value = g.id; o.textContent = g.name;
-        gradeSel.appendChild(o);
-      });
-    gradeSel.disabled = false;
-    refreshContent(null);
-  }
-
-  function refreshContent(gradeId) {
-    var show = gradeId !== null && gradeId !== '';
-    [hrWrap, secWrap, subjWrap].forEach(function(w) { if (w) w.style.display = show ? '' : 'none'; });
-    if (hint) hint.style.display = show ? 'none' : '';
-    ['ta-grade-homeroom', 'ta-grade-sections', 'ta-grade-subjects'].forEach(function(cls) {
-      document.querySelectorAll('.' + cls).forEach(function(el) {
-        el.style.display = (String(el.dataset.gid) === String(gradeId)) ? '' : 'none';
+  // Subject search — filters the visible options only; never clears a checkbox.
+  const subjSearch = document.getElementById('taSubjSearch');
+  if (subjSearch) {
+    subjSearch.addEventListener('input', () => {
+      const q = subjSearch.value.trim().toLowerCase();
+      document.querySelectorAll('.ta-subj-group').forEach(grp => {
+        let visible = 0;
+        grp.querySelectorAll('.ta-subj-item').forEach(it => {
+          const hit = !q || (it.dataset.search || '').indexOf(q) !== -1;
+          it.style.display = hit ? '' : 'none';
+          if (hit) visible++;
+        });
+        grp.style.display = visible ? '' : 'none';
       });
     });
-    document.querySelectorAll('.ta-ungrouped-subjects').forEach(function(el) {
-      el.style.display = show ? '' : 'none';
-    });
   }
-
-  if (multiStage) {
-    stageSel.addEventListener('change', function() { refreshGrades(); });
-  }
-  gradeSel.addEventListener('change', function() { refreshContent(gradeSel.value || null); });
-
-  refreshContent(null);
 })();
+
+/* Collect the current teacher selection as {grades:[{name, sections:[…]}]}.
+   Read-only: used by the Review step, it never creates or changes anything. */
+function taCollect(fieldName) {
+  const out = [];
+  document.querySelectorAll(`input[name="${fieldName}"]:checked`).forEach(cb => {
+    const [gid, sid] = cb.value.split(':');
+    const g = TA_GRADES.find(x => String(x.id) === gid);
+    if (!g) return;
+    const s = (g.sections || []).find(x => String(x.id) === sid);
+    if (!s) return;
+    let row = out.find(r => r.id === g.id);
+    if (!row) { row = { id: g.id, name: g.name, sections: [] }; out.push(row); }
+    if (!row.sections.includes(s.name)) row.sections.push(s.name);
+  });
+  return out;
+}
 
 /* ════════════ Wizard engine ════════════ */
 (function () {
@@ -1058,23 +1258,58 @@
     }
 
     // ── Section 5: Teacher Assignments ──
+    // Reads the CURRENT wizard selections only (checked inputs). It never
+    // creates, changes, or persists an assignment — and no database id is
+    // displayed: grade and section names are resolved from TA_GRADES.
     const teacherStep = document.querySelector('[data-step-key="teacher"]');
     if (teacherStep) {
-      const labelOf     = cb => cb.closest('.form-check')?.querySelector('label')?.textContent?.trim() || cb.value;
-      const hrChecked   = Array.from(form.querySelectorAll('[name="homeroom_section_ids"]:checked')).map(labelOf);
-      const tsChecked   = Array.from(form.querySelectorAll('[name="teaching_section_ids"]:checked')).map(labelOf);
-      const subjChecked = Array.from(form.querySelectorAll('[name="subject_ids"]:checked')).map(labelOf);
+      const esc2 = s => String(s).replace(/[&<>"']/g,
+        c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+      const labelOf = cb => cb.closest('.form-check')?.querySelector('label')?.textContent?.trim() || '';
+
+      const homeroom = taCollect('wiz_homeroom[]');
+      const teaching = taCollect('wiz_teaching[]');
+      // Distinct subject names, in document order, without duplicates.
+      const subjects = [];
+      form.querySelectorAll('[name="subject_ids"]:checked').forEach(cb => {
+        const n = labelOf(cb);
+        if (n && !subjects.includes(n)) subjects.push(n);
+      });
+
+      // One grade block: grade name as the heading, its own sections beneath.
+      const gradeBlocks = list => `<div class="rv-ta-grades">${
+        list.map(g => `<div class="rv-ta-grade">
+          <div class="rv-ta-grade-name">${esc2(g.name)}</div>
+          <div class="rv-ta-secs">${
+            g.sections.map(s => `<span class="rv-ta-sec">${esc2(s)}</span>`).join('')
+          }</div>
+        </div>`).join('')
+      }</div>`;
+
       let s5 = '';
-      if (hrChecked.length || tsChecked.length || subjChecked.length) {
-        s5 = '<div class="rv-grid">';
-        if (hrChecked.length)
-          s5 += fld('مشرف صف (رئيسي)', hrChecked.map(v => `<span class="badge bg-primary me-1 mb-1">${v}</span>`).join(''));
-        if (tsChecked.length)
-          s5 += fld('شعب التدريس', tsChecked.map(v => `<span class="badge bg-info text-dark me-1 mb-1">${v}</span>`).join(''));
-        if (subjChecked.length)
-          s5 += fld('المواد الدراسية', subjChecked.map(v => `<span class="badge bg-secondary me-1 mb-1">${v}</span>`).join(''));
-        s5 += '</div>';
-      } else {
+      if (subjects.length) {
+        s5 += `<div class="rv-ta-block">
+          <div class="rv-ta-label">المواد الدراسية</div>
+          <div class="rv-ta-inline">${subjects.map(esc2).join('، ')}</div>
+        </div>`;
+      }
+      if (teaching.length) {
+        s5 += `<div class="rv-ta-block">
+          <div class="rv-ta-label">الصفوف والشعب التي يُدرّسها</div>
+          ${gradeBlocks(teaching)}
+        </div>`;
+      }
+      if (homeroom.length) {
+        s5 += `<div class="rv-ta-block">
+          <div class="rv-ta-label">الصفوف الرئيسية / الإشراف</div>
+          ${gradeBlocks(homeroom)}
+        </div>`;
+      }
+      if (teaching.length && !subjects.length) {
+        s5 += `<div class="rv-empty"><i class="bi bi-exclamation-triangle"></i>
+          لن تُحفظ الشعب التي يدرسها بدون اختيار مادة دراسية واحدة على الأقل.</div>`;
+      }
+      if (!s5) {
         s5 = '<div class="rv-empty"><i class="bi bi-journal-x"></i>لم تُحدد تكليفات تدريسية.</div>';
       }
       html += sec('bi-journal-bookmark-fill', 'إعدادات التدريسي', s5, 'teacher');
