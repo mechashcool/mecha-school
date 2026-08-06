@@ -175,6 +175,11 @@
     margin-bottom: 5px;
   }
   .ta-subj-group .form-check-label { font-size: 12.5px; }
+  /* Per-grade empty states: a grade with no sections / no subjects configured
+     is still shown, with an explicit message instead of being hidden. */
+  .ta-inline-empty {
+    font-size: 12px; color: var(--text-muted); font-style: italic;
+  }
 
   /* ── Professional Review ── */
   .rv-header {
@@ -683,7 +688,7 @@
       <div class="card-header"><i class="bi bi-journal-bookmark-fill text-accent"></i>إعدادات التدريسي</div>
       <div class="card-body">
 
-        {% if sections or subjects %}
+        {% if grades %}
 
         {# ─── 1. Homeroom / class supervisor ─────────────────────────────────
              Kept deliberately separate from "الشعب التي يدرسها": teaching a
@@ -736,70 +741,37 @@
           </div>
         </div>
 
-        {# ─── 3. Subjects ────────────────────────────────────────────────────
-             Only this school's subjects for the active year, grouped by their
-             grade for readability. Selection itself is school-wide (unchanged
-             teacher_subjects semantics). #}
-        {% if subjects %}
+        {# ─── 3. Subjects — filtered by the TEACHING grades only ─────────────
+             Rendered client-side from the same trusted server data as the grade
+             cards, and rebuilt whenever a teaching grade is added or removed.
+             Grades chosen only under الإشراف never widen this list, and the
+             server re-checks every submitted subject against the selected
+             teaching grades. #}
         <div class="ta-area">
           <div class="ta-area-hd">
             <i class="bi bi-journals"></i>
             <span>المواد الدراسية</span>
-            <span class="ta-area-hint">يمكن اختيار أكثر من مادة</span>
+            <span class="ta-area-hint">تُعرض حسب الصفوف المحددة في "الشعب التي يدرسها"</span>
           </div>
-          <div class="mb-2" style="max-width:320px">
+          <div class="mb-2" id="taSubjSearchWrap" style="max-width:320px;display:none">
             <input type="search" class="form-control form-control-sm" id="taSubjSearch"
-                   placeholder="ابحث باسم المادة أو الصف..." data-wizard-enter-optout>
+                   placeholder="ابحث باسم المادة..." data-wizard-enter-optout>
           </div>
-          <div class="ta-subject-box">
-            {% for grade in grades %}
-            {% set gsubjs = subjects | selectattr('grade_id', 'equalto', grade.id) | list %}
-            {% if gsubjs %}
-            <div class="ta-subj-group">
-              <div class="ta-subj-grade">{{ grade.name }}</div>
-              <div class="d-flex flex-wrap gap-2">
-                {% for subj in gsubjs %}
-                <div class="form-check form-check-inline ta-subj-item"
-                     data-search="{{ (subj.name ~ ' ' ~ grade.name)|lower }}">
-                  <input class="form-check-input" type="checkbox"
-                         name="subject_ids" value="{{ subj.id }}"
-                         id="subj_{{ subj.id }}">
-                  <label class="form-check-label" for="subj_{{ subj.id }}">{{ subj.name }}</label>
-                </div>
-                {% endfor %}
-              </div>
-            </div>
-            {% endif %}
-            {% endfor %}
-            {% set ung = subjects | selectattr('grade_id', 'none') | list %}
-            {% if ung %}
-            <div class="ta-subj-group">
-              <div class="ta-subj-grade">مواد عامة (غير مرتبطة بصف)</div>
-              <div class="d-flex flex-wrap gap-2">
-                {% for subj in ung %}
-                <div class="form-check form-check-inline ta-subj-item"
-                     data-search="{{ subj.name|lower }}">
-                  <input class="form-check-input" type="checkbox"
-                         name="subject_ids" value="{{ subj.id }}"
-                         id="subj_ung_{{ subj.id }}">
-                  <label class="form-check-label" for="subj_ung_{{ subj.id }}">{{ subj.name }}</label>
-                </div>
-                {% endfor %}
-              </div>
-            </div>
-            {% endif %}
+          {# Empty state shown until at least one teaching grade is selected. #}
+          <div class="ta-empty" id="taSubjEmpty">
+            <i class="bi bi-info-circle"></i>اختر صفًا واحدًا على الأقل لعرض المواد الدراسية.
           </div>
-          <div class="form-text mt-2">
+          <div class="ta-subject-box" id="taSubjectsBox" style="display:none"></div>
+          <div class="form-text mt-2" id="taSubjHint" style="display:none">
             <i class="bi bi-info-circle me-1"></i>
             تُربط المواد المختارة بالشعب التي يُدرّسها — يلزم اختيار مادة واحدة على الأقل لحفظ تلك الشعب.
           </div>
         </div>
-        {% endif %}
 
         {% else %}
         <p class="text-muted mb-0">
           <i class="bi bi-info-circle me-1"></i>
-          لا توجد شعب أو مواد محددة للعام الدراسي الحالي.
+          لا توجد صفوف دراسية معرّفة للعام الدراسي الحالي.
         </p>
         {% endif %}
 
@@ -1050,17 +1022,108 @@ function empClearErr(el) {
    generated account credentials. */
 const TA_GRADES = {{ wizard_ta_grades|tojson }};
 
+function taEsc(s) {
+  return String(s).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/* Grade ids currently selected under "الشعب التي يدرسها" (teaching only —
+   homeroom/supervision grades deliberately do not count). */
+function taTeachingGradeIds() {
+  const box = document.querySelector('[data-ta-cards="teaching"]');
+  if (!box) return [];
+  return Array.from(box.querySelectorAll('.ta-card')).map(c => c.dataset.gid);
+}
+
+/* Rebuild the subject list from the currently selected TEACHING grades.
+   Called whenever a teaching grade is added or removed, so the list always
+   matches the real selection. Subjects of a removed grade are deleted from the
+   DOM outright, which is what guarantees a stale selection can never be
+   submitted. Ticked subjects that are still valid keep their state. */
+function taRenderSubjects() {
+  const box   = document.getElementById('taSubjectsBox');
+  const empty = document.getElementById('taSubjEmpty');
+  const hint  = document.getElementById('taSubjHint');
+  const srchW = document.getElementById('taSubjSearchWrap');
+  const srch  = document.getElementById('taSubjSearch');
+  if (!box) return;
+
+  // Remember what is ticked so a still-valid choice survives the re-render.
+  const checked = new Set(Array.from(
+    box.querySelectorAll('input[name="subject_ids"]:checked')).map(cb => cb.value));
+
+  const gids = taTeachingGradeIds();
+  if (!gids.length) {
+    box.innerHTML = '';                    // inputs gone → nothing submitted
+    box.style.display = 'none';
+    if (empty) empty.style.display = '';
+    if (hint)  hint.style.display  = 'none';
+    if (srchW) srchW.style.display = 'none';   // search hidden with the list
+    return;
+  }
+
+  let html = '';
+  gids.forEach(gid => {
+    const g = TA_GRADES.find(x => String(x.id) === String(gid));
+    if (!g) return;
+    const subs = g.subjects || [];
+    html += `<div class="ta-subj-group" data-gid="${g.id}">
+      <div class="ta-subj-grade">${taEsc(g.name)}</div>
+      ${subs.length
+        ? `<div class="d-flex flex-wrap gap-2">${subs.map(s => `
+        <div class="form-check form-check-inline ta-subj-item m-0"
+             data-search="${taEsc(String(s.name).toLowerCase())}">
+          <input class="form-check-input" type="checkbox" name="subject_ids"
+                 value="${s.id}" id="subj_${g.id}_${s.id}"${checked.has(String(s.id)) ? ' checked' : ''}>
+          <label class="form-check-label" for="subj_${g.id}_${s.id}">${taEsc(s.name)}</label>
+        </div>`).join('')}</div>`
+        : '<span class="ta-inline-empty">لا توجد مواد دراسية مضافة لهذا الصف.</span>'}
+    </div>`;
+  });
+
+  box.innerHTML = html;
+  box.style.display = '';
+  if (empty) empty.style.display = 'none';
+  if (hint)  hint.style.display  = '';
+  if (srchW) srchW.style.display = '';
+  if (srch && srch.value) taApplySubjSearch();   // keep an active query applied
+}
+
+/* Subject search — scoped to what is rendered, i.e. the selected teaching
+   grades only. It can never surface a subject of an unselected grade. */
+function taApplySubjSearch() {
+  const srch = document.getElementById('taSubjSearch');
+  const box  = document.getElementById('taSubjectsBox');
+  if (!srch || !box) return;
+  const q = srch.value.trim().toLowerCase();
+  box.querySelectorAll('.ta-subj-group').forEach(grp => {
+    const items = grp.querySelectorAll('.ta-subj-item');
+    if (!items.length) {                 // grade with no subjects configured
+      grp.style.display = q ? 'none' : '';
+      return;
+    }
+    let visible = 0;
+    items.forEach(it => {
+      const hit = !q || (it.dataset.search || '').indexOf(q) !== -1;
+      it.style.display = hit ? '' : 'none';
+      if (hit) visible++;
+    });
+    grp.style.display = visible ? '' : 'none';
+  });
+}
+
 (function () {
   const AREAS = {
     homeroom: { field: 'wiz_homeroom[]', idp: 'hr' },
     teaching: { field: 'wiz_teaching[]', idp: 'ts' }
   };
 
-  const esc = s => String(s).replace(/[&<>"']/g,
-    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const esc = taEsc;
 
-  // Grades that actually have sections are the only ones worth offering.
-  const usable = TA_GRADES.filter(g => g.sections && g.sections.length);
+  // EVERY grade the school has configured, across every stage — never filtered
+  // down to the ones that happen to have sections. A grade with no sections is
+  // still offered and shows an explicit empty state inside its card.
+  const usable = TA_GRADES;
 
   Object.keys(AREAS).forEach(area => {
     const cfg     = AREAS[area];
@@ -1105,6 +1168,8 @@ const TA_GRADES = {{ wizard_ta_grades|tojson }};
       const allDisabled = Array.from(picker.options).every(o => !o.value || o.disabled);
       addBtn.disabled = allDisabled;
       picker.disabled = allDisabled;
+      // Adding/removing a TEACHING grade immediately re-filters the subjects.
+      if (area === 'teaching') taRenderSubjects();
     }
 
     function addGrade(gid) {
@@ -1118,8 +1183,8 @@ const TA_GRADES = {{ wizard_ta_grades|tojson }};
           <span class="ta-card-title">${esc(g.name)}</span>
           ${g.stage ? `<span class="ta-card-stage">${esc(g.stage)}</span>` : ''}
           <span class="ta-card-tools">
-            <button type="button" class="btn btn-sm btn-link p-0 ta-all"
-                    style="font-size:11.5px;text-decoration:none">تحديد الكل</button>
+            ${g.sections.length ? `<button type="button" class="btn btn-sm btn-link p-0 ta-all"
+                    style="font-size:11.5px;text-decoration:none">تحديد الكل</button>` : ''}
             <button type="button" class="btn btn-sm btn-outline-danger py-0 px-1 ta-del"
                     title="إزالة هذا الصف" aria-label="إزالة الصف ${esc(g.name)}">
               <i class="bi bi-x-lg"></i>
@@ -1127,13 +1192,15 @@ const TA_GRADES = {{ wizard_ta_grades|tojson }};
           </span>
         </div>
         <div class="ta-card-body">
-          ${g.sections.map(s => `
+          ${g.sections.length
+            ? g.sections.map(s => `
             <div class="form-check form-check-inline m-0">
               <input class="form-check-input" type="checkbox"
                      name="${cfg.field}" value="${g.id}:${s.id}"
                      id="${cfg.idp}_${g.id}_${s.id}">
               <label class="form-check-label" for="${cfg.idp}_${g.id}_${s.id}">${esc(s.name)}</label>
-            </div>`).join('')}
+            </div>`).join('')
+            : '<span class="ta-inline-empty">لا توجد شعب مضافة لهذا الصف.</span>'}
         </div>`;
       cards.appendChild(card);
       refresh();
@@ -1168,26 +1235,17 @@ const TA_GRADES = {{ wizard_ta_grades|tojson }};
     refresh();
   });
 
-  // Subject search — filters the visible options only; never clears a checkbox.
+  // Subject search — filters within the rendered (selected-grade) subjects only
+  // and never clears a checkbox.
   const subjSearch = document.getElementById('taSubjSearch');
-  if (subjSearch) {
-    subjSearch.addEventListener('input', () => {
-      const q = subjSearch.value.trim().toLowerCase();
-      document.querySelectorAll('.ta-subj-group').forEach(grp => {
-        let visible = 0;
-        grp.querySelectorAll('.ta-subj-item').forEach(it => {
-          const hit = !q || (it.dataset.search || '').indexOf(q) !== -1;
-          it.style.display = hit ? '' : 'none';
-          if (hit) visible++;
-        });
-        grp.style.display = visible ? '' : 'none';
-      });
-    });
-  }
+  if (subjSearch) subjSearch.addEventListener('input', taApplySubjSearch);
+
+  taRenderSubjects();   // establish the correct initial empty state
 })();
 
-/* Collect the current teacher selection as {grades:[{name, sections:[…]}]}.
-   Read-only: used by the Review step, it never creates or changes anything. */
+/* Collect checked sections as [{id, name, items:[section names]}], grouped by
+   their own grade. Read-only: used by the Review step, it never creates or
+   changes anything, and it resolves names from TA_GRADES so no id is shown. */
 function taCollect(fieldName) {
   const out = [];
   document.querySelectorAll(`input[name="${fieldName}"]:checked`).forEach(cb => {
@@ -1197,9 +1255,29 @@ function taCollect(fieldName) {
     const s = (g.sections || []).find(x => String(x.id) === sid);
     if (!s) return;
     let row = out.find(r => r.id === g.id);
-    if (!row) { row = { id: g.id, name: g.name, sections: [] }; out.push(row); }
-    if (!row.sections.includes(s.name)) row.sections.push(s.name);
+    if (!row) { row = { id: g.id, name: g.name, items: [] }; out.push(row); }
+    if (!row.items.includes(s.name)) row.items.push(s.name);
   });
+  return out;
+}
+
+/* Collect checked subjects the same way, grouped under the grade they were
+   rendered for. Only subjects currently in the DOM can be collected, so a
+   subject whose grade was removed can never appear. Two same-named subjects
+   belonging to different grades stay separate — they are distinct records. */
+function taCollectSubjects() {
+  const out = [];
+  document.querySelectorAll('#taSubjectsBox input[name="subject_ids"]:checked')
+    .forEach(cb => {
+      const grp = cb.closest('.ta-subj-group');
+      const g = TA_GRADES.find(x => String(x.id) === String(grp && grp.dataset.gid));
+      if (!g) return;
+      const s = (g.subjects || []).find(x => String(x.id) === cb.value);
+      if (!s) return;
+      let row = out.find(r => r.id === g.id);
+      if (!row) { row = { id: g.id, name: g.name, items: [] }; out.push(row); }
+      if (!row.items.includes(s.name)) row.items.push(s.name);
+    });
   return out;
 }
 
@@ -1463,25 +1541,21 @@ function taCollect(fieldName) {
     // displayed: grade and section names are resolved from TA_GRADES.
     const teacherStep = document.querySelector('[data-step-key="teacher"]');
     if (teacherStep) {
-      const esc2 = s => String(s).replace(/[&<>"']/g,
-        c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-      const labelOf = cb => cb.closest('.form-check')?.querySelector('label')?.textContent?.trim() || '';
+      const esc2 = taEsc;
 
+      // All three read the LIVE DOM, so anything removed from the wizard —
+      // a grade, a section, or a subject whose grade was dropped — is simply
+      // absent here. No stale, duplicated, or invalid entry can be shown.
       const homeroom = taCollect('wiz_homeroom[]');
       const teaching = taCollect('wiz_teaching[]');
-      // Distinct subject names, in document order, without duplicates.
-      const subjects = [];
-      form.querySelectorAll('[name="subject_ids"]:checked').forEach(cb => {
-        const n = labelOf(cb);
-        if (n && !subjects.includes(n)) subjects.push(n);
-      });
+      const subjects = taCollectSubjects();
 
-      // One grade block: grade name as the heading, its own sections beneath.
+      // One block per grade: grade name as the heading, its own items beneath.
       const gradeBlocks = list => `<div class="rv-ta-grades">${
         list.map(g => `<div class="rv-ta-grade">
           <div class="rv-ta-grade-name">${esc2(g.name)}</div>
           <div class="rv-ta-secs">${
-            g.sections.map(s => `<span class="rv-ta-sec">${esc2(s)}</span>`).join('')
+            g.items.map(s => `<span class="rv-ta-sec">${esc2(s)}</span>`).join('')
           }</div>
         </div>`).join('')
       }</div>`;
@@ -1490,7 +1564,7 @@ function taCollect(fieldName) {
       if (subjects.length) {
         s5 += `<div class="rv-ta-block">
           <div class="rv-ta-label">المواد الدراسية</div>
-          <div class="rv-ta-inline">${subjects.map(esc2).join('، ')}</div>
+          ${gradeBlocks(subjects)}
         </div>`;
       }
       if (teaching.length) {

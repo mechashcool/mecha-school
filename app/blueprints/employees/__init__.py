@@ -107,6 +107,45 @@ def _is_allowed_account_role(role_id) -> bool:
     return bool(role and role.name in _ACCOUNT_ROLE_NAMES)
 
 
+def _ordered_wizard_grades(grades):
+    """Sort the school's grades into their normal display order for the wizard.
+
+    Reuses the project's existing canonical grade list (``IRAQI_STANDARD_GRADES``
+    in app/utils/iraqi_grades.py, whose order already "defines visual display
+    order") instead of the alphabetical-by-name ordering the query returns, so
+    الصف الأول comes before الصف الثاني and stages appear in their real
+    progression rather than alphabetically.
+
+    Nothing is hard-coded or invented here: only the grades the school actually
+    has are returned. Custom grades the canonical list does not know, and stages
+    it does not know (e.g. رياض الأطفال, الثانوية, or any school-specific stage),
+    are kept and sorted after the known ones by name — never dropped.
+    """
+    from app.utils.iraqi_grades import IRAQI_STANDARD_GRADES, _normalize
+
+    grade_rank = {_normalize(n): i for i, (n, _s) in enumerate(IRAQI_STANDARD_GRADES)}
+    stage_rank = {}
+    for _i, (_n, stage) in enumerate(IRAQI_STANDARD_GRADES):
+        stage_rank.setdefault(_normalize(stage), len(stage_rank))
+    big = len(grade_rank) + 1
+
+    def key(g):
+        stage = _normalize(g.stage or '')
+        # Unknown stages sort after known ones, alphabetically; grades with no
+        # stage at all go last so they never break the stage grouping.
+        s_known = stage in stage_rank
+        return (
+            0 if stage else 1,
+            0 if s_known else 1,
+            stage_rank.get(stage, 0),
+            '' if s_known else stage,
+            grade_rank.get(_normalize(g.name or ''), big),
+            g.name or '',
+        )
+
+    return sorted(grades, key=key)
+
+
 def _form_context(employee=None):
     """Build the full context dict for the create/edit form."""
     school = get_current_school()
@@ -121,10 +160,16 @@ def _form_context(employee=None):
                  .order_by(Section.name).all() if grade_ids else [])
     grade_map = {g.id: g for g in grades}
 
-    # Grade → its own sections, for the create-wizard teacher step. Built from the
-    # SAME school+year scoped grade/section lists loaded above, so the client can
-    # never be offered a grade or section belonging to another school or year. The
-    # ids are still re-validated server-side on POST (_wizard_teacher_selection).
+    # Grade → its own sections AND its own subjects, for the create-wizard
+    # teacher step. Built from the SAME school+year scoped grade/section/subject
+    # lists loaded above, so the client can never be offered anything belonging
+    # to another school or year — and every id is still re-validated server-side
+    # on POST (_wizard_teacher_selection).
+    #
+    # EVERY grade configured for the school is included, across every stage, even
+    # when it has no sections or no subjects yet: the wizard shows an explicit
+    # empty state inside that grade instead of hiding it. Order follows the
+    # project's canonical grade order (see _ordered_wizard_grades).
     wizard_ta_grades = [
         {
             'id':       g.id,
@@ -132,8 +177,10 @@ def _form_context(employee=None):
             'stage':    g.stage or '',
             'sections': [{'id': s.id, 'name': s.name}
                          for s in sections if s.grade_id == g.id],
+            'subjects': [{'id': sub.id, 'name': sub.name}
+                         for sub in subjects if sub.grade_id == g.id],
         }
-        for g in grades
+        for g in _ordered_wizard_grades(grades)
     ]
 
     roles = _available_roles()
@@ -275,6 +322,7 @@ _TA_ERR_SECTION = ('الصفوف أو الشعب المحددة غير صالح�
                    'أو للعام الدراسي الحالي. يرجى إعادة الاختيار.')
 _TA_ERR_SUBJECT = ('المواد الدراسية المحددة غير صالحة أو لا تعود لهذه المدرسة '
                    'أو للعام الدراسي الحالي. يرجى إعادة الاختيار.')
+_TA_ERR_SUBJ_GRADE = 'إحدى المواد الدراسية المختارة لا تنتمي إلى الصفوف المحددة.'
 _TA_ERR_NO_YEAR = 'لا يمكن حفظ تكليفات التدريسي بدون عام دراسي فعّال.'
 
 
@@ -341,8 +389,11 @@ def _wizard_teacher_selection(school, year):
         .filter(Section.school_id == school.id,
                 Section.academic_year_id == year.id).all()
     }
-    valid_subject_ids = {
-        r[0] for r in db.session.query(Subject.id)
+    # subject_id → its owning grade_id (None for school-wide subjects), scoped to
+    # this school and year. Used both to reject foreign subjects and to enforce
+    # that a subject really belongs to one of the selected teaching grades.
+    subject_grade = {
+        r[0]: r[1] for r in db.session.query(Subject.id, Subject.grade_id)
         .execution_options(bypass_tenant_scope=True)
         .filter(Subject.school_id == school.id,
                 Subject.academic_year_id == year.id).all()
@@ -364,10 +415,20 @@ def _wizard_teacher_selection(school, year):
     homeroom_ids = _clean_pairs(hr_pairs)
     teaching_ids = _clean_pairs(ts_pairs)
 
+    # Grades actually selected under "الشعب التي يدرسها". Homeroom-only grades
+    # deliberately do NOT widen the set of acceptable subjects.
+    teaching_grade_ids = {section_grade[s_id] for s_id in teaching_ids}
+
     clean_subjects, seen_subjects = [], set()
     for subject_id in subject_ids:
-        if subject_id not in valid_subject_ids:
+        if subject_id not in subject_grade:
+            # Unknown, other-school, or other-year subject.
             raise ValueError(_TA_ERR_SUBJECT)
+        if subject_grade[subject_id] not in teaching_grade_ids:
+            # Belongs to no selected teaching grade (or to none at all) — this
+            # catches a stale selection left over from a removed grade just as
+            # much as a deliberately forged id.
+            raise ValueError(_TA_ERR_SUBJ_GRADE)
         if subject_id in seen_subjects:
             continue
         seen_subjects.add(subject_id)
