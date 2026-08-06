@@ -37,6 +37,50 @@ _ACCOUNT_ROLE_NAMES = ('teacher', 'parent')
 # in _handle_employee_post so a forged/manually-modified POST cannot exceed it.
 MAX_EMPLOYEE_DOCUMENTS = 5
 
+# Per-file / per-field ceilings for the "Add New Employee" wizard. Each one is
+# enforced twice: in the browser for immediate feedback, and again server-side
+# in _handle_employee_post — which is the authoritative check, since a client
+# can disable JavaScript or craft the POST directly. These are PER FILE limits,
+# not a request limit: a valid submission may carry one photo plus five
+# documents, so the global MAX_CONTENT_LENGTH (16 MB) is deliberately left
+# untouched — lowering it would reject legitimate submissions.
+MAX_EMPLOYEE_PHOTO_BYTES    = 2 * 1024 * 1024   # 2 MB per employee photo
+MAX_EMPLOYEE_DOCUMENT_BYTES = 2 * 1024 * 1024   # 2 MB per employee document
+MAX_EMPLOYEE_NOTES_CHARS    = 300               # characters, Python len()
+
+# Arabic validation messages for the limits above (kept generic on purpose —
+# they never echo a filename, path, byte count, or internal detail).
+_MSG_PHOTO_TOO_BIG = 'حجم صورة الموظف يجب ألا يتجاوز 2 ميجابايت.'
+_MSG_DOC_TOO_BIG   = 'حجم كل مستند يجب ألا يتجاوز 2 ميجابايت.'
+_MSG_NOTES_TOO_LONG = f'يجب ألا تتجاوز الملاحظات {MAX_EMPLOYEE_NOTES_CHARS} حرف.'
+_MSG_PHOTO_REJECTED = ('تعذّر حفظ صورة الموظف — تأكد من أن الصيغة مقبولة '
+                       'وأن الحجم لا يتجاوز 2 ميجابايت.')
+
+
+def _uploaded_size(file_storage):
+    """Real byte length of an uploaded file, measured from its own stream.
+
+    Never trusts a client-supplied size, the Content-Length header, the MIME
+    type, or the filename: the stream itself is measured. The position is
+    restored before returning so the existing ``save_uploaded_file`` helper can
+    still read the file normally afterwards.
+
+    Returns the size in bytes, or ``None`` when it cannot be measured — callers
+    treat ``None`` as a failure (fail closed) rather than letting an unmeasured
+    upload through.
+    """
+    stream = getattr(file_storage, 'stream', None)
+    if stream is None:
+        return None
+    try:
+        pos = stream.tell()
+        stream.seek(0, 2)          # SEEK_END
+        size = stream.tell()
+        stream.seek(pos)           # restore for save_uploaded_file()
+        return size
+    except (AttributeError, OSError, ValueError):
+        return None
+
 
 def _available_roles():
     """Roles selectable for an employee login account from the employee page.
@@ -166,6 +210,9 @@ def _form_context(employee=None):
         linked_user             = linked_user,
         existing_device_mapping = existing_device_mapping,
         max_employee_documents  = MAX_EMPLOYEE_DOCUMENTS,
+        max_employee_photo_bytes    = MAX_EMPLOYEE_PHOTO_BYTES,
+        max_employee_document_bytes = MAX_EMPLOYEE_DOCUMENT_BYTES,
+        max_employee_notes_chars    = MAX_EMPLOYEE_NOTES_CHARS,
         wizard_ta_grades        = wizard_ta_grades,
         gen_employee_username   = gen_employee_username,
         gen_employee_password   = gen_employee_password,
@@ -506,24 +553,62 @@ def _handle_employee_post(employee):
         except ValueError:
             pass
 
-    # ── Enforce the employee-document limit BEFORE creating anything ──────────
-    # Document rows exist only in the create wizard (the edit form has none), so
-    # this guard applies to create. Validate the count up-front — before the
-    # Employee row is inserted or any file is uploaded — so a forged/tampered
-    # request that exceeds the ceiling is rejected without partially creating the
-    # employee or uploading any document. The wizard UI enforces the same
-    # MAX_EMPLOYEE_DOCUMENTS ceiling; this is the independent server-side check.
+    notes_value = request.form.get('notes', '').strip()
+
+    # ── Create-wizard limits — enforced BEFORE anything is created ────────────
+    # Notes length, photo size, document count, and per-document size are all
+    # validated here: before the Employee row is inserted, before the linked User
+    # account exists, and before a single byte is written to storage. A request
+    # that fails any of these is rejected outright, so it can never leave a
+    # partial employee, an orphan account, orphan EmployeeDocument rows, or an
+    # orphan uploaded file behind. The wizard enforces the same limits in the
+    # browser; these are the independent server-side checks — JavaScript, the
+    # Content-Length header, the MIME type, and the filename are all untrusted.
+    # Document rows exist only in the create wizard, so this block is create-only
+    # and the employee edit form keeps its current behaviour unchanged.
     if is_create:
+        if len(notes_value) > MAX_EMPLOYEE_NOTES_CHARS:
+            flash(_MSG_NOTES_TOO_LONG, 'danger')
+            return render_template(_tmpl, error_step='documents',
+                                   **_form_context(employee))
+
+        _photo_file = request.files.get('photo')
+        if _photo_file and _photo_file.filename:
+            _photo_size = _uploaded_size(_photo_file)
+            if _photo_size is None or _photo_size > MAX_EMPLOYEE_PHOTO_BYTES:
+                flash(_MSG_PHOTO_TOO_BIG, 'danger')
+                return render_template(_tmpl, error_step='documents',
+                                       **_form_context(employee))
+
         _submitted_doc_files = [f for f in request.files.getlist('doc_file[]')
                                 if f and f.filename]
         if len(_submitted_doc_files) > MAX_EMPLOYEE_DOCUMENTS:
             flash(f'يمكن إضافة {MAX_EMPLOYEE_DOCUMENTS} مستندات كحد أقصى.', 'danger')
             return render_template(_tmpl, error_step='documents',
                                    **_form_context(employee))
+        # Every document is checked before ANY of them is saved, so an oversized
+        # file never results in the other documents being partially uploaded.
+        for _doc_file in _submitted_doc_files:
+            _doc_size = _uploaded_size(_doc_file)
+            if _doc_size is None or _doc_size > MAX_EMPLOYEE_DOCUMENT_BYTES:
+                flash(_MSG_DOC_TOO_BIG, 'danger')
+                return render_template(_tmpl, error_step='documents',
+                                       **_form_context(employee))
 
     photo_path = None
     if 'photo' in request.files and request.files['photo'].filename:
-        photo_path = save_uploaded_file(request.files['photo'], 'employees')
+        # max_size is a second, independent gate inside the shared upload helper
+        # (it measures the bytes it actually reads). Applied on create only, so
+        # the edit flow keeps its existing behaviour untouched.
+        photo_path = save_uploaded_file(
+            request.files['photo'], 'employees',
+            max_size=MAX_EMPLOYEE_PHOTO_BYTES if is_create else None)
+        if is_create and not photo_path:
+            # Rejected by the helper (extension or size) — stop before creating
+            # the employee rather than silently dropping the photo.
+            flash(_MSG_PHOTO_REJECTED, 'danger')
+            return render_template(_tmpl, error_step='documents',
+                                   **_form_context(employee))
 
     if is_create:
         employee = Employee(
@@ -546,7 +631,7 @@ def _handle_employee_post(employee):
             salary_start_date = salary_start,
             payroll_status = request.form.get('payroll_status', 'active') or 'active',
             photo         = photo_path,
-            notes         = request.form.get('notes', '').strip(),
+            notes         = notes_value,
             school_id     = school.id if school else None,
         )
         import logging as _logging
@@ -588,7 +673,7 @@ def _handle_employee_post(employee):
         employee.payroll_status = request.form.get('payroll_status', employee.payroll_status) or 'active'
         if salary_start:
             employee.salary_start_date = salary_start
-        employee.notes         = request.form.get('notes', '').strip()
+        employee.notes         = notes_value
         if hire_date:
             employee.hire_date = hire_date
         if photo_path:
@@ -675,6 +760,7 @@ def _handle_employee_post(employee):
             file_path = save_uploaded_file(
                 f, 'employee_docs',
                 allowed_exts=_ALLOWED_DOC_EXTS,
+                max_size=MAX_EMPLOYEE_DOCUMENT_BYTES,
             )
             if not file_path:
                 _doc_warnings.append(

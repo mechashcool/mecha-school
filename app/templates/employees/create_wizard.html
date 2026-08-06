@@ -58,13 +58,80 @@
   }
   .wiz-nav .spacer { flex: 1; }
 
-  /* ── Employee documents: each type selector visibly paired with its file ── */
-  .emp-doc-row {
-    border: 1px solid var(--border); border-radius: 10px;
-    padding: 10px 12px; margin-bottom: 10px; background: var(--card-bg);
+  /* ── Photo card ── */
+  .emp-photo-preview {
+    width: 160px; height: 160px; margin: 0 auto 16px;
+    border-radius: 14px; border: 1.5px solid var(--border); background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 54px; color: var(--text-muted); overflow: hidden;
   }
-  .emp-doc-row .form-label { font-size: 11.5px; font-weight: 700; margin-bottom: 3px; }
-  .emp-doc-actions { display: flex; align-items: flex-end; padding-bottom: 1px; }
+  .emp-photo-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .emp-photo-btn { min-width: 190px; }
+  .emp-upload-hint {
+    margin-top: 8px; font-size: 11.5px; color: var(--text-muted); line-height: 1.6;
+  }
+  .emp-photo-name {
+    margin-top: 4px; font-size: 11.5px; font-weight: 700; color: var(--primary);
+  }
+  @media (max-width: 575.98px) {
+    .emp-photo-preview { width: 132px; height: 132px; font-size: 44px; }
+  }
+
+  /* ── Notes card ── */
+  .emp-notes-foot {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; flex-wrap: wrap; margin-top: 8px;
+  }
+  .emp-notes-help { font-size: 11.5px; color: var(--text-muted); line-height: 1.6; flex: 1 1 200px; }
+  .emp-counter {
+    font-size: 12px; font-weight: 700; color: var(--text-muted);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .emp-counter.is-full { color: var(--danger, #dc3545); }
+
+  /* ── Inline validation message (photo / document rows) ── */
+  .emp-err {
+    margin-top: 6px; font-size: 11.5px; font-weight: 700;
+    color: var(--danger, #dc3545); line-height: 1.5;
+  }
+
+  /* ── Employee documents: aligned table-style grid ── */
+  .emp-doc-table {
+    border: 1.5px solid var(--border); border-radius: 12px; overflow: hidden;
+    margin-bottom: 10px;
+  }
+  .emp-doc-head, .emp-doc-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 2fr) 84px;
+    gap: 12px; align-items: center; padding: 10px 14px;
+  }
+  .emp-doc-head {
+    background: var(--bg); border-bottom: 1.5px solid var(--border);
+    font-size: 11.5px; font-weight: 800; color: var(--text-muted);
+  }
+  .emp-doc-row + .emp-doc-row { border-top: 1px solid var(--border); }
+  /* Grid children must be allowed to shrink, otherwise the file input forces
+     the row wider than the card and the page scrolls horizontally. */
+  .emp-doc-head > *, .emp-doc-row > * { min-width: 0; }
+  .emp-doc-row .form-control, .emp-doc-row .form-select { width: 100%; }
+  .emp-doc-actions { display: flex; justify-content: center; }
+  .emp-doc-row .form-label {
+    font-size: 11.5px; font-weight: 700; margin-bottom: 3px; color: var(--text-muted);
+  }
+  .emp-doc-add {
+    width: 100%; border: 1.5px dashed var(--border); border-radius: 12px;
+    background: transparent; color: var(--primary);
+    font-size: 12.5px; font-weight: 700; padding: 10px;
+    transition: background .15s var(--ease), border-color .15s var(--ease);
+  }
+  .emp-doc-add:hover:not(:disabled) { background: var(--bg); border-color: var(--primary); }
+  .emp-doc-add:disabled { opacity: .5; cursor: not-allowed; }
+  /* Stack cleanly on tablet/mobile — no clipped file input or delete button. */
+  @media (max-width: 767.98px) {
+    .emp-doc-head { display: none; }
+    .emp-doc-row { grid-template-columns: 1fr; gap: 8px; padding: 12px 14px; }
+    .emp-doc-actions { justify-content: flex-start; }
+  }
 
   /* ── Teacher assignments (create wizard only) ── */
   .ta-area-hd {
@@ -450,34 +517,47 @@
   <section class="wizard-step" data-step-key="documents"
            data-step-title="{{ 'الصورة والمستندات' if school_cfg.section_visible('employees', 'photo') else 'الملاحظات والمستندات' }}">
 
+    {# Notes (≈60%) on the RTL start side, photo (≈40%) beside it, matching the
+       approved layout. Both cards use h-100 so their heights stay balanced. #}
     {% if school_cfg.section_visible('employees', 'photo') %}
-    {# Photo + notes side by side. Cards are NOT stretched to equal height
-       (no h-100) — that is what previously left a large blank area under the
-       short notes field. Each card is now only as tall as its content. #}
-    <div class="row g-3 mb-3 align-items-start">
-      <div class="col-lg-4">
-        <div class="card">
-          <div class="card-header"><i class="bi bi-camera-fill text-accent"></i>صورة الموظف</div>
-          <div class="card-body text-center py-3">
-            <div class="mb-3" style="width:120px;height:120px;border-radius:12px;
-                  background:var(--bg);display:flex;align-items:center;justify-content:center;
-                  margin:0 auto;font-size:40px;color:var(--text-muted)" id="photoPreviewWrap">
-              <i class="bi bi-person-fill" id="photoPreviewIcon"></i>
-              <img id="photoPreviewImg" class="rounded-12 d-none"
-                   style="width:120px;height:120px;object-fit:cover" alt="">
+    <div class="row g-3 mb-3">
+      <div class="col-lg-7">
+        <div class="card h-100">
+          <div class="card-header"><i class="bi bi-sticky-fill text-accent"></i>ملاحظات</div>
+          <div class="card-body d-flex flex-column">
+            {# maxlength is the real browser-side limit; the server re-checks it. #}
+            <textarea name="notes" id="empNotes" class="form-control flex-grow-1"
+                      rows="4" maxlength="{{ max_employee_notes_chars }}"
+                      style="min-height:110px"
+                      placeholder="أي ملاحظات إضافية عن الموظف ...">{{ sf.get('notes', '')[:max_employee_notes_chars] }}</textarea>
+            <div class="emp-notes-foot">
+              <span class="emp-notes-help">
+                يمكنك كتابة ملاحظات عامة مثل الخبرات، المهارات الخاصة، أو أي معلومات أخرى مفيدة.
+              </span>
+              <span class="emp-counter" id="empNotesCounter">0 / {{ max_employee_notes_chars }}</span>
             </div>
-            <input type="file" name="photo" id="photoInput"
-                   class="form-control form-control-sm" accept="image/*">
           </div>
         </div>
       </div>
-      <div class="col-lg-8">
-        <div class="card">
-          <div class="card-header"><i class="bi bi-sticky-fill text-accent"></i>ملاحظات</div>
-          <div class="card-body py-3">
-            <textarea name="notes" class="form-control" rows="4"
-                      placeholder="أي ملاحظات إضافية...">{{ sf.get('notes', '') }}</textarea>
-            <div class="form-text">لا يوجد حد لطول الملاحظات — يتم حفظ النص كاملاً.</div>
+      <div class="col-lg-5">
+        <div class="card h-100">
+          <div class="card-header"><i class="bi bi-camera-fill text-accent"></i>صورة الموظف</div>
+          <div class="card-body text-center d-flex flex-column">
+            <div class="emp-photo-preview" id="photoPreviewWrap">
+              <i class="bi bi-person-fill" id="photoPreviewIcon"></i>
+              <img id="photoPreviewImg" class="d-none" alt="">
+            </div>
+            <div class="mt-auto">
+              {# The real file input is kept in the DOM (same name/id, same
+                 accept, same upload flow) and simply presented as a button. #}
+              <label for="photoInput" class="btn btn-outline-primary btn-sm emp-photo-btn">
+                <i class="bi bi-upload me-1"></i>اختيار صورة
+              </label>
+              <input type="file" name="photo" id="photoInput" class="d-none" accept="image/*">
+              <div class="emp-upload-hint">PNG, JPG, JPEG — الحد الأقصى 2 ميجابايت</div>
+              <div class="emp-photo-name" id="photoFileName"></div>
+              <div class="emp-err d-none" id="photoError"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -485,32 +565,47 @@
     {% else %}
     <div class="card mb-3">
       <div class="card-header"><i class="bi bi-sticky-fill text-accent"></i>ملاحظات</div>
-      <div class="card-body py-3">
-        <textarea name="notes" class="form-control" rows="4"
-                  placeholder="أي ملاحظات إضافية...">{{ sf.get('notes', '') }}</textarea>
-        <div class="form-text">لا يوجد حد لطول الملاحظات — يتم حفظ النص كاملاً.</div>
+      <div class="card-body">
+        <textarea name="notes" id="empNotes" class="form-control" rows="4"
+                  maxlength="{{ max_employee_notes_chars }}"
+                  placeholder="أي ملاحظات إضافية عن الموظف ...">{{ sf.get('notes', '')[:max_employee_notes_chars] }}</textarea>
+        <div class="emp-notes-foot">
+          <span class="emp-notes-help">
+            يمكنك كتابة ملاحظات عامة مثل الخبرات، المهارات الخاصة، أو أي معلومات أخرى مفيدة.
+          </span>
+          <span class="emp-counter" id="empNotesCounter">0 / {{ max_employee_notes_chars }}</span>
+        </div>
       </div>
     </div>
     {% endif %}
 
     <div class="card mb-4">
       <div class="card-header">
-        <i class="bi bi-folder-fill text-accent"></i>مستندات الموظف
+        <i class="bi bi-file-earmark-text-fill text-accent"></i>مستندات الموظف
+        <span class="text-muted fw-normal" style="font-size:12px">
+          (الحد الأقصى {{ max_employee_documents }} مستندات)
+        </span>
         <span class="badge bg-light text-dark ms-auto" id="empDocCount"></span>
       </div>
-      <div class="card-body py-3">
+      <div class="card-body">
         <p class="text-muted small mb-3">
           <i class="bi bi-info-circle me-1"></i>
           يمكنك رفع مستندات الموظف الآن أو تركها فارغة وإضافتها لاحقاً.
-          الصيغ المقبولة: PDF, JPG, PNG, DOC, DOCX — بحد أقصى {{ max_employee_documents }} مستندات.
+          الصيغ المسموحة: PDF, JPG, PNG, DOC, DOCX — بحد أقصى 2 ميجابايت لكل مستند.
         </p>
-        <div id="empDocRows">
-          <div class="emp-doc-row">
-            <div class="row g-2 align-items-end">
-              <div class="col-md-5">
-                <label class="form-label">نوع المستند</label>
+
+        <div class="emp-doc-table">
+          <div class="emp-doc-head">
+            <div>نوع المستند</div>
+            <div>الملف</div>
+            <div class="text-center">الإجراءات</div>
+          </div>
+          <div id="empDocRows">
+            <div class="emp-doc-row">
+              <div>
+                <label class="form-label d-md-none">نوع المستند</label>
                 <select name="doc_type[]" class="form-select form-select-sm">
-                  <option value="">— اختر النوع —</option>
+                  <option value="">اختر نوع المستند</option>
                   <option value="هوية">هوية وطنية</option>
                   <option value="شهادة">شهادة دراسية</option>
                   <option value="عقد">عقد عمل</option>
@@ -518,17 +613,24 @@
                   <option value="أخرى">أخرى</option>
                 </select>
               </div>
-              <div class="col-md-6">
-                <label class="form-label">الملف</label>
+              <div>
+                <label class="form-label d-md-none">الملف</label>
                 <input type="file" name="doc_file[]" class="form-control form-control-sm"
                        accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+                <div class="emp-err d-none"></div>
               </div>
-              <div class="col-md-1 emp-doc-actions"></div>
+              <div class="emp-doc-actions">
+                <button type="button" class="btn btn-sm btn-outline-danger remove-emp-doc-row"
+                        title="إزالة" aria-label="إزالة هذا المستند">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </div>
             </div>
           </div>
         </div>
-        <button type="button" id="addEmpDocRow" class="btn btn-sm btn-outline-primary">
-          <i class="bi bi-plus-lg"></i> إضافة مستند آخر
+
+        <button type="button" id="addEmpDocRow" class="emp-doc-add">
+          <i class="bi bi-plus-lg me-1"></i>إضافة مستند آخر
         </button>
       </div>
     </div>
@@ -759,23 +861,101 @@
   {% include 'employees/_classification_js.html' %}
 {% endwith %}
 <script>
-/* ════════════ Photo preview ════════════ */
+/* ════════════ Shared limits (server-side constants) ════════════
+   These mirror MAX_EMPLOYEE_PHOTO_BYTES / MAX_EMPLOYEE_DOCUMENT_BYTES /
+   MAX_EMPLOYEE_NOTES_CHARS. The browser checks are for immediate feedback only —
+   the server re-validates every one of them independently before anything is
+   created, so disabling JavaScript cannot bypass a limit. */
+const EMP_MAX_PHOTO_BYTES = {{ max_employee_photo_bytes }};
+const EMP_MAX_DOC_BYTES   = {{ max_employee_document_bytes }};
+const EMP_MAX_NOTES       = {{ max_employee_notes_chars }};
+
+function empShowErr(el, msg) {
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.remove('d-none');
+}
+function empClearErr(el) {
+  if (!el) return;
+  el.textContent = '';
+  el.classList.add('d-none');
+}
+
+/* ════════════ Photo preview + 2 MB limit ════════════ */
 (function () {
   const input = document.getElementById('photoInput');
   if (!input) return;
-  input.addEventListener('change', () => {
-    const file = input.files && input.files[0];
-    const img  = document.getElementById('photoPreviewImg');
-    const icon = document.getElementById('photoPreviewIcon');
-    if (file && file.type.startsWith('image/')) {
-      img.src = URL.createObjectURL(file);
-      img.classList.remove('d-none');
-      icon.classList.add('d-none');
-    } else {
+  const img    = document.getElementById('photoPreviewImg');
+  const icon   = document.getElementById('photoPreviewIcon');
+  const nameEl = document.getElementById('photoFileName');
+  const errEl  = document.getElementById('photoError');
+
+  let lastValidFile = null;   // keeps the accepted selection across a rejection
+  let lastObjectUrl = null;
+
+  // Put the previously accepted file back into the input so an invalid pick
+  // never discards a valid one. Falls back to clearing when the browser has no
+  // DataTransfer support.
+  function restoreLastValid() {
+    if (!lastValidFile) { input.value = ''; return; }
+    try {
+      const dt = new DataTransfer();
+      dt.items.add(lastValidFile);
+      input.files = dt.files;
+    } catch (e) {
+      input.value = '';
+      lastValidFile = null;
+      if (nameEl) nameEl.textContent = '';
       img.classList.add('d-none');
       icon.classList.remove('d-none');
     }
+  }
+
+  input.addEventListener('change', () => {
+    const file = input.files && input.files[0];
+    if (!file) return;                       // nothing selected — keep as is
+
+    // Real byte size, not the accept attribute and not a client-declared value.
+    if (file.size > EMP_MAX_PHOTO_BYTES) {
+      empShowErr(errEl, 'حجم صورة الموظف يجب ألا يتجاوز 2 ميجابايت.');
+      restoreLastValid();                    // current valid preview survives
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      empShowErr(errEl, 'يرجى اختيار ملف صورة صالح (PNG, JPG, JPEG).');
+      restoreLastValid();
+      return;
+    }
+
+    empClearErr(errEl);
+    if (lastObjectUrl) URL.revokeObjectURL(lastObjectUrl);
+    lastObjectUrl = URL.createObjectURL(file);
+    lastValidFile = file;
+    img.src = lastObjectUrl;
+    img.classList.remove('d-none');
+    icon.classList.add('d-none');
+    if (nameEl) nameEl.textContent = file.name;
   });
+})();
+
+/* ════════════ Notes: live counter + real 300-character limit ════════════ */
+(function () {
+  const ta  = document.getElementById('empNotes');
+  const out = document.getElementById('empNotesCounter');
+  if (!ta || !out) return;
+
+  const sync = () => {
+    // Hard clamp catches paste/drop paths that can outrun maxlength, so the
+    // counter can never show a number above the limit.
+    if (ta.value.length > EMP_MAX_NOTES) ta.value = ta.value.slice(0, EMP_MAX_NOTES);
+    out.textContent = `${ta.value.length} / ${EMP_MAX_NOTES}`;
+    out.classList.toggle('is-full', ta.value.length >= EMP_MAX_NOTES);
+  };
+
+  ta.addEventListener('input', sync);
+  ta.addEventListener('paste', () => setTimeout(sync, 0));
+  ta.addEventListener('drop',  () => setTimeout(sync, 0));
+  sync();   // initial load AND after a server-side validation re-render
 })();
 
 /* ════════════ Employee document rows ════════════ */
@@ -783,7 +963,7 @@
   const addBtn = document.getElementById('addEmpDocRow');
   const rows   = document.getElementById('empDocRows');
   const MAX    = {{ max_employee_documents }};
-  const OPTS   = `<option value="">— اختر النوع —</option>
+  const OPTS   = `<option value="">اختر نوع المستند</option>
     <option value="هوية">هوية وطنية</option>
     <option value="شهادة">شهادة دراسية</option>
     <option value="عقد">عقد عمل</option>
@@ -809,21 +989,21 @@
     const row = document.createElement('div');
     row.className = 'emp-doc-row';
     row.innerHTML = `
-      <div class="row g-2 align-items-end">
-        <div class="col-md-5">
-          <label class="form-label">نوع المستند</label>
-          <select name="doc_type[]" class="form-select form-select-sm">${OPTS}</select>
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">الملف</label>
-          <input type="file" name="doc_file[]" class="form-control form-control-sm"
-                 accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
-        </div>
-        <div class="col-md-1 emp-doc-actions">
-          <button type="button" class="btn btn-outline-danger btn-sm w-100 remove-emp-doc-row" title="إزالة">
-            <i class="bi bi-trash"></i>
-          </button>
-        </div>
+      <div>
+        <label class="form-label d-md-none">نوع المستند</label>
+        <select name="doc_type[]" class="form-select form-select-sm">${OPTS}</select>
+      </div>
+      <div>
+        <label class="form-label d-md-none">الملف</label>
+        <input type="file" name="doc_file[]" class="form-control form-control-sm"
+               accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+        <div class="emp-err d-none"></div>
+      </div>
+      <div class="emp-doc-actions">
+        <button type="button" class="btn btn-sm btn-outline-danger remove-emp-doc-row"
+                title="إزالة" aria-label="إزالة هذا المستند">
+          <i class="bi bi-trash"></i>
+        </button>
       </div>`;
     rows.appendChild(row);
     refreshBtn();
@@ -834,6 +1014,26 @@
       e.target.closest('.emp-doc-row')?.remove();
       refreshBtn();
     }
+  });
+
+  // Per-document 2 MB limit. Delegated on the container, so it covers the
+  // initial row, every dynamically added row, and rows added again after a
+  // delete — without re-binding anything.
+  rows.addEventListener('change', e => {
+    const fi = e.target;
+    if (!fi.matches || !fi.matches('input[name="doc_file[]"]')) return;
+    const row   = fi.closest('.emp-doc-row');
+    const errEl = row ? row.querySelector('.emp-err') : null;
+    const file  = fi.files && fi.files[0];
+    if (!file) { empClearErr(errEl); return; }
+    if (file.size > EMP_MAX_DOC_BYTES) {
+      // Clear ONLY this file input — the row's نوع المستند selection and every
+      // other document row are left exactly as they were.
+      fi.value = '';
+      empShowErr(errEl, 'حجم كل مستند يجب ألا يتجاوز 2 ميجابايت.');
+      return;
+    }
+    empClearErr(errEl);
   });
 
   refreshBtn();   // reflect the initial row count on load
