@@ -150,6 +150,59 @@
   border-top: 1px solid #f3f6fa;
 }
 
+/* ── Pagination footer (below the fee records table) ────────────────────── */
+.fees-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 18px;
+  background: #fbfdff;
+  border-top: 1px solid #eef2f8;
+  direction: rtl;
+}
+.fees-pager-count {
+  font-size: 12.5px;
+  color: #9aabb8;
+}
+.fees-pager .pagination {
+  flex-wrap: wrap;
+  row-gap: 6px;
+  margin-bottom: 0;
+}
+.fees-pager .page-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+  color: #1a3a5c;
+  background: #ffffff;
+  border-color: #dde5f0;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.fees-pager .page-link i { font-size: 12px; }
+.fees-pager .page-item:not(.active):not(.disabled) .page-link:hover {
+  background: #f0f5fc;
+  border-color: #c8d8ec;
+  color: #0f2540;
+}
+.fees-pager .page-link:focus-visible {
+  outline: 2px solid #1a3a5c;
+  outline-offset: 1px;
+  box-shadow: none;
+}
+.fees-pager .page-item.active .page-link {
+  background: #1a3a5c;
+  border-color: #1a3a5c;
+  color: #ffffff;
+}
+.fees-pager .page-item.disabled .page-link {
+  color: #b9c4d1;
+  background: #f7f9fc;
+  border-color: #eef2f8;
+}
+
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 640px) {
   .fees-action-bar {
@@ -167,6 +220,12 @@
     right: 0;
     min-width: unset;
   }
+  .fees-pager {
+    justify-content: center;
+    padding: 12px 12px;
+  }
+  .fees-pager .pagination { justify-content: center; }
+  .fees-pager .page-link { padding: 6px 11px; font-size: 12.5px; }
 }
 </style>
 {% endblock %}
@@ -408,6 +467,83 @@
   {{ overdue_table_body(overdue_installments, show_student_col=True) }}
   {% else %}
   {{ fees_table_body(fee_entries, show_student_col=True, installment_filter=installment_filter) }}
+  {% endif %}
+
+  {#  ── Pagination ────────────────────────────────────────────────────────────
+      Exposes the EXISTING server-side pagination object (`records`, built with
+      per_page=20 in fees.index) so pages beyond the first are reachable. No
+      query, filter, ordering or scoping behaviour is touched here.
+
+      Filter preservation: every current query parameter is carried over via
+      `request.args`, with only `page` removed so `url_for` can set it (passing
+      it twice would raise TypeError). Changing a filter re-submits the GET form
+      without `page`, so the route's default (page=1) applies naturally.  #}
+  {% if records.total %}
+  {% set pager_args = request.args.to_dict() %}
+  {% set _ = pager_args.pop('page', None) %}
+  <div class="fees-pager">
+    {# `first`/`last` are 0 when the page holds no items (an out-of-range ?page=
+       typed by hand); the nav below still renders so the user can navigate back. #}
+    <div class="fees-pager-count">
+      {% if records.items %}
+      عرض {{ records.first }}–{{ records.last }} من أصل {{ records.total }} سجل
+      {% else %}
+      لا توجد سجلات في هذه الصفحة — من أصل {{ records.total }} سجل
+      {% endif %}
+    </div>
+
+    {% if records.pages > 1 %}
+    <nav aria-label="تنقل بين صفحات السجلات">
+      <ul class="pagination pagination-sm">
+
+        <li class="page-item {{ 'disabled' if not records.has_prev }}">
+          {% if records.has_prev %}
+          <a class="page-link" rel="prev"
+             href="{{ url_for('fees.index', page=records.prev_num, **pager_args) }}">
+            <i class="bi bi-chevron-right"></i>السابق
+          </a>
+          {% else %}
+          <span class="page-link" aria-disabled="true">
+            <i class="bi bi-chevron-right"></i>السابق
+          </span>
+          {% endif %}
+        </li>
+
+        {% for p in records.iter_pages(left_edge=1, left_current=1,
+                                       right_current=2, right_edge=1) %}
+          {% if p %}
+          <li class="page-item {{ 'active' if p == records.page }}">
+            {% if p == records.page %}
+            <span class="page-link" aria-current="page">{{ p }}</span>
+            {% else %}
+            <a class="page-link"
+               href="{{ url_for('fees.index', page=p, **pager_args) }}">{{ p }}</a>
+            {% endif %}
+          </li>
+          {% else %}
+          <li class="page-item disabled">
+            <span class="page-link" aria-hidden="true">…</span>
+          </li>
+          {% endif %}
+        {% endfor %}
+
+        <li class="page-item {{ 'disabled' if not records.has_next }}">
+          {% if records.has_next %}
+          <a class="page-link" rel="next"
+             href="{{ url_for('fees.index', page=records.next_num, **pager_args) }}">
+            التالي<i class="bi bi-chevron-left"></i>
+          </a>
+          {% else %}
+          <span class="page-link" aria-disabled="true">
+            التالي<i class="bi bi-chevron-left"></i>
+          </span>
+          {% endif %}
+        </li>
+
+      </ul>
+    </nav>
+    {% endif %}
+  </div>
   {% endif %}
 </div>
 
