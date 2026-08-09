@@ -45,6 +45,8 @@ from app.models import (db, AttendanceDevice, DeviceEventLog,
                         DeviceStudentMapping, DeviceEmployeeMapping,
                         Student, Employee)
 from app.services.hikvision import sync_device, test_connection
+from app.utils.device_numbering import (DeviceNumberAllocationError,
+                                        ensure_student_device_mapping)
 from app.utils.decorators import (admin_required, permission_required,
                                    any_permission_required, super_admin_required,
                                    get_active_year, get_current_school,
@@ -693,12 +695,9 @@ def add_mapping(device_id):
     dev    = _get_device_or_404(device_id, school)
     scope  = getattr(dev, 'device_scope', 'students')
 
-    emp_no = (request.form.get('employee_no_string') or '').strip()
-    if not emp_no or not emp_no.isdigit():
-        flash('رقم التسجيل يجب أن يكون أرقاماً فقط.', 'danger')
-        return redirect(url_for('attendance_devices.mappings', device_id=device_id))
-
     # ── Students ──────────────────────────────────────────────────────────────
+    # The student device number is allocated automatically by the server; any
+    # employee_no_string sent by the browser is ignored for student mappings.
     if scope in ('students', 'mixed'):
         student_id = request.form.get('student_id', type=int)
         if student_id:
@@ -706,21 +705,28 @@ def add_mapping(device_id):
             if not student:
                 flash('الطالب غير موجود أو لا ينتمي لهذه المدرسة.', 'danger')
                 return redirect(url_for('attendance_devices.mappings', device_id=device_id))
-            mapping = DeviceStudentMapping(
-                school_id=school.id, device_id=dev.id,
-                employee_no_string=emp_no, student_id=student.id, is_active=True,
-            )
             try:
-                db.session.add(mapping)
+                mapping, created = ensure_student_device_mapping(dev, student.id, school.id)
                 db.session.commit()
-                flash(f'تم ربط الرقم {emp_no} بالطالب {student.full_name}.', 'success')
-            except IntegrityError:
+            except DeviceNumberAllocationError:
                 db.session.rollback()
-                flash(f'الرقم {emp_no} مرتبط بطالب آخر في هذا الجهاز.', 'danger')
+                flash('تعذر إنشاء رقم الطالب على الجهاز. يرجى المحاولة مرة أخرى.', 'danger')
+                return redirect(url_for('attendance_devices.mappings', device_id=device_id))
+            if created:
+                flash(f'تم ربط الطالب {student.full_name} بالرقم '
+                      f'{mapping.employee_no_string} على هذا الجهاز.', 'success')
+            else:
+                flash(f'الطالب {student.full_name} مرتبط مسبقاً بهذا الجهاز '
+                      f'بالرقم {mapping.employee_no_string}.', 'warning')
             return redirect(url_for('attendance_devices.mappings', device_id=device_id))
 
     # ── Employees ─────────────────────────────────────────────────────────────
     if scope in ('employees', 'mixed'):
+        emp_no = (request.form.get('employee_no_string') or '').strip()
+        if not emp_no or not emp_no.isdigit():
+            flash('رقم التسجيل يجب أن يكون أرقاماً فقط.', 'danger')
+            return redirect(url_for('attendance_devices.mappings', device_id=device_id))
+
         employee_id = request.form.get('employee_id', type=int)
         if not employee_id:
             flash('يرجى اختيار موظف.', 'danger')

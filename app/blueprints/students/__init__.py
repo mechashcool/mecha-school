@@ -22,6 +22,8 @@ from app.utils.buildings import (
     user_can_access_student, validate_building_for_school,
 )
 from app.utils.audit import log_action
+from app.utils.device_numbering import (DeviceNumberAllocationError,
+                                        ensure_student_device_mapping)
 
 students_bp = Blueprint('students', __name__,
                          template_folder='../../templates/students')
@@ -465,7 +467,8 @@ def create():
         # exclusive and a duplicate account is never created.
         create_parent_account   = request.form.get('create_parent_account') == '1'
         link_existing_parent_id = request.form.get('link_existing_parent_id', type=int)
-        employee_no_string      = request.form.get('employee_no_string', '').strip()
+        # The device user number is allocated automatically by the server when
+        # the mapping is created — any value posted by the browser is ignored.
         _dev_id_raw             = request.form.get('device_id', '').strip()
         device_id               = int(_dev_id_raw) if _dev_id_raw.isdigit() else None
         all_devices_flag        = request.form.get('all_devices') == '1'
@@ -527,18 +530,6 @@ def create():
         # typed is validated here. The unique username is produced (and its
         # global uniqueness guaranteed) in the account-creation block below, so
         # a duplicate-username error can never be surfaced.
-
-        if employee_no_string:
-            if not employee_no_string.isdigit():
-                return _re_render('رقم الطالب في جهاز الحضور يجب أن يكون أرقاماً فقط')
-            _check_devs = active_devices if all_devices_flag else (
-                [d for d in active_devices if d.id == device_id] if device_id else [])
-            for _dev in _check_devs:
-                _conflict = (DeviceStudentMapping.query
-                             .filter_by(device_id=_dev.id, employee_no_string=employee_no_string)
-                             .first())
-                if _conflict:
-                    return _re_render(f'الرقم {employee_no_string} مستخدم مسبقاً في جهاز "{_dev.name}"')
 
         # ── Pre-validate optional fee BEFORE creating the student / uploads ───
         # Validating here (no DB writes yet) keeps registration atomic and avoids
@@ -721,17 +712,18 @@ def create():
                 parent_created = True
 
         # ── Create attendance device mappings ────────────────────────────────
-        if employee_no_string and employee_no_string.isdigit():
-            _map_devs = active_devices if all_devices_flag else (
-                [d for d in active_devices if d.id == device_id] if device_id else [])
-            for _dev in _map_devs:
-                db.session.add(DeviceStudentMapping(
-                    school_id=school.id,
-                    device_id=_dev.id,
-                    employee_no_string=employee_no_string,
-                    student_id=student.id,
-                    is_active=True,
-                ))
+        # The device user number is generated per device by the shared helper;
+        # the manager only chooses the device(s).
+        _map_devs = active_devices if all_devices_flag else (
+            [d for d in active_devices if d.id == device_id] if device_id else [])
+        if _map_devs:
+            try:
+                for _dev in _map_devs:
+                    ensure_student_device_mapping(_dev, student.id, school.id)
+            except DeviceNumberAllocationError:
+                db.session.rollback()
+                return _re_render(
+                    'تعذر إنشاء رقم الطالب على جهاز الحضور. يرجى المحاولة مرة أخرى.')
 
         # ── Link to existing parent account ──────────────────────────────────
         # School-scoped lookup — an id from another school resolves to None.
@@ -1277,39 +1269,28 @@ def edit(student_id):
                             file_path=saved,
                         ))
 
-        # ── Attendance device mapping update/create ──────────────────────────
-        _emp_no = request.form.get('employee_no_string', '').strip()
+        # ── Attendance device mapping create ─────────────────────────────────
+        # The device user number is allocated automatically per device; a value
+        # posted by the browser is ignored. An existing mapping keeps its
+        # current number and is only re-activated.
         _raw_dev = request.form.get('device_id', '').strip()
         _dev_id  = int(_raw_dev) if _raw_dev.isdigit() else None
         _all_dev = request.form.get('all_devices') == '1'
 
-        if _emp_no:
-            if not _emp_no.isdigit():
-                flash('رقم الطالب في جهاز الحضور يجب أن يكون أرقاماً فقط', 'warning')
-            else:
-                _dev_targets = active_devices if _all_dev else (
-                    [d for d in active_devices if d.id == _dev_id] if _dev_id else [])
+        _dev_targets = active_devices if _all_dev else (
+            [d for d in active_devices if d.id == _dev_id] if _dev_id else [])
+        if _dev_targets:
+            try:
                 for _dev in _dev_targets:
-                    _existing_map = (DeviceStudentMapping.query
-                                     .filter_by(device_id=_dev.id, student_id=student.id)
-                                     .first())
-                    if _existing_map:
-                        _existing_map.employee_no_string = _emp_no
-                        _existing_map.is_active = True
-                    else:
-                        _conflict = (DeviceStudentMapping.query
-                                     .filter_by(device_id=_dev.id, employee_no_string=_emp_no)
-                                     .first())
-                        if _conflict:
-                            flash(f'الرقم {_emp_no} مستخدم مسبقاً في جهاز "{_dev.name}"', 'warning')
-                        else:
-                            db.session.add(DeviceStudentMapping(
-                                school_id=school.id,
-                                device_id=_dev.id,
-                                employee_no_string=_emp_no,
-                                student_id=student.id,
-                                is_active=True,
-                            ))
+                    _map, _created = ensure_student_device_mapping(
+                        _dev, student.id, school.id)
+                    if not _created:
+                        _map.is_active = True
+            except DeviceNumberAllocationError:
+                db.session.rollback()
+                flash('تعذر إنشاء رقم الطالب على جهاز الحضور. يرجى المحاولة مرة أخرى.',
+                      'danger')
+                return redirect(url_for('students.edit', student_id=student_id))
 
         # ── Add new parent account (edit form) ──────────────────────────────
         # Guardian profile fields come from the student record (already updated above)

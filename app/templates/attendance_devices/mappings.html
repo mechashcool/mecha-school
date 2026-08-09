@@ -75,11 +75,8 @@
       </div>
       <div class="card-body">
         <form method="POST" action="{{ url_for('attendance_devices.add_mapping', device_id=device.id) }}">
-          <div class="mb-3">
-            <label class="form-label">رقم التسجيل على الجهاز <span class="text-danger">*</span></label>
-            <input type="text" name="employee_no_string" class="form-control"
-                   pattern="[0-9]+" required placeholder="مثال: 1 أو 42" title="أرقام فقط">
-            <div class="form-text">الرقم الذي برمجته على الجهاز لهذا الطالب.</div>
+          <div class="alert alert-info py-2 px-3 small mb-3">
+            <i class="bi bi-info-circle me-1"></i>سيتم إنشاء رقم الطالب على جهاز الحضور تلقائياً.
           </div>
           <div class="mb-3">
             <label class="form-label">الطالب <span class="text-danger">*</span></label>

@@ -182,16 +182,10 @@
       <div class="card-header"><i class="bi bi-hdd-network-fill text-accent"></i>بيانات جهاز الحضور</div>
       <div class="card-body">
         <p class="text-muted small mb-3">
-          <i class="bi bi-info-circle me-1"></i>اكتب نفس الرقم الموجود داخل جهاز الحضور لهذا الطالب.
+          <i class="bi bi-info-circle me-1"></i>سيتم إنشاء رقم الطالب على جهاز الحضور تلقائياً.
         </p>
         <div class="row g-3 align-items-end">
-          <div class="col-md-4">
-            <label class="form-label">رقم الطالب في الجهاز</label>
-            <input type="text" name="employee_no_string" class="form-control"
-                   placeholder="مثال: 1 أو 25 أو 630" pattern="[0-9]*" inputmode="numeric"
-                   value="{{ sf.get('employee_no_string', '') }}">
-          </div>
-          <div class="col-md-{{ '8' if active_devices|length == 1 else '5' }}">
+          <div class="col-md-{{ '12' if active_devices|length == 1 else '9' }}">
             <label class="form-label">اختيار الجهاز</label>
             <select name="device_id" class="form-select" id="deviceSelect">
               <option value="">— اختر الجهاز —</option>
@@ -881,13 +875,13 @@ calcNet();
 
     // ── Section 2: Academic placement ──
     const building = selText('wizBuilding');
-    const deviceNo = txt('employee_no_string');
-    if (grade || sectionName || building || deviceNo) {
+    const deviceName = selText('deviceSelect');
+    if (grade || sectionName || building || deviceName) {
       let s2 = '<div class="rv-grid">';
       s2 += fld('الصف', grade);
       s2 += fld('الشعبة', sectionName);
       s2 += fld('البناية', building);
-      s2 += fld('رقم في جهاز الحضور', deviceNo);
+      s2 += fld('جهاز الحضور', deviceName);
       s2 += '</div>';
       html += sec('bi-mortarboard-fill', 'التعيين الأكاديمي', s2, 'student');
     }
