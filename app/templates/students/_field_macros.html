@@ -88,9 +88,16 @@
 {# residential area — same school-scoped selector as the internal Add Student
    form. `areas` is the school's ACTIVE ResidentialArea rows (already isolated to
    the school by the caller). Renders nothing when the school has no areas
-   (identical fallback to the internal form — the free-text address stays). #}
-{% macro residential_area_field(areas, sf) %}
-          {% if areas %}
+   (identical fallback to the internal form — the free-text address stays).
+
+   `allow_new` (opt-in, OFF by default) appends the "أخرى — إضافة منطقة جديدة"
+   option plus an inline name input. It is only enabled for the internal,
+   authenticated Add Student wizard — the PUBLIC external-registration form keeps
+   calling this macro with two arguments and therefore stays unchanged (an
+   unauthenticated visitor can never create a residential area). #}
+{% macro residential_area_field(areas, sf, allow_new=False) %}
+          {% set new_selected = allow_new and sf.get('residential_area_id') == '__new__' %}
+          {% if areas or allow_new %}
           <div class="col-md-4">
             <label class="form-label"><i class="bi bi-geo-alt me-1"></i>منطقة السكن</label>
             <select name="residential_area_id" id="wizResidentialArea" class="form-select">
@@ -100,8 +107,25 @@
                 {{ a.name }}
               </option>
               {% endfor %}
+              {% if allow_new %}
+              <option value="__new__" {{ 'selected' if new_selected }}>أخرى — إضافة منطقة جديدة</option>
+              {% endif %}
             </select>
           </div>
+          {% if allow_new %}
+          {# Shown only while "أخرى" is selected. Kept `disabled` when hidden so it
+             is neither submitted nor blocks the wizard's per-step validation. #}
+          <div class="col-md-4 {{ '' if new_selected else 'd-none' }}" id="wizNewAreaWrap">
+            <label class="form-label" for="wizNewAreaName">
+              <i class="bi bi-plus-circle me-1"></i>اسم منطقة السكن الجديدة
+              <span class="text-danger">*</span>
+            </label>
+            <input type="text" name="new_residential_area_name" id="wizNewAreaName"
+                   class="form-control" maxlength="200" placeholder="اكتب اسم المنطقة"
+                   value="{{ sf.get('new_residential_area_name') or '' }}"
+                   {% if new_selected %}required{% else %}disabled{% endif %}>
+          </div>
+          {% endif %}
           {% endif %}
 {% endmacro %}
 

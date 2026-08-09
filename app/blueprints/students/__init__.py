@@ -83,6 +83,85 @@ def _get_residential_area_or_404(area_id, school):
     return area
 
 
+# ─── Shared residential-area NAME rules ──────────────────────────────────────
+# Single source of truth for the name/duplicate rules, used by BOTH the مناطق
+# السكن management page (create + edit) and the inline "أخرى — إضافة منطقة
+# جديدة" option of the Add Student wizard, so the two can never drift.
+
+# Value posted by the wizard's "أخرى — إضافة منطقة جديدة" option.
+NEW_RESIDENTIAL_AREA_SENTINEL = '__new__'
+MAX_RESIDENTIAL_AREA_NAME = 200
+
+
+class ResidentialAreaNameError(ValueError):
+    """Invalid residential-area name — carries a safe Arabic message."""
+
+
+def normalize_residential_area_name(raw):
+    """The normalisation the مناطق السكن form already applies: trim only."""
+    return (raw or '').strip()
+
+
+def validate_residential_area_name(raw):
+    """Return the normalised name, or raise ResidentialAreaNameError (Arabic)."""
+    name = normalize_residential_area_name(raw)
+    if not name:
+        raise ResidentialAreaNameError('اسم المنطقة مطلوب.')
+    if len(name) > MAX_RESIDENTIAL_AREA_NAME:
+        raise ResidentialAreaNameError('اسم المنطقة طويل جداً (الحد الأقصى 200 حرف).')
+    return name
+
+
+def find_residential_area_by_name(school_id, name, exclude_id=None):
+    """Area with this exact name in THIS school only — never another school's.
+
+    Mirrors the uq_residential_area_school_name constraint (school_id + name).
+    """
+    if not school_id or not name:
+        return None
+    q = (ResidentialArea.query
+         .execution_options(bypass_tenant_scope=True)
+         .filter(ResidentialArea.school_id == school_id,
+                 ResidentialArea.name == name))
+    if exclude_id:
+        q = q.filter(ResidentialArea.id != exclude_id)
+    return q.first()
+
+
+def stage_residential_area(raw_name, school_id):
+    """Get-or-create one school's ResidentialArea — staged, never committed.
+
+    Same model, same name rules, same duplicate rule and same school scope as
+    the مناطق السكن page. An area with the same normalised name in THIS school
+    is reused instead of creating a second row. The row is only flushed (inside
+    a SAVEPOINT), so the caller's existing transaction still owns the final
+    commit/rollback. Returns (area, created).
+    """
+    from sqlalchemy.exc import IntegrityError as _IntegrityError
+
+    name = validate_residential_area_name(raw_name)
+    if not school_id:
+        raise ResidentialAreaNameError('يرجى اختيار مدرسة أولاً.')
+
+    existing = find_residential_area_by_name(school_id, name)
+    if existing:
+        return existing, False
+
+    area = ResidentialArea(school_id=school_id, name=name, is_active=True)
+    try:
+        with db.session.begin_nested():
+            db.session.add(area)
+    except _IntegrityError:
+        # Concurrent insert of the same (school_id, name) — the SAVEPOINT rolled
+        # back, so re-read and reuse the row the other request committed.
+        existing = find_residential_area_by_name(school_id, name)
+        if existing:
+            return existing, False
+        raise ResidentialAreaNameError(
+            'تعذر حفظ منطقة السكن. يرجى المحاولة مرة أخرى.')
+    return area, True
+
+
 @students_bp.route('/')
 @login_required
 @permission_required('view_students')
@@ -518,13 +597,32 @@ def create():
         # area of THIS school; an invalid, inactive, or foreign-school id is
         # rejected here (submitted values preserved by _re_render) instead of
         # being silently discarded, so the user can correct the selection.
-        _raw_area_id = request.form.get('residential_area_id', type=int)
+        # The "أخرى — إضافة منطقة جديدة" option posts a sentinel instead of an id:
+        # the typed name is created (or an existing same-name area of THIS school
+        # is reused) through the SAME helper/rules as the مناطق السكن page. The
+        # row is only staged here — it is committed by this route's single final
+        # commit, so a later failure rolls it back with the student.
+        _raw_area_field = (request.form.get('residential_area_id') or '').strip()
         residential_area_id_val = None
-        if _raw_area_id:
-            residential_area_id_val = _validate_residential_area_for_school(
-                _raw_area_id, school.id)
-            if not residential_area_id_val:
-                return _re_render('يرجى اختيار منطقة سكن صالحة لهذه المدرسة.')
+        _new_area_id_for_log = None
+        _new_area_name_for_log = None
+        if _raw_area_field == NEW_RESIDENTIAL_AREA_SENTINEL:
+            try:
+                _new_area, _new_area_created = stage_residential_area(
+                    request.form.get('new_residential_area_name'), school.id)
+            except ResidentialAreaNameError as _area_exc:
+                return _re_render(str(_area_exc))
+            residential_area_id_val = _new_area.id
+            if _new_area_created:
+                _new_area_id_for_log = _new_area.id
+                _new_area_name_for_log = _new_area.name
+        elif _raw_area_field:
+            _raw_area_id = request.form.get('residential_area_id', type=int)
+            if _raw_area_id:
+                residential_area_id_val = _validate_residential_area_for_school(
+                    _raw_area_id, school.id)
+                if not residential_area_id_val:
+                    return _re_render('يرجى اختيار منطقة سكن صالحة لهذه المدرسة.')
 
         # Parent credentials are generated automatically — nothing the manager
         # typed is validated here. The unique username is produced (and its
@@ -874,6 +972,14 @@ def create():
         # Student, fee record, installments, payments, receipt numbers, and
         # Revenue records are all staged in the same session and committed here.
         db.session.commit()
+
+        # Audit the inline area creation only AFTER it is actually committed
+        # (log_action commits on its own, so it must never run before this
+        # point or it would persist a half-staged registration).
+        if _new_area_name_for_log:
+            log_action('create', 'residential_area', _new_area_id_for_log,
+                       details=f'created residential area '
+                               f'"{_new_area_name_for_log}" from add-student form')
 
         # ── Post-commit side effects via the SAME canonical helper as
         # fees.pay_installment — one call per accepted payment operation, so
@@ -1637,23 +1743,20 @@ def residential_area_new():
         return redirect(url_for('students.index'))
 
     if request.method == 'POST':
-        name = request.form.get('name', '').strip()
         is_active = request.form.get('is_active', '1') == '1'
 
-        if not name:
-            flash('اسم المنطقة مطلوب.', 'danger')
-            return render_template('students/residential_area_form.html',
-                                   area=None, form_name=name)
-        if len(name) > 200:
-            flash('اسم المنطقة طويل جداً (الحد الأقصى 200 حرف).', 'danger')
-            return render_template('students/residential_area_form.html',
-                                   area=None, form_name=name[:200])
+        # Same shared name rules the Add Student inline option uses.
+        try:
+            name = validate_residential_area_name(request.form.get('name'))
+        except ResidentialAreaNameError as exc:
+            flash(str(exc), 'danger')
+            return render_template(
+                'students/residential_area_form.html', area=None,
+                form_name=normalize_residential_area_name(
+                    request.form.get('name'))[:MAX_RESIDENTIAL_AREA_NAME])
 
         # Prevent duplicate names within the same school.
-        existing = (ResidentialArea.query
-                    .execution_options(bypass_tenant_scope=True)
-                    .filter_by(school_id=school.id, name=name)
-                    .first())
+        existing = find_residential_area_by_name(school.id, name)
         if existing:
             flash('توجد منطقة سكن بنفس الاسم في هذه المدرسة.', 'danger')
             return render_template('students/residential_area_form.html',
@@ -1680,22 +1783,17 @@ def residential_area_edit(area_id):
     area = _get_residential_area_or_404(area_id, school)
 
     if request.method == 'POST':
-        name = request.form.get('name', '').strip()
         is_active = request.form.get('is_active', '1') == '1'
 
-        if not name:
-            flash('اسم المنطقة مطلوب.', 'danger')
-            return render_template('students/residential_area_form.html', area=area)
-        if len(name) > 200:
-            flash('اسم المنطقة طويل جداً (الحد الأقصى 200 حرف).', 'danger')
+        # Same shared name rules the Add Student inline option uses.
+        try:
+            name = validate_residential_area_name(request.form.get('name'))
+        except ResidentialAreaNameError as exc:
+            flash(str(exc), 'danger')
             return render_template('students/residential_area_form.html', area=area)
 
-        duplicate = (ResidentialArea.query
-                     .execution_options(bypass_tenant_scope=True)
-                     .filter(ResidentialArea.school_id == school.id,
-                             ResidentialArea.name == name,
-                             ResidentialArea.id != area.id)
-                     .first())
+        duplicate = find_residential_area_by_name(school.id, name,
+                                                  exclude_id=area.id)
         if duplicate:
             flash('توجد منطقة سكن أخرى بنفس الاسم في هذه المدرسة.', 'danger')
             return render_template('students/residential_area_form.html', area=area)

@@ -168,7 +168,7 @@
           </div>
           {% endif %}
 
-          {{ sfields.residential_area_field(residential_areas_list, sf) }}
+          {{ sfields.residential_area_field(residential_areas_list, sf, allow_new=True) }}
 
           {{ sfields.student_address_field(form_cfg, sf) }}
         </div>
@@ -769,6 +769,25 @@ function updatePayAmountWords(i) {
 renderInstDates();
 calcNet();
 
+/* ════════════ Inline "add new residence area" toggle ════════════ */
+/* Shows the new-area name input only while "أخرى — إضافة منطقة جديدة" is
+   selected. The input stays `disabled` while hidden so it is not submitted and
+   cannot block the step validation below. The server re-validates regardless. */
+(function () {
+  const sel  = document.getElementById('wizResidentialArea');
+  const wrap = document.getElementById('wizNewAreaWrap');
+  const inp  = document.getElementById('wizNewAreaName');
+  if (!sel || !wrap || !inp) return;
+  function apply() {
+    const on = sel.value === '__new__';
+    wrap.classList.toggle('d-none', !on);
+    inp.disabled = !on;
+    inp.required = on;
+    if (!on) { inp.value = ''; }
+  }
+  sel.addEventListener('change', apply);
+})();
+
 /* ════════════ Wizard engine ════════════ */
 (function () {
   const form = document.getElementById('studentWizardForm');
@@ -867,7 +886,10 @@ calcNet();
     s1 += fld('الجنس', genderMap[txt('gender')] || '');
     s1 += fld('الجنسية', txt('nationality'));
     s1 += fld('رقم الهاتف', txt('phone'));
-    s1 += fld('منطقة السكن', selText('wizResidentialArea'));
+    s1 += fld('منطقة السكن',
+              (document.getElementById('wizResidentialArea') || {}).value === '__new__'
+                ? txt('new_residential_area_name')
+                : selText('wizResidentialArea'));
     s1 += fld('العنوان', txt('address'));
     s1 += fld('ملاحظات', txt('notes'));
     s1 += '</div>';
