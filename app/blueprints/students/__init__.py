@@ -1312,41 +1312,62 @@ def edit(student_id):
             student.building_id = _new_building
 
         # ── Residential area (optional) — server-side school validation ──────
+        # The "أخرى — إضافة منطقة جديدة" option posts NEW_RESIDENTIAL_AREA_SENTINEL
+        # instead of an id — the SAME sentinel, name rules, duplicate rule and
+        # school scope the Add Student wizard uses (stage_residential_area), so an
+        # existing same-name area of THIS school is reused instead of creating a
+        # second row. The row is only staged: this route's single final commit
+        # owns it, so a later failure rolls it back together with the edit.
         if school:
-            _raw_area = request.form.get('residential_area_id', type=int)
-            if not _raw_area:
-                # Intentional empty selection — clear any existing link.
-                student.residential_area_id = None
-            elif _raw_area == student.residential_area_id:
-                # Unchanged — keep it even if the area was deactivated meanwhile
-                # (it was validated against this school when originally linked).
-                pass
+            _raw_area_field = (request.form.get('residential_area_id') or '').strip()
+            _area_error = None
+            if _raw_area_field == NEW_RESIDENTIAL_AREA_SENTINEL:
+                try:
+                    _new_area, _ = stage_residential_area(
+                        request.form.get('new_residential_area_name'), school.id)
+                except ResidentialAreaNameError as _area_exc:
+                    _area_error = str(_area_exc)
+                else:
+                    student.residential_area_id = _new_area.id
             else:
-                _area_id = _validate_residential_area_for_school(_raw_area, school.id)
-                if not _area_id:
-                    # Invalid / inactive / foreign-school id — reject the change
-                    # without saving anything and without clearing the student's
-                    # current area. Submitted values are preserved (the dirty
-                    # student object carries them into the form) so the user can
-                    # correct the selection. No commit happens on this path, so
-                    # the in-memory edits are discarded at request teardown.
-                    flash('يرجى اختيار منطقة سكن صالحة لهذه المدرسة.', 'danger')
-                    return render_template(
-                        'students/form.html', student=student, sections=sections,
-                        grades=grades, stages=['ابتدائية', 'متوسطة', 'إعدادية'],
-                        selected_grade_id=selected_grade_id,
-                        selected_stage=selected_stage,
-                        active_devices=active_devices,
-                        available_parents=available_parents,
-                        linked_parents=linked_parents,
-                        existing_device_mappings=existing_device_mappings,
-                        form_cfg=form_cfg,
-                        buildings_enabled=buildings_on,
-                        buildings_list=buildings_for_form,
-                        selected_building_id=student.building_id,
-                        residential_areas_list=residential_areas_for_form,
-                    )
-                student.residential_area_id = _area_id
+                _raw_area = request.form.get('residential_area_id', type=int)
+                if not _raw_area:
+                    # Intentional empty selection — clear any existing link.
+                    student.residential_area_id = None
+                elif _raw_area == student.residential_area_id:
+                    # Unchanged — keep it even if the area was deactivated meanwhile
+                    # (it was validated against this school when originally linked).
+                    pass
+                else:
+                    _area_id = _validate_residential_area_for_school(_raw_area, school.id)
+                    if not _area_id:
+                        _area_error = 'يرجى اختيار منطقة سكن صالحة لهذه المدرسة.'
+                    else:
+                        student.residential_area_id = _area_id
+            if _area_error:
+                # Invalid / inactive / foreign-school id, or an invalid new-area
+                # name — reject the change without saving anything and without
+                # clearing the student's current area. Submitted values are
+                # preserved (the dirty student object carries them into the
+                # form) so the user can correct the selection. No commit
+                # happens on this path, so the in-memory edits are discarded
+                # at request teardown.
+                flash(_area_error, 'danger')
+                return render_template(
+                    'students/form.html', student=student, sections=sections,
+                    grades=grades, stages=['ابتدائية', 'متوسطة', 'إعدادية'],
+                    selected_grade_id=selected_grade_id,
+                    selected_stage=selected_stage,
+                    active_devices=active_devices,
+                    available_parents=available_parents,
+                    linked_parents=linked_parents,
+                    existing_device_mappings=existing_device_mappings,
+                    form_cfg=form_cfg,
+                    buildings_enabled=buildings_on,
+                    buildings_list=buildings_for_form,
+                    selected_building_id=student.building_id,
+                    residential_areas_list=residential_areas_for_form,
+                )
 
         if form_cfg.section_visible('notes'):
             student.notes = request.form.get('notes', '').strip()

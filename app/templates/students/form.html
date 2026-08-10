@@ -1,4 +1,7 @@
 {% extends "shared/base.html" %}
+{# Shared student field markup — the residential-area selector below is the very
+   same macro the Add Student wizard uses, so the two can never drift. #}
+{% import 'students/_field_macros.html' as sfields %}
 {% block title %}{{ 'تعديل طالب' if student else 'إضافة طالب' }}{% endblock %}
 {% block page_title %}{{ 'تعديل: ' + student.full_name if student else 'طالب جديد' }}{% endblock %}
 
@@ -155,23 +158,16 @@
             {% endif %}
 
             {# residential area (optional per-school lookup — separate from the
-               free-text address, which is unchanged) #}
-            {% if residential_areas_list %}
-            <div class="col-md-4">
-              <label class="form-label">
-                <i class="bi bi-geo-alt me-1"></i>منطقة السكن
-              </label>
-              <select name="residential_area_id" class="form-select">
-                <option value="">— بدون منطقة —</option>
-                {% for a in residential_areas_list %}
-                <option value="{{ a.id }}"
-                        {{ 'selected' if student and student.residential_area_id == a.id }}>
-                  {{ a.name }}{{ '' if a.is_active else ' (معطّلة)' }}
-                </option>
-                {% endfor %}
-              </select>
-            </div>
-            {% endif %}
+               free-text address, which is unchanged). Same macro (and therefore
+               the same "أخرى — إضافة منطقة جديدة" option + inline name input) as
+               the Add Student wizard. On a fresh GET the student's current area
+               is pre-selected; on a re-render after a validation error the
+               submitted values win, exactly like the rest of this form. #}
+            {% set ra_sf = request.form if request.method == 'POST'
+                           else {'residential_area_id':
+                                 student.residential_area_id|string
+                                 if student and student.residential_area_id else ''} %}
+            {{ sfields.residential_area_field(residential_areas_list, ra_sf, allow_new=True) }}
 
             {# address #}
             {% if form_cfg.field_visible('address') %}
@@ -619,6 +615,25 @@
       event.target.closest('.document-row')?.remove();
     }
   });
+
+/* ════════════ Inline "add new residence area" toggle ════════════ */
+/* Identical to the Add Student wizard: the new-area name input is only shown
+   while "أخرى — إضافة منطقة جديدة" is selected, and stays `disabled` (and
+   cleared) while hidden so it is never submitted. The server re-validates. */
+(function () {
+  const sel  = document.getElementById('wizResidentialArea');
+  const wrap = document.getElementById('wizNewAreaWrap');
+  const inp  = document.getElementById('wizNewAreaName');
+  if (!sel || !wrap || !inp) return;
+  function apply() {
+    const on = sel.value === '__new__';
+    wrap.classList.toggle('d-none', !on);
+    inp.disabled = !on;
+    inp.required = on;
+    if (!on) { inp.value = ''; }
+  }
+  sel.addEventListener('change', apply);
+})();
 
 /* Live search for existing-parent dropdowns */
 (function () {

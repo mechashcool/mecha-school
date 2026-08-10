@@ -103,8 +103,13 @@
             <select name="residential_area_id" id="wizResidentialArea" class="form-select">
               <option value="">— بدون منطقة —</option>
               {% for a in areas %}
+              {# The "(معطّلة)" marker only ever appears for a caller that passes a
+                 deactivated row (the Edit Student form, which keeps the student's
+                 current area selectable). The Add Student wizard and the public
+                 registration form pass ACTIVE areas only, so their output is
+                 unchanged. #}
               <option value="{{ a.id }}" {{ 'selected' if sf.get('residential_area_id') == a.id|string }}>
-                {{ a.name }}
+                {{ a.name }}{{ '' if a.is_active else ' (معطّلة)' }}
               </option>
               {% endfor %}
               {% if allow_new %}
