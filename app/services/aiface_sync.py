@@ -133,7 +133,7 @@ def prepare_photo_for_device(photo, label: str = '') -> tuple:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def sync_person_to_device(device, enrollid: int, name: str, photo,
-                           entity_type: str = 'student') -> dict:
+                           entity_type: str = 'student', card=None) -> dict:
     """
     Push one person (student or employee) to an AI Face device.
 
@@ -142,8 +142,16 @@ def sync_person_to_device(device, enrollid: int, name: str, photo,
                                        (non-fatal for TimeoutError and generic errors;
                                         FATAL only if device is offline at this point)
       2. prepare_photo_for_device()  — EXIF-rotate, resize, JPEG
-      3. setuserinfo(enrollid, name, backupnum=50, record=<b64>)
+      3. setuserinfo(enrollid, name, backupnum=50, record=<b64>[, card=<str>])
       4. enableuser(enrollid)        — enable face access (non-fatal)
+
+    `card` is the OPTIONAL RFID card credential (Student.rfid_tag_id). When it is
+    empty/None — always the case for employees, and for students with no card —
+    the `card` key is omitted entirely and the request is byte-for-byte the same
+    as before this parameter existed. The card travels as an extra user field on
+    the SAME setuserinfo request that carries the face photo (backupnum=50); it
+    does NOT replace the photo, is not a second request, and never becomes the
+    enrollid. It is sent as a STRING so leading zeroes ("0006110011") survive.
 
     Returns a comprehensive dict with ok, message, error_message_ar, device_sn,
     enrollid, entity_type, backupnum, photo_info, deleteuser_result,
@@ -218,17 +226,31 @@ def sync_person_to_device(device, enrollid: int, name: str, photo,
         'name':     name,
         'admin':    0,
     }
+
+    # Optional RFID card credential — additive user field on the existing
+    # setuserinfo request. str() (never int()) so a stored value like
+    # "0006110011" keeps every leading zero. Only surrounding whitespace is
+    # stripped; when nothing is left the key is not added at all, so a person
+    # without a card produces exactly the previous payload.
+    card_value = '' if card is None else str(card).strip()
+    if card_value:
+        cmd['card'] = card_value
+
     backupnum = None
     if jpeg_bytes:
         backupnum = 50
         cmd['backupnum'] = backupnum
         cmd['record']    = base64.b64encode(jpeg_bytes).decode('ascii')
         b64_len = len(cmd['record'])
-        log.info('[aiface_cmd] send cmd=setuserinfo sn=%s enrollid=%d backupnum=%d b64_len=%d',
-                 sn, enrollid, backupnum, b64_len)
+        # has_card is a boolean only — the card number is a credential and is
+        # never written to the logs.
+        log.info('[aiface_cmd] send cmd=setuserinfo sn=%s enrollid=%d backupnum=%d '
+                 'b64_len=%d has_card=%s',
+                 sn, enrollid, backupnum, b64_len, bool(card_value))
     else:
-        log.info('[aiface_cmd] send cmd=setuserinfo sn=%s enrollid=%d (no photo error=%s)',
-                 sn, enrollid, photo_info.get('error', 'unknown'))
+        log.info('[aiface_cmd] send cmd=setuserinfo sn=%s enrollid=%d (no photo error=%s) '
+                 'has_card=%s',
+                 sn, enrollid, photo_info.get('error', 'unknown'), bool(card_value))
 
     # ── Step 3: setuserinfo ───────────────────────────────────────────────────
     setuserinfo_result = None

@@ -1023,6 +1023,10 @@ def ajax_aiface_sync_student(device_id):
         name=student.full_name,
         photo=student.photo,
         entity_type='student',
+        # Optional RFID card credential. None/empty → omitted from the payload,
+        # leaving the request exactly as it was before. enrollid stays the
+        # device user number from the mapping — the card never replaces it.
+        card=student.rfid_tag_id,
     )
     status = 200 if result['ok'] else (503 if result.get('offline') else 502)
     return jsonify(result), status
@@ -1093,8 +1097,9 @@ def ajax_aiface_sync_all(device_id):
     succeeded = []
     failed    = []
 
-    def _run_sync(enrollid_str, name, photo, entity_type):
-        res = sync_person_to_device(dev, int(enrollid_str), name, photo, entity_type)
+    def _run_sync(enrollid_str, name, photo, entity_type, card=None):
+        res = sync_person_to_device(dev, int(enrollid_str), name, photo, entity_type,
+                                    card=card)
         if res.get('offline'):
             return res  # propagate offline signal up
         if res['ok']:
@@ -1113,7 +1118,8 @@ def ajax_aiface_sync_all(device_id):
             if not student:
                 continue
             offline_res = _run_sync(m.employee_no_string, student.full_name,
-                                    student.photo, 'student')
+                                    student.photo, 'student',
+                                    card=student.rfid_tag_id)
             if offline_res:
                 return jsonify({'ok': False, 'offline': True,
                                 'message': offline_res.get('message')}), 503

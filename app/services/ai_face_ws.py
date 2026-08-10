@@ -183,6 +183,37 @@ def get_all_device_status() -> dict:
 
 # ── Outbound command API (sync wrapper for Flask handlers) ─────────────────────
 
+# Outbound setuserinfo commands carry credentials that must never reach the logs:
+#   card   — the student's physical RFID card number (cloneable access credential)
+#   record — the base64 face photo (biometric data, also tens of KB of noise)
+# Both are redacted for LOGGING ONLY. The payload actually transmitted to the
+# device is untouched and still contains the complete original values.
+_LOG_REDACT_KEYS      = ('card',)     # value hidden entirely
+_LOG_LENGTH_ONLY_KEYS = ('record',)   # replaced by its size
+
+
+def _safe_log_payload(payload: dict) -> str:
+    """Return a log-safe JSON rendering of an outbound command.
+
+    Redaction is applied to a SHALLOW COPY — the caller's `payload` dict is never
+    mutated, so what is sent over the WebSocket is unaffected. All other fields
+    (cmd, enrollid, name, admin, backupnum, …) stay visible for diagnostics.
+    """
+    if not isinstance(payload, dict):
+        return str(payload)
+    safe = dict(payload)
+    for key in _LOG_REDACT_KEYS:
+        if safe.get(key) not in (None, ''):
+            safe[key] = '<redacted>'
+    for key in _LOG_LENGTH_ONLY_KEYS:
+        val = safe.get(key)
+        if isinstance(val, str) and val:
+            safe[key] = f'<redacted: {len(val)} chars>'
+        elif val:
+            safe[key] = '<redacted>'
+    return json.dumps(safe, ensure_ascii=False)
+
+
 async def _send_and_wait(sn: str, payload: dict, timeout: float) -> dict:
     """Async: send JSON command to connected device and await the ret= response."""
     entry = _connections.get(sn)
@@ -196,7 +227,10 @@ async def _send_and_wait(sn: str, payload: dict, timeout: float) -> dict:
     try:
         raw_out = json.dumps(payload, ensure_ascii=False)
         await ws.send(raw_out)
-        log.info("[aiface] → sn=%s cmd=%s payload=%s", sn, ret_key, raw_out)
+        # Log the REDACTED rendering, never raw_out — raw_out is what the device
+        # receives and still holds the real card number and face-photo bytes.
+        log.info("[aiface] → sn=%s cmd=%s payload=%s",
+                 sn, ret_key, _safe_log_payload(payload))
         return await asyncio.wait_for(fut, timeout=timeout)
     except asyncio.TimeoutError:
         raise TimeoutError(
