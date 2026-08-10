@@ -6,7 +6,7 @@ from io import BytesIO
 from flask import Blueprint, Response, abort, flash, redirect, render_template, request, send_file, url_for
 from flask_login import current_user, login_required
 from sqlalchemy import func, or_
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import joinedload
 
 from app.models import (
@@ -153,6 +153,28 @@ def _get_or_create_stock(item, warehouse, minimum_quantity=None):
     return stock
 
 
+# DB-level uniqueness for item_code is (school_id, academic_year_id, item_code).
+# The name must match the constraint declared on InventoryItem so a concurrent
+# duplicate can be told apart from any other integrity failure.
+ITEM_CODE_UNIQUE_CONSTRAINT = 'uq_inventory_item_school_year_code'
+DUPLICATE_ITEM_CODE_MESSAGE = 'رمز المادة مستخدم بالفعل، يرجى اختيار رمز آخر.'
+
+
+def _is_duplicate_item_code_error(error):
+    """True only for the item_code uniqueness conflict, never for other errors.
+
+    Prefers psycopg2's structured diagnostics (constraint_name); falls back to
+    matching the constraint name in the driver message when diagnostics are not
+    available. Any other IntegrityError is left alone so unrelated problems are
+    not mislabelled as a duplicate code.
+    """
+    original = getattr(error, 'orig', None)
+    constraint = getattr(getattr(original, 'diag', None), 'constraint_name', None)
+    if constraint:
+        return constraint == ITEM_CODE_UNIQUE_CONSTRAINT
+    return ITEM_CODE_UNIQUE_CONSTRAINT in str(original or error)
+
+
 def _recompute_item_total(item):
     """Keep InventoryItem.current_quantity in sync as the sum of its per-warehouse stock."""
     total = (db.session.query(func.coalesce(func.sum(InventoryItemStock.quantity), 0))
@@ -247,18 +269,40 @@ def create_item():
                                    clothing_category_ids=clothing_ids,
                                    clothing_sizes=CLOTHING_SIZES), 400
 
+        def _duplicate_code_response():
+            flash(DUPLICATE_ITEM_CODE_MESSAGE, 'danger')
+            return render_template('inventory/item_form.html', item=None, categories=categories,
+                                   warehouses=warehouses,
+                                   clothing_category_ids=_clothing_category_ids(categories),
+                                   clothing_sizes=CLOTHING_SIZES), 400
+
+        # Reject a duplicate رمز المادة before writing anything. Scope matches the
+        # DB constraint exactly: same school + same academic year. A blank code
+        # stays optional (NULL) and is never checked, as before.
+        submitted_code = request.form.get('item_code', '').strip() or None
+        if submitted_code and _items_query(school, year).filter_by(item_code=submitted_code).first():
+            return _duplicate_code_response()
+
         item = InventoryItem(
             school_id=school.id,
             academic_year_id=year.id,
         )
         _populate_item(item)
         db.session.add(item)
-        db.session.flush()
+        try:
+            db.session.flush()
 
-        stock = _get_or_create_stock(item, warehouse, minimum_quantity=item.minimum_quantity)
-        stock.quantity = _decimal_value('current_quantity')
-        _recompute_item_total(item)
-        db.session.commit()
+            stock = _get_or_create_stock(item, warehouse, minimum_quantity=item.minimum_quantity)
+            stock.quantity = _decimal_value('current_quantity')
+            _recompute_item_total(item)
+            db.session.commit()
+        except IntegrityError as exc:
+            # The pre-check above closes the common case; the DB constraint stays
+            # the final authority for two concurrent submissions of the same code.
+            db.session.rollback()
+            if not _is_duplicate_item_code_error(exc):
+                raise
+            return _duplicate_code_response()
         flash('تمت إضافة المادة بنجاح.', 'success')
         return redirect(url_for('inventory.index'))
 
