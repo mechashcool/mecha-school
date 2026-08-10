@@ -170,6 +170,11 @@
 
           {{ sfields.residential_area_field(residential_areas_list, sf, allow_new=True) }}
 
+          {# Optional internal RFID enrollment credential — captured from the USB
+             reader (keyboard emulation). Its own Enter handling lives in the
+             macro so the reader's automatic ENTER never advances this wizard. #}
+          {{ sfields.rfid_card_field(sf.get('rfid_tag_id') or '') }}
+
           {{ sfields.student_address_field(form_cfg, sf) }}
         </div>
       </div>
@@ -891,6 +896,7 @@ calcNet();
                 ? txt('new_residential_area_name')
                 : selText('wizResidentialArea'));
     s1 += fld('العنوان', txt('address'));
+    s1 += fld('البطاقة التعريفية', txt('rfid_tag_id'));
     s1 += fld('ملاحظات', txt('notes'));
     s1 += '</div>';
     html += sec('bi-person-fill', 'بيانات الطالب', s1, 'student');
@@ -1127,6 +1133,13 @@ calcNet();
     if (e.key !== 'Enter' || e.isComposing) return;
     if (e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
     const t = e.target;
+    // The RFID field handles (and swallows) its own Enter: the USB card reader
+    // emits ENTER right after typing the card number, and that must never
+    // advance the wizard or save the student. Its own listener already stops
+    // propagation — this is a second, explicit guard.
+    // preventDefault (not a bare return) so the browser's implicit form
+    // submission cannot fire either.
+    if (t.id === 'rfidTagInput') { e.preventDefault(); return; }
     const tag = t.tagName;
     if (tag === 'TEXTAREA' || tag === 'BUTTON' || tag === 'A') return;
     if (tag === 'INPUT') {

@@ -1,4 +1,5 @@
 """Mecha-School — Students Blueprint  (Phase 6: multi-tenant + capacity check)"""
+import re
 from decimal import Decimal, InvalidOperation
 
 from flask import (Blueprint, render_template, redirect, url_for,
@@ -160,6 +161,84 @@ def stage_residential_area(raw_name, school_id):
         raise ResidentialAreaNameError(
             'تعذر حفظ منطقة السكن. يرجى المحاولة مرة أخرى.')
     return area, True
+
+
+# ─── RFID card helpers (البطاقة التعريفية) ───────────────────────────────────
+# The card number is CREDENTIAL STRING data, never a number. USB keyboard-
+# emulation readers (e.g. SmarTec CR20 RF) type fixed-width values such as
+# "0006110011" whose leading zeroes are part of the physical identifier, then
+# emit ENTER. The value is therefore ONLY trimmed of the whitespace/CR/LF the
+# scanner adds — it is never int()-parsed, zero-stripped or re-formatted — and
+# is stored verbatim in Student.rfid_tag_id (String(64), nullable).
+#
+# The reader itself is an input peripheral only: it never talks to the server,
+# has no IP/serial and is NOT an AttendanceDevice.
+
+MAX_RFID_TAG = 64
+
+# Allow-list: realistic card identifiers are decimal or hex, sometimes with a
+# separator. Anything else (spaces, control characters, markup) is rejected so a
+# hand-crafted submission can never smuggle unexpected bytes into the credential.
+_RFID_TAG_RE = re.compile(r'^[A-Za-z0-9_-]+$')
+
+
+class RfidTagError(ValueError):
+    """Invalid RFID card value — carries a safe Arabic message."""
+
+
+def normalize_rfid_tag(raw):
+    """Return the trimmed card string, or None when no card was scanned.
+
+    Only SURROUNDING whitespace/CR/LF (what the reader's ENTER adds) is removed;
+    the identifier itself — including every leading zero — is preserved exactly.
+    Raises RfidTagError (Arabic) for an over-long or malformed value.
+    """
+    tag = (raw or '').strip()
+    if not tag:
+        return None                      # optional field — stays NULL
+    if len(tag) > MAX_RFID_TAG:
+        raise RfidTagError(
+            f'رقم البطاقة التعريفية طويل جداً (الحد الأقصى {MAX_RFID_TAG} خانة).')
+    if not _RFID_TAG_RE.match(tag):
+        raise RfidTagError(
+            'رقم البطاقة التعريفية غير صالح — يُسمح بالأرقام والحروف الإنجليزية فقط.')
+    return tag
+
+
+def find_student_by_rfid(school_id, tag, exclude_student_id=None):
+    """The student holding this card in THIS school only — never another school's.
+
+    Mirrors the uq_student_school_rfid_tag partial unique index
+    (school_id, rfid_tag_id) WHERE rfid_tag_id IS NOT NULL, so:
+      * the same physical card may be used by a DIFFERENT, unrelated school,
+      * any number of students may have no card at all (NULL).
+    Same pattern as find_residential_area_by_name: the automatic tenant criteria
+    are bypassed and the trusted server-side school id is filtered explicitly, so
+    the check behaves identically for school users and for a super admin with an
+    active school selected.
+    """
+    if not school_id or not tag:
+        return None
+    q = (Student.query
+         .execution_options(bypass_tenant_scope=True)
+         .filter(Student.school_id == school_id,
+                 Student.rfid_tag_id == tag))
+    if exclude_student_id:
+        q = q.filter(Student.id != exclude_student_id)
+    return q.first()
+
+
+def validate_rfid_for_student(raw, school_id, exclude_student_id=None):
+    """Normalise + enforce the one-card-one-student rule inside ONE school.
+
+    Returns the value to store (str or None). Raises RfidTagError (Arabic) when
+    the value is malformed or already belongs to another student of this school —
+    the other student's record is never read out, transferred or overwritten.
+    """
+    tag = normalize_rfid_tag(raw)
+    if tag and find_student_by_rfid(school_id, tag, exclude_student_id):
+        raise RfidTagError('هذه البطاقة مرتبطة بطالب آخر بالفعل.')
+    return tag
 
 
 @students_bp.route('/')
@@ -624,6 +703,17 @@ def create():
                 if not residential_area_id_val:
                     return _re_render('يرجى اختيار منطقة سكن صالحة لهذه المدرسة.')
 
+        # ── RFID card (optional) — validated BEFORE any upload/DB write ──────
+        # Empty is allowed (no card). A scanned value is trimmed, format-checked
+        # and rejected here if it already belongs to another student of THIS
+        # school, so no photo is uploaded and no row is written on a duplicate.
+        # The submitted value is preserved by _re_render so the user can rescan.
+        try:
+            rfid_tag_val = validate_rfid_for_student(
+                request.form.get('rfid_tag_id'), school.id)
+        except RfidTagError as _rfid_exc:
+            return _re_render(str(_rfid_exc))
+
         # Parent credentials are generated automatically — nothing the manager
         # typed is validated here. The unique username is produced (and its
         # global uniqueness guaranteed) in the account-creation block below, so
@@ -709,7 +799,8 @@ def create():
             nationality       = request.form.get('nationality', '').strip(),
             address           = request.form.get('address', '').strip(),
             phone             = request.form.get('phone', '').strip(),
-            rfid_tag_id       = request.form.get('rfid_tag_id', '').strip() or None,
+            # Pre-validated above (trimmed, format-checked, duplicate-checked).
+            rfid_tag_id       = rfid_tag_val,
             section_id        = section_id,
             guardian_name     = request.form.get('guardian_name', '').strip(),
             guardian_phone    = request.form.get('guardian_phone', '').strip(),
@@ -741,8 +832,10 @@ def create():
             )
             if _is_student_id_conflict:
                 return _re_render('رقم الطالب مستخدم مسبقاً، يرجى المحاولة مرة أخرى')
+            # Race backstop: another request committed the same card between the
+            # pre-check above and this flush. The DB constraint is authoritative.
             if 'uq_student_school_rfid_tag' in _exc_str:
-                return _re_render('رقم RFID مستخدم مسبقاً لطالب آخر في هذه المدرسة')
+                return _re_render('هذه البطاقة مرتبطة بطالب آخر بالفعل.')
             return _re_render('تعذر حفظ بيانات الطالب بسبب تعارض في القيم. يرجى المحاولة مرة أخرى')
 
         if is_feature_enabled(_school_id_for_feat, 'students.documents_upload') and form_cfg.section_visible('student_documents'):
@@ -1238,12 +1331,41 @@ def edit(student_id):
 
     if request.method == 'POST':
         from datetime import datetime as dt
+        from sqlalchemy.exc import IntegrityError as _EditIntegrityError
 
         # ── Backend enforcement of required fields per school config ─────────
         _cfg_errors = form_cfg.validate(request.form)
         if _cfg_errors:
             for _err in _cfg_errors:
                 flash(_err, 'danger')
+            return render_template(
+                'students/form.html', student=student, sections=sections,
+                grades=grades, stages=['ابتدائية', 'متوسطة', 'إعدادية'],
+                selected_grade_id=selected_grade_id, selected_stage=selected_stage,
+                active_devices=active_devices, available_parents=available_parents,
+                linked_parents=linked_parents,
+                existing_device_mappings=existing_device_mappings,
+                form_cfg=form_cfg,
+                buildings_enabled=buildings_on,
+                buildings_list=buildings_for_form,
+                selected_building_id=student.building_id,
+                residential_areas_list=residential_areas_for_form,
+            )
+
+        # ── RFID card (optional) — validated BEFORE any field is mutated ─────
+        # Same normalisation, format rule and one-card-one-student rule as the
+        # Add Student wizard. The scope is THIS student's own school (the school
+        # the DB constraint uses), and the student themselves is excluded so
+        # re-saving the form without rescanning keeps the current card. An empty
+        # value intentionally clears the card, exactly like the other optional
+        # fields on this form. A card held by another student of the same school
+        # is rejected without touching either record.
+        try:
+            student.rfid_tag_id = validate_rfid_for_student(
+                request.form.get('rfid_tag_id'), student.school_id,
+                exclude_student_id=student.id)
+        except RfidTagError as _rfid_exc:
+            flash(str(_rfid_exc), 'danger')
             return render_template(
                 'students/form.html', student=student, sections=sections,
                 grades=grades, stages=['ابتدائية', 'متوسطة', 'إعدادية'],
@@ -1483,7 +1605,19 @@ def edit(student_id):
                     )
                     _linked_parent_name = _ep.full_name
 
-        db.session.commit()
+        try:
+            db.session.commit()
+        except _EditIntegrityError as _exc:
+            # Race backstop only: another request committed the same card between
+            # the pre-check above and this commit. The partial unique index
+            # uq_student_school_rfid_tag is authoritative. Any other integrity
+            # error keeps its previous behaviour (re-raised untouched).
+            db.session.rollback()
+            if 'uq_student_school_rfid_tag' not in str(_exc).lower():
+                raise
+            flash('هذه البطاقة مرتبطة بطالب آخر بالفعل.', 'danger')
+            return redirect(url_for('students.edit', student_id=student_id))
+
         flash('تم تحديث بيانات الطالب بنجاح.', 'success')
         if _parent_added:
             flash('تم إنشاء حساب ولي الأمر وربطه بالطالب بنجاح.', 'success')

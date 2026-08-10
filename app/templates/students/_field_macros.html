@@ -11,6 +11,10 @@
   Only student + guardian information and photo/document uploads live here — no
   fee, account, device, class/section, or other internal field is ever included,
   so these macros are safe to render on the public form.
+
+  ONE EXCEPTION: rfid_card_field() is INTERNAL ONLY. It is never called by
+  registration/form.html and must not be added to it — the RFID card is a staff
+  enrollment credential, not something a public applicant may set.
 #}
 
 {# full_name + date_of_birth + gender + nationality + phone — column blocks only.
@@ -132,6 +136,80 @@
           </div>
           {% endif %}
           {% endif %}
+{% endmacro %}
+
+
+{# ── RFID card (البطاقة التعريفية) — INTERNAL ONLY ───────────────────────────
+   Deliberately NOT part of student_identity_fields: that macro is also rendered
+   by the PUBLIC external-registration form, and the card is an internal staff
+   enrollment credential. Only the authenticated Add Student wizard and Edit
+   Student form call this macro, so the public form stays unchanged.
+
+   Column block only — the caller supplies the surrounding <div class="row g-3">.
+   `value` is the current/submitted card string (leading zeroes intact).
+
+   Reader behaviour (confirmed hardware — SmarTec CR20 RF): the reader is USB
+   keyboard emulation. It types the card number into the focused field and then
+   emits ENTER. That ENTER must never submit the form or advance the wizard, so
+   it is swallowed on THIS input only (preventDefault + stopPropagation). Every
+   other field keeps its existing keyboard behaviour — Enter is not disabled
+   globally. #}
+{% macro rfid_card_field(value='') %}
+          <div class="col-md-4">
+            <label class="form-label" for="rfidTagInput">
+              <i class="bi bi-credit-card-2-front me-1"></i>البطاقة التعريفية
+            </label>
+            <input type="text" name="rfid_tag_id" id="rfidTagInput"
+                   class="form-control" maxlength="64" autocomplete="off"
+                   placeholder="اضغط هنا ثم مرر البطاقة على القارئ"
+                   value="{{ value or '' }}">
+            <div class="form-text" id="rfidTagHint"
+                 data-default-hint="مرر البطاقة على قارئ RFID لالتقاط رقمها تلقائياً">
+              مرر البطاقة على قارئ RFID لالتقاط رقمها تلقائياً
+            </div>
+          </div>
+          <script>
+          (function () {
+            const input = document.getElementById('rfidTagInput');
+            if (!input || input.dataset.rfidBound) return;
+            input.dataset.rfidBound = '1';
+
+            const hint = document.getElementById('rfidTagHint');
+            const DEFAULT_HINT = hint ? hint.dataset.defaultHint : '';
+
+            function setHint(text, cls) {
+              if (!hint) return;
+              hint.textContent = text;
+              hint.className = 'form-text' + (cls ? ' ' + cls : '');
+            }
+
+            input.addEventListener('focus', function () {
+              if (!input.value.trim()) setHint('بانتظار البطاقة...', 'text-accent');
+            });
+
+            input.addEventListener('blur', function () {
+              // Trim whatever the reader appended, then report the real state.
+              input.value = input.value.trim();
+              if (input.value) setHint('تمت قراءة البطاقة', 'text-success');
+              else setHint(DEFAULT_HINT, '');
+            });
+
+            // The reader's automatic ENTER lands here. Swallow it so it cannot
+            // submit the form, click "التالي", save the student, or move to
+            // another wizard step. stopPropagation() keeps it from reaching the
+            // wizard's form-level Enter handler.
+            input.addEventListener('keydown', function (e) {
+              if (e.key !== 'Enter' || e.isComposing) return;
+              e.preventDefault();
+              e.stopPropagation();
+              // Only surrounding whitespace/CR/LF is removed — the card string
+              // itself (including every leading zero) is kept exactly as typed.
+              input.value = input.value.trim();
+              if (input.value) setHint('تمت قراءة البطاقة بنجاح', 'text-success');
+              else setHint(DEFAULT_HINT, '');
+            });
+          })();
+          </script>
 {% endmacro %}
 
 

@@ -169,6 +169,15 @@
                                  if student and student.residential_area_id else ''} %}
             {{ sfields.residential_area_field(residential_areas_list, ra_sf, allow_new=True) }}
 
+            {# RFID card — same macro, semantics, normalisation, validation and
+               one-card-one-student rule as the Add Student wizard. On a fresh GET
+               the student's saved card is shown; on a re-render after a validation
+               error the submitted value wins, like the rest of this form. Clearing
+               the field intentionally removes the card. #}
+            {{ sfields.rfid_card_field(request.form.get('rfid_tag_id')
+                                       if request.method == 'POST'
+                                       else (student.rfid_tag_id if student else '')) }}
+
             {# address #}
             {% if form_cfg.field_visible('address') %}
             <div class="col-12">
