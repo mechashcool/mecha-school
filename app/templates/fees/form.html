@@ -76,6 +76,24 @@
               </div>
               {% else %}
               <div class="student-search">
+                {# RFID card lookup — an ADDITIONAL way to identify the same
+                   student. The CR20 reader types the card number here and emits
+                   ENTER, which resolves the card through the EXISTING student
+                   search endpoint and selects the student in the same الطالب
+                   field. The name/code search below is unchanged. Stays visible
+                   in both search and dropdown modes. Plain text input — no
+                   WebUSB/WebSerial/driver/desktop service. #}
+                <div class="mb-2">
+                  <div class="input-group">
+                    <span class="input-group-text"><i class="bi bi-credit-card-2-front"></i></span>
+                    <input type="text" id="rfidLookupInput" class="form-control"
+                           placeholder="مرر البطاقة على القارئ"
+                           autocomplete="off" maxlength="64">
+                    <button type="button" class="btn btn-outline-secondary" id="rfidLookupClear"
+                            title="مسح البطاقة"><i class="bi bi-x-lg"></i></button>
+                  </div>
+                  <div id="rfidLookupHint" class="form-text mt-1 d-none"></div>
+                </div>
                 <!-- Search mode: shown when no section is selected -->
                 <div id="searchMode">
                   <div class="input-group">
@@ -494,6 +512,78 @@ if (studentSearch) {
   studentSearch.addEventListener('input', () => {
     clearTimeout(studentSearchTimer);
     studentSearchTimer = setTimeout(searchStudents, 250);
+  });
+}
+
+// ── RFID card lookup (SmarTec CR20, USB keyboard emulation) ──────────────────
+// An ADDITIONAL way to identify the same student — it resolves the card through
+// the EXISTING student-search endpoint (same school / active-year / active-
+// status / building scope) and then hands the result to the EXISTING
+// chooseStudent(), so there is no second student-selection mechanism and no
+// duplicated lookup logic. The name/code search is untouched.
+const rfidLookupInput = document.getElementById('rfidLookupInput');
+const rfidLookupClear = document.getElementById('rfidLookupClear');
+const rfidLookupHint  = document.getElementById('rfidLookupHint');
+
+function setRfidHint(text, cls) {
+  if (!rfidLookupHint) return;
+  rfidLookupHint.textContent = text || '';
+  rfidLookupHint.className = 'form-text mt-1' + (cls ? ' ' + cls : '');
+  if (!text) rfidLookupHint.classList.add('d-none');
+}
+
+function lookupStudentByRfid() {
+  if (!rfidLookupInput) return;
+  // Trim only the whitespace/CR/LF the scanner appends — "0006110011" keeps
+  // every leading zero and is sent to the server as a string.
+  const card = rfidLookupInput.value.trim();
+  rfidLookupInput.value = card;
+  if (!card) { setRfidHint('', ''); return; }
+  setRfidHint('جارٍ البحث عن البطاقة...', 'text-muted');
+
+  fetch(`${studentSearchUrl}?rfid=${encodeURIComponent(card)}`,
+        { headers: { 'Accept': 'application/json' } })
+    .then(r => r.ok ? r.json() : { results: [] })
+    .then(data => {
+      const results = data.results || [];
+      if (!results.length) {
+        // Unknown card, or a student outside this user's allowed scope: keep any
+        // existing selection exactly as it was and never reveal another student.
+        setRfidHint('لا يوجد طالب مرتبط بهذه البطاقة', 'text-danger');
+        return;
+      }
+      // A stale section cascade would contradict the scanned student and the
+      // server rejects that combination ("الطالب لا ينتمي إلى الشعبة المحددة").
+      // Reset the cascade through the EXISTING helpers first, then select.
+      if (sectionIdInput && sectionIdInput.value) {
+        stageFilter.value = '';
+        resetGrade();            // → resetSection() → clearStudentSelection()
+      }
+      chooseStudent(results[0]);
+      setRfidHint('تم تحديد الطالب من البطاقة', 'text-success');
+    })
+    .catch(() => setRfidHint('تعذر البحث عن البطاقة. حاول مرة أخرى.', 'text-danger'));
+}
+
+if (rfidLookupInput) {
+  // The reader emits ENTER right after typing the card number. It is handled
+  // HERE ONLY: it runs the RFID lookup and is stopped before it can submit or
+  // save the fee record. ENTER in every other field is unchanged — no global
+  // Enter handler is added.
+  rfidLookupInput.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    lookupStudentByRfid();
+  });
+}
+
+if (rfidLookupClear) {
+  rfidLookupClear.addEventListener('click', () => {
+    if (!rfidLookupInput) return;
+    rfidLookupInput.value = '';
+    setRfidHint('', '');
+    rfidLookupInput.focus();
   });
 }
 

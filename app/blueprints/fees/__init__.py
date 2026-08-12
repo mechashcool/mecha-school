@@ -1208,13 +1208,28 @@ def search_students():
 
     term = request.args.get('q', '').strip()
     section_id = request.args.get('section_id', type=int)
+    # RFID card lookup — same handling as the /students/ and /fees/ pages: a
+    # STRING that is only trimmed of the whitespace/CR/LF the CR20 reader
+    # appends, so "0006110011" never degrades to "6110011". Never int-parsed.
+    rfid = request.args.get('rfid', '').strip()
 
     # Require at least 2 chars for open search; allow empty term only when loading
-    # all students for a specific section dropdown (section_id must still be validated).
-    if len(term) < 2 and not section_id:
+    # all students for a specific section dropdown (section_id must still be
+    # validated), or when resolving a scanned RFID card.
+    if len(term) < 2 and not section_id and not rfid:
         return jsonify({'results': []})
 
     query = _active_fee_student_query(school, year)
+
+    # RFID card lookup — EXACT match, resolved through the SAME scoped query the
+    # name/code search already uses (_active_fee_student_query: active status +
+    # this school + active academic year + building scope). A scan therefore can
+    # never select a student the user could not select through the normal flow,
+    # and a card from another school or a restricted building resolves to
+    # nothing. Read-only: no student record is touched.
+    if rfid:
+        student = query.filter(Student.rfid_tag_id == rfid).first()
+        return jsonify({'results': [_student_payload(student)] if student else []})
 
     if section_id:
         # Verify section belongs to this school + active year before applying filter.
