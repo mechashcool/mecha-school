@@ -123,6 +123,22 @@
                  value="{{ q }}">
         </div>
 
+        {# RFID card — the CR20 USB reader types the card number here and emits
+           ENTER, which submits these same filters (see extra_js). Plain text
+           input: no WebUSB/WebSerial/driver/desktop service involved. #}
+        <div class="col-md-2">
+          <label class="form-label mb-1 fw-600">
+            <i class="bi bi-credit-card-2-front me-1"></i>البطاقة التعريفية
+          </label>
+          <div class="input-group">
+            <input type="text" name="rfid" id="rpt-rfid" class="form-control"
+                   placeholder="مرر البطاقة على القارئ"
+                   value="{{ rfid }}" autocomplete="off" maxlength="64">
+            <button type="button" class="btn btn-outline-secondary" id="rpt-rfid-clear"
+                    title="مسح البطاقة"><i class="bi bi-x-lg"></i></button>
+          </div>
+        </div>
+
         {# Date range #}
         <div class="col-md-1">
           <label class="form-label mb-1 fw-600">من</label>
@@ -461,11 +477,22 @@
 
 {% elif submitted %}
 <div class="alert alert-secondary mb-4 py-3 d-flex align-items-center gap-3">
+  {# A scanned card that belongs to no reachable student gets its own message, so
+     the user can tell "this card is not registered" apart from "that student has
+     no attendance matching the other filters". #}
+  {% if rfid and rfid_no_student %}
+  <i class="bi bi-credit-card-2-front" style="font-size:22px;opacity:.4;flex-shrink:0"></i>
+  <div>
+    <strong>لا يوجد طالب مرتبط بهذه البطاقة</strong><br>
+    <span style="font-size:13px"><code>{{ rfid }}</code></span>
+  </div>
+  {% else %}
   <i class="bi bi-search" style="font-size:22px;opacity:.4;flex-shrink:0"></i>
   <div>
     <strong>لا توجد نتائج مطابقة للبحث</strong><br>
     <span style="font-size:13px">لم يُعثر على بيانات حضور تطابق الفلاتر المحددة للفترة من {{ start }} إلى {{ end }}.</span>
   </div>
+  {% endif %}
 </div>
 
 {% else %}
@@ -524,6 +551,44 @@
 </script>
 
 <script>
+// ── RFID card filter (SmarTec CR20, USB keyboard emulation) ──────────────────
+// The reader types the card number into this field and then emits ENTER. That
+// ENTER is handled HERE ONLY: it is stopped before it can bubble/submit on its
+// own, and instead runs the page's EXISTING "عرض" submit — the same GET request
+// the button produces, carrying every other filter unchanged. Enter in the
+// student search box, the date fields and everywhere else on the page keeps its
+// existing behaviour — no global Enter handler is added.
+(function () {
+  var rfidInput = document.getElementById('rpt-rfid');
+  var clearBtn  = document.getElementById('rpt-rfid-clear');
+  var form      = document.getElementById('report-filter-form');
+  if (!rfidInput || !form) return;
+
+  function runReport() {
+    if (typeof form.requestSubmit === 'function') form.requestSubmit();
+    else form.submit();
+  }
+
+  rfidInput.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // Trim only the whitespace/CR/LF the scanner appends — "0006110011" keeps
+    // every leading zero and is sent to the server as a string.
+    rfidInput.value = rfidInput.value.trim();
+    runReport();
+  });
+
+  // Clear the card and re-run the report without touching any other filter.
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function () {
+      rfidInput.value = '';
+      rfidInput.focus();
+      runReport();
+    });
+  }
+})();
+
 function toggleDetail(id) {
   var row = document.getElementById(id);
   if (row) row.style.display = (row.style.display === 'none' ? 'table-row' : 'none');

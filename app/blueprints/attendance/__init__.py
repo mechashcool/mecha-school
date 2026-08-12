@@ -29,7 +29,14 @@ def _notify_absent_parents(student, school_id, today_str, source='manual', shift
 
     title = 'تنبيه غياب'
     body  = f'تم تسجيل الطالب {student.full_name} غائباً بتاريخ {today_str}.'
+    # Deep-link payload. `type` is included alongside `ntype` so the value is
+    # present under the SAME key the homework push uses (that payload sets both
+    # `type` and `ntype`); this keeps the notification contract symmetric and
+    # lets the mobile router classify the tap regardless of which of
+    # type / ntype / screen it reads. `student_id` is the only identifier the
+    # app needs to open /parent/child/<student_id>/attendance.
     data  = {
+        'type':         'attendance',
         'ntype':        'attendance',
         'action':       'absent',
         'status':       'absent',
@@ -879,7 +886,7 @@ def _build_report_pools(school, year):
 
 
 def _get_student_query(school, all_sections, stage=None, grade_id=None,
-                       section_id=None, shift_id=None, q=None):
+                       section_id=None, shift_id=None, q=None, rfid=None):
     """Build and return a Student query with appropriate filters."""
     from app.models import AttendanceShift
     grade_map = {s.grade_id: s for s in all_sections}
@@ -917,6 +924,15 @@ def _get_student_query(school, all_sections, stage=None, grade_id=None,
             Student.full_name.ilike(f'%{q}%'),
             Student.student_id.ilike(f'%{q}%'),
         ))
+
+    # RFID card filter — EXACT string match on the stored credential, identical
+    # semantics to the /students/ and /fees/ pages. It is just one more AND-ed
+    # condition on the SAME scoped query, so the school filter, the teacher
+    # section pool, the active-status rule and every other filter above stay in
+    # force: a card issued by another school (or belonging to a section this
+    # teacher is not assigned to) matches no rows. Empty → no effect at all.
+    if rfid:
+        sq = sq.filter(Student.rfid_tag_id == rfid)
     return sq
 
 
@@ -952,6 +968,10 @@ def report():
     stage       = request.args.get('stage', '').strip()
     status_f    = request.args.get('status', '').strip()   # present/absent/late
     q           = request.args.get('q', '').strip()
+    # RFID card filter — same handling as the /students/ and /fees/ pages: a
+    # STRING that is only trimmed of the whitespace/CR/LF the CR20 reader
+    # appends, so "0006110011" never degrades to "6110011". Never int-parsed.
+    rfid        = request.args.get('rfid', '').strip()
     start       = request.args.get('start', local_today.replace(day=1).isoformat())
     end         = request.args.get('end',   local_today.isoformat())
     submitted   = bool(request.args)
@@ -977,9 +997,24 @@ def report():
     section_summary = []   # for 'section' mode
     shift_summary   = []   # for 'shift' mode
 
+    # ── RFID card → does any REACHABLE student hold it? ───────────────────────
+    # Used ONLY to tell "this card belongs to no student" apart from "that
+    # student simply has no attendance matching the other filters". A BOOLEAN is
+    # computed (never the student's name/id), through the very same scoped pool
+    # the report itself uses (school + teacher section pool + active status), so
+    # another school's card — or a card held by a student outside this teacher's
+    # sections — always reads as "not associated".
+    rfid_no_student = False
+    if submitted and rfid:
+        # .first() on the query itself (not a wrapped EXISTS) so the query's
+        # include_all_years execution option — which the report pool relies on —
+        # is preserved. Only the boolean is kept; the row is never rendered.
+        _rfid_q = _get_student_query(school, all_sections, rfid=rfid)
+        rfid_no_student = _rfid_q.limit(1).first() is None
+
     if submitted:
         sq = _get_student_query(school, all_sections, stage, grade_id,
-                                section_id, shift_id, q)
+                                section_id, shift_id, q, rfid)
         students = sq.order_by(Student.full_name).all()
 
         if report_type == 'grade':
@@ -1079,6 +1114,7 @@ def report():
                            section_id=section_id, grade_id=grade_id,
                            shift_id=shift_id,
                            stage=stage, status_f=status_f, q=q,
+                           rfid=rfid, rfid_no_student=rfid_no_student,
                            start=start, end=end,
                            submitted=submitted)
 
@@ -1102,6 +1138,9 @@ def report_export_pdf():
     stage       = request.args.get('stage', '').strip()
     status_f    = request.args.get('status', '').strip()
     q           = request.args.get('q', '').strip()
+    # Same RFID card filter as the on-screen report, so the exported file always
+    # matches what the user is looking at. String only — never int-parsed.
+    rfid        = request.args.get('rfid', '').strip()
     start       = request.args.get('start', local_today.replace(day=1).isoformat())
     end         = request.args.get('end',   local_today.isoformat())
 
@@ -1116,7 +1155,7 @@ def report_export_pdf():
     _all_grades, all_sections, grade_map, all_shifts = _build_report_pools(school, year)
 
     sq = _get_student_query(school, all_sections, stage, grade_id,
-                            section_id, shift_id, q)
+                            section_id, shift_id, q, rfid)
     students = sq.order_by(Student.full_name).all()
 
     rows = []
@@ -1161,6 +1200,9 @@ def report_export_excel():
     stage       = request.args.get('stage', '').strip()
     status_f    = request.args.get('status', '').strip()
     q           = request.args.get('q', '').strip()
+    # Same RFID card filter as the on-screen report, so the exported file always
+    # matches what the user is looking at. String only — never int-parsed.
+    rfid        = request.args.get('rfid', '').strip()
     start       = request.args.get('start', local_today.replace(day=1).isoformat())
     end         = request.args.get('end',   local_today.isoformat())
 
@@ -1175,7 +1217,7 @@ def report_export_excel():
     _all_grades, all_sections, grade_map, all_shifts = _build_report_pools(school, year)
 
     sq = _get_student_query(school, all_sections, stage, grade_id,
-                            section_id, shift_id, q)
+                            section_id, shift_id, q, rfid)
     students = sq.order_by(Student.full_name).all()
 
     rows = []
