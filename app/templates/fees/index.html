@@ -455,12 +455,43 @@
         <input type="text" name="q" id="q" class="form-control"
                placeholder="بحث باسم الطالب أو رقمه..." value="{{ search }}">
       </div>
+      {# RFID card filter — same control, icon, semantics and CR20 ENTER handling
+         as the /students/ page. The reader types the card number here and emits
+         ENTER, which submits this existing GET form (see extra_js below). Plain
+         text input: no WebUSB/WebSerial/driver/desktop service involved. #}
+      <div class="col-md-2">
+        <label for="rfidFilterInput" class="form-label">
+          <i class="bi bi-credit-card-2-front me-1"></i>البطاقة التعريفية
+        </label>
+        <div class="input-group">
+          <input type="text" name="rfid" id="rfidFilterInput" class="form-control"
+                 placeholder="مرر البطاقة على القارئ"
+                 value="{{ rfid }}" autocomplete="off" maxlength="64">
+          <button type="button" class="btn btn-outline-secondary" id="rfidFilterClear"
+                  title="مسح البطاقة وعرض جميع السجلات">
+            <i class="bi bi-x-lg"></i>
+          </button>
+        </div>
+      </div>
       <div class="col-md-1 d-grid">
         <button class="btn btn-primary w-100"><i class="bi bi-search me-1"></i>بحث</button>
       </div>
     </form>
   </div>
 </div>
+
+{# Scanned card matched no student reachable in this school → say so explicitly,
+   so it is not confused with "this student has no fees". The filters bar and the
+   fee table below stay exactly as they are. #}
+{% if rfid and rfid_no_student %}
+<div class="alert alert-warning d-flex align-items-center gap-2 mb-4">
+  <i class="bi bi-credit-card-2-front" style="font-size:20px;opacity:.7"></i>
+  <div>
+    لا يوجد طالب مرتبط بهذه البطاقة
+    <div style="font-size:12.5px"><code>{{ rfid }}</code></div>
+  </div>
+</div>
+{% endif %}
 
 <div class="card">
   {% if overdue_mode %}
@@ -676,6 +707,42 @@
 {% endblock %}
 
 {% block extra_js %}
+<script>
+// ── RFID card filter (SmarTec CR20, USB keyboard emulation) ──────────────────
+// Mirrors the /students/ page: the reader types the card number into the RFID
+// field and then emits ENTER. That ENTER is handled HERE ONLY — it runs this
+// page's EXISTING filter mechanism (the GET filters form, the same one the fee
+// type / installment / payment status selects already submit via
+// this.form.submit()). preventDefault stops the browser's implicit submission
+// so the behaviour is deterministic, and stopPropagation keeps the key off any
+// ancestor handler. Enter in the البحث box and every other input on the page is
+// untouched — no global Enter handler is added.
+(function () {
+  var rfidInput = document.getElementById('rfidFilterInput');
+  var rfidClear = document.getElementById('rfidFilterClear');
+  if (!rfidInput) return;
+  var form = rfidInput.form;
+
+  rfidInput.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // Trim only the whitespace/CR/LF the scanner appends — "0006110011" keeps
+    // every leading zero and is submitted as a string.
+    rfidInput.value = rfidInput.value.trim();
+    if (form) form.submit();
+  });
+
+  // Clear the card and restore the existing list, leaving other filters as they
+  // are (they are submitted with the same form).
+  if (rfidClear) {
+    rfidClear.addEventListener('click', function () {
+      rfidInput.value = '';
+      if (form) form.submit();
+    });
+  }
+})();
+</script>
 <script>
 // ── Student financial statement modal ────────────────────────────────────────
 (function () {

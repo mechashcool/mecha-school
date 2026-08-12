@@ -27,7 +27,7 @@ _log = logging.getLogger('mecha.fees')
 
 
 def _overdue_installments_query(school, *, search='', fee_type_filter='all',
-                                installment_filter='all'):
+                                installment_filter='all', rfid=''):
     """Query yielding ONE row per *overdue* FeeInstallment.
 
     Overdue = due_date strictly before today AND an outstanding balance remains
@@ -73,6 +73,13 @@ def _overdue_installments_query(school, *, search='', fee_type_filter='all',
     if search:
         q = q.filter(Student.full_name.ilike(f'%{search}%') |
                      Student.student_id.ilike(f'%{search}%'))
+
+    # RFID card filter — EXACT string match on the already-joined Student, same
+    # semantics as the /students/ page. ANDed with the other filters; the query
+    # is already school-scoped above, so another school's card matches nothing.
+    # Empty (the default, and what the export/print callers pass) → no effect.
+    if rfid:
+        q = q.filter(Student.rfid_tag_id == rfid)
 
     if fee_type_filter != 'all':
         q = q.filter(FeeRecord.fee_type_id == int(fee_type_filter))
@@ -924,7 +931,11 @@ def index():
     fee_type_filter = request.args.get('fee_type', 'all')
     payment_status = request.args.get('payment_status', 'all')
     installment_filter = request.args.get('installment', 'all')
-    
+    # RFID card filter — same handling as the /students/ page: a STRING that is
+    # only trimmed of the whitespace/CR/LF the CR20 reader appends, so
+    # "0006110011" never degrades to "6110011". Never parsed as a number.
+    rfid      = request.args.get('rfid', '').strip()
+
     # Subquery for total paid
     total_paid_sub = db.session.query(
         FeeInstallment.fee_record_id,
@@ -940,6 +951,20 @@ def index():
         years_q = years_q.filter_by(school_id=school.id)
     years = years_q.order_by(AcademicYear.start_date.desc()).all()
 
+    # ── RFID card → does any REACHABLE student of this school hold it? ────────
+    # Used only to tell "this card belongs to no student" apart from "this
+    # student simply has no matching fees". A BOOLEAN is computed (never the
+    # student's name/id), and the same school AND building scope the fee lists
+    # use is applied — so a restricted user can never learn that a card belongs
+    # to a student outside their buildings, and another school's card always
+    # reads as "not associated".
+    rfid_no_student = False
+    if rfid and school:
+        _rfid_q = Student.query.filter(Student.school_id == school.id,
+                                       Student.rfid_tag_id == rfid)
+        _rfid_q = apply_building_scope_to_students(_rfid_q, current_user, school)
+        rfid_no_student = not db.session.query(_rfid_q.exists()).scalar()
+
     # ── "متأخر التسديد" — one visible row per overdue installment ──────────
     # This mode intentionally does NOT group by fee record: a student with
     # several overdue installments appears once per overdue installment, each
@@ -952,6 +977,7 @@ def index():
             search=search,
             fee_type_filter=fee_type_filter,
             installment_filter=installment_filter,
+            rfid=rfid,
         ).paginate(page=page, per_page=20, error_out=False)
         return render_template(
             'fees/index.html',
@@ -962,6 +988,7 @@ def index():
             fee_type_filter=fee_type_filter,
             payment_status=payment_status,
             installment_filter=installment_filter,
+            rfid=rfid, rfid_no_student=rfid_no_student,
         )
 
     query = FeeRecord.query.join(Student).outerjoin(
@@ -983,9 +1010,16 @@ def index():
         query = query.filter(Student.full_name.ilike(f'%{search}%') |
                              Student.student_id.ilike(f'%{search}%'))
 
+    # RFID card filter — EXACT match on the already-joined Student, identical to
+    # the /students/ page. ANDed with every other filter; the query is already
+    # school-scoped and building-scoped above, so a card from another school (or
+    # another building, for a restricted user) matches no rows.
+    if rfid:
+        query = query.filter(Student.rfid_tag_id == rfid)
+
     if fee_type_filter != 'all':
         query = query.filter(FeeRecord.fee_type_id == int(fee_type_filter))
-    
+
     if installment_filter != 'all':
         query = query.join(FeeInstallment).filter(FeeInstallment.installment_no == int(installment_filter))
     
@@ -1023,7 +1057,8 @@ def index():
                            years=years, search=search,
                            fee_type_filter=fee_type_filter,
                            payment_status=payment_status,
-                           installment_filter=installment_filter)
+                           installment_filter=installment_filter,
+                           rfid=rfid, rfid_no_student=rfid_no_student)
 
 
 @fees_bp.route('/create', methods=['GET', 'POST'])
