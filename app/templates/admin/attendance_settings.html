@@ -34,17 +34,6 @@
       <span class="badge bg-warning text-dark ms-1" style="font-size:9px">HR</span>
     </a>
   </li>
-  {% if is_school_obj %}
-  <li class="nav-item">
-    <a class="nav-link" id="pill-shifts" href="#"
-       onclick="showAttTab('shifts');return false;">
-      <i class="bi bi-layers-half me-1"></i>الشفتات
-      {% if settings.enable_attendance_shifts %}
-      <span class="badge bg-success ms-1" style="font-size:9px">مفعَّل</span>
-      {% endif %}
-    </a>
-  </li>
-  {% endif %}
   <li class="nav-item">
     <a class="nav-link" id="pill-guide" href="#"
        onclick="showAttTab('guide');return false;">
@@ -122,6 +111,11 @@
             </div>
           </div>
         </div>
+
+        {# ── Unified-mode settings pane (hidden while shifts mode is selected) ──
+           Fields stay inside the main form even when hidden, so their saved
+           values are re-submitted untouched and never reset. ── #}
+        <div id="unifiedSettingsPane" class="{{ 'd-none' if settings.enable_attendance_shifts }}">
 
         {# B. Default School Timings #}
         <div class="card mb-4">
@@ -213,6 +207,8 @@
             </div>
           </div>
         </div>
+
+        </div>{# /unifiedSettingsPane #}
 
         <button type="submit" class="btn btn-primary btn-lg px-5">
           <i class="bi bi-check-circle-fill me-2"></i>حفظ الإعدادات
@@ -446,10 +442,17 @@
 </div>{# /tab-students #}
 
 {# ══════════════════════════════════════════════════════════════════════════
-   TAB 4 — الشفتات  (outside main form — has its own sub-forms)
+   SHIFTS-MODE SETTINGS PANE
+   Rendered inside the "الإعدادات العامة" tab, directly under the mode
+   selector, whenever وضع الشفتات المتعددة is the selected mode.
+   It must stay OUTSIDE the main settings <form> because it carries its own
+   shift CRUD sub-forms (shifts.create_shift / edit / toggle / delete) and
+   nested forms are invalid HTML. The sibling tab panes above it are hidden
+   while the general tab is active, so it renders directly below it.
+   Visibility is driven by syncAttModePanes() — no shift data is touched.
 ══════════════════════════════════════════════════════════════════════════ #}
 {% if is_school_obj %}
-<div id="tab-shifts" class="att-tab-pane" style="display:none">
+<div id="shiftSettingsPane" class="{{ '' if settings.enable_attendance_shifts else 'd-none' }}">
 
   <div class="d-flex align-items-center gap-3 mb-4 flex-wrap">
     <div>
@@ -470,8 +473,9 @@
   {% if not settings.enable_attendance_shifts %}
   <div class="alert alert-info mb-4" style="font-size:13px">
     <i class="bi bi-info-circle me-1"></i>
-    يمكنك إعداد الشفتات الآن، لكنها لن تُستخدم إلا بعد تفعيل
-    <b>وضع الشفتات المتعددة</b> من تبويب <b>الإعدادات العامة</b> وحفظ الإعدادات.
+    الوضع المحفوظ حالياً هو <b>الحضور الموحَّد</b>. يمكنك إعداد الشفتات الآن،
+    لكنها لن تُستخدم إلا بعد الضغط على <b>حفظ الإعدادات</b> أعلاه لتفعيل
+    <b>وضع الشفتات المتعددة</b>.
   </div>
   {% endif %}
 
@@ -643,7 +647,7 @@
     </div>
   </div>
 
-</div>{# /tab-shifts #}
+</div>{# /shiftSettingsPane #}
 {% endif %}
 
 {# ══════════════════════════════════════════════════════════════════════════
@@ -823,6 +827,28 @@ function showAttTab(name) {
   });
   var pill = document.getElementById('pill-' + name);
   if (pill) pill.classList.add('active');
+
+  /* The mode-dependent settings panes only belong to the general tab. */
+  var shiftPane = document.getElementById('shiftSettingsPane');
+  if (shiftPane) shiftPane.style.display = (name === 'general') ? '' : 'none';
+}
+
+/* Show the settings pane that matches the currently selected mode.
+   Purely a visibility switch — it never writes to, clears or resets either
+   mode's stored settings. Unified inputs stay inside the main form while
+   hidden, so a save re-submits their existing values unchanged. */
+function syncAttModePanes(mode) {
+  var unifiedPane = document.getElementById('unifiedSettingsPane');
+  var shiftPane   = document.getElementById('shiftSettingsPane');
+
+  /* Without a shift pane (non-school settings row) shifts are unavailable —
+     keep the unified pane visible rather than leaving an empty section. */
+  if (!shiftPane) {
+    if (unifiedPane) unifiedPane.classList.remove('d-none');
+    return;
+  }
+  if (unifiedPane) unifiedPane.classList.toggle('d-none', mode === 'shifts');
+  shiftPane.classList.toggle('d-none', mode !== 'shifts');
 }
 
 /* Attendance mode card selection — updates hidden checkbox + visual state */
@@ -844,7 +870,17 @@ function selectAttMode(mode) {
 
   var fallbackBadge = document.getElementById('shiftFallbackBadge');
   if (fallbackBadge) fallbackBadge.classList.toggle('d-none', mode !== 'shifts');
+
+  syncAttModePanes(mode);
 }
+
+/* Initial visibility is derived from the SAVED backend mode: #shiftsToggle is
+   server-rendered from settings.enable_attendance_shifts, so the section shown
+   on load always matches what is actually persisted. */
+document.addEventListener('DOMContentLoaded', function() {
+  var chk = document.getElementById('shiftsToggle');
+  syncAttModePanes(chk && chk.checked ? 'shifts' : 'normal');
+});
 
 /* Edit shift modal — identical to original */
 function showEditShift(btn) {
