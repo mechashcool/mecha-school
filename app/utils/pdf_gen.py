@@ -1282,18 +1282,41 @@ def generate_attendance_report_pdf(rows, report_type='detail', date_from='', dat
         elements.append(Paragraph(ar('تفاصيل الحضور اليومي'), title_s))
         elements.append(Spacer(1, 0.3*cm))
 
-        d_head = [ph('التاريخ'), ph('وقت الحضور'), ph('وقت الانصراف'),
-                  ph('الحالة'), ph('المصدر'), ph('ملاحظات')]
+        # RTL layout: ReportLab always lays cells out left→right, so the columns
+        # are STORED in reverse of the Arabic reading order. Read right→left the
+        # table is:  التاريخ | وقت الحضور | وقت الانصراف | الحالة
+        d_head   = [ph('الحالة'), ph('وقت الانصراف'), ph('وقت الحضور'), ph('التاريخ')]
+        d_widths = [5*cm, 4.8*cm, 4.8*cm, 5.4*cm]   # same right→left order
+
+        # Status colours — identical palette to the on-screen daily table. A
+        # Paragraph carries its own colour, so this is done with per-status
+        # styles rather than a TEXTCOLOR table command.
+        _status_colors = {
+            'حاضر':  HexColor('#1aab6d'),
+            'متأخر': HexColor('#e8a020'),
+            'غائب':  HexColor('#e03e3e'),
+            'مجاز':  HexColor('#2e7d32'),
+        }
+        _status_styles = {
+            lbl: ParagraphStyle(f'atd_st{si}', parent=td_s,
+                                fontName=fn_b, textColor=col)
+            for si, (lbl, col) in enumerate(_status_colors.items())
+        }
+        _muted_style = ParagraphStyle('atd_stm', parent=td_s,
+                                      textColor=HexColor('#8b98a8'))
+
+        def p_status(label):
+            return Paragraph(ar(str(label)),
+                             _status_styles.get(label, _muted_style))
+
         d_data = [d_head]
         d_bgs  = []
         for i, d in enumerate(daily_rows, 1):
             d_data.append([
-                p(d['date'].strftime('%Y-%m-%d') if d.get('date') else '—'),
-                p(d['check_in'].strftime('%H:%M')  if d.get('check_in')  else '—'),
+                p_status(d.get('status_ar') or '—'),
                 p(d['check_out'].strftime('%H:%M') if d.get('check_out') else '—'),
-                p(d.get('status_ar') or '—'),
-                p(d.get('source') or '—'),
-                p(d.get('notes') or '—'),
+                p(d['check_in'].strftime('%H:%M')  if d.get('check_in')  else '—'),
+                p(d['date'].strftime('%Y-%m-%d')   if d.get('date')      else '—'),
             ])
             if i % 2 == 0:
                 d_bgs.append(i)
@@ -1310,8 +1333,7 @@ def generate_attendance_report_pdf(rows, report_type='detail', date_from='', dat
         for ri in d_bgs:
             d_style.append(('BACKGROUND', (0, ri), (-1, ri), ALT_BG))
 
-        d_tbl = Table(d_data, colWidths=[3*cm, 2.6*cm, 2.6*cm, 2.6*cm, 2.6*cm, 6*cm],
-                      repeatRows=1)
+        d_tbl = Table(d_data, colWidths=d_widths, repeatRows=1, hAlign='CENTER')
         d_tbl.setStyle(TableStyle(d_style))
         elements.append(d_tbl)
 
