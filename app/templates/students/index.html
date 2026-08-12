@@ -148,10 +148,27 @@
         </select>
       </div>
       {% endif %}
+      {# RFID card filter — the CR20 USB reader types the card number here and
+         emits ENTER, which triggers the search immediately (see extra_js). Plain
+         text input: no WebUSB/WebSerial/driver/desktop service involved. #}
+      <div class="col-md-2">
+        <label class="form-label mb-1" style="font-size:12px">
+          <i class="bi bi-credit-card-2-front me-1"></i>البطاقة التعريفية
+        </label>
+        <div class="input-group">
+          <input type="text" name="rfid" id="rfidFilterInput" class="form-control"
+                 placeholder="مرر البطاقة على القارئ..."
+                 value="{{ rfid }}" autocomplete="off" maxlength="64">
+          <button type="button" class="btn btn-outline-secondary" id="rfidFilterClear"
+                  title="مسح البطاقة وعرض جميع الطلاب">
+            <i class="bi bi-x-lg"></i>
+          </button>
+        </div>
+      </div>
       <div class="col-md-1">
         <button class="btn btn-primary w-100"><i class="bi bi-search"></i></button>
       </div>
-      {% if search or status or stage or grade_id or section_id or building_id or residential_area_id %}
+      {% if search or status or stage or grade_id or section_id or building_id or residential_area_id or rfid %}
       <div class="col-md-1">
         <a href="{{ url_for('students.index') }}" class="btn btn-outline-secondary w-100">مسح</a>
       </div>
@@ -280,8 +297,14 @@
         {% else %}
         <tr>
           <td colspan="{{ 9 if buildings_enabled else 8 }}" class="text-center text-muted py-5">
+            {% if rfid %}
+            <i class="bi bi-credit-card-2-front" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا يوجد طالب مرتبط بهذه البطاقة
+            <div style="font-size:12.5px;margin-top:4px"><code>{{ rfid }}</code></div>
+            {% else %}
             <i class="bi bi-people" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
             لا يوجد طلاب
+            {% endif %}
           </td>
         </tr>
         {% endfor %}
@@ -297,7 +320,7 @@
         {% for p in students.iter_pages() %}
           {% if p %}
           <li class="page-item {{ 'active' if p == students.page }}">
-            <a class="page-link" href="{{ url_for('students.index', page=p, q=search, status=status, stage=stage or '', grade_id=grade_id or '', section_id=section_id or '', building_id=building_id or '', residential_area_id=residential_area_id or '') }}">{{ p }}</a>
+            <a class="page-link" href="{{ url_for('students.index', page=p, q=search, status=status, stage=stage or '', grade_id=grade_id or '', section_id=section_id or '', building_id=building_id or '', residential_area_id=residential_area_id or '', rfid=rfid or '') }}">{{ p }}</a>
           </li>
           {% else %}
           <li class="page-item disabled"><span class="page-link">…</span></li>
@@ -325,6 +348,8 @@ function onStageChange(el) {
   'use strict';
 
   const searchInput    = document.getElementById('stu-search-input');
+  const rfidInput      = document.getElementById('rfidFilterInput');
+  const rfidClearBtn   = document.getElementById('rfidFilterClear');
   const tbody          = document.getElementById('stu-tbody');
   const totalLabel     = document.getElementById('stu-total-label');
   const pageInfo       = document.getElementById('stu-page-info');
@@ -346,9 +371,15 @@ function onStageChange(el) {
     const form = document.getElementById('studentFilterForm');
     const params = new URLSearchParams();
     params.set('q', searchInput.value.trim());
-    ['status', 'stage', 'grade_id', 'section_id', 'building_id', 'residential_area_id'].forEach(name => {
+    // 'rfid' rides the same path as every other filter, so it is always ANDed
+    // with them (and with pagination) instead of replacing them.
+    ['status', 'stage', 'grade_id', 'section_id', 'building_id',
+     'residential_area_id', 'rfid'].forEach(name => {
       const el = form ? form.elements[name] : null;
-      if (el && el.value) params.set(name, el.value);
+      // .trim() strips the whitespace/CR/LF the card reader appends; the card
+      // string itself (leading zeroes included) is sent unchanged.
+      const val = el ? el.value.trim() : '';
+      if (val) params.set(name, val);
     });
     return params;
   }
@@ -406,8 +437,18 @@ function onStageChange(el) {
       .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
   }
 
-  function renderRows(items) {
+  function renderRows(items, rfidActive) {
     if (!items.length) {
+      // An RFID scan that matched nothing gets its own message, so the user can
+      // tell "this card belongs to no student" apart from "no search results".
+      if (rfidActive) {
+        const scanned = rfidInput ? rfidInput.value.trim() : '';
+        tbody.innerHTML = `<tr><td colspan="${COL_COUNT}" class="text-center text-muted py-5">
+          <i class="bi bi-credit-card-2-front" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+          لا يوجد طالب مرتبط بهذه البطاقة
+          <div style="font-size:12.5px;margin-top:4px"><code>${escHtml(scanned)}</code></div></td></tr>`;
+        return;
+      }
       tbody.innerHTML = `<tr><td colspan="${COL_COUNT}" class="text-center text-muted py-5">
         <i class="bi bi-search" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
         لا توجد نتائج مطابقة لبحثك</td></tr>`;
@@ -483,7 +524,7 @@ function onStageChange(el) {
       if (activeXhr && activeXhr.status === 200) {
         const data = JSON.parse(activeXhr.responseText);
         totalLabel.textContent = `إجمالي ${data.total} طالب`;
-        renderRows(data.items);
+        renderRows(data.items, data.rfid_active);
         renderPagination(data);
       }
       activeXhr = null;
@@ -504,6 +545,34 @@ function onStageChange(el) {
   const areaFilter = document.getElementById('residentialAreaFilter');
   if (areaFilter) {
     areaFilter.addEventListener('change', function () { doSearch(1); });
+  }
+
+  // ── RFID card filter (SmarTec CR20, USB keyboard emulation) ────────────────
+  // The reader types the card number into this field and then emits ENTER.
+  // That ENTER is handled HERE ONLY: it runs the RFID search immediately and is
+  // stopped before it can submit the filters form (which would reload the whole
+  // page). Enter in the normal search box and everywhere else on the page keeps
+  // its existing behaviour — no global Enter handler is added.
+  if (rfidInput) {
+    rfidInput.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' || e.isComposing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // Trim only the whitespace/CR/LF the scanner appends — "0006110011" keeps
+      // every leading zero and is sent to the server as a string.
+      rfidInput.value = rfidInput.value.trim();
+      doSearch(1);
+    });
+  }
+
+  // Clear the card and return to the full list, without touching other filters.
+  if (rfidClearBtn) {
+    rfidClearBtn.addEventListener('click', function () {
+      if (!rfidInput) return;
+      rfidInput.value = '';
+      rfidInput.focus();
+      doSearch(1);
+    });
   }
 
   paginationEl.addEventListener('click', function (e) {

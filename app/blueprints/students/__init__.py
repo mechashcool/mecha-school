@@ -253,6 +253,9 @@ def index():
     section_id  = request.args.get('section_id', type=int)
     building_id = request.args.get('building_id', type=int)
     residential_area_id = request.args.get('residential_area_id', type=int)
+    # RFID card filter — read as a STRING and only trimmed of the whitespace/CR/LF
+    # the USB reader appends, so "0006110011" never degrades to "6110011".
+    rfid        = request.args.get('rfid', '').strip()
     school      = get_current_school()
     year        = get_view_year(school.id) if school else None
 
@@ -280,6 +283,15 @@ def index():
             Student.full_name.ilike(f'%{search}%') |
             Student.student_id.ilike(f'%{search}%')
         )
+
+    # RFID card filter — EXACT string match on the stored credential, so a scan
+    # resolves to the single student holding that card (never a partial match).
+    # ANDed with every other active filter. The query is already restricted to
+    # the current school above, so a card issued by another school matches no
+    # rows and cannot reveal that student's identity. Empty → no effect at all.
+    if rfid:
+        query = query.filter(Student.rfid_tag_id == rfid)
+
     if status == 'archived':
         query = query.filter_by(status='archived')
     elif status:
@@ -389,7 +401,8 @@ def index():
                            buildings_list=buildings_list,
                            building_id=building_id,
                            residential_areas_list=residential_areas_list,
-                           residential_area_id=residential_area_id)
+                           residential_area_id=residential_area_id,
+                           rfid=rfid)
 
 
 @students_bp.route('/search')
@@ -411,6 +424,8 @@ def search():
     section_id  = request.args.get('section_id', type=int)
     building_id = request.args.get('building_id', type=int)
     residential_area_id = request.args.get('residential_area_id', type=int)
+    # Same string-only handling as students.index — leading zeroes preserved.
+    rfid        = request.args.get('rfid', '').strip()
 
     buildings_on         = school_buildings_enabled(school)
     allowed_building_ids = user_allowed_building_ids(current_user, school)
@@ -430,6 +445,11 @@ def search():
             Student.full_name.ilike(f'%{q}%') |
             Student.student_id.ilike(f'%{q}%')
         )
+
+    # RFID card filter — identical rule and identical school isolation as
+    # students.index (exact match, ANDed with the other filters, school-scoped).
+    if rfid:
+        query = query.filter(Student.rfid_tag_id == rfid)
 
     if status == 'archived':
         query = query.filter_by(status='archived')
@@ -511,6 +531,10 @@ def search():
         'next_num':     paginated.next_num,
         'prev_num':     paginated.prev_num,
         'buildings_on': buildings_on,
+        # Boolean only (never the card number itself) so the client can show the
+        # "no student holds this card" empty state for an RFID scan that matched
+        # nothing, based on what the server actually applied.
+        'rfid_active':  bool(rfid),
     })
 
 
