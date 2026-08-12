@@ -18,10 +18,10 @@
   <div class="card-body py-3">
     <form method="GET" id="report-filter-form">
 
-      {# Report type #}
-      <div class="row g-2 mb-3">
+      {# ── Row 0 (RTL): نوع التقرير — full-width segmented control ────────── #}
+      <div class="row g-3 mb-3">
         <div class="col-12">
-          <label class="form-label fw-600 mb-1">نوع التقرير</label>
+          <label class="form-label mb-1 fw-600">نوع التقرير</label>
           <div class="d-flex gap-2 flex-wrap">
             {% set types = [
               ('detail',  'bi-table',        'تقرير تفصيلي عام'),
@@ -44,10 +44,12 @@
         </div>
       </div>
 
-      <div class="row g-2 align-items-end">
+      {# ── Row 1 (RTL): المرحلة | الصف | الشعبة | الشفت ──────────────────── #}
+      {% set scope_col = 'col-md-6 col-lg-3' if shifts_enabled else 'col-md-6 col-lg-4' %}
+      <div class="row g-3 align-items-end mb-3">
 
         {# Stage #}
-        <div class="col-md-2">
+        <div class="{{ scope_col }}">
           <label class="form-label mb-1 fw-600">المرحلة</label>
           <select name="stage" class="form-select" id="rpt-stage">
             <option value="">كل المراحل</option>
@@ -58,7 +60,7 @@
         </div>
 
         {# Grade #}
-        <div class="col-md-2">
+        <div class="{{ scope_col }}">
           <label class="form-label mb-1 fw-600">الصف</label>
           <select name="grade_id" class="form-select" id="rpt-grade">
             <option value="">كل الصفوف</option>
@@ -72,7 +74,7 @@
         </div>
 
         {# Section #}
-        <div class="col-md-2">
+        <div class="{{ scope_col }}">
           <label class="form-label mb-1 fw-600">الشعبة</label>
           <select name="section_id" class="form-select" id="rpt-section">
             <option value="">كل الشعب</option>
@@ -88,7 +90,7 @@
 
         {# Shift (only when shifts enabled) #}
         {% if shifts_enabled %}
-        <div class="col-md-2">
+        <div class="{{ scope_col }}">
           <label class="form-label mb-1 fw-600">
             <i class="bi bi-layers-half me-1"></i>الشفت
           </label>
@@ -103,20 +105,13 @@
         </div>
         {% endif %}
 
-        {# Status filter #}
-        <div class="col-md-1">
-          <label class="form-label mb-1 fw-600">الحالة</label>
-          <select name="status" class="form-select">
-            <option value="" {% if not status_f %}selected{% endif %}>الكل</option>
-            <option value="present"  {% if status_f == 'present'  %}selected{% endif %}>حاضر</option>
-            <option value="late"     {% if status_f == 'late'     %}selected{% endif %}>متأخر</option>
-            <option value="absent"   {% if status_f == 'absent'   %}selected{% endif %}>غائب</option>
-            <option value="on_leave" {% if status_f == 'on_leave' %}selected{% endif %}>مجاز</option>
-          </select>
-        </div>
+      </div>
+
+      {# ── Row 2 (RTL): الطالب | البطاقة التعريفية | الحالة | من | إلى ───── #}
+      <div class="row g-3 align-items-end">
 
         {# Student name search #}
-        <div class="col-md-2">
+        <div class="col-md-6 col-lg-3">
           <label class="form-label mb-1 fw-600">الطالب</label>
           <input type="text" name="q" class="form-control"
                  placeholder="ابحث بالاسم أو الرقم..."
@@ -126,7 +121,7 @@
         {# RFID card — the CR20 USB reader types the card number here and emits
            ENTER, which submits these same filters (see extra_js). Plain text
            input: no WebUSB/WebSerial/driver/desktop service involved. #}
-        <div class="col-md-2">
+        <div class="col-md-6 col-lg-3">
           <label class="form-label mb-1 fw-600">
             <i class="bi bi-credit-card-2-front me-1"></i>البطاقة التعريفية
           </label>
@@ -139,27 +134,39 @@
           </div>
         </div>
 
+        {# Status filter #}
+        <div class="col-md-4 col-lg-2">
+          <label class="form-label mb-1 fw-600">الحالة</label>
+          <select name="status" class="form-select">
+            <option value="" {% if not status_f %}selected{% endif %}>الكل</option>
+            <option value="present"  {% if status_f == 'present'  %}selected{% endif %}>حاضر</option>
+            <option value="late"     {% if status_f == 'late'     %}selected{% endif %}>متأخر</option>
+            <option value="absent"   {% if status_f == 'absent'   %}selected{% endif %}>غائب</option>
+            <option value="on_leave" {% if status_f == 'on_leave' %}selected{% endif %}>مجاز</option>
+          </select>
+        </div>
+
         {# Date range #}
-        <div class="col-md-1">
+        <div class="col-md-4 col-lg-2">
           <label class="form-label mb-1 fw-600">من</label>
           <input type="date" name="start" class="form-control" value="{{ start }}">
         </div>
-        <div class="col-md-1">
+        <div class="col-md-4 col-lg-2">
           <label class="form-label mb-1 fw-600">إلى</label>
           <input type="date" name="end" class="form-control" value="{{ end }}">
         </div>
 
-        {# Buttons #}
-        <div class="col-md-auto d-flex gap-2 align-items-end">
-          <button class="btn btn-primary">
-            <i class="bi bi-search me-1"></i>عرض
-          </button>
-          {% if submitted %}
-          <a href="{{ url_for('attendance.report') }}" class="btn btn-outline-secondary"
-             title="مسح الفلاتر"><i class="bi bi-x-lg"></i></a>
-          {% endif %}
-        </div>
+      </div>
 
+      {# ── Actions (end of the RTL flow) ──────────────────────────────────── #}
+      <div class="d-flex gap-2 justify-content-end mt-3">
+        <button class="btn btn-primary px-4">
+          <i class="bi bi-search me-1"></i>عرض
+        </button>
+        {% if submitted %}
+        <a href="{{ url_for('attendance.report') }}" class="btn btn-outline-secondary"
+           title="مسح الفلاتر"><i class="bi bi-x-lg"></i></a>
+        {% endif %}
       </div>
     </form>
   </div>

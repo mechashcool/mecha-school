@@ -1175,22 +1175,28 @@ def generate_attendance_report_pdf(rows, report_type='detail', date_from='', dat
                             leftMargin=1.5*cm, rightMargin=1.5*cm,
                             topMargin=1.5*cm, bottomMargin=1.5*cm)
 
-    title_s = ParagraphStyle('at',  fontName=fn_b, fontSize=14,
+    # Header hierarchy: school name (strongest) → report title → period.
+    # Explicit `leading` on every Arabic style so the three lines never collide.
+    school_s = ParagraphStyle('asch', fontName=fn_b, fontSize=16, leading=21,
                               alignment=1, textColor=HexColor('#1a3a5c'))
-    sub_s   = ParagraphStyle('as2', fontName=fn,   fontSize=10,
-                              alignment=1, textColor=HexColor('#555555'))
+    title_s = ParagraphStyle('at',  fontName=fn_b, fontSize=12, leading=17,
+                              alignment=1, textColor=HexColor('#2c5578'))
+    sub_s   = ParagraphStyle('as2', fontName=fn,   fontSize=9.5, leading=14,
+                              alignment=1, textColor=HexColor('#6b7a8d'))
     th_s    = ParagraphStyle('ath', fontName=fn_b, fontSize=8,
                               alignment=1, textColor=WHITE)
     td_s    = ParagraphStyle('atd', fontName=fn,   fontSize=8, alignment=1)
 
     elements = []
 
+    # School identity — read from the School object the caller already resolved
+    # from the authenticated context. Never hard-coded, never a system name.
     school_name = ''
     if school:
         school_name = getattr(school, 'school_name_ar', '') or getattr(school, 'school_name', '')
     if school_name:
-        elements.append(Paragraph(ar(school_name), title_s))
-        elements.append(Spacer(1, 0.2*cm))
+        elements.append(Paragraph(ar(school_name), school_s))
+        elements.append(Spacer(1, 0.18*cm))
 
     type_labels = {
         'detail':  'تقرير تفصيلي عام',
@@ -1200,6 +1206,7 @@ def generate_attendance_report_pdf(rows, report_type='detail', date_from='', dat
         'shift':   'تقرير حسب الشفت',
     }
     elements.append(Paragraph(ar(type_labels.get(report_type, 'تقرير الحضور')), title_s))
+    elements.append(Spacer(1, 0.1*cm))
     elements.append(Paragraph(ar(f'الفترة: {date_from}  —  {date_to}'), sub_s))
     elements.append(Spacer(1, 0.4*cm))
 
@@ -1338,10 +1345,13 @@ def generate_attendance_report_pdf(rows, report_type='detail', date_from='', dat
         elements.append(d_tbl)
 
     elements.append(Spacer(1, 0.4*cm))
-    foot_s = ParagraphStyle('af2', fontName=fn, fontSize=8,
+    foot_s = ParagraphStyle('af2', fontName=fn, fontSize=8, leading=12,
                              alignment=1, textColor=HexColor('#9aabb8'))
+    # System attribution — Core School is the platform identity; the school's own
+    # name stays in the header above. Generation time and footer position kept.
     elements.append(Paragraph(
-        ar(f'تم الإنشاء: {datetime.utcnow().strftime("%Y-%m-%d %H:%M")} | نظام المهندس'),
+        ar('تم إنشاء هذا التقرير بواسطة Core School — نظام إدارة المدارس'
+           f'  |  تم الإنشاء: {datetime.utcnow().strftime("%Y-%m-%d %H:%M")}'),
         foot_s))
 
     doc.build(elements)
