@@ -609,6 +609,13 @@ def generate_salary_pdf(record) -> bytes | None:
     from reportlab.lib import colors
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    # Arabic-capable font only for the branding lines; tables keep Helvetica.
+    arabic_font_registered = _register_arabic_fonts(pdfmetrics, TTFont)
+    fn_ar = 'Amiri' if arabic_font_registered else 'Helvetica'
+    ar = _shape_arabic_text
 
     ARABIC_MONTHS = ['', 'January', 'February', 'March', 'April', 'May', 'June',
                      'July', 'August', 'September', 'October', 'November', 'December']
@@ -625,10 +632,13 @@ def generate_salary_pdf(record) -> bytes | None:
                                spaceAfter=4, alignment=1)
     sub_s   = ParagraphStyle('sub',   fontSize=11, spaceAfter=16, alignment=1,
                                textColor=colors.HexColor('#6b7a8d'))
+    brand_s = ParagraphStyle('brand', fontName=fn_ar, fontSize=10, spaceAfter=2,
+                               alignment=1, textColor=colors.HexColor('#6b7a8d'))
 
-    elements.append(Paragraph("Al-Muhandis School — Salary Slip", title_s))
+    elements.append(Paragraph("Core School", title_s))
+    elements.append(Paragraph(ar('نظام إدارة المدارس'), brand_s))
     elements.append(Paragraph(
-        f"{ARABIC_MONTHS[record.month]} {record.year}", sub_s))
+        f"Salary Slip — {ARABIC_MONTHS[record.month]} {record.year}", sub_s))
 
     # Employee info (prefer snapshots so historical slips stay correct)
     emp = record.employee
@@ -704,8 +714,13 @@ def generate_salary_pdf(record) -> bytes | None:
         paid_txt += f"  |  Paid: {record.paid_date.strftime('%Y-%m-%d')}"
     elements.append(Paragraph(paid_txt, status_s))
     elements.append(Paragraph(
-        f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC | Al-Muhandis System",
+        f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC",
         status_s))
+    attribution_s = ParagraphStyle('attr', fontName=fn_ar, fontSize=8, alignment=1,
+                                    textColor=colors.HexColor('#9aabb8'))
+    elements.append(Paragraph(
+        ar('تم إنشاء هذا الوصل إلكترونياً باستخدام نظام Core School لإدارة المدارس'),
+        attribution_s))
 
     doc.build(elements)
     return buf.getvalue()
