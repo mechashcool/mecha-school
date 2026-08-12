@@ -9,11 +9,15 @@ _STATUS_AR = {'present': 'حاضر', 'absent': 'غائب', 'late': 'متأخر',
 
 
 def generate_attendance_excel(rows, report_type='detail', date_from='', date_to='',
-                               school=None) -> bytes:
+                               school=None, daily_rows=None) -> bytes:
     """
     Build an .xlsx attendance report and return it as bytes.
 
     rows: list of dicts with keys: student, present, absent, late, checkout, details
+    daily_rows: optional day-by-day rows for a single-student report (as built by
+        the attendance blueprint). When given, the "سجل تفصيلي" sheet is filled
+        from them so the file matches the on-screen daily table; otherwise the
+        sheet keeps its existing per-record behaviour.
     """
     try:
         from openpyxl import Workbook
@@ -149,7 +153,34 @@ def generate_attendance_excel(rows, report_type='detail', date_from='', date_to=
         hdr(ws2.cell(1, ci), h)
 
     detail_row = 2
-    for i, row in enumerate(rows, 1):
+    if daily_rows and len(rows) == 1:
+        # Single-student report — one row per applicable day, identical to the
+        # daily table rendered on screen (including days with no stored record).
+        s       = rows[0]['student']
+        grade_n = s.section.grade.name if s.section and s.section.grade else '—'
+        sec_n   = s.section.name       if s.section else '—'
+        for d in daily_rows:
+            alt = (detail_row % 2 == 0)
+            row_vals = [
+                1,
+                s.full_name,
+                grade_n,
+                sec_n,
+                d['date'].strftime('%Y-%m-%d') if d.get('date') else '—',
+                d['check_in'].strftime('%H:%M')  if d.get('check_in')  else '—',
+                d['check_out'].strftime('%H:%M') if d.get('check_out') else '—',
+                d.get('status_ar') or '—',
+                d.get('source') or '—',
+                d.get('notes') or '',
+            ]
+            for ci, v in enumerate(row_vals, 1):
+                val(ws2.cell(detail_row, ci), v, alt=alt)
+            detail_row += 1
+        rows_for_detail = []
+    else:
+        rows_for_detail = rows
+
+    for i, row in enumerate(rows_for_detail, 1):
         s       = row['student']
         grade_n = s.section.grade.name if s.section and s.section.grade else '—'
         sec_n   = s.section.name       if s.section else '—'

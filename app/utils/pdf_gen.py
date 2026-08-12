@@ -1137,11 +1137,16 @@ _SUBJECTS = [
 # ─── STUDENT ATTENDANCE REPORT PDF ───────────────────────────────────────────
 
 def generate_attendance_report_pdf(rows, report_type='detail', date_from='', date_to='',
-                                   school=None, grade_map=None) -> bytes | None:
+                                   school=None, grade_map=None,
+                                   daily_rows=None) -> bytes | None:
     """
     Generate an Arabic RTL attendance report PDF.
 
     rows: list of dicts with keys: student, present, absent, late, checkout, details
+    daily_rows: optional day-by-day rows for a single-student report (dicts with
+        date/check_in/check_out/status_ar/source/notes as built by the attendance
+        blueprint). When given, a "تفاصيل الحضور اليومي" table is appended after
+        the existing summary table; everything above it is unchanged.
     Returns bytes or None if ReportLab is unavailable.
     """
     if not _get_rl():
@@ -1270,6 +1275,45 @@ def generate_attendance_report_pdf(rows, report_type='detail', date_from='', dat
     tbl = Table(table_data, colWidths=col_w, repeatRows=1)
     tbl.setStyle(TableStyle(style_cmds))
     elements.append(tbl)
+
+    # ── Day-by-day details (single-student reports only) ──────────────────────
+    if daily_rows:
+        elements.append(Spacer(1, 0.6*cm))
+        elements.append(Paragraph(ar('تفاصيل الحضور اليومي'), title_s))
+        elements.append(Spacer(1, 0.3*cm))
+
+        d_head = [ph('التاريخ'), ph('وقت الحضور'), ph('وقت الانصراف'),
+                  ph('الحالة'), ph('المصدر'), ph('ملاحظات')]
+        d_data = [d_head]
+        d_bgs  = []
+        for i, d in enumerate(daily_rows, 1):
+            d_data.append([
+                p(d['date'].strftime('%Y-%m-%d') if d.get('date') else '—'),
+                p(d['check_in'].strftime('%H:%M')  if d.get('check_in')  else '—'),
+                p(d['check_out'].strftime('%H:%M') if d.get('check_out') else '—'),
+                p(d.get('status_ar') or '—'),
+                p(d.get('source') or '—'),
+                p(d.get('notes') or '—'),
+            ])
+            if i % 2 == 0:
+                d_bgs.append(i)
+
+        d_style = [
+            ('BACKGROUND',    (0, 0), (-1, 0), HEADER_BG),
+            ('FONTNAME',      (0, 0), (-1, -1), fn),
+            ('ALIGN',         (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID',          (0, 0), (-1, -1), 0.3, HexColor('#cccccc')),
+            ('TOPPADDING',    (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]
+        for ri in d_bgs:
+            d_style.append(('BACKGROUND', (0, ri), (-1, ri), ALT_BG))
+
+        d_tbl = Table(d_data, colWidths=[3*cm, 2.6*cm, 2.6*cm, 2.6*cm, 2.6*cm, 6*cm],
+                      repeatRows=1)
+        d_tbl.setStyle(TableStyle(d_style))
+        elements.append(d_tbl)
 
     elements.append(Spacer(1, 0.4*cm))
     foot_s = ParagraphStyle('af2', fontName=fn, fontSize=8,

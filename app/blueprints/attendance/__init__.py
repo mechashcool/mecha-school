@@ -952,6 +952,83 @@ def _student_stats(student_id, start_date, end_date, status_filter=None):
     return present, absent, late, on_leave, checkout, atts
 
 
+# Display labels only — the stored StudentAttendance.status values themselves are
+# never re-derived here.
+_DAILY_STATUS_AR = {'present': 'حاضر', 'late': 'متأخر',
+                    'absent': 'غائب', 'on_leave': 'مجاز'}
+
+
+def _daily_detail_rows(atts, start_date, end_date, school, local_today,
+                       fill_gaps=True):
+    """Build one presentation row per applicable day for a SINGLE student.
+
+    ``atts`` are the exact StudentAttendance objects _student_stats() counted for
+    the summary, so nothing is re-queried and no status is recomputed — date,
+    check_in, check_out and status are read straight off the stored record.
+
+    Days inside the range that carry no stored record are appended only when
+    ``fill_gaps`` is true (i.e. no status filter is narrowing the summary), the
+    day is not in the future, and it is a working day per the EXISTING
+    is_holiday_date() rule used by the auto-absence service. Those rows carry
+    has_record=False / status=None and are counted nowhere, so the daily list can
+    never disagree with the summary counters.
+    """
+    from datetime import timedelta
+
+    def _row(day, att):
+        shift = getattr(att, 'shift', None) if att is not None else None
+        return {
+            'date':       day,
+            'check_in':   att.check_in  if att is not None else None,
+            'check_out':  att.check_out if att is not None else None,
+            'status':     att.status    if att is not None else None,
+            'status_ar':  (_DAILY_STATUS_AR.get(att.status, att.status or '—')
+                           if att is not None else 'غير مسجَّل'),
+            'source':     (att.source if att is not None else None) or '—',
+            'notes':      (att.notes  if att is not None else None) or '',
+            'shift_name': shift.name if shift else '—',
+            'has_record': att is not None,
+        }
+
+    rows = [_row(a.date, a) for a in atts if a.date]
+
+    if fill_gaps:
+        seen  = {a.date for a in atts if a.date}
+        limit = min(end_date, local_today)
+        day   = start_date
+        while day <= limit:
+            if day not in seen and not is_holiday_date(
+                    day, school.id if school else None, school):
+                rows.append(_row(day, None))
+            day += timedelta(days=1)
+
+    rows.sort(key=lambda r: r['date'])
+    return rows
+
+
+def _single_student_detail(rows, report_type, q, rfid, start_date, end_date,
+                           school, local_today, status_f):
+    """Return (record, daily_rows) when the report targets ONE specific student.
+
+    "One specific student" means the report was narrowed through the existing
+    student search box (``q``) or the existing RFID card filter (``rfid``) and
+    exactly one student remains. Both selection paths go through the very same
+    _get_student_query() / _student_stats() pipeline, so an RFID-selected student
+    and a name/ID-selected student produce byte-identical rows here.
+
+    Returns (None, []) for every other report — general multi-student reports keep
+    their current behaviour untouched.
+    """
+    if report_type not in ('detail', 'student'):
+        return None, []
+    if not (q or rfid) or len(rows) != 1:
+        return None, []
+    rec = rows[0]
+    daily = _daily_detail_rows(rec['details'], start_date, end_date, school,
+                               local_today, fill_gaps=not status_f)
+    return rec, daily
+
+
 @attendance_bp.route('/report')
 @login_required
 @permission_required('take_attendance')
@@ -1100,9 +1177,17 @@ def report():
                     'details': atts,
                 })
 
+    # Specific-student mode (name/ID search or RFID card) → day-by-day details.
+    single_record, daily_rows = (
+        _single_student_detail(records, report_type, q, rfid,
+                               start_date, end_date, school, local_today, status_f)
+        if submitted else (None, []))
+
     shifts_enabled = bool(school and getattr(school, 'enable_attendance_shifts', False))
     return render_template('attendance/report.html',
                            records=records,
+                           single_record=single_record,
+                           daily_rows=daily_rows,
                            grade_summary=grade_summary,
                            section_summary=section_summary,
                            shift_summary=shift_summary,
@@ -1164,12 +1249,19 @@ def report_export_pdf():
         rows.append({'student': s, 'present': p, 'absent': a, 'late': l,
                      'on_leave': ol, 'checkout': co, 'details': atts})
 
+    # Same specific-student detection as the on-screen report, so a student picked
+    # by name/ID or by RFID card never gets a summary-only PDF.
+    _single, daily_rows = _single_student_detail(
+        rows, report_type, q, rfid, start_date, end_date,
+        school, local_today, status_f)
+
     pdf_bytes = generate_attendance_report_pdf(
         rows=rows,
         report_type=report_type,
         date_from=start, date_to=end,
         school=school,
         grade_map=grade_map,
+        daily_rows=daily_rows,
     )
     if not pdf_bytes:
         flash('تعذّر إنشاء ملف PDF — تأكد من تثبيت مكتبة ReportLab وتوفر الخط العربي.', 'danger')
@@ -1226,11 +1318,18 @@ def report_export_excel():
         rows.append({'student': s, 'present': p, 'absent': a, 'late': l,
                      'on_leave': ol, 'checkout': co, 'details': atts})
 
+    # Same specific-student detection as the on-screen report, so the detail sheet
+    # matches the daily table the user is looking at.
+    _single, daily_rows = _single_student_detail(
+        rows, report_type, q, rfid, start_date, end_date,
+        school, local_today, status_f)
+
     xlsx_bytes = generate_attendance_excel(
         rows=rows,
         report_type=report_type,
         date_from=start, date_to=end,
         school=school,
+        daily_rows=daily_rows,
     )
     resp = make_response(xlsx_bytes)
     resp.headers['Content-Type']        = (

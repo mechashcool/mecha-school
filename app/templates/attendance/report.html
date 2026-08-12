@@ -340,6 +340,147 @@
 {% endif %}
 
 {# ══════════════════════════════════════════════════════════════════════════ #}
+{#  SPECIFIC STUDENT — info + summary + day-by-day details                    #}
+{#  Shown when the report was narrowed to ONE student through the existing    #}
+{#  name/ID search or the existing RFID card filter. The counters below are   #}
+{#  the same expressions the general table uses; the daily rows come from the #}
+{#  same StudentAttendance records those counters were computed from.         #}
+{# ══════════════════════════════════════════════════════════════════════════ #}
+{% if single_record %}
+{% set st  = single_record.student %}
+{% set sol = single_record.on_leave if single_record.on_leave is defined else 0 %}
+{% set sbillable = single_record.present + single_record.absent + single_record.late %}
+{% set stotal    = sbillable + sol %}
+{% set spct      = ((single_record.present + single_record.late) / sbillable * 100) | round(1) if sbillable else 0 %}
+<div class="card mb-4">
+  <div class="card-header d-flex align-items-center justify-content-between fw-600">
+    <span><i class="bi bi-person-badge text-accent me-1"></i>تقرير حضور الطالب</span>
+    <small class="text-muted">{{ start }} إلى {{ end }}</small>
+  </div>
+  <div class="card-body">
+
+    {# ── Student information ── #}
+    <div class="row g-3 mb-3">
+      <div class="col-md-4">
+        <div style="font-size:12px;color:#6b7a8d">اسم الطالب</div>
+        <div class="fw-700">{{ st.full_name }}</div>
+      </div>
+      <div class="col-md-2">
+        <div style="font-size:12px;color:#6b7a8d">رقم الطالب</div>
+        <div><code>{{ st.student_id }}</code></div>
+      </div>
+      <div class="col-md-3">
+        <div style="font-size:12px;color:#6b7a8d">الصف / الشعبة</div>
+        <div>
+          {% if st.section %}{{ st.section.grade.name if st.section.grade else '—' }} / {{ st.section.name }}
+          {% else %}—{% endif %}
+        </div>
+      </div>
+      {% if shifts_enabled %}
+      <div class="col-md-3">
+        <div style="font-size:12px;color:#6b7a8d">الشفت</div>
+        <div>
+          {% if st.section and st.section.shift %}{{ st.section.shift.name }}
+          {% elif st.section and st.section.grade and st.section.grade.shift %}
+            {{ st.section.grade.shift.name }} <span class="text-muted" style="font-size:11px">(صف)</span>
+          {% else %}—{% endif %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    {# ── Attendance summary (same values as the general table row) ── #}
+    <div class="table-wrapper mb-3">
+      <table class="table table-sm mb-0">
+        <thead>
+          <tr>
+            <th>أيام السجل</th>
+            <th class="text-success">حاضر</th>
+            <th class="text-warning">متأخر</th>
+            <th class="text-danger">غائب</th>
+            <th style="color:#2e7d32">مجاز</th>
+            <th>نسبة الحضور</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="fw-700">{{ stotal }}</td>
+            <td class="text-success fw-700">{{ single_record.present }}</td>
+            <td class="text-warning fw-700">{{ single_record.late }}</td>
+            <td class="text-danger fw-700">{{ single_record.absent }}</td>
+            <td style="color:#2e7d32;font-weight:700">{{ sol }}</td>
+            <td>
+              <span style="font-weight:700;color:
+                {% if spct >= 85 %}#1aab6d{% elif spct >= 70 %}#e8a020{% else %}#e03e3e{% endif %}">
+                {{ spct }}%
+              </span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    {# ── Day-by-day details ── #}
+    <div class="fw-600 mb-2" style="font-size:14px">
+      <i class="bi bi-calendar3 text-accent me-1"></i>تفاصيل الحضور اليومي
+    </div>
+    {% if daily_rows %}
+    <div class="table-wrapper">
+      <table class="table table-sm mb-0">
+        <thead>
+          <tr>
+            <th>التاريخ</th>
+            <th>وقت الحضور</th>
+            <th>وقت الانصراف</th>
+            <th>الحالة</th>
+            <th>المصدر</th>
+            {% if shifts_enabled %}<th>الشفت</th>{% endif %}
+            <th>ملاحظات</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in daily_rows %}
+          <tr>
+            <td>{{ d.date.strftime('%Y-%m-%d') }}</td>
+            <td>{{ d.check_in.strftime('%H:%M')  if d.check_in  else '—' }}</td>
+            <td>{{ d.check_out.strftime('%H:%M') if d.check_out else '—' }}</td>
+            <td>
+              {% if d.status == 'present' %}
+              <span class="badge-status badge-active">حاضر</span>
+              {% elif d.status == 'late' %}
+              <span class="badge-status badge-pending">متأخر</span>
+              {% elif d.status == 'on_leave' %}
+              <span class="badge-status" style="background:#e8f5e9;color:#2e7d32;font-weight:700">مجاز</span>
+              {% elif d.status == 'absent' %}
+              <span class="badge-status badge-inactive">غائب</span>
+              {% else %}
+              <span class="badge-status" style="background:#eef1f5;color:#8b98a8;font-weight:600">غير مسجَّل</span>
+              {% endif %}
+            </td>
+            <td style="font-size:12px">{{ d.source }}</td>
+            {% if shifts_enabled %}
+            <td style="font-size:12px;color:#6b7a8d">{{ d.shift_name }}</td>
+            {% endif %}
+            <td style="font-size:12px;color:#6b7a8d">{{ d.notes or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="text-muted mt-2 mb-0" style="font-size:12px">
+      <i class="bi bi-info-circle me-1"></i>
+      العطل الرسمية وأيام العطلة الأسبوعية غير معروضة.
+      «غير مسجَّل» تعني يوم دوام بلا سجل حضور مخزَّن، وهو غير محتسب ضمن الملخص أعلاه.
+    </p>
+    {% else %}
+    <p class="text-muted mb-0" style="font-size:13px">لا توجد سجلات في هذه الفترة</p>
+    {% endif %}
+
+  </div>
+</div>
+{% endif %}
+
+{# ══════════════════════════════════════════════════════════════════════════ #}
 {#  DETAIL / STUDENT TABLE                                                    #}
 {# ══════════════════════════════════════════════════════════════════════════ #}
 {% if records %}
