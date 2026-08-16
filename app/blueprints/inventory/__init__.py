@@ -339,6 +339,28 @@ def item_detail(item_id):
                            movement_types=MOVEMENT_TYPES)
 
 
+def _render_item_edit_form(item, categories, warehouses):
+    """Render the edit form for an existing item.
+
+    Used for the GET view and for rejected POSTs, so a validation error shows
+    the same per-warehouse stock table the user submitted from.
+    """
+    stocks = (InventoryItemStock.query
+              .options(joinedload(InventoryItemStock.warehouse))
+              .filter_by(item_id=item.id)
+              .join(InventoryWarehouse)
+              .order_by(InventoryWarehouse.name)
+              .all())
+    assigned_warehouse_ids = {s.warehouse_id for s in stocks}
+    available_warehouses = [w for w in warehouses if w.id not in assigned_warehouse_ids]
+
+    return render_template('inventory/item_form.html', item=item, categories=categories,
+                           warehouses=warehouses, stocks=stocks,
+                           available_warehouses=available_warehouses,
+                           clothing_category_ids=_clothing_category_ids(categories),
+                           clothing_sizes=CLOTHING_SIZES)
+
+
 @inventory_bp.route('/items/<int:item_id>/edit', methods=['GET', 'POST'])
 @login_required
 @historical_guard
@@ -352,61 +374,91 @@ def edit_item(item_id):
     warehouses = _warehouses(school)
 
     if request.method == 'POST':
-        _populate_item(item)
+        def _reject(message):
+            flash(message, 'danger')
+            return _render_item_edit_form(item, categories, warehouses), 400
 
-        # Update existing per-warehouse stock rows submitted with the form.
-        stock_ids = request.form.getlist('stock_id', type=int)
-        stock_quantities = request.form.getlist('stock_quantity')
-        stock_minimums = request.form.getlist('stock_minimum')
-        for stock_id, qty_raw, min_raw in zip(stock_ids, stock_quantities, stock_minimums):
-            stock = InventoryItemStock.query.filter_by(id=stock_id, item_id=item.id).first()
-            if not stock:
-                continue
-            try:
-                stock.quantity = Decimal(qty_raw or '0')
-            except InvalidOperation:
-                pass
-            try:
-                stock.minimum_quantity = Decimal(min_raw or '0')
-            except InvalidOperation:
-                pass
+        # Validate the submitted تصنيف against this school AND this academic
+        # year — the same ownership scope delete_category() uses. Checked here
+        # because the before_flush relationship guard reads item.category, which
+        # still holds the previously loaded category after only category_id is
+        # reassigned; without this an unknown id would reach the DB as a foreign
+        # key violation (raw 500) and a foreign id could relink the item.
+        category_id = request.form.get('category_id', type=int)
+        category = InventoryCategory.query.filter_by(
+            id=category_id,
+            school_id=school.id,
+            academic_year_id=year.id,
+        ).first() if category_id else None
+        if not category:
+            return _reject('يرجى اختيار تصنيف صحيح.')
 
-        # Optionally add the item to one more warehouse it isn't stocked in yet.
-        new_warehouse_id = request.form.get('new_warehouse_id', type=int)
-        if new_warehouse_id:
-            new_warehouse = InventoryWarehouse.query.filter_by(
-                id=new_warehouse_id, school_id=school.id, is_active=True).first()
-            already_assigned = InventoryItemStock.query.filter_by(
-                item_id=item.id, warehouse_id=new_warehouse_id).first()
-            if not new_warehouse:
-                flash('المخزن المحدد للإضافة غير صالح.', 'warning')
-            elif already_assigned:
-                flash('المادة موجودة بالفعل في هذا المخزن.', 'warning')
-            else:
-                stock = _get_or_create_stock(item, new_warehouse, minimum_quantity=item.minimum_quantity)
-                stock.quantity = _decimal_value('new_quantity')
-                stock.minimum_quantity = _decimal_value('new_minimum')
+        # Reject a رمز المادة already owned by ANOTHER item before writing
+        # anything. Scope matches the DB constraint exactly (same school + same
+        # academic year) and excludes this item, so keeping its own code is
+        # never a self-conflict. A blank code stays optional (NULL) and is never
+        # checked, as before.
+        submitted_code = request.form.get('item_code', '').strip() or None
+        if submitted_code and (_items_query(school, year)
+                               .filter(InventoryItem.item_code == submitted_code,
+                                       InventoryItem.id != item.id)
+                               .first()):
+            return _reject(DUPLICATE_ITEM_CODE_MESSAGE)
 
-        _recompute_item_total(item)
-        db.session.commit()
+        # From here on the item is mutated, so every query below can autoflush
+        # the pending UPDATE — the duplicate-code IntegrityError may therefore
+        # surface before commit() and has to be caught around the whole block.
+        try:
+            _populate_item(item)
+
+            # Update existing per-warehouse stock rows submitted with the form.
+            stock_ids = request.form.getlist('stock_id', type=int)
+            stock_quantities = request.form.getlist('stock_quantity')
+            stock_minimums = request.form.getlist('stock_minimum')
+            for stock_id, qty_raw, min_raw in zip(stock_ids, stock_quantities, stock_minimums):
+                stock = InventoryItemStock.query.filter_by(id=stock_id, item_id=item.id).first()
+                if not stock:
+                    continue
+                try:
+                    stock.quantity = Decimal(qty_raw or '0')
+                except InvalidOperation:
+                    pass
+                try:
+                    stock.minimum_quantity = Decimal(min_raw or '0')
+                except InvalidOperation:
+                    pass
+
+            # Optionally add the item to one more warehouse it isn't stocked in yet.
+            new_warehouse_id = request.form.get('new_warehouse_id', type=int)
+            if new_warehouse_id:
+                new_warehouse = InventoryWarehouse.query.filter_by(
+                    id=new_warehouse_id, school_id=school.id, is_active=True).first()
+                already_assigned = InventoryItemStock.query.filter_by(
+                    item_id=item.id, warehouse_id=new_warehouse_id).first()
+                if not new_warehouse:
+                    flash('المخزن المحدد للإضافة غير صالح.', 'warning')
+                elif already_assigned:
+                    flash('المادة موجودة بالفعل في هذا المخزن.', 'warning')
+                else:
+                    stock = _get_or_create_stock(item, new_warehouse, minimum_quantity=item.minimum_quantity)
+                    stock.quantity = _decimal_value('new_quantity')
+                    stock.minimum_quantity = _decimal_value('new_minimum')
+
+            _recompute_item_total(item)
+            db.session.commit()
+        except IntegrityError as exc:
+            # The pre-check above closes the common case; the DB constraint stays
+            # the final authority for two concurrent submissions of the same code.
+            # The rollback restores the item and its stock rows to their stored
+            # values, so a rejected save leaves nothing partially written.
+            db.session.rollback()
+            if not _is_duplicate_item_code_error(exc):
+                raise
+            return _reject(DUPLICATE_ITEM_CODE_MESSAGE)
         flash('تم تحديث المادة بنجاح.', 'success')
         return redirect(url_for('inventory.index'))
 
-    stocks = (InventoryItemStock.query
-              .options(joinedload(InventoryItemStock.warehouse))
-              .filter_by(item_id=item.id)
-              .join(InventoryWarehouse)
-              .order_by(InventoryWarehouse.name)
-              .all())
-    assigned_warehouse_ids = {s.warehouse_id for s in stocks}
-    available_warehouses = [w for w in warehouses if w.id not in assigned_warehouse_ids]
-
-    clothing_ids = _clothing_category_ids(categories)
-    return render_template('inventory/item_form.html', item=item, categories=categories,
-                           warehouses=warehouses, stocks=stocks,
-                           available_warehouses=available_warehouses,
-                           clothing_category_ids=clothing_ids,
-                           clothing_sizes=CLOTHING_SIZES)
+    return _render_item_edit_form(item, categories, warehouses)
 
 
 def _populate_item(item):
