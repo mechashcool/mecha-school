@@ -44,16 +44,21 @@ def _school_or_404():
     return school
 
 
-def _records_query(school, q):
+def _records_query(school, q, rfid=''):
     """School-scoped registration-records query, optionally filtered by the same
-    name/number search used on the index page. Ordered newest-updated first.
-    Shared by the index list and the bulk export routes so they stay consistent.
+    name/number search used on the index page and/or by the student's RFID card.
+    Ordered newest-updated first. Shared by the index list, the live-search
+    endpoint and the bulk export routes so they stay consistent.
     """
     query = StudentRegistrationRecord.query.filter(
         StudentRegistrationRecord.school_id == school.id
     )
+    # One join covers both student-backed filters (joining twice would be
+    # ambiguous when q and rfid are supplied together).
+    if q or rfid:
+        query = query.join(Student)
     if q:
-        query = query.join(Student).filter(
+        query = query.filter(
             db.or_(
                 Student.full_name.ilike(f'%{q}%'),
                 Student.student_id.ilike(f'%{q}%'),
@@ -61,6 +66,13 @@ def _records_query(school, q):
                 StudentRegistrationRecord.snap_student_number.ilike(f'%{q}%'),
             )
         )
+    # RFID card filter — EXACT string match on the already-joined Student, the
+    # same semantics as the /students/ and /fees/ pages. ANDed with q, never a
+    # replacement for it. The query is school-scoped above, so a card issued by
+    # another school matches no rows and cannot reveal that student's record.
+    # Empty (the default) → no effect at all.
+    if rfid:
+        query = query.filter(Student.rfid_tag_id == rfid)
     return query.order_by(StudentRegistrationRecord.updated_at.desc())
 
 
@@ -300,20 +312,13 @@ def get_student_data(student_id):
 def search():
     school = _school_or_404()
     q = request.args.get('q', '').strip()
+    # Same string-only handling as students.index — read as a STRING and only
+    # trimmed of the whitespace/CR/LF the USB reader appends, so "0006110011"
+    # never degrades to "6110011". Kept here so the live search keeps applying
+    # the card filter instead of silently dropping it.
+    rfid = request.args.get('rfid', '').strip()
 
-    query = StudentRegistrationRecord.query.filter(
-        StudentRegistrationRecord.school_id == school.id
-    )
-    if q:
-        query = query.join(Student).filter(
-            db.or_(
-                Student.full_name.ilike(f'%{q}%'),
-                Student.student_id.ilike(f'%{q}%'),
-                StudentRegistrationRecord.snap_full_name.ilike(f'%{q}%'),
-                StudentRegistrationRecord.snap_student_number.ilike(f'%{q}%'),
-            )
-        )
-    rows = query.order_by(StudentRegistrationRecord.updated_at.desc()).limit(50).all()
+    rows = _records_query(school, q, rfid).limit(50).all()
 
     def _gs(r):
         if r.snap_grade_name:
@@ -323,6 +328,10 @@ def search():
 
     return jsonify({
         'ok': True,
+        # Boolean only (never the card number itself) so the client can show the
+        # "no record is linked to this card" empty state based on what the server
+        # actually applied.
+        'rfid_active': bool(rfid),
         'records': [{
             'student_name':   r.snap_full_name or '',
             'student_number': r.snap_student_number or '',
@@ -347,12 +356,16 @@ def index():
     school = _school_or_404()
     q      = request.args.get('q', '').strip()
     page   = request.args.get('page', 1, type=int)
+    # RFID card filter — same handling as the /students/ and /fees/ pages: a
+    # STRING that is only trimmed of the whitespace/CR/LF the CR20 reader
+    # appends. Never parsed as a number, so leading zeroes survive intact.
+    rfid   = request.args.get('rfid', '').strip()
 
-    records = _records_query(school, q).paginate(
+    records = _records_query(school, q, rfid).paginate(
         page=page, per_page=25, error_out=False
     )
     return render_template('student_records/index.html',
-                           records=records, q=q, school=school)
+                           records=records, q=q, rfid=rfid, school=school)
 
 
 # ─── NEW ──────────────────────────────────────────────────────────────────────
@@ -491,21 +504,22 @@ def pdf(record_id):
 def export_pdf():
     school = _school_or_404()
     q      = request.args.get('q', '').strip()
+    rfid   = request.args.get('rfid', '').strip()
 
     paper = request.args.get('paper', 'a4').lower()
     if paper not in ('a3', 'a4'):
         paper = 'a4'
 
-    records = _records_query(school, q).all()
+    records = _records_query(school, q, rfid).all()
     if not records:
         flash('لا توجد سجلات قيد للتصدير.', 'warning')
-        return redirect(url_for('student_records.index', q=q or None))
+        return redirect(url_for('student_records.index', q=q or None, rfid=rfid or None))
 
     from app.utils.pdf_gen import generate_registration_records_bulk_pdf
     pdf_bytes = generate_registration_records_bulk_pdf(records, school, paper=paper)
     if not pdf_bytes:
         flash('تعذّر إنشاء ملف PDF — تحقق من توفر مكتبة ReportLab والخط العربي.', 'danger')
-        return redirect(url_for('student_records.index', q=q or None))
+        return redirect(url_for('student_records.index', q=q or None, rfid=rfid or None))
 
     fname = f'سجلات_القيد_{paper.upper()}.pdf'
     return send_file(BytesIO(pdf_bytes), mimetype='application/pdf',
@@ -520,17 +534,18 @@ def export_pdf():
 def export_excel():
     school = _school_or_404()
     q      = request.args.get('q', '').strip()
+    rfid   = request.args.get('rfid', '').strip()
 
-    records = _records_query(school, q).all()
+    records = _records_query(school, q, rfid).all()
     if not records:
         flash('لا توجد سجلات قيد للتصدير.', 'warning')
-        return redirect(url_for('student_records.index', q=q or None))
+        return redirect(url_for('student_records.index', q=q or None, rfid=rfid or None))
 
     from app.utils.excel_export import export_registration_records
     xlsx_bytes = export_registration_records(records)
     if not xlsx_bytes:
         flash('تعذّر إنشاء ملف Excel — تحقق من توفر مكتبة openpyxl.', 'danger')
-        return redirect(url_for('student_records.index', q=q or None))
+        return redirect(url_for('student_records.index', q=q or None, rfid=rfid or None))
 
     return send_file(
         BytesIO(xlsx_bytes),

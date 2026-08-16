@@ -17,20 +17,20 @@
       <ul class="dropdown-menu dropdown-menu-end">
         <li>
           <a class="dropdown-item" target="_blank"
-             href="{{ url_for('student_records.export_pdf', paper='a4', q=q or None) }}">
+             href="{{ url_for('student_records.export_pdf', paper='a4', q=q or None, rfid=rfid or None) }}">
             <i class="bi bi-file-earmark-pdf me-1"></i>تصدير PDF A4
           </a>
         </li>
         <li>
           <a class="dropdown-item" target="_blank"
-             href="{{ url_for('student_records.export_pdf', paper='a3', q=q or None) }}">
+             href="{{ url_for('student_records.export_pdf', paper='a3', q=q or None, rfid=rfid or None) }}">
             <i class="bi bi-file-earmark-pdf-fill me-1"></i>تصدير PDF A3
           </a>
         </li>
         <li><hr class="dropdown-divider"></li>
         <li>
           <a class="dropdown-item"
-             href="{{ url_for('student_records.export_excel', q=q or None) }}">
+             href="{{ url_for('student_records.export_excel', q=q or None, rfid=rfid or None) }}">
             <i class="bi bi-file-earmark-excel me-1"></i>تصدير Excel
           </a>
         </li>
@@ -46,7 +46,7 @@
 <div class="card mb-4">
   <div class="card-body">
     <form method="GET" class="row g-3 align-items-end">
-      <div class="col-12 col-md-8">
+      <div class="col-12 col-md-5">
         <label class="form-label">بحث بالاسم أو رقم الطالب</label>
         <div class="input-group">
           <span class="input-group-text"><i class="bi bi-search"></i></span>
@@ -54,9 +54,27 @@
                  placeholder="اكتب اسم الطالب أو رقمه…" value="{{ q }}" autofocus>
         </div>
       </div>
+      {# RFID card filter — same control, icon, semantics and CR20 ENTER handling
+         as the /students/ and /fees/ pages. The reader types the card number
+         here and emits ENTER, which submits this existing GET form (see the
+         script below). Plain text input: no WebUSB/WebSerial/driver involved. #}
+      <div class="col-12 col-md-3">
+        <label for="rfidFilterInput" class="form-label">
+          <i class="bi bi-credit-card-2-front me-1"></i>بحث بالبطاقة التعريفية
+        </label>
+        <div class="input-group">
+          <input type="text" name="rfid" id="rfidFilterInput" class="form-control"
+                 placeholder="مرر البطاقة..."
+                 value="{{ rfid }}" autocomplete="off" maxlength="64">
+          <button type="button" class="btn btn-outline-secondary" id="rfidFilterClear"
+                  title="مسح البطاقة وعرض جميع السجلات">
+            <i class="bi bi-x-lg"></i>
+          </button>
+        </div>
+      </div>
       <div class="col-auto">
         <button type="submit" class="btn btn-primary">بحث</button>
-        {% if q %}
+        {% if q or rfid %}
         <a href="{{ url_for('student_records.index') }}"
            class="btn btn-outline-secondary ms-1">مسح</a>
         {% endif %}
@@ -142,7 +160,7 @@
   <ul class="pagination justify-content-center">
     {% if records.has_prev %}
     <li class="page-item">
-      <a class="page-link" href="{{ url_for('student_records.index', page=records.prev_num, q=q) }}">
+      <a class="page-link" href="{{ url_for('student_records.index', page=records.prev_num, q=q, rfid=rfid) }}">
         السابق
       </a>
     </li>
@@ -150,7 +168,7 @@
     {% for p in records.iter_pages() %}
       {% if p %}
       <li class="page-item {{ 'active' if p == records.page }}">
-        <a class="page-link" href="{{ url_for('student_records.index', page=p, q=q) }}">{{ p }}</a>
+        <a class="page-link" href="{{ url_for('student_records.index', page=p, q=q, rfid=rfid) }}">{{ p }}</a>
       </li>
       {% else %}
       <li class="page-item disabled"><span class="page-link">…</span></li>
@@ -158,7 +176,7 @@
     {% endfor %}
     {% if records.has_next %}
     <li class="page-item">
-      <a class="page-link" href="{{ url_for('student_records.index', page=records.next_num, q=q) }}">
+      <a class="page-link" href="{{ url_for('student_records.index', page=records.next_num, q=q, rfid=rfid) }}">
         التالي
       </a>
     </li>
@@ -169,13 +187,23 @@
 
 {% else %}
 <div class="text-center py-5 text-muted" id="records-empty">
+  {# A scanned card that matched nothing gets its own message, so the user can
+     tell "no record is linked to this card" apart from "no search results". #}
+  {% if rfid %}
+  <i class="bi bi-credit-card-2-front" style="font-size:3rem"></i>
+  <p class="mt-3 mb-0">لا يوجد سجل قيد مرتبط بهذه البطاقة.</p>
+  <div class="small"><code>{{ rfid }}</code></div>
+  <a href="{{ url_for('student_records.index') }}" class="btn btn-outline-secondary mt-2">
+    <i class="bi bi-x-circle me-1"></i>مسح البحث
+  </a>
+  {% elif q %}
   <i class="bi bi-card-text" style="font-size:3rem"></i>
-  {% if q %}
   <p class="mt-3">لا توجد سجلات مطابقة للبحث.</p>
   <a href="{{ url_for('student_records.index') }}" class="btn btn-outline-secondary mt-2">
     <i class="bi bi-x-circle me-1"></i>مسح البحث
   </a>
   {% else %}
+  <i class="bi bi-card-text" style="font-size:3rem"></i>
   <p class="mt-3">لا توجد سجلات قيد بعد.</p>
   <a href="{{ url_for('student_records.new') }}" class="btn btn-primary mt-2">
     <i class="bi bi-plus-circle-fill me-1"></i>إضافة أول سجل
@@ -185,12 +213,48 @@
 {% endif %}
 
 <script>
+// ── RFID card filter (SmarTec CR20, USB keyboard emulation) ──────────────────
+// Mirrors the /students/ and /fees/ pages: the reader types the card number into
+// the card field and then emits ENTER. That ENTER is handled HERE ONLY — it
+// submits this page's EXISTING GET search form. preventDefault stops the
+// browser's implicit submission so the behaviour is deterministic, and
+// stopPropagation keeps the key off any ancestor handler. Enter in the
+// name/number box and everywhere else on the page is untouched — no global Enter
+// handler is added. Kept in its own IIFE so it also binds on an empty result
+// page (where the live-search block below bails out early).
+(function () {
+  const rfidInput    = document.getElementById('rfidFilterInput');
+  const rfidClearBtn = document.getElementById('rfidFilterClear');
+  if (!rfidInput) return;
+  const form = rfidInput.form;
+
+  rfidInput.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // Trim only the whitespace/CR/LF the scanner appends — "0006110011" keeps
+    // every leading zero and is submitted as a string.
+    rfidInput.value = rfidInput.value.trim();
+    if (form) form.submit();
+  });
+
+  // Clear the card and restore the list, leaving the name/number search as it is
+  // (it is submitted with the same form).
+  if (rfidClearBtn) {
+    rfidClearBtn.addEventListener('click', function () {
+      rfidInput.value = '';
+      if (form) form.submit();
+    });
+  }
+})();
+
 (function () {
   const input    = document.getElementById('search-input');
   const tbody    = document.getElementById('records-tbody');
   const tableWrap = document.getElementById('records-table-wrap');
   const emptyBox  = document.getElementById('records-empty');
   const pagBox    = document.getElementById('records-pagination');
+  const rfidInput = document.getElementById('rfidFilterInput');
 
   if (!input || !tbody) return;
 
@@ -203,15 +267,19 @@
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  function renderRows(records) {
+  function renderRows(records, rfidActive) {
     if (!records.length) {
       if (tableWrap) tableWrap.style.display = 'none';
       if (pagBox)    pagBox.style.display    = 'none';
       if (emptyBox) {
         emptyBox.style.display = '';
-        emptyBox.innerHTML =
-          '<i class="bi bi-card-text" style="font-size:3rem"></i>' +
-          '<p class="mt-3">لا توجد سجلات مطابقة للبحث.</p>';
+        emptyBox.innerHTML = rfidActive
+          ? '<i class="bi bi-credit-card-2-front" style="font-size:3rem"></i>' +
+            '<p class="mt-3 mb-0">لا يوجد سجل قيد مرتبط بهذه البطاقة.</p>' +
+            '<div class="small"><code>' +
+              esc(rfidInput ? rfidInput.value.trim() : '') + '</code></div>'
+          : '<i class="bi bi-card-text" style="font-size:3rem"></i>' +
+            '<p class="mt-3">لا توجد سجلات مطابقة للبحث.</p>';
       }
       return;
     }
@@ -250,6 +318,24 @@
     }).join('');
   }
 
+  // The card filter rides the same live-search request as 'q', so it is always
+  // ANDed with it instead of being silently dropped while the user types.
+  // .trim() strips only the whitespace/CR/LF the reader appends — the card
+  // string itself (leading zeroes included) is sent unchanged.
+  function searchUrl(q) {
+    const params = new URLSearchParams();
+    params.set('q', q);
+    const card = rfidInput ? rfidInput.value.trim() : '';
+    if (card) params.set('rfid', card);
+    return SEARCH_URL + '?' + params.toString();
+  }
+
+  function runSearch(q) {
+    fetch(searchUrl(q))
+      .then(function (r) { return r.json(); })
+      .then(function (data) { if (data.ok) renderRows(data.records, data.rfid_active); });
+  }
+
   let timer;
   input.addEventListener('input', function () {
     clearTimeout(timer);
@@ -257,17 +343,11 @@
 
     if (q.length === 0) {
       // Empty — fetch default list immediately, no debounce.
-      fetch(SEARCH_URL + '?q=')
-        .then(function (r) { return r.json(); })
-        .then(function (data) { if (data.ok) renderRows(data.records); });
+      runSearch('');
       return;
     }
 
-    timer = setTimeout(function () {
-      fetch(SEARCH_URL + '?q=' + encodeURIComponent(q))
-        .then(function (r) { return r.json(); })
-        .then(function (data) { if (data.ok) renderRows(data.records); });
-    }, 350);
+    timer = setTimeout(function () { runSearch(q); }, 350);
   });
 })();
 </script>
