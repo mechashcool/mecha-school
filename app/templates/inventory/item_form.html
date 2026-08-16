@@ -12,7 +12,7 @@
 
 <div class="card">
   <div class="card-body">
-    <form method="POST" class="row g-3">
+    <form method="POST" class="row g-3" id="itemForm">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
       <div class="col-md-6">
         <label class="form-label">اسم المادة <span class="text-danger">*</span></label>
@@ -137,7 +137,7 @@
       {% endif %}
 
       <div class="col-12 d-flex gap-2">
-        <button class="btn btn-primary"><i class="bi bi-check2-circle me-1"></i>حفظ</button>
+        <button type="submit" id="itemSaveBtn" class="btn btn-primary"><i class="bi bi-check2-circle me-1"></i>حفظ</button>
         <a href="{{ url_for('inventory.index') }}" class="btn btn-outline-secondary">إلغاء</a>
       </div>
     </form>
@@ -161,4 +161,45 @@
   toggle();
 })();
 </script>
+
+{% if not item %}
+{# Create mode only — an accidental save here silently creates a real item with
+   default quantity/category/warehouse. The edit form has an existing row to
+   compare against, so its Enter behaviour is deliberately left untouched. #}
+<script>
+(function () {
+  const form = document.getElementById('itemForm');
+  const saveBtn = document.getElementById('itemSaveBtn');
+  if (!form || !saveBtn) return;
+
+  // Block the browser's implicit submission: every required field is either
+  // pre-filled or defaults to its first option, so a stray Enter after typing
+  // the name would otherwise POST a valid — but unfinished — item. <textarea>
+  // is excluded so Enter keeps inserting a newline in الملاحظات.
+  form.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || e.target.tagName === 'TEXTAREA') return;
+    e.preventDefault();
+  });
+
+  // One POST per intentional click. This listens for 'submit', which the
+  // browser fires only *after* native validation passes — an invalid form
+  // never reaches here, so the button is never disabled while required fields
+  // are still missing.
+  let submitting = false;
+  form.addEventListener('submit', function (e) {
+    if (submitting) { e.preventDefault(); return; }
+    submitting = true;
+    // Disable on the next tick rather than mid-submit, so the in-flight
+    // navigation is never affected by the control being disabled.
+    setTimeout(function () { saveBtn.disabled = true; }, 0);
+  });
+
+  // A back/forward-cache restore would otherwise return the user to a form
+  // whose Save button is still disabled from the previous submission.
+  window.addEventListener('pageshow', function (e) {
+    if (e.persisted) { submitting = false; saveBtn.disabled = false; }
+  });
+})();
+</script>
+{% endif %}
 {% endblock %}
