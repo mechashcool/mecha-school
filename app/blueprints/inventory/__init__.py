@@ -394,15 +394,19 @@ def edit_item(item_id):
             return _reject('يرجى اختيار تصنيف صحيح.')
 
         # Reject a رمز المادة already owned by ANOTHER item before writing
-        # anything. Scope matches the DB constraint exactly (same school + same
-        # academic year) and excludes this item, so keeping its own code is
-        # never a self-conflict. A blank code stays optional (NULL) and is never
-        # checked, as before.
+        # anything. The stored code is read first, before _populate_item()
+        # overwrites it: an unchanged code — including a NULL one left blank —
+        # is not re-validated at all, so an item can never be reported as a
+        # duplicate of itself. A blank code stays optional (NULL), as before.
+        # The scope of the check matches the DB constraint exactly (same school
+        # + same academic year) and excludes this item.
+        current_code = item.item_code
         submitted_code = request.form.get('item_code', '').strip() or None
-        if submitted_code and (_items_query(school, year)
-                               .filter(InventoryItem.item_code == submitted_code,
-                                       InventoryItem.id != item.id)
-                               .first()):
+        if (submitted_code != current_code and submitted_code
+                and _items_query(school, year)
+                .filter(InventoryItem.item_code == submitted_code,
+                        InventoryItem.id != item.id)
+                .first()):
             return _reject(DUPLICATE_ITEM_CODE_MESSAGE)
 
         # From here on the item is mutated, so every query below can autoflush

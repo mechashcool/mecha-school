@@ -28,7 +28,7 @@
       </div>
       <div class="col-md-4">
         <label class="form-label">رمز المادة</label>
-        <input type="text" name="item_code" class="form-control" value="{{ item.item_code if item else '' }}">
+        <input type="text" name="item_code" class="form-control" value="{{ item.item_code if item and item.item_code is not none else '' }}">
       </div>
       <div class="col-md-4">
         <label class="form-label">وحدة القياس <span class="text-danger">*</span></label>
@@ -68,7 +68,7 @@
       </div>
       <div class="col-md-4">
         <label class="form-label">المورد</label>
-        <input type="text" name="supplier" class="form-control" value="{{ item.supplier if item else '' }}">
+        <input type="text" name="supplier" class="form-control" value="{{ item.supplier if item and item.supplier is not none else '' }}">
       </div>
       <div class="col-md-6 d-flex align-items-end">
         <label class="form-check">
@@ -78,7 +78,7 @@
       </div>
       <div class="col-12">
         <label class="form-label">ملاحظات</label>
-        <textarea name="notes" class="form-control" rows="3">{{ item.notes if item else '' }}</textarea>
+        <textarea name="notes" class="form-control" rows="3">{{ item.notes if item and item.notes is not none else '' }}</textarea>
       </div>
 
       {% if item %}
