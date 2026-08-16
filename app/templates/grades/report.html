@@ -200,7 +200,7 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
                         exam_type=exam_type_filter, subject_id=subject_filter,
                         start_date=start_date, end_date=end_date,
                         stage=stage_f, grade_id=grade_id_f or '',
-                        section_id=section_id_f or '') }}"
+                        section_id=section_id_f or '', rfid=rfid) }}"
        class="btn btn-outline-success">
       <i class="bi bi-file-earmark-excel-fill me-1"></i>تصدير Excel
     </a>
@@ -295,6 +295,20 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
       <div class="col-6 col-md-2">
         <label class="form-label small">بحث باسم الطالب</label>
         <input type="text" name="student_q" class="form-control" placeholder="اسم الطالب أو رقمه" value="{{ student_search }}">
+      </div>
+
+      {# RFID card filter — same control, icon, semantics and CR20 ENTER handling
+         as the /students/, /fees/ and /student-registration-records/ pages. The
+         reader types the card number here and emits ENTER, which submits this
+         existing GET filter form (see extra_js). Plain text input: no
+         WebUSB/WebSerial/driver/desktop service involved. #}
+      <div class="col-6 col-md-2">
+        <label for="rfidFilterInput" class="form-label small">
+          <i class="bi bi-credit-card-2-front me-1"></i>بحث بالبطاقة التعريفية
+        </label>
+        <input type="text" name="rfid" id="rfidFilterInput" class="form-control"
+               placeholder="مرر البطاقة..." value="{{ rfid }}"
+               autocomplete="off" maxlength="64">
       </div>
 
       <div class="col-6 col-md-2 d-flex gap-1 align-items-end">
@@ -631,8 +645,16 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
         {% else %}
         <tr>
           <td colspan="10" class="text-center text-muted py-5">
+            {# A scanned card that matched nothing gets its own message, so it is
+               not confused with "this filter simply has no results". #}
+            {% if rfid %}
+            <i class="bi bi-credit-card-2-front" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            لا توجد نتائج مرتبطة بهذه البطاقة
+            <div style="font-size:12.5px;margin-top:4px"><code>{{ rfid }}</code></div>
+            {% else %}
             <i class="bi bi-clipboard-data" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
             لا توجد نتائج لهذه التصفية
+            {% endif %}
           </td>
         </tr>
         {% endfor %}
@@ -703,6 +725,31 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
 
   // Apply on page load to restore consistent dropdown state from URL params
   filterGrades();
+})();
+</script>
+<script>
+// ── RFID card filter (SmarTec CR20, USB keyboard emulation) ──────────────────
+// Mirrors the /students/, /fees/ and /student-registration-records/ pages: the
+// reader types the card number into the card field and then emits ENTER. That
+// ENTER is handled HERE ONLY — it submits this page's EXISTING GET filter form
+// (the same form the تصفية button submits). preventDefault stops the browser's
+// implicit submission so the behaviour is deterministic, and stopPropagation
+// keeps the key off any ancestor handler. Enter in بحث باسم الطالب, بحث باسم
+// الاختبار and every other input is untouched — no global Enter handler is added.
+(function () {
+  const rfidInput = document.getElementById('rfidFilterInput');
+  if (!rfidInput) return;
+  const form = rfidInput.form;
+
+  rfidInput.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // Trim only the whitespace/CR/LF the scanner appends — "0006110011" keeps
+    // every leading zero and is submitted as a string.
+    rfidInput.value = rfidInput.value.trim();
+    if (form) form.submit();
+  });
 })();
 </script>
 {% endblock %}

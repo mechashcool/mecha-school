@@ -979,6 +979,11 @@ def report():
     stage_f          = request.args.get('stage', '').strip()
     grade_id_f       = request.args.get('grade_id', type=int)
     section_id_f     = request.args.get('section_id', type=int)
+    # RFID card filter — same handling as the /students/, /fees/ and
+    # /student-registration-records/ pages: a STRING that is only trimmed of the
+    # whitespace/CR/LF the CR20 reader appends. Never parsed as a number, so
+    # "0006110011" keeps every leading zero.
+    rfid             = request.args.get('rfid', '').strip()
 
     school = get_current_school()
     year   = get_view_year(school.id) if school else None
@@ -1031,13 +1036,21 @@ def report():
         results_base = _apply_teacher_scope(results_base)
 
     # Join Student once if any student-level filter is needed
-    if student_search or section_id_f or grade_id_f or stage_f:
+    if student_search or rfid or section_id_f or grade_id_f or stage_f:
         results_base = results_base.join(Student, ExamResult.student_id == Student.id)
         if student_search:
             results_base = results_base.filter(
                 Student.full_name.ilike(f'%{student_search}%') |
                 Student.student_id.ilike(f'%{student_search}%')
             )
+        # RFID card filter — EXACT string match on the Student already joined
+        # above, the same semantics as every other RFID filter in the project.
+        # ANDed with the name search and with every structural filter, never a
+        # replacement for them. results_base is already restricted to this
+        # school (and academic year) above, so a card issued by another school
+        # matches no rows. Empty → no effect at all.
+        if rfid:
+            results_base = results_base.filter(Student.rfid_tag_id == rfid)
         if section_id_f:
             results_base = results_base.filter(Student.section_id == section_id_f)
         elif grade_id_f:
@@ -1171,6 +1184,7 @@ def report():
                            stages=stages,
                            search=search,
                            student_search=student_search,
+                           rfid=rfid,
                            exam_type_filter=exam_type_filter,
                            subject_filter=subject_filter,
                            start_date=start_date,
@@ -1198,6 +1212,9 @@ def report_export():
     stage_f          = request.args.get('stage', '').strip()
     grade_id_f       = request.args.get('grade_id', type=int)
     section_id_f     = request.args.get('section_id', type=int)
+    # Same string-only handling as grades.report, so the exported file matches
+    # exactly what the screen (and the printout) shows for the same filters.
+    rfid             = request.args.get('rfid', '').strip()
 
     school = get_current_school()
     year   = get_view_year(school.id) if school else None
@@ -1236,14 +1253,15 @@ def report_export():
         base, search, exam_type_filter, subject_filter, start_date, end_date
     ).order_by(Exam.exam_date.desc()).all()
 
-    data = export_exams(exams, subject_report=True, student_search=student_search)
+    data = export_exams(exams, subject_report=True,
+                        student_search=student_search, rfid=rfid)
     if not data:
         flash('مكتبة Excel غير متاحة.', 'warning')
         return redirect(url_for('grades.report', q=search, student_q=student_search,
                                 exam_type=exam_type_filter, subject_id=subject_filter,
                                 start_date=start_date, end_date=end_date,
                                 stage=stage_f, grade_id=grade_id_f or '',
-                                section_id=section_id_f or ''))
+                                section_id=section_id_f or '', rfid=rfid))
 
     return Response(
         data,

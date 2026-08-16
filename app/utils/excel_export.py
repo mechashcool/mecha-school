@@ -419,6 +419,7 @@ def export_exams(
     exams,
     subject_report: bool = False,
     student_search: str = '',
+    rfid: str = '',
 ) -> bytes | None:
     """Export exam list or per-student subject report to Excel. Returns bytes or None."""
     wb = _wb()
@@ -463,16 +464,26 @@ def export_exams(
                 row_num += 1
 
             results_q = exam.results.order_by(None)
-            if student_search:
+            # One join covers both student-level filters (joining twice would be
+            # ambiguous when the name search and the card are supplied together).
+            if student_search or rfid:
                 from app.models import ExamResult, Student
 
-                needle = f'%{student_search}%'
                 results_q = results_q.join(
                     Student, ExamResult.student_id == Student.id
-                ).filter(
-                    Student.full_name.ilike(needle) |
-                    Student.student_id.ilike(needle)
                 )
+                if student_search:
+                    needle = f'%{student_search}%'
+                    results_q = results_q.filter(
+                        Student.full_name.ilike(needle) |
+                        Student.student_id.ilike(needle)
+                    )
+                # RFID card filter — EXACT string match, mirroring grades.report
+                # so screen, print and Excel agree for the same filters. The
+                # rows come from this exam's own results, which are already
+                # school- and year-scoped by the caller's exam query.
+                if rfid:
+                    results_q = results_q.filter(Student.rfid_tag_id == rfid)
             for result in results_q.all():
                 counter += 1
                 row = [
