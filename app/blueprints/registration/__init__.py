@@ -38,6 +38,9 @@ from app.utils.helpers import save_uploaded_file, ALLOWED_IMAGE_EXTENSIONS
 from app.utils.registration_tokens import (hash_token, verify_token,
                                            generate_token, normalize_name,
                                            normalize_text)
+# Same whitespace normalization used when the standard Iraqi grades are created,
+# so display ordering matches stored names regardless of spacing variations.
+from app.utils.iraqi_grades import _normalize as _normalize_grade_name
 # Reuse the SAME school-scoped residential-area helpers as the internal Add
 # Student form (single source of truth for loading + fail-closed validation).
 from app.blueprints.students import (_school_residential_areas,
@@ -145,11 +148,43 @@ def _active_year(school):
             .filter_by(school_id=school.id, is_current=True).first())
 
 
+# Canonical display order for the public registration grade dropdown.
+# Display only — never used to create, rename, or filter grades.
+_GRADE_DISPLAY_ORDER: list[str] = [
+    'الصف الأول الابتدائي',
+    'الصف الثاني الابتدائي',
+    'الصف الثالث الابتدائي',
+    'الصف الرابع الابتدائي',
+    'الصف الخامس الابتدائي',
+    'الصف السادس الابتدائي',
+    'الصف الأول المتوسط',
+    'الصف الثاني المتوسط',
+    'الصف الثالث المتوسط',
+    'الصف الرابع الإعدادي العلمي',
+    'الصف الرابع الإعدادي الأدبي',
+    'الصف الخامس الإعدادي العلمي',
+    'الصف الخامس الإعدادي الأدبي',
+    'الصف السادس الإعدادي العلمي',
+    'الصف السادس الإعدادي الأدبي',
+]
+_GRADE_RANK = {_normalize_grade_name(n): i
+               for i, n in enumerate(_GRADE_DISPLAY_ORDER)}
+
+
+def _grade_sort_key(grade):
+    """Recognized grades first in canonical order; unknown names keep their
+    incoming (name-ordered) relative position at the end."""
+    rank = _GRADE_RANK.get(_normalize_grade_name(grade.name or ''))
+    return (0, rank) if rank is not None else (1, 0)
+
+
 def _active_grades(school, year):
-    return (Grade.query.execution_options(bypass_tenant_scope=True,
-                                          include_all_years=True)
-            .filter_by(school_id=school.id, academic_year_id=year.id)
-            .order_by(Grade.name).all())
+    grades = (Grade.query.execution_options(bypass_tenant_scope=True,
+                                            include_all_years=True)
+              .filter_by(school_id=school.id, academic_year_id=year.id)
+              .order_by(Grade.name).all())
+    # Display-order only — same rows, same ids, nothing added or removed.
+    return sorted(grades, key=_grade_sort_key)
 
 
 def _content_matches_ext(file_storage, ext: str) -> bool:
