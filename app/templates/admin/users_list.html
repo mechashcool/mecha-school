@@ -96,7 +96,7 @@
             </span>
           </td>
           <td class="text-muted" style="font-size:12.5px">
-            {{ user.last_login.strftime('%Y-%m-%d %H:%M') if user.last_login else 'لم يدخل بعد' }}
+            {{ user.last_login | to_baghdad('%Y-%m-%d %H:%M') if user.last_login else 'لم يدخل بعد' }}
           </td>
           <td>
             {% set target_super = user.role and user.role.name == 'super_admin' %}
