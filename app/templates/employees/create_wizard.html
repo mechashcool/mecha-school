@@ -743,7 +743,8 @@
 
         {# ─── 3. Subjects — filtered by the TEACHING grades only ─────────────
              Rendered client-side from the same trusted server data as the grade
-             cards, and rebuilt whenever a teaching grade is added or removed.
+             cards, and rebuilt whenever a teaching grade or one of its sections
+             is selected or deselected — the same set the server validates.
              Grades chosen only under الإشراف never widen this list, and the
              server re-checks every submitted subject against the selected
              teaching grades. #}
@@ -751,15 +752,15 @@
           <div class="ta-area-hd">
             <i class="bi bi-journals"></i>
             <span>المواد الدراسية</span>
-            <span class="ta-area-hint">تُعرض حسب الصفوف المحددة في "الشعب التي يدرسها"</span>
+            <span class="ta-area-hint">تُعرض حسب الشعب المحددة في "الصفوف والشعب التي يُدرّسها"</span>
           </div>
           <div class="mb-2" id="taSubjSearchWrap" style="max-width:320px;display:none">
             <input type="search" class="form-control form-control-sm" id="taSubjSearch"
                    placeholder="ابحث باسم المادة..." data-wizard-enter-optout>
           </div>
-          {# Empty state shown until at least one teaching grade is selected. #}
+          {# Empty state shown until at least one teaching SECTION is selected. #}
           <div class="ta-empty" id="taSubjEmpty">
-            <i class="bi bi-info-circle"></i>اختر صفًا واحدًا على الأقل لعرض المواد الدراسية.
+            <i class="bi bi-info-circle"></i>حدّد شعبة واحدة على الأقل ضمن "الصفوف والشعب التي يُدرّسها" لعرض موادها الدراسية.
           </div>
           <div class="ta-subject-box" id="taSubjectsBox" style="display:none"></div>
           <div class="form-text mt-2" id="taSubjHint" style="display:none">
@@ -1027,19 +1028,27 @@ function taEsc(s) {
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-/* Grade ids currently selected under "الشعب التي يدرسها" (teaching only —
-   homeroom/supervision grades deliberately do not count). */
+/* Grade ids whose sections are actually TICKED under "الشعب التي يدرسها"
+   (homeroom/supervision grades deliberately do not count).
+
+   This mirrors the server exactly: _wizard_teacher_selection derives the set of
+   acceptable subject grades from the submitted "<grade_id>:<section_id>" pairs,
+   i.e. from the CHECKED section boxes — not from the grade cards on screen.
+   Merely adding a grade card must therefore not offer that grade's subjects,
+   otherwise a subject the UI displayed would be rejected on save. */
 function taTeachingGradeIds() {
   const box = document.querySelector('[data-ta-cards="teaching"]');
   if (!box) return [];
-  return Array.from(box.querySelectorAll('.ta-card')).map(c => c.dataset.gid);
+  return Array.from(box.querySelectorAll('.ta-card'))
+    .filter(c => c.querySelector('input[name="wiz_teaching[]"]:checked'))
+    .map(c => c.dataset.gid);
 }
 
-/* Rebuild the subject list from the currently selected TEACHING grades.
-   Called whenever a teaching grade is added or removed, so the list always
-   matches the real selection. Subjects of a removed grade are deleted from the
-   DOM outright, which is what guarantees a stale selection can never be
-   submitted. Ticked subjects that are still valid keep their state. */
+/* Rebuild the subject list from the TEACHING grades that have a ticked section.
+   Called whenever a teaching grade is added or removed AND whenever a section is
+   ticked or unticked, so the list always matches the real selection. Subjects
+   of a grade that is no longer taught are deleted from the DOM outright, which
+   is what guarantees a stale selection can never be submitted. Ticked subjects that are still valid keep their state. */
 function taRenderSubjects() {
   const box   = document.getElementById('taSubjectsBox');
   const empty = document.getElementById('taSubjEmpty');
@@ -1229,8 +1238,20 @@ function taApplySubjSearch() {
         const turnOn = boxes.some(b => !b.checked);
         boxes.forEach(b => { b.checked = turnOn; });
         all.textContent = turnOn ? 'إلغاء التحديد' : 'تحديد الكل';
+        // Setting .checked in code fires no change event — refresh explicitly.
+        if (area === 'teaching') taRenderSubjects();
       }
     });
+
+    // Ticking / unticking a section changes which grades are really taught, so
+    // the subject list is rebuilt from exactly the set the server validates
+    // against. Unticking the last section of a grade drops that grade's subject
+    // inputs from the DOM, so a stale selection can never be submitted.
+    if (area === 'teaching') {
+      cards.addEventListener('change', e => {
+        if (e.target.matches('input[name="wiz_teaching[]"]')) taRenderSubjects();
+      });
+    }
 
     refresh();
   });
