@@ -3,7 +3,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from flask import (Blueprint, render_template, redirect, url_for,
-                   flash, request, abort, jsonify, session)
+                   flash, request, abort, jsonify, session, current_app)
 from flask_login import login_required, current_user
 from sqlalchemy.orm import joinedload
 from app.models import (db, Student, Section, Grade, AcademicYear, StudentDocument,
@@ -1784,26 +1784,83 @@ def delete(student_id):
     name = student.full_name
     sid  = student.id
 
-    # Remove M2M parent links (no DB-side CASCADE)
-    db.session.execute(
-        parent_students.delete().where(parent_students.c.student_id == sid)
-    )
-
-    # Explicitly delete all child records via raw SQL to bypass:
-    # a) lazy='dynamic' cascade unreliability
-    # b) ORM year-scope filtering that leaves cross-year rows orphaned
     from sqlalchemy import text
-    db.session.execute(
-        text("DELETE FROM fee_installments"
-             " WHERE fee_record_id IN (SELECT id FROM fee_records WHERE student_id = :sid)"),
-        {'sid': sid},
-    )
-    for tbl in ('complaints', 'leave_requests', 'student_attendance', 'fee_records',
-                'exam_results', 'student_documents', 'student_suspensions'):
-        db.session.execute(text(f"DELETE FROM {tbl} WHERE student_id = :sid"), {'sid': sid})
+    from sqlalchemy.exc import SQLAlchemyError
 
-    db.session.delete(student)
-    db.session.commit()
+    # One transaction: every child row and the student itself, or nothing.
+    try:
+        # ── Financial-audit guard ──────────────────────────────────────────────
+        # fee_refund_events is an auditable refund / fee-cancellation ledger, and its
+        # rows are referenced by revenues this delete deliberately PRESERVES
+        # (Revenue.refund_event_id). Purging it would destroy that audit linkage, so
+        # such a student is blocked here with a clear message instead of failing with
+        # a server error later. Archiving stays available.
+        # Raw SQL on purpose (same reason as the deletes below): the model is
+        # year-scoped, so an ORM count would silently miss other years' events.
+        refund_events = db.session.execute(
+            text("SELECT COUNT(*) FROM fee_refund_events WHERE student_id = :sid"),
+            {'sid': sid},
+        ).scalar() or 0
+        if refund_events:
+            flash('لا يمكن الحذف النهائي لهذا الطالب لارتباطه بسجلات استرجاع أو '
+                  'إلغاء رسوم ضمن السجل المالي للمدرسة، وهي سجلات لا يجوز حذفها. '
+                  'استخدم خيار الأرشفة لإخفاء الطالب من القوائم النشطة.', 'danger')
+            return redirect(url_for('students.view', student_id=sid))
+
+        # Remove M2M parent links (no DB-side CASCADE)
+        db.session.execute(
+            parent_students.delete().where(parent_students.c.student_id == sid)
+        )
+
+        # Explicitly delete all child records via raw SQL to bypass:
+        # a) lazy='dynamic' cascade unreliability
+        # b) ORM year-scope filtering that leaves cross-year rows orphaned
+        #
+        # fee_reminder_logs points at BOTH students and fee_installments, so it
+        # must be cleared before the installments below (same ordering rule as
+        # SCHOOL_DELETE_ORDER in app/utils/school_cleanup.py).
+        db.session.execute(
+            text("DELETE FROM fee_reminder_logs WHERE student_id = :sid"), {'sid': sid})
+        db.session.execute(
+            text("DELETE FROM fee_installments"
+                 " WHERE fee_record_id IN (SELECT id FROM fee_records WHERE student_id = :sid)"),
+            {'sid': sid},
+        )
+        # student_registration_records / student_transport / device_student_mappings
+        # are student-owned rows that already die with the student elsewhere
+        # (school_cleanup deletes the first two as student child tables; the last
+        # two also carry a DB-side ON DELETE CASCADE). They are removed explicitly
+        # here because each one additionally has a Student backref whose default
+        # "de-associate" behaviour would otherwise try to NULL a NOT NULL
+        # student_id during the flush, before the database cascade can run.
+        for tbl in ('complaints', 'leave_requests', 'student_attendance', 'fee_records',
+                    'exam_results', 'student_documents', 'student_suspensions',
+                    'student_registration_records', 'student_transport',
+                    'device_student_mappings'):
+            db.session.execute(text(f"DELETE FROM {tbl} WHERE student_id = :sid"), {'sid': sid})
+
+        # Admission requests are the SCHOOL's own audit trail, not the student's
+        # record: the row (status, decision, documents) is kept and only the
+        # optional pointer is cleared. approved_student_id is nullable and the
+        # admissions screen already renders an approved request without it.
+        db.session.execute(
+            text("UPDATE student_registration_requests SET approved_student_id = NULL"
+                 " WHERE approved_student_id = :sid"),
+            {'sid': sid},
+        )
+
+        db.session.delete(student)
+        db.session.commit()
+    except SQLAlchemyError:
+        # Nothing is half-deleted: the whole transaction is rolled back and the
+        # internal database error is logged, never shown to the user.
+        db.session.rollback()
+        current_app.logger.exception(
+            'Permanent student delete failed for student_id=%s', sid)
+        flash('تعذّر حذف الطالب نهائياً بسبب وجود بيانات مرتبطة به. '
+              'لم يتم حذف أي شيء. يمكنك استخدام خيار الأرشفة بدلاً من الحذف.', 'danger')
+        return redirect(url_for('students.view', student_id=sid))
+
     flash(f'تم حذف الطالب {name} وجميع سجلاته بشكل نهائي.', 'success')
     return redirect(url_for('students.index'))
 
