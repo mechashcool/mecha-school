@@ -6,7 +6,7 @@
 <div class="page-header">
   <div>
     <h1 class="page-title">أجهزة الحضور</h1>
-    <p class="page-subtitle">إدارة أجهزة Hikvision لتسجيل الحضور والانصراف</p>
+    <p class="page-subtitle">إدارة أجهزة تسجيل الحضور والانصراف</p>
   </div>
   {% if current_user.is_super_admin and school_cfg.action_enabled('attendance_devices', 'add_device') %}
   <a href="{{ url_for('attendance_devices.new_device') }}" class="btn btn-primary">
