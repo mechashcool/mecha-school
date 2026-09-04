@@ -16,7 +16,7 @@ Routes:
 All routes are super-admin only (role.name == 'super_admin').
 """
 from flask import (Blueprint, render_template, redirect, url_for,
-                   flash, request, session, jsonify)
+                   flash, request, session, jsonify, current_app, g)
 from flask_login import login_required, current_user
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
@@ -34,8 +34,7 @@ from app.utils.packages import (
 from app.utils.school_config import MODULE_DEFS, CONFIGURABLE_MODULES, save_module_config
 from app.utils.audit import log_action
 from app.utils.school_cleanup import (
-    cleanup_school_cascade, format_linked_counts, is_demo_school,
-    linked_school_counts,
+    cleanup_school_cascade, format_linked_counts, linked_school_counts,
 )
 
 schools_bp = Blueprint('schools', __name__,
@@ -424,58 +423,71 @@ def edit(school_id):
 @login_required
 @super_admin_required
 def delete(school_id):
+    """Super-admin hard delete: remove one school and every row it owns.
+
+    Deletion is intentionally destructive and irreversible. Every statement is
+    anchored to this one already-authorized school_id (see
+    ``cleanup_school_cascade``), so no other school's rows and no global
+    reference data (roles, permissions, exam types, feature packages) are
+    touched. The whole cascade plus the school row itself is ONE transaction:
+    any error rolls the entire thing back, leaving the school intact.
+    """
     school = School.query.get_or_404(school_id)
     name = school.school_name
-    linked_counts = linked_school_counts(school.id)
-
-    if linked_counts and not is_demo_school(school):
-        flash(
-            f'لا يمكن حذف المدرسة "{name}" لأنها مرتبطة ببيانات: '
-            f'{format_linked_counts(linked_counts)}. '
-            'احذف أو انقل هذه البيانات أولاً. التنظيف التلقائي متاح فقط '
-            'للمدارس التجريبية/الاختبارية المولّدة من النظام.',
-            'danger'
-        )
-        return redirect(url_for('schools.index'))
-
-    # Clear session if we deleted the active school
-    if session.get('active_school_id') == school_id:
-        session.pop('active_school_id', None)
 
     try:
-        if linked_counts:
-            deleted_counts = cleanup_school_cascade(school.id)
-            db.session.commit()
-            details = format_linked_counts(deleted_counts)
-            log_action(
-                'delete',
-                'school',
-                school_id,
-                details=f'cascade-deleted demo/test school "{name}": {details}',
-            )
-            flash(
-                f'تم تنظيف وحذف المدرسة التجريبية "{name}" وجميع بياناتها '
-                f'المرتبطة بأمان. البيانات المحذوفة: {details}.',
-                'success',
-            )
-        else:
-            db.session.delete(school)
-            db.session.commit()
-            log_action('delete', 'school', school_id,
-                       details=f'deleted school "{name}"')
-            flash(f'تم حذف المدرسة "{name}".', 'success')
+        deleted_counts = cleanup_school_cascade(school.id)
+        db.session.commit()
     except IntegrityError:
         db.session.rollback()
+        current_app.logger.exception(
+            '[school-delete] integrity error deleting school_id=%s', school_id)
         refreshed_counts = linked_school_counts(school_id)
         details = format_linked_counts(refreshed_counts) or 'بيانات مرتبطة غير محددة'
         flash(
-            f'تعذر حذف المدرسة "{name}" بسبب بيانات مرتبطة: {details}.',
+            f'تعذر حذف المدرسة "{name}" بسبب بيانات مرتبطة: {details}. '
+            'لم يتم حذف أي بيانات.',
             'danger',
         )
-    except Exception as exc:
+        return redirect(url_for('schools.index'))
+    except Exception:
         db.session.rollback()
-        flash(f'تعذر حذف المدرسة "{name}" أثناء عملية التنظيف: {exc}', 'danger')
+        # Log the real exception server-side only; never surface SQL/driver
+        # internals to the browser.
+        current_app.logger.exception(
+            '[school-delete] cleanup failed for school_id=%s', school_id)
+        flash(
+            f'تعذر حذف المدرسة "{name}" أثناء عملية التنظيف. '
+            'تم التراجع عن العملية بالكامل ولم يتم حذف أي بيانات.',
+            'danger',
+        )
+        return redirect(url_for('schools.index'))
 
+    # ── Committed. Clear every reference to the now-deleted school. ───────────
+    # The session key AND the request-scoped tenant context must both be
+    # cleared: g.tenant_scope_school_id was resolved in before_request and would
+    # otherwise still point at the deleted school, making the audit-log insert
+    # below fail its school_id foreign key.
+    if session.get('active_school_id') == school_id:
+        session.pop('active_school_id', None)
+    if getattr(g, 'tenant_scope_school_id', None) == school_id:
+        g.tenant_scope_school_id = None
+        g.tenant_scope_academic_year_id = None
+        g.tenant_scope_view_year_id = None
+
+    # Drop this school's cached context (active year / branding) so no stale
+    # entry survives the row it described.
+    from app.utils.context_cache import invalidate_school_context
+    invalidate_school_context(school_id)
+
+    details = format_linked_counts(deleted_counts)
+    log_action('delete', 'school', school_id,
+               details=f'hard-deleted school "{name}": {details}')
+    flash(
+        f'تم حذف المدرسة "{name}" وجميع بياناتها المرتبطة نهائياً. '
+        f'البيانات المحذوفة: {details}.',
+        'success',
+    )
     return redirect(url_for('schools.index'))
 
 

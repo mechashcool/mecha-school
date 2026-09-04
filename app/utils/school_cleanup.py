@@ -9,14 +9,17 @@ from sqlalchemy import or_
 from app.models import (
     db, AcademicYear, Announcement, AnnouncementTarget, AttendanceDevice,
     AuditLog, Complaint, Device, Employee, EmployeeAttendance, EmployeeDocument,
-    EmployeeEvaluation, Exam, ExamResult, Expense, ExpenseCategory,
-    FeeInstallment, FeeRecord, FeeReminderLog, FeeType, Grade,
+    EmployeeEvaluation, EmployeeLeaveRequest, Exam, ExamResult, Expense,
+    ExpenseCategory,
+    FeeInstallment, FeeRecord, FeeRefundEvent, FeeReminderLog, FeeType, Grade,
     InventoryCategory, InventoryCount, InventoryItem, InventoryItemStock,
     InventoryMovement, InventoryWarehouse,
     LeaveRequest, Notification, NotificationRead, PayrollItem, PayrollSettings,
     PushNotification, Revenue,
-    RevenueCategory, SalaryComponent, SalaryRecord, Schedule, School, Section,
+    RevenueCategory, SalaryComponent, SalaryRecord, Schedule, School,
+    SchoolAnnouncement, SchoolContentRead, SchoolVideo, Section,
     Student, StudentAttendance, StudentDocument, StudentRegistrationRecord,
+    StudentRegistrationRequest, StudentRegistrationRequestDocument,
     StudentSuspension, StudentTransport, Subject, TransportRoute, User,
     parent_students, teacher_subjects, user_permissions,
 )
@@ -45,16 +48,20 @@ LINKED_SCHOOL_MODELS = (
     (Subject, 'المواد'),
     (Student, 'الطلاب'),
     (StudentRegistrationRecord, 'سجلات القيد'),
+    (StudentRegistrationRequest, 'طلبات التسجيل الخارجي'),
+    (StudentRegistrationRequestDocument, 'مستندات طلبات التسجيل الخارجي'),
     (StudentDocument, 'مستندات الطلاب'),
     (StudentSuspension, 'إيقافات الطلاب'),
     (Complaint, 'الشكاوى'),
     (LeaveRequest, 'طلبات الغياب'),
     (Employee, 'الموظفون/التدريسيون'),
     (EmployeeDocument, 'مستندات الموظفين'),
+    (EmployeeLeaveRequest, 'طلبات إجازات الموظفين'),
     (FeeType, 'أنواع الرسوم'),
     (FeeRecord, 'سجلات الرسوم'),
     (FeeInstallment, 'أقساط الرسوم'),
     (FeeReminderLog, 'سجلات تذكير الرسوم'),
+    (FeeRefundEvent, 'عمليات الاسترجاع/الإلغاء المالية'),
     (RevenueCategory, 'تصنيفات الإيرادات'),
     (Revenue, 'الإيرادات'),
     (ExpenseCategory, 'تصنيفات المصروفات'),
@@ -83,6 +90,9 @@ LINKED_SCHOOL_MODELS = (
     (InventoryCategory, 'تصنيفات المخزون'),
     (InventoryWarehouse, 'المخازن'),
     (AttendanceDevice, 'أجهزة الحضور'),
+    (SchoolVideo, 'مقاطع لوحة المدرسة'),
+    (SchoolAnnouncement, 'إعلانات لوحة المدرسة'),
+    (SchoolContentRead, 'قراءات محتوى لوحة المدرسة'),
 )
 
 
@@ -90,9 +100,33 @@ SCHOOL_DELETE_ORDER = (
     # ── Leaf tables with no outgoing FKs to school-owned rows ──────────────────
     (PushNotification, 'سجل الإشعارات الفورية'),
     (AuditLog, 'سجل التدقيق'),
+    # School board (videos/announcements/read receipts). All three carry
+    # school_id → schools.id and user FKs with NO ondelete, so they block both
+    # User and School deletion and must be removed up-front.
+    # SchoolContentRead first: content_id is a plain integer, not an FK, so the
+    # order between the three is only a readability choice.
+    (SchoolContentRead, 'قراءات محتوى لوحة المدرسة'),
+    (SchoolVideo, 'مقاطع لوحة المدرسة'),
+    (SchoolAnnouncement, 'إعلانات لوحة المدرسة'),
     # FeeReminderLog must precede FeeInstallment (installment_id FK) and
     # Student (student_id FK) and User (parent_user_id FK).
     (FeeReminderLog, 'سجلات تذكير الرسوم'),
+    # ── Public (external) registration intake ─────────────────────────────────
+    # StudentRegistrationRequest has NO-ondelete FKs to students
+    # (approved_student_id), grades (desired_grade_id), users (reviewed_by,
+    # linked_parent_id), residential_areas, academic_years and schools, so it
+    # must precede all of them. Its documents cascade via request_id but are
+    # deleted explicitly first because they also carry their own school_id FK.
+    (StudentRegistrationRequestDocument, 'مستندات طلبات التسجيل الخارجي'),
+    (StudentRegistrationRequest, 'طلبات التسجيل الخارجي'),
+    # ── Refund / cancellation ledger ──────────────────────────────────────────
+    # Revenue.refund_event_id → fee_refund_events.id (no ondelete), so Revenue
+    # must be deleted BEFORE FeeRefundEvent. FeeRefundEvent in turn holds
+    # no-ondelete FKs to fee_installments, fee_records and students, so it must
+    # precede all three. Revenue itself has no dependents, and its own FKs
+    # (revenue_categories, users, academic_years) are all deleted later.
+    (Revenue, 'الإيرادات'),
+    (FeeRefundEvent, 'عمليات الاسترجاع/الإلغاء المالية'),
     # ── Student child tables (must precede Student) ────────────────────────────
     (StudentDocument, 'مستندات الطلاب'),
     (StudentSuspension, 'إيقافات الطلاب'),
@@ -109,13 +143,16 @@ SCHOOL_DELETE_ORDER = (
     (EmployeeAttendance, 'حضور الموظفين'),
     (EmployeeDocument, 'مستندات الموظفين'),
     (EmployeeEvaluation, 'تقييمات الموظفين'),
+    # EmployeeLeaveRequest → employees / users / academic_years / schools, all
+    # with NO ondelete — must precede every one of them.
+    (EmployeeLeaveRequest, 'طلبات إجازات الموظفين'),
     # PayrollItem → salary_records / salary_components (must precede both).
     (PayrollItem, 'بنود الرواتب'),
     (SalaryRecord, 'الرواتب'),
     # SalaryComponent → employees (must precede Employee); PayrollSettings → schools.
     (SalaryComponent, 'مكونات الراتب'),
     (PayrollSettings, 'إعدادات الرواتب'),
-    (Revenue, 'الإيرادات'),
+    # Revenue is deleted earlier (see the refund-ledger block above).
     (Expense, 'المصروفات'),
     (Notification, 'الإشعارات'),
     (Announcement, 'سجل الإعلانات'),
@@ -125,14 +162,10 @@ SCHOOL_DELETE_ORDER = (
     (ExpenseCategory, 'تصنيفات المصروفات'),
     (Complaint, 'الشكاوى'),
     (LeaveRequest, 'طلبات الغياب'),
-    # ── Core school-year structure ─────────────────────────────────────────────
-    (Student, 'الطلاب'),
-    (Section, 'الشُعب'),
-    (Subject, 'المواد'),
-    (Grade, 'المراحل'),
-    (Employee, 'الموظفون/التدريسيون'),
-    (User, 'المستخدمون'),
-    # ── Inventory (must precede AcademicYear) ──────────────────────────────────
+    # ── Inventory (must precede User and AcademicYear) ─────────────────────────
+    # InventoryCount.counted_by and InventoryMovement.created_by → users.id with
+    # NO ondelete, so the whole inventory block has to be removed BEFORE User.
+    # Nothing in it references students/sections/subjects/grades/employees.
     # InventoryItemStock.item_id → inventory_items.id AND
     # InventoryItemStock.warehouse_id → inventory_warehouses.id  (no ondelete
     # on either FK) — must precede both InventoryItem and InventoryWarehouse.
@@ -149,6 +182,13 @@ SCHOOL_DELETE_ORDER = (
     # InventoryWarehouse.school_id → schools.id only (no year FK); its only
     # dependents (ItemStock/Movement/Count above) are already gone here.
     (InventoryWarehouse, 'المخازن'),
+    # ── Core school-year structure ─────────────────────────────────────────────
+    (Student, 'الطلاب'),
+    (Section, 'الشُعب'),
+    (Subject, 'المواد'),
+    (Grade, 'المراحل'),
+    (Employee, 'الموظفون/التدريسيون'),
+    (User, 'المستخدمون'),
     # ── Transport (must precede school deletion) ───────────────────────────────
     # StudentTransport already deleted above; no FK blocks TransportRoute now.
     (TransportRoute, 'مسارات النقل'),
