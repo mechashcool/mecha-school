@@ -271,8 +271,65 @@ def compute_fee_amounts(form):
     return total_amount, discount, net_amount
 
 
+def _form_num_installments(form):
+    """The installment count the form asks for, clamped exactly as before.
+
+    Extracted so the manual-amount parser and persist_fee_record can never
+    disagree about how many installments a submission has.
+    """
+    return max(1, min(12, int(form.get('num_installments', 1) or 1)))
+
+
+def parse_manual_installment_amounts(form, *, net_amount):
+    """Validate optional per-installment amounts typed by the user.
+
+    Returns ``None`` when manual mode is off (the ``manual_installments``
+    checkbox absent), in which case the caller keeps the existing automatic
+    equal split untouched. Otherwise returns a list of Decimals, one per
+    installment, in installment order.
+
+    The sum must equal the fee's NET amount (total - discount), because that is
+    what the automatic split has always divided and what the installments
+    represent. With no discount, net == total.
+
+    Performs no database access. Raises :class:`FeeValidationError` with an
+    Arabic message on invalid input, matching compute_fee_amounts' contract.
+    """
+    if not form.get('manual_installments'):
+        return None
+
+    num_installments = _form_num_installments(form)
+    amounts = []
+    for i in range(1, num_installments + 1):
+        raw = (form.get(f'installment_amount_{i}') or '').strip()
+        if raw == '':
+            raise FeeValidationError(
+                'يجب إدخال مبلغ لكل قسط عند تفعيل إدخال مبالغ الأقساط يدوياً.')
+        try:
+            value = Decimal(raw)
+        except InvalidOperation:
+            raise FeeValidationError(f'مبلغ القسط {i} غير صالح.')
+        if value < 0:
+            raise FeeValidationError('مبالغ الأقساط لا يمكن أن تكون سالبة.')
+        amounts.append(value.quantize(Decimal('0.01')))
+
+    # Reject amounts that do not belong to the submitted installment set, so a
+    # crafted POST cannot smuggle in extra rows beyond the chosen count.
+    if form.get(f'installment_amount_{num_installments + 1}') is not None:
+        raise FeeValidationError('عدد مبالغ الأقساط لا يطابق عدد الأقساط المحدد.')
+
+    expected = Decimal(net_amount).quantize(Decimal('0.01'))
+    entered  = sum(amounts, Decimal('0')).quantize(Decimal('0.01'))
+    if entered != expected:
+        raise FeeValidationError(
+            f'مجموع مبالغ الأقساط ({entered:,}) لا يساوي الصافي بعد الخصم '
+            f'({expected:,}). يرجى تعديل المبالغ.')
+    return amounts
+
+
 def persist_fee_record(form, *, school, student_id, fee_type_id, academic_year_id,
-                       total_amount, discount, notes=None):
+                       total_amount, discount, notes=None,
+                       installment_amounts=None):
     """Create a FeeRecord and its FeeInstallments from already-computed amounts.
 
     Shared by `fees.create` and the student-registration wizard. Adds objects to
@@ -295,18 +352,23 @@ def persist_fee_record(form, *, school, student_id, fee_type_id, academic_year_i
     db.session.flush()
 
     # Build installments from the server-computed net amount.
-    num_inst = max(1, min(12, int(form.get('num_installments', 1) or 1)))
+    num_inst = _form_num_installments(form)
     net      = record.net_amount          # uses model property: total_amount - discount
     each     = round(net / num_inst, 2)
+    if installment_amounts is not None and len(installment_amounts) != num_inst:
+        raise FeeValidationError('عدد مبالغ الأقساط لا يطابق عدد الأقساط المحدد.')
     for i in range(1, num_inst + 1):
         due_str = form.get(f'due_date_{i}')
         due     = dt.strptime(due_str, '%Y-%m-%d').date() if due_str else date.today()
+        # Manual mode uses the user's own per-installment amount, never a
+        # redistribution of it; automatic mode keeps the existing equal split.
+        amount = installment_amounts[i - 1] if installment_amounts is not None else each
         inst = FeeInstallment(
             fee_record_id    = record.id,
             school_id        = record.school_id,
             academic_year_id = record.academic_year_id,
             installment_no   = i,
-            amount           = each,
+            amount           = amount,
             due_date         = due,
         )
         db.session.add(inst)
@@ -1119,8 +1181,13 @@ def create():
                                    selected_student=selected_student)
 
         # ── Discount computation (may reject with a user-facing message) ──────
+        # Optional manual per-installment amounts are validated in the same
+        # step; when the toggle is off the parser returns None and the existing
+        # automatic equal split is used unchanged.
         try:
             total_amount, discount, _net = compute_fee_amounts(request.form)
+            manual_amounts = parse_manual_installment_amounts(request.form,
+                                                              net_amount=_net)
         except FeeValidationError as exc:
             flash(str(exc), 'danger')
             return render_template('fees/form.html',
@@ -1145,6 +1212,7 @@ def create():
                 academic_year_id=selected_year_id,
                 total_amount=total_amount,
                 discount=discount,
+                installment_amounts=manual_amounts,
             )
             db.session.commit()
         except IntegrityError as exc:
