@@ -51,6 +51,14 @@ HIDDEN_FROM_CREATE_FORM_ROLES = {'hr', 'reception'}
 # _is_role_assignable_by_current_user.
 SCHOOL_MANAGER_ASSIGNABLE_ROLES = {'teacher', 'parent'}
 
+# The ONLY accounts an actor who is neither a super admin nor a school manager
+# may edit, disable or delete — even when its role grants manage_users, and
+# including the legacy `admin` role. An allow-list keyed on the TARGET
+# account's canonical Role.name, so any role added later is denied by default.
+# Distinct from SCHOOL_MANAGER_ASSIGNABLE_ROLES above: that one restricts which
+# role may be ASSIGNED, this one restricts which account may be MANAGED.
+USER_MANAGER_BASIC_TARGET_ROLES = {'teacher', 'parent'}
+
 COMPLAINT_TYPES = {
     'academic': '\u0623\u0643\u0627\u062f\u064a\u0645\u064a\u0629',
     'administrative': '\u0625\u062f\u0627\u0631\u064a\u0629',
@@ -157,6 +165,33 @@ def _assignable_roles(existing_role_name=None, school_id=None):
              or role.name == existing_role_name
              or role.is_available_to_school(school_id))
     ]
+
+
+def _may_manage_user_account(user):
+    """Whether current_user may edit / disable / delete this TARGET account.
+
+    Actor-vs-target rule, layered ON TOP OF (never instead of) the existing
+    protected-account, same-school and self-action guards in each route:
+
+      • super admin    → unchanged; whatever the existing guards already allow.
+      • school manager → unchanged; any account in their own school the
+        existing guards allow, INCLUDING accountant, registrar, storekeeper
+        and custom-role accounts the Super Admin created.
+      • every other actor, the legacy `admin` role included → teacher/parent
+        targets only.
+
+    Keyed on canonical Role.name values, never on display labels. The actor
+    branches are ordered so the two privileged tiers are settled before the
+    generic manage_users branch — User.has_permission() returns True for them
+    too. Anyone else fails closed.
+    """
+    if current_user.is_super_admin:
+        return True
+    if _role_name(current_user.role) in {SUPER_ADMIN_ROLE, SCHOOL_ADMIN_ROLE}:
+        return True
+    if current_user.has_permission('manage_users'):
+        return _role_name(user.role) in USER_MANAGER_BASIC_TARGET_ROLES
+    return False
 
 
 def _is_super_admin_account(user):
@@ -653,7 +688,8 @@ def users_list():
     return render_template('admin/users_list.html',
                            users=users, roles=roles,
                            search=search, role_filter=role_filter,
-                           all_schools=all_schools)
+                           all_schools=all_schools,
+                           can_manage_user=_may_manage_user_account)
 
 
 @admin_bp.route('/users/create', methods=['GET', 'POST'])
@@ -911,6 +947,13 @@ def edit_user(user_id):
         abort(403)
     if is_school_manager and user.id == current_user.id:
         abort(403)
+
+    # Actor-vs-target: a non-admin-tier role granted manage_users may only
+    # touch teacher/parent accounts. Runs on GET and POST alike, before the
+    # form is rendered and before any mutation.
+    if not _may_manage_user_account(user):
+        flash('لا تملك صلاحية تعديل هذا المستخدم.', 'danger')
+        return redirect(url_for('admin.users_list'))
 
     if _is_soft_deleted(user):
         flash('لا يمكن تعديل هذا الحساب لأنه محذوف.', 'danger')
@@ -1185,6 +1228,14 @@ def toggle_user(user_id):
     user = db.session.get(User, user_id, execution_options={'bypass_tenant_scope': True})
     if user is None:
         abort(404)
+    # Investor accounts are managed exclusively from the Super Admin portal —
+    # same protection edit_user/delete_user already apply, so enabling or
+    # disabling one cannot be reached from here either.
+    if _is_investor_account(user):
+        if current_user.is_super_admin:
+            flash('حسابات المستثمر تُدار من بوابة المشرف العام فقط.', 'info')
+            return redirect(url_for('super_admin.school_detail', school_id=user.school_id))
+        abort(403)
     if _is_school_scoped_manager() and (
             _is_super_admin_account(user)
             or (user.role and user.role.name == SCHOOL_ADMIN_ROLE)
@@ -1192,6 +1243,11 @@ def toggle_user(user_id):
         abort(403)
     if _is_super_admin_account(user) and not current_user.is_super_admin:
         abort(403)
+    # Same actor-vs-target rule as edit/delete — otherwise disabling an account
+    # would remain an unguarded way to act on a protected target.
+    if not _may_manage_user_account(user):
+        flash('لا تملك صلاحية تعديل هذا المستخدم.', 'danger')
+        return redirect(url_for('admin.users_list'))
     if _is_soft_deleted(user):
         flash('لا يمكن تعديل هذا الحساب لأنه محذوف.', 'danger')
         return redirect(url_for('admin.users_list'))
@@ -1236,6 +1292,12 @@ def delete_user(user_id):
         abort(403)
     if _is_super_admin_account(user) and not current_user.is_super_admin:
         abort(403)
+
+    # Actor-vs-target: a non-admin-tier role granted manage_users may only
+    # delete teacher/parent accounts. Rejected before any mutation.
+    if not _may_manage_user_account(user):
+        flash('لا تملك صلاحية حذف هذا المستخدم.', 'danger')
+        return redirect(url_for('admin.users_list'))
 
     if user.id == current_user.id:
         flash('لا يمكنك حذف حسابك الخاص.', 'danger')

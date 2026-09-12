@@ -7,7 +7,7 @@ from datetime import datetime as dt, date
 
 from app.models import (db, Employee, User, Role, teacher_subjects,
                         Subject, Section, Grade, DeviceEmployeeMapping,
-                        EmployeeAttendance)
+                        EmployeeAttendance, SUPER_ADMIN_ROLE, SCHOOL_ADMIN_ROLE)
 from app.utils.decorators import (permission_required, accountant_or_permission,
                                    get_current_school,
                                    historical_guard, get_active_year, action_required)
@@ -105,6 +105,25 @@ def _is_allowed_account_role(role_id) -> bool:
         return False
     role = Role.query.get(role_id)
     return bool(role and role.name in _ACCOUNT_ROLE_NAMES)
+
+
+def _may_change_linked_account_role(linked_user) -> bool:
+    """Whether current_user may change the ROLE of an employee's linked account.
+
+    Mirrors the actor-vs-target rule enforced on the user-management screens
+    (_may_manage_user_account in the admin blueprint): an account that already
+    holds a role outside _ACCOUNT_ROLE_NAMES — accountant, registrar, a custom
+    role — may only have its role changed by a super admin or a school manager.
+    Any other actor may act on teacher/parent accounts only, so this page cannot
+    be used to sidestep that restriction. Target roles are read from the account
+    as stored, never from the submitted form.
+    """
+    if current_user.is_super_admin:
+        return True
+    actor_role = (current_user.role.name or '') if current_user.role else ''
+    if actor_role in {SUPER_ADMIN_ROLE, SCHOOL_ADMIN_ROLE}:
+        return True
+    return bool(linked_user.role and linked_user.role.name in _ACCOUNT_ROLE_NAMES)
 
 
 def _ordered_wizard_grades(grades):
@@ -942,10 +961,17 @@ def _handle_employee_post(employee):
                 user_active = request.form.get('user_is_active')
 
                 if new_role and new_role != linked_user.role_id:
+                    # Two separate checks: who the TARGET account currently is,
+                    # then which role may be assigned to it. Only a super admin
+                    # or school manager may re-role an account that is not
+                    # already teacher/parent.
+                    if not _may_change_linked_account_role(linked_user):
+                        flash_msgs.append(('warning',
+                            'لا تملك صلاحية تعديل دور هذا الحساب.'))
                     # Only allow switching the linked account to a permitted
                     # (teacher/parent) role. Ignore any other/forged role_id so a
                     # crafted POST cannot promote the account to a privileged role.
-                    if _is_allowed_account_role(new_role):
+                    elif _is_allowed_account_role(new_role):
                         linked_user.role_id = new_role
                         changed = True
                     else:
