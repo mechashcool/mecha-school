@@ -42,6 +42,15 @@ INVESTOR_ROLE = 'investor_viewer'
 # To re-enable a role in the dropdown, remove its name from this set.
 HIDDEN_FROM_CREATE_FORM_ROLES = {'hr', 'reception'}
 
+# The ONLY roles a school-scoped manager may assign from the Create/Edit User
+# screens. An allow-list, not an exclude-list, so a role added to the system
+# later (built-in or custom) can never leak into a school manager's selector.
+# Values are canonical Role.name keys, matching the same allow-list already
+# used for employee login accounts (_ACCOUNT_ROLE_NAMES in the employees
+# blueprint). Super admin is unaffected — see
+# _is_role_assignable_by_current_user.
+SCHOOL_MANAGER_ASSIGNABLE_ROLES = {'teacher', 'parent'}
+
 COMPLAINT_TYPES = {
     'academic': '\u0623\u0643\u0627\u062f\u064a\u0645\u064a\u0629',
     'administrative': '\u0625\u062f\u0627\u0631\u064a\u0629',
@@ -84,7 +93,7 @@ def _role_name(role):
     return (role.name or '').strip() if role else ''
 
 
-def _is_role_assignable_by_current_user(role):
+def _is_role_assignable_by_current_user(role, existing_role_name=None):
     name = _role_name(role)
     # Investor accounts are never assignable via the generic user forms — for
     # anyone, including super admin. They are provisioned only from the Super
@@ -93,13 +102,21 @@ def _is_role_assignable_by_current_user(role):
         return False
     if current_user.is_super_admin:
         return name != LEGACY_ADMIN_ROLE
-    if current_user.is_school_admin:
-        return name not in {SUPER_ADMIN_ROLE, SCHOOL_ADMIN_ROLE, LEGACY_ADMIN_ROLE}
-    # Any other role granted manage_users may assign only non-privileged
-    # roles — never an admin tier (no privilege-escalation path), never
-    # investor. Same restriction set as a school manager.
-    if current_user.has_permission('manage_users'):
-        return name not in {SUPER_ADMIN_ROLE, SCHOOL_ADMIN_ROLE, LEGACY_ADMIN_ROLE}
+    # School-scoped actors — the school manager role, or any other role granted
+    # manage_users — may assign ONLY teacher/parent. Applied here rather than in
+    # the template so the dropdown and both POST handlers (create_user and
+    # edit_user) share one authority: a crafted role_id is rejected server-side.
+    if current_user.is_school_admin or current_user.has_permission('manage_users'):
+        # An admin tier stays unassignable unconditionally — never reachable
+        # through the existing-role allowance below.
+        if name in {SUPER_ADMIN_ROLE, SCHOOL_ADMIN_ROLE, LEGACY_ADMIN_ROLE}:
+            return False
+        if name in SCHOOL_MANAGER_ASSIGNABLE_ROLES:
+            return True
+        # Keeping an account on the role it ALREADY holds stays allowed, so
+        # editing an existing accountant/custom-role user does not silently
+        # force a role change. Only assigning a new role is restricted.
+        return bool(existing_role_name) and name == existing_role_name
     return False
 
 
@@ -133,7 +150,7 @@ def _assignable_roles(existing_role_name=None, school_id=None):
     roles = Role.query.order_by(Role.id).all()
     return [
         role for role in roles
-        if _is_role_assignable_by_current_user(role)
+        if _is_role_assignable_by_current_user(role, existing_role_name)
         and (role.name not in HIDDEN_FROM_CREATE_FORM_ROLES
              or role.name == existing_role_name)
         and (school_id is None
@@ -686,9 +703,11 @@ def create_user():
         else:
             assigned_school_id = current_user.school_id
 
-        # School managers cannot create admin-role users — reject before any DB writes
+        # Reject a role the current actor may not assign — before any DB writes.
+        # For a school manager this is the teacher/parent allow-list, so a
+        # crafted role_id (accountant, a custom role, any future role) fails here.
         if not role_obj or not _is_role_assignable_by_current_user(role_obj):
-            flash('لا يمكنك إسناد دور إداري للمستخدمين. اختر دوراً آخر.', 'danger')
+            flash('لا تملك صلاحية إنشاء مستخدم بهذا الدور.', 'danger')
             return redirect(url_for('admin.users_list'))
 
         if role_obj.name == SUPER_ADMIN_ROLE:
@@ -945,6 +964,7 @@ def edit_user(user_id):
         # Snapshot before mutation so custom-role availability is enforced only
         # on an actual change (never disrupting an already-assigned account).
         prev_role_id   = user.role_id
+        prev_role_name = user.role.name if user.role else None
         prev_school_id = user.school_id
 
         user.full_name = request.form.get('full_name', user.full_name).strip()
@@ -989,9 +1009,12 @@ def edit_user(user_id):
         new_role_id = request.form.get('role_id', type=int)
         if new_role_id:
             new_role = Role.query.get(new_role_id)
-            # School managers cannot promote users to admin roles
-            if not new_role or not _is_role_assignable_by_current_user(new_role):
-                flash('لا يمكنك إسناد دور إداري للمستخدمين.', 'danger')
+            # School managers cannot promote users to admin roles, and may only
+            # switch an account to teacher/parent (keeping its current role is
+            # still allowed — see _is_role_assignable_by_current_user).
+            if not new_role or not _is_role_assignable_by_current_user(
+                    new_role, existing_role_name=prev_role_name):
+                flash('لا تملك صلاحية إسناد هذا الدور للمستخدم.', 'danger')
                 return redirect(url_for('admin.edit_user', user_id=user.id))
             user.role = new_role
 
