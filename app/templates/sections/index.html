@@ -464,10 +464,53 @@
 
 {% block extra_js %}
 <script>
+// Duplicate-submit guard for the "add section" form ONLY. Scoped to this one
+// form, so every other form/button on the page stays untouched.
+// Hooked to 'submit' (not 'click'): the event only fires once native HTML
+// validation has passed, so an invalid required field can never leave the
+// button stuck disabled.
+(function () {
+  var form = document.getElementById('addSectionForm');
+  if (!form) return;
+
+  function unlock() {
+    delete form.dataset.submitting;
+    var btn = form.querySelector('button[type="submit"]');
+    if (btn && btn.dataset.originalHtml !== undefined) {
+      btn.disabled  = false;
+      btn.innerHTML = btn.dataset.originalHtml;
+      delete btn.dataset.originalHtml;
+    }
+  }
+
+  form.addEventListener('submit', function (e) {
+    if (form.dataset.submitting === '1') {
+      e.preventDefault();   // a second click while the first POST is in flight
+      return;
+    }
+    form.dataset.submitting = '1';
+    var btn = form.querySelector('button[type="submit"]');
+    if (btn) {
+      btn.dataset.originalHtml = btn.innerHTML;
+      btn.disabled    = true;
+      btn.textContent = 'جارٍ الإضافة...';
+    }
+  });
+
+  // Restore on back/forward cache so the button is never stuck after the user
+  // navigates back to this page. No timers are used to re-enable it.
+  window.addEventListener('pageshow', function (e) { if (e.persisted) unlock(); });
+
+  window.unlockAddSectionForm = unlock;
+}());
+
 function showAddSection(gradeId, gradeName) {
   document.getElementById('gradeNameLabel').textContent = 'الصف: ' + gradeName;
   document.getElementById('addSectionForm').action =
     '/sections/grades/' + gradeId + '/sections/create';
+  // The modal is shared by every grade card — reopening it must always start
+  // from an unlocked, usable button.
+  if (window.unlockAddSectionForm) window.unlockAddSectionForm();
   new bootstrap.Modal(document.getElementById('addSectionModal')).show();
 }
 

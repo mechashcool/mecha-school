@@ -13,6 +13,14 @@ from app.utils.decorators import (admin_required, permission_required,
                                    any_permission_required,
                                    get_current_school, get_active_year,
                                    historical_guard, module_required, action_required)
+from sqlalchemy.exc import IntegrityError
+import logging
+
+_log = logging.getLogger(__name__)
+
+# Existing DB constraint that defines a duplicate section:
+# (school_id, academic_year_id, grade_id, name) — see Section.__table_args__.
+SECTION_NAME_UQ_CONSTRAINT = 'uq_section_school_year_grade_name'
 
 sections_bp = Blueprint('sections', __name__,
                           template_folder='../../templates/sections')
@@ -274,8 +282,34 @@ def create_section(grade_id):
                     capacity=capacity, teacher_id=teacher_id,
                     shift_id=shift_id)
         db.session.add(s)
-        db.session.commit()
-        flash('تم إضافة الشعبة.', 'success')
+        try:
+            db.session.commit()
+        except IntegrityError as exc:
+            db.session.rollback()
+            # A duplicate submit that raced the first request. The duplicate
+            # rule is the EXISTING Section constraint
+            # uq_section_school_year_grade_name (school_id, academic_year_id,
+            # grade_id, name) — no new uniqueness semantics are introduced here.
+            # Identify it from the psycopg diagnostics, which name the violated
+            # constraint exactly; fall back to matching the message text only
+            # when that field is unavailable (non-psycopg driver, wrapped error).
+            orig            = getattr(exc, 'orig', None)
+            diag            = getattr(orig, 'diag', None)
+            constraint_name = getattr(diag, 'constraint_name', None)
+            is_duplicate_section = (
+                constraint_name == SECTION_NAME_UQ_CONSTRAINT
+                or SECTION_NAME_UQ_CONSTRAINT in str(orig)
+            )
+            # Any other IntegrityError is unexpected and must keep its original
+            # behaviour, so it is logged and re-raised rather than swallowed.
+            if not is_duplicate_section:
+                _log.error('[sections] section INSERT failed with an unexpected '
+                           'IntegrityError. grade_id=%s name=%r constraint=%r: %s',
+                           grade_id, name, constraint_name, exc)
+                raise
+            flash('هذه الشعبة موجودة بالفعل في هذا الصف.', 'warning')
+        else:
+            flash('تم إضافة الشعبة.', 'success')
     return redirect(url_for('sections.index', year_id=grade.academic_year_id))
 
 
