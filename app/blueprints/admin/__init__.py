@@ -2352,6 +2352,26 @@ import re as _re
 _ROLE_NAME_RE = _re.compile(r'^[a-z][a-z0-9_]{1,60}$')
 
 
+def _generate_role_name():
+    """Build an internal technical identifier for a role created without one.
+
+    roles.name stays NOT NULL / UNIQUE, so a role whose English identifier the
+    super admin left blank still needs a real string. The value is a neutral
+    'custom_<hex>' token (never derived from the Arabic label) that matches
+    _ROLE_NAME_RE, is pre-checked for collisions, and falls back to the
+    database UNIQUE constraint as the final guarantee.
+    """
+    import secrets
+    from app.utils.permissions_catalog import BUILTIN_ROLE_NAMES
+    for _ in range(10):
+        candidate = f'custom_{secrets.token_hex(6)}'
+        if candidate in BUILTIN_ROLE_NAMES:
+            continue
+        if not Role.query.filter_by(name=candidate).first():
+            return candidate
+    raise RuntimeError('Could not generate a unique role identifier.')
+
+
 def _role_form_context(role=None):
     """Build the organized permission catalog for the role editor.
 
@@ -2446,11 +2466,11 @@ def create_role():
         description = request.form.get('description', '').strip()
 
         error = None
-        if not name or not label:
-            error = 'الاسم والتسمية مطلوبان.'
-        elif not _ROLE_NAME_RE.match(name):
+        if not label:
+            error = 'التسمية مطلوبة.'
+        elif name and not _ROLE_NAME_RE.match(name):
             error = 'المعرّف يجب أن يبدأ بحرف إنجليزي صغير ويحتوي حروفاً صغيرة وأرقاماً وشرطات سفلية فقط.'
-        else:
+        elif name:
             from app.utils.permissions_catalog import BUILTIN_ROLE_NAMES
             if name in BUILTIN_ROLE_NAMES:
                 error = 'هذا المعرّف محجوز لأدوار النظام.'
@@ -2461,6 +2481,11 @@ def create_role():
             flash(error, 'danger')
             return render_template('admin/role_form.html',
                                    **_role_form_context(None))
+
+        # Identifier is optional: fall back to an internal generated token so
+        # roles.name remains a non-null unique string.
+        if not name:
+            name = _generate_role_name()
 
         role = Role(name=name, label=label, description=description,
                     is_admin=False)

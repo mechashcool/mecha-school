@@ -27,9 +27,9 @@
         <div class="card-body">
           {% if not role %}
           <div class="mb-3">
-            <label class="form-label">المعرّف (بالإنجليزية) <span class="text-danger">*</span></label>
+            <label class="form-label">المعرّف (بالإنجليزية)</label>
             <input type="text" name="name" class="form-control" placeholder="مثال: registrar"
-                   pattern="[a-z][a-z0-9_]{1,60}" required>
+                   pattern="[a-z][a-z0-9_]{1,60}">
             <small class="text-muted">حروف إنجليزية صغيرة وأرقام وشرطات سفلية فقط</small>
           </div>
           {% else %}
