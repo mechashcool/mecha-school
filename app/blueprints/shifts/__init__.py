@@ -5,17 +5,23 @@ All routes are POST-only (or GET for edit form) and redirect back to
 admin.attendance_settings. There is NO sidebar entry for this blueprint;
 the shifts management UI is embedded inside the attendance settings page.
 
+The automatic-absence cutoff is NOT a per-shift setting: every shift of a
+school shares School.shift_absent_after_time, edited through
+`update_global_absence` below.  AttendanceShift.absent_after_time is retained
+in the database for rollback/audit and is no longer read for behaviour.
+
 Routes:
   POST /attendance-shifts/create
   POST /attendance-shifts/<id>/edit
   POST /attendance-shifts/<id>/toggle
   POST /attendance-shifts/<id>/delete
+  POST /attendance-shifts/global-absence
 """
 from flask import Blueprint, redirect, url_for, flash, request
 from flask_login import login_required, current_user
 from datetime import time as _time
 
-from app.models import db, AttendanceShift, Section
+from app.models import db, AttendanceShift, School, Section
 from app.utils.decorators import get_current_school
 
 shifts_bp = Blueprint('shifts', __name__)
@@ -56,20 +62,16 @@ def create_shift():
     name              = request.form.get('name', '').strip()
     start_time        = _parse_time(request.form.get('start_time', ''))
     late_after_time   = _parse_time(request.form.get('late_after_time', ''))
-    absent_after_time = _parse_time(request.form.get('absent_after_time', ''))
     dismissal_time    = _parse_time(request.form.get('dismissal_time', ''))
 
     if not name:
         flash('اسم الشفت مطلوب.', 'danger')
         return redirect(url_for('admin.attendance_settings'))
-    if not start_time or not late_after_time or not absent_after_time:
-        flash('أوقات البداية والتأخر والغياب التلقائي مطلوبة.', 'danger')
+    if not start_time or not late_after_time:
+        flash('أوقات البداية والتأخر مطلوبة.', 'danger')
         return redirect(url_for('admin.attendance_settings'))
     if late_after_time <= start_time:
         flash('وقت التأخر يجب أن يكون بعد وقت البداية.', 'warning')
-        return redirect(url_for('admin.attendance_settings'))
-    if absent_after_time <= start_time:
-        flash('وقت الغياب التلقائي يجب أن يكون بعد وقت البداية.', 'warning')
         return redirect(url_for('admin.attendance_settings'))
 
     existing = (AttendanceShift.query
@@ -80,12 +82,19 @@ def create_shift():
         flash(f'يوجد شفت باسم "{name}" بالفعل.', 'warning')
         return redirect(url_for('admin.attendance_settings'))
 
+    # absent_after_time is LEGACY: it is never read for the auto-absence
+    # decision (School.shift_absent_after_time is), but the column is still
+    # NOT NULL, so give it a consistent value — the school-wide cutoff when one
+    # is configured, otherwise the shift's own late threshold as an inert
+    # placeholder.  Nothing reads it either way.
+    legacy_absent = getattr(school, 'shift_absent_after_time', None) or late_after_time
+
     shift = AttendanceShift(
         school_id         = school.id,
         name              = name,
         start_time        = start_time,
         late_after_time   = late_after_time,
-        absent_after_time = absent_after_time,
+        absent_after_time = legacy_absent,
         dismissal_time    = dismissal_time,
         is_active         = True,
     )
@@ -114,17 +123,13 @@ def edit_shift(shift_id):
     name              = request.form.get('name', '').strip() or shift.name
     start_time        = _parse_time(request.form.get('start_time', ''))
     late_after_time   = _parse_time(request.form.get('late_after_time', ''))
-    absent_after_time = _parse_time(request.form.get('absent_after_time', ''))
     dismissal_time    = _parse_time(request.form.get('dismissal_time', ''))
 
-    if not start_time or not late_after_time or not absent_after_time:
-        flash('أوقات البداية والتأخر والغياب التلقائي مطلوبة.', 'danger')
+    if not start_time or not late_after_time:
+        flash('أوقات البداية والتأخر مطلوبة.', 'danger')
         return redirect(url_for('admin.attendance_settings'))
     if late_after_time <= start_time:
         flash('وقت التأخر يجب أن يكون بعد وقت البداية.', 'warning')
-        return redirect(url_for('admin.attendance_settings'))
-    if absent_after_time <= start_time:
-        flash('وقت الغياب التلقائي يجب أن يكون بعد وقت البداية.', 'warning')
         return redirect(url_for('admin.attendance_settings'))
 
     # Check duplicate name (exclude self)
@@ -142,7 +147,8 @@ def edit_shift(shift_id):
     shift.name              = name
     shift.start_time        = start_time
     shift.late_after_time   = late_after_time
-    shift.absent_after_time = absent_after_time
+    # shift.absent_after_time is intentionally NOT touched — the historical
+    # per-shift value is preserved for rollback/audit.
     shift.dismissal_time    = dismissal_time
     db.session.commit()
     flash(f'تم تحديث الشفت "{name}" بنجاح.', 'success')
@@ -205,4 +211,82 @@ def delete_shift(shift_id):
     db.session.delete(shift)
     db.session.commit()
     flash(f'تم حذف الشفت "{name}".', 'success')
+    return redirect(url_for('admin.attendance_settings'))
+
+
+@shifts_bp.route('/global-absence', methods=['POST'])
+@login_required
+def update_global_absence():
+    """
+    Set the school-wide automatic-absence cutoff shared by ALL shifts
+    (School.shift_absent_after_time).
+
+    Lives in its own tiny form because #shiftSettingsPane sits outside the main
+    attendance-settings form (that pane carries the shift CRUD sub-forms and
+    nested forms are invalid HTML).
+
+    The school is resolved from the trusted server-side session context only —
+    a school_id in the request body is never read.  Submitting an empty value
+    clears the setting back to NULL, which makes shift auto-absence fail closed.
+    Unified mode's School.att_absence_threshold is not touched here.
+
+    A non-empty cutoff is REJECTED (nothing is saved, the previous value stays)
+    unless it is strictly after the start_time of every active shift.
+    """
+    from app.utils.audit import log_action
+
+    if not _require_admin():
+        flash('ليس لديك صلاحية.', 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+
+    school = get_current_school()
+    if not school or not isinstance(school, School):
+        flash('لم يتم تحديد المدرسة.', 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+
+    raw = request.form.get('shift_absent_after_time', '')
+    cutoff = _parse_time(raw)
+
+    if raw.strip() and cutoff is None:
+        flash('صيغة الوقت غير صحيحة.', 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+
+    # BLOCKING validation — the cutoff must be strictly AFTER the start of every
+    # active shift.  A cutoff at or before a shift's start_time would mark that
+    # shift's students absent before their day begins, sending parent
+    # notifications that cannot be unsent.  Validate BEFORE assigning so a
+    # rejected submission leaves the stored value completely unchanged.
+    if cutoff is not None:
+        invalid = (AttendanceShift.query
+                   .execution_options(bypass_tenant_scope=True)
+                   .filter(AttendanceShift.school_id == school.id,
+                           AttendanceShift.is_active.is_(True),
+                           AttendanceShift.start_time >= cutoff)
+                   .order_by(AttendanceShift.start_time)
+                   .all())
+        if invalid:
+            details = '، '.join(
+                f'{sh.name} (يبدأ {sh.start_time.strftime("%H:%M")})'
+                for sh in invalid
+            )
+            flash(
+                f'لم يتم الحفظ: وقت الغياب التلقائي ({cutoff.strftime("%H:%M")}) '
+                f'يجب أن يكون بعد بداية دوام كل الشفتات المفعَّلة. '
+                f'الشفتات التالية تبدأ في نفس الوقت أو بعده: {details}. '
+                f'لم يتم تغيير الوقت المحفوظ سابقاً.',
+                'danger',
+            )
+            return redirect(url_for('admin.attendance_settings'))
+
+    school.shift_absent_after_time = cutoff
+    db.session.commit()
+    log_action('edit', 'school_settings', school.id,
+               details='shift global auto-absence time updated')
+
+    if cutoff is None:
+        flash('تم إلغاء وقت الغياب التلقائي للشفتات. لن يتم تسجيل الغياب '
+              'التلقائي لأي شفت حتى يتم تحديد وقت.', 'warning')
+        return redirect(url_for('admin.attendance_settings'))
+
+    flash(f'تم حفظ وقت الغياب التلقائي للشفتات: {cutoff.strftime("%H:%M")}.', 'success')
     return redirect(url_for('admin.attendance_settings'))

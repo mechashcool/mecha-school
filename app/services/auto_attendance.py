@@ -203,7 +203,18 @@ def _check_school(school) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  SHIFTS MODE — per-shift auto-absence
+#  SHIFTS MODE — auto-absence on the school-wide cutoff
+#
+#  Every active shift is marked absent at the SAME time:
+#  School.shift_absent_after_time.  The legacy per-shift
+#  AttendanceShift.absent_after_time is retained in the database for
+#  rollback/audit but is never read here.
+#
+#  When School.shift_absent_after_time is NULL the whole per-shift pass is
+#  skipped (fail-closed) — no fallback to att_absence_threshold and no fallback
+#  to the per-shift column, because a wrong absence sends parent notifications
+#  that cannot be unsent.  The shiftless fallback (Case 4) is unaffected and
+#  keeps using att_absence_threshold exactly as before.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _check_school_shifts(school, school_name: str, local_now, local_date) -> None:
@@ -243,11 +254,28 @@ def _check_school_shifts(school, school_name: str, local_now, local_date) -> Non
                      school.id, school_name)
         return
 
+    # School-wide cutoff shared by every shift. NULL = not configured → skip.
+    cutoff = getattr(school, 'shift_absent_after_time', None)
+    if cutoff is None:
+        _log.warning(
+            '[attendance-shift] school_id=%s "%s" — shift_absent_after_time is NOT '
+            'CONFIGURED (NULL); per-shift auto-absence SKIPPED for all %d active '
+            'shifts (fail-closed, no fallback). Set the global shift absence time '
+            'in attendance settings.',
+            school.id, school_name, len(active_shifts),
+        )
+        active_shifts = []
+    else:
+        _log.info(
+            '[attendance-shift] school_id=%s "%s" global_cutoff=%s local_now=%s',
+            school.id, school_name, cutoff, local_now.strftime('%H:%M:%S'),
+        )
+
     for shift in active_shifts:
-        cutoff = shift.absent_after_time
         passed = now_time >= cutoff
         _log.info(
-            '[attendance-shift] school_id=%s shift_id=%s "%s" cutoff=%s local_now=%s passed=%s',
+            '[attendance-shift] school_id=%s shift_id=%s "%s" global_cutoff=%s '
+            'local_now=%s passed=%s',
             school.id, shift.id, shift.name, cutoff,
             local_now.strftime('%H:%M:%S'), passed,
         )
@@ -676,6 +704,10 @@ def run_school_shift_auto_absent_now(school, year, settings) -> dict:
     so those flows respect shift timings instead of the default cutoff. Mirrors
     the scheduler's per-tick shift logic (without the previous-day catch-up).
 
+    All shifts share School.shift_absent_after_time; when it is NULL the
+    per-shift pass is skipped entirely (fail-closed) and only the shiftless
+    fallback runs.
+
     Returns {'holiday': bool, 'count': int} where count is total absences created
     across all shifts plus the shiftless fallback.
     """
@@ -704,13 +736,24 @@ def run_school_shift_auto_absent_now(school, year, settings) -> dict:
         school.id, len(active_shifts), local_now.strftime('%H:%M:%S'),
     )
 
+    # School-wide cutoff shared by every shift. NULL = not configured → skip.
+    cutoff = getattr(school, 'shift_absent_after_time', None)
+    if cutoff is None:
+        _log.warning(
+            '[attendance-shift] web-trigger school_id=%s — shift_absent_after_time '
+            'is NOT CONFIGURED (NULL); per-shift auto-absence SKIPPED for all %d '
+            'active shifts (fail-closed, no fallback).',
+            school.id, len(active_shifts),
+        )
+        active_shifts = []
+
     total = 0
     for shift in active_shifts:
-        passed = now_time >= shift.absent_after_time
+        passed = now_time >= cutoff
         _log.info(
             '[attendance-shift] web-trigger school_id=%s shift_id=%s "%s" '
-            'cutoff=%s local_now=%s passed=%s',
-            school.id, shift.id, shift.name, shift.absent_after_time,
+            'global_cutoff=%s local_now=%s passed=%s',
+            school.id, shift.id, shift.name, cutoff,
             now_time.strftime('%H:%M:%S'), passed,
         )
         if passed:
@@ -728,7 +771,8 @@ def run_school_shift_auto_absent_now(school, year, settings) -> dict:
 def _catchup_previous_day_shifts(school, school_name: str, local_now, local_date) -> None:
     """
     Within _CATCHUP_WINDOW_HOURS after midnight: re-run per-shift auto-absence for
-    yesterday so a near-midnight absent_after_time is never permanently missed.
+    yesterday so a near-midnight School.shift_absent_after_time is never
+    permanently missed.  Skipped entirely when that cutoff is NULL (fail-closed).
     """
     if local_now.hour >= _CATCHUP_WINDOW_HOURS:
         return
@@ -761,6 +805,17 @@ def _catchup_previous_day_shifts(school, school_name: str, local_now, local_date
         .filter_by(school_id=school.id, is_active=True)
         .all()
     )
+
+    # Fail closed: with no school-wide cutoff configured there is no defensible
+    # time to have marked yesterday's shift students absent.
+    if getattr(school, 'shift_absent_after_time', None) is None:
+        _log.warning(
+            '[attendance-shift] catch-up school_id=%s date=%s — '
+            'shift_absent_after_time is NOT CONFIGURED (NULL); per-shift catch-up '
+            'SKIPPED for all %d active shifts (fail-closed).',
+            school.id, yesterday, len(active_shifts),
+        )
+        active_shifts = []
 
     for shift in active_shifts:
         _log.info('[attendance-shift] catch-up check school_id=%s shift_id=%s "%s" date=%s',

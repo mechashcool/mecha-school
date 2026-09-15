@@ -51,11 +51,11 @@
               <option value="{{ shift.id }}"
                       {{ 'selected' if section.shift_id == shift.id }}>
                 {{ shift.name }}
-                ({{ shift.start_time.strftime('%H:%M') }}–{{ shift.absent_after_time.strftime('%H:%M') }})
+                ({{ shift.start_time.strftime('%H:%M') }}{% if shift.dismissal_time %}–{{ shift.dismissal_time.strftime('%H:%M') }}{% endif %})
               </option>
               {% endfor %}
             </select>
-            <small class="text-muted">الشفت يحدد أوقات التأخر والغياب التلقائي لهذه الشعبة.</small>
+            <small class="text-muted">الشفت يحدد أوقات البداية والتأخر والانصراف لهذه الشعبة. وقت الغياب التلقائي موحَّد لجميع الشفتات ويُضبط من إعدادات الحضور.</small>
           </div>
           {% endif %}
           <div class="d-flex gap-3 mt-4">

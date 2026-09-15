@@ -444,7 +444,7 @@
               {% for shift in active_shifts %}
               <option value="{{ shift.id }}">
                 {{ shift.name }}
-                ({{ shift.start_time.strftime('%H:%M') }}–{{ shift.absent_after_time.strftime('%H:%M') }})
+                ({{ shift.start_time.strftime('%H:%M') }}{% if shift.dismissal_time %}–{{ shift.dismissal_time.strftime('%H:%M') }}{% endif %})
               </option>
               {% endfor %}
             </select>

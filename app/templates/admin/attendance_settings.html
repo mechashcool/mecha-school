@@ -479,6 +479,51 @@
   </div>
   {% endif %}
 
+  {# ── Global auto-absence cutoff (school-level, shared by ALL shifts) ──
+     Its own <form> posting to shifts.update_global_absence, because this pane
+     sits outside the main settings form and nested forms are invalid HTML.
+     Unified mode's att_absence_threshold is a separate setting and is not
+     touched here. ── #}
+  <div class="card mb-4" style="border-top:3px solid #e03e3e">
+    <div class="card-header">
+      <i class="bi bi-x-circle text-danger me-1"></i>وقت الغياب التلقائي للشفتات
+    </div>
+    <div class="card-body">
+      <p class="text-muted mb-3" style="font-size:13px;line-height:1.9">
+        وقت واحد موحَّد لجميع الشفتات. عند حلول هذا الوقت يُسجَّل كل طالب لم
+        يُسجَّل حضوره في أي شفت غائباً تلقائياً.
+        <b>لم يعد لكل شفت وقت غياب منفصل.</b>
+      </p>
+
+      {% if settings.enable_attendance_shifts and not settings.shift_absent_after_time %}
+      <div class="alert alert-danger py-2 mb-3" style="font-size:13px">
+        <i class="bi bi-exclamation-triangle-fill me-1"></i>
+        <b>لم يتم تحديد وقت الغياب التلقائي للشفتات.</b>
+        لن يتم تسجيل أي غياب تلقائي لطلاب الشفتات حتى يتم تحديد وقت وحفظه.
+        (هذا إجراء وقائي متعمَّد لتفادي تسجيل غياب خاطئ وإرسال إشعارات لا يمكن التراجع عنها.)
+      </div>
+      {% endif %}
+
+      <form method="POST" action="{{ url_for('shifts.update_global_absence') }}"
+            class="row g-3 align-items-end">
+        <div class="col-md-4">
+          <label class="form-label fw-600 small">
+            <i class="bi bi-x-circle text-danger me-1"></i>وقت الغياب التلقائي الموحَّد
+          </label>
+          <input type="time" name="shift_absent_after_time" class="form-control"
+                 style="border-color:#e03e3e"
+                 value="{{ settings.shift_absent_after_time.strftime('%H:%M') if settings.shift_absent_after_time else '' }}">
+          <small class="text-muted">اتركه فارغاً لتعطيل الغياب التلقائي للشفتات.</small>
+        </div>
+        <div class="col-md-3">
+          <button type="submit" class="btn btn-primary w-100">
+            <i class="bi bi-save me-1"></i>حفظ وقت الغياب
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   {# Shifts list #}
   {% if active_shifts or inactive_shifts %}
   <div class="card mb-4">
@@ -492,7 +537,6 @@
             <th>اسم الشفت</th>
             <th>بداية الدوام</th>
             <th style="color:#e8a020">حد التأخر</th>
-            <th class="text-danger">حد الغياب</th>
             <th>وقت الانصراف</th>
             <th>الحالة</th>
             <th></th>
@@ -504,7 +548,6 @@
             <td class="fw-600">{{ shift.name }}</td>
             <td>{{ shift.start_time.strftime('%H:%M') if shift.start_time else '—' }}</td>
             <td><span style="color:#e8a020">{{ shift.late_after_time.strftime('%H:%M') if shift.late_after_time else '—' }}</span></td>
-            <td><span class="text-danger">{{ shift.absent_after_time.strftime('%H:%M') if shift.absent_after_time else '—' }}</span></td>
             <td>{{ shift.dismissal_time.strftime('%H:%M') if shift.dismissal_time else '—' }}</td>
             <td>
               {% if shift.is_active %}
@@ -520,7 +563,6 @@
                         data-shift-name="{{ shift.name }}"
                         data-start="{{ shift.start_time.strftime('%H:%M') if shift.start_time else '' }}"
                         data-late="{{ shift.late_after_time.strftime('%H:%M') if shift.late_after_time else '' }}"
-                        data-absent="{{ shift.absent_after_time.strftime('%H:%M') if shift.absent_after_time else '' }}"
                         data-dismissal="{{ shift.dismissal_time.strftime('%H:%M') if shift.dismissal_time else '' }}"
                         onclick="showEditShift(this)" title="تعديل">
                   <i class="bi bi-pencil"></i>
@@ -563,7 +605,7 @@
     </div>
     <div class="card-body">
       <form method="POST" action="{{ url_for('shifts.create_shift') }}" class="row g-3">
-        <div class="col-md-3">
+        <div class="col-md-4">
           <label class="form-label fw-600">اسم الشفت <span class="text-danger">*</span></label>
           <input type="text" name="name" class="form-control"
                  placeholder="مثال: الدوام الصباحي" required>
@@ -581,14 +623,7 @@
           <input type="time" name="late_after_time" class="form-control"
                  style="border-color:#e8a020" required>
         </div>
-        <div class="col-md-2">
-          <label class="form-label fw-600 small">
-            <i class="bi bi-x-circle text-danger me-1"></i>حد الغياب <span class="text-danger">*</span>
-          </label>
-          <input type="time" name="absent_after_time" class="form-control"
-                 style="border-color:#e03e3e" required>
-        </div>
-        <div class="col-md-2">
+        <div class="col-md-3">
           <label class="form-label fw-600 small">
             <i class="bi bi-door-closed text-secondary me-1"></i>وقت الانصراف
           </label>
@@ -626,10 +661,6 @@
               <div class="col-6">
                 <label class="form-label fw-600">حد التأخر <span class="text-danger">*</span></label>
                 <input type="time" name="late_after_time" id="editShiftLate" class="form-control" required>
-              </div>
-              <div class="col-6">
-                <label class="form-label fw-600">حد الغياب التلقائي <span class="text-danger">*</span></label>
-                <input type="time" name="absent_after_time" id="editShiftAbsent" class="form-control" required>
               </div>
               <div class="col-6">
                 <label class="form-label fw-600">وقت الانصراف</label>
@@ -887,7 +918,6 @@ function showEditShift(btn) {
   document.getElementById('editShiftName').value      = btn.dataset.shiftName;
   document.getElementById('editShiftStart').value     = btn.dataset.start;
   document.getElementById('editShiftLate').value      = btn.dataset.late;
-  document.getElementById('editShiftAbsent').value    = btn.dataset.absent;
   document.getElementById('editShiftDismissal').value = btn.dataset.dismissal;
   document.getElementById('editShiftForm').action     =
     '/attendance-shifts/' + btn.dataset.shiftId + '/edit';

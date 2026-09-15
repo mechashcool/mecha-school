@@ -105,6 +105,19 @@ class School(db.Model):
     enable_attendance_shifts = db.Column(db.Boolean, default=False, nullable=False,
                                          server_default=db.false())
 
+    # SHIFT MODE ONLY — the single automatic-absence cutoff shared by every
+    # AttendanceShift of this school.  Replaces the former per-shift
+    # AttendanceShift.absent_after_time as the behavioural source.
+    #
+    # NULL means "not configured yet": shift auto-absence is skipped entirely
+    # (fail-closed).  It deliberately does NOT fall back to
+    # att_absence_threshold or to AttendanceShift.absent_after_time, because an
+    # incorrect absence triggers parent notifications that cannot be unsent.
+    #
+    # Unified (non-shift) mode is unaffected and keeps using
+    # att_absence_threshold exactly as before.
+    shift_absent_after_time = db.Column(db.Time, nullable=True)
+
     # Last applied feature package (nullable — no package = defaults apply)
     package_id  = db.Column(db.Integer, db.ForeignKey('feature_packages.id', ondelete='SET NULL'),
                             nullable=True)
@@ -289,8 +302,11 @@ class AttendanceShift(db.Model):
 
     Only relevant when School.enable_attendance_shifts is True.
     Sections are linked to a shift via Section.shift_id.
-    Auto-absence checks each shift's absent_after_time independently so morning
-    students are never marked absent by an afternoon cutoff and vice-versa.
+
+    Auto-absence is driven by the school-wide School.shift_absent_after_time —
+    one cutoff shared by every shift.  `absent_after_time` below is RETAINED for
+    rollback/audit of the previous per-shift behaviour and is NO LONGER read by
+    any automatic-absence decision.  Do not reintroduce reads of it.
     """
     __tablename__ = 'attendance_shifts'
     __school_scoped__ = True
@@ -301,6 +317,9 @@ class AttendanceShift(db.Model):
     name              = db.Column(db.String(100), nullable=False)
     start_time        = db.Column(db.Time, nullable=False)
     late_after_time   = db.Column(db.Time, nullable=False)
+    # LEGACY — historical per-shift cutoff. Kept NOT NULL and populated on
+    # create purely to satisfy the existing constraint; never read for
+    # behaviour.  See School.shift_absent_after_time.
     absent_after_time = db.Column(db.Time, nullable=False)
     dismissal_time    = db.Column(db.Time, nullable=True)
     is_active         = db.Column(db.Boolean, default=True, nullable=False,
