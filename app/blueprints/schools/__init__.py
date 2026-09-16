@@ -36,6 +36,11 @@ from app.utils.audit import log_action
 from app.utils.school_cleanup import (
     cleanup_school_cascade, format_linked_counts, linked_school_counts,
 )
+from app.utils.school_stages import (
+    ALL_STAGES, STAGE_LABELS, ERR_NO_STAGE, ERR_STORED_INVALID,
+    InvalidStageConfiguration, apply_school_stages, parse_stages,
+    provision_stages, school_stages,
+)
 
 schools_bp = Blueprint('schools', __name__,
                         template_folder='../../templates/schools')
@@ -43,6 +48,12 @@ schools_bp = Blueprint('schools', __name__,
 
 def _school_form_context(school=None):
     return {'school': school}
+
+
+@schools_bp.context_processor
+def _inject_stage_constants():
+    """Constants for the educational-stage selector on schools/form.html."""
+    return {'all_stages': ALL_STAGES, 'stage_labels': STAGE_LABELS}
 
 
 MANAGER_ROLE_NAMES = frozenset({'school_admin'})
@@ -189,6 +200,41 @@ def create():
         if code and School.query.filter_by(code=code).first():
             errors.append('School code is already in use.')
 
+        # Educational stages — MANDATORY for every new school. Validated here,
+        # before any row is written, and never taken from anything but this
+        # already-super-admin-authorized form.
+        try:
+            stages = parse_stages(request.form.getlist('educational_stages'))
+        except ValueError as exc:
+            stages = []
+            errors.append(str(exc))
+        else:
+            if not stages:
+                errors.append(ERR_NO_STAGE)
+
+        # Initial academic year — REQUIRED for a new school. Stage provisioning
+        # (grades + section أ + default subjects) is scoped to an academic year,
+        # so without one the school would be created in managed mode with no
+        # structure at all. Dates are validated here, before any row is written;
+        # nothing is ever defaulted or invented on the operator's behalf.
+        year_name = request.form.get('year_name', '').strip()
+        year_start_raw = (request.form.get('year_start') or '').strip()
+        year_end_raw = (request.form.get('year_end') or '').strip()
+        year_start = year_end = None
+        if not year_name or not year_start_raw or not year_end_raw:
+            errors.append('العام الدراسي الأول مطلوب: الاسم وتاريخ البدء '
+                          'وتاريخ الانتهاء.')
+        else:
+            try:
+                year_start = dt.strptime(year_start_raw, '%Y-%m-%d').date()
+                year_end = dt.strptime(year_end_raw, '%Y-%m-%d').date()
+            except ValueError:
+                errors.append('تنسيق تاريخ العام الدراسي غير صحيح.')
+            else:
+                if year_end <= year_start:
+                    errors.append('تاريخ انتهاء العام الدراسي يجب أن يكون '
+                                  'بعد تاريخ البدء.')
+
         # Validate the selected package (if any) server-side before doing any work.
         selected_package = None
         pkg_id = request.form.get('package_id', type=int)
@@ -228,35 +274,29 @@ def create():
             locale            = request.form.get('locale', 'ar').strip() or 'ar',
             governorate       = request.form.get('governorate', '').strip() or None,
             price_per_student = pps,
+            # Validated above; a new school is always created in managed mode.
+            educational_stages = ','.join(stages),
         )
 
         try:
             db.session.add(school)
             db.session.flush()
 
-            year_name = request.form.get('year_name', '').strip()
-            new_ay = None
-            if year_name:
-                start_raw = request.form.get('year_start')
-                end_raw = request.form.get('year_end')
-                if start_raw and end_raw:
-                    new_ay = AcademicYear(
-                        school_id=school.id,
-                        name=year_name,
-                        start_date=dt.strptime(start_raw, '%Y-%m-%d').date(),
-                        end_date=dt.strptime(end_raw, '%Y-%m-%d').date(),
-                        is_current=True,
-                    )
-                    db.session.add(new_ay)
-                    db.session.flush()  # assign new_ay.id before grade creation
+            # Validated above, so the year always exists for a new school.
+            new_ay = AcademicYear(
+                school_id=school.id,
+                name=year_name,
+                start_date=year_start,
+                end_date=year_end,
+                is_current=True,
+            )
+            db.session.add(new_ay)
+            db.session.flush()  # assign new_ay.id before grade creation
 
-            # Auto-create standard Iraqi grades and subjects when a year is created with the school.
-            if new_ay:
-                from app.utils.iraqi_grades import ensure_iraqi_standard_grades
-                from app.utils.iraqi_subjects import ensure_standard_subjects
-                ensure_iraqi_standard_grades(school.id, new_ay.id)
-                db.session.flush()  # assign grade IDs so subjects can reference them
-                ensure_standard_subjects(school.id, new_ay.id)
+            # Auto-create the grades of the SELECTED stages only, one section
+            # "أ" per grade, and the standard subjects of those grades. Same
+            # transaction as the school row, so a failure creates nothing.
+            provision_stages(school.id, new_ay.id, stages)
 
             # Apply configuration. A selected package takes precedence and is
             # applied atomically (modules + features + student form + module
@@ -382,6 +422,41 @@ def edit(school_id):
                 flash('رمز المدرسة مستخدم مسبقاً من مدرسة أخرى. اختر رمزاً مختلفاً.', 'danger')
                 return render_template('schools/form.html', school=school)
         school.code = new_code
+
+        # ── Educational stages ────────────────────────────────────────────────
+        # LEGACY schools (educational_stages IS NULL) whose form posts no stage
+        # stay legacy: nothing is stored, and no grade, section, subject or
+        # student row is created, renamed, filtered or deleted by this edit.
+        # A school already in managed mode can never drop to zero stages.
+        # Any rejection aborts the WHOLE edit — the previous configuration and
+        # every existing record are preserved by the rollback below.
+        try:
+            requested_stages = parse_stages(request.form.getlist('educational_stages'))
+        except ValueError as exc:
+            db.session.rollback()
+            flash(str(exc), 'danger')
+            return render_template('schools/form.html', school=school)
+
+        # A non-empty but unparseable stored value is NOT legacy: it must be
+        # repaired by an explicit selection, never silently ignored.
+        try:
+            current_stages = school_stages(school)
+            stored_stages_valid = True
+        except InvalidStageConfiguration:
+            current_stages, stored_stages_valid = [], False
+
+        if requested_stages or current_stages or not stored_stages_valid:
+            if not requested_stages:
+                db.session.rollback()
+                flash(ERR_NO_STAGE if stored_stages_valid else ERR_STORED_INVALID,
+                      'danger')
+                return render_template('schools/form.html', school=school)
+            ok, stage_error = apply_school_stages(school, requested_stages)
+            if not ok:
+                db.session.rollback()
+                flash(stage_error, 'danger')
+                return render_template('schools/form.html',
+                                       school=School.query.get(school_id))
 
         # Logo upload — stored in Supabase Storage (school-media bucket) in production,
         # or local static/uploads/ in development.
@@ -539,6 +614,10 @@ def create_year(school_id):
             is_current = is_current,
         )
         db.session.add(ay)
+        # A new year is deliberately left EMPTY for every school, managed or
+        # legacy. super_admin.rollover_year refuses to run once the target year
+        # has grades, so auto-provisioning here would permanently block the
+        # rollover of sections, capacities, teacher assignments and fee types.
         db.session.commit()
         log_action('create', 'academic_year', ay.id,
                    details=f'school={school_id}, year="{name}"')

@@ -142,27 +142,79 @@
         </div>
       </div>
 
+      <!-- Educational stages -->
+      {%- set posted_stages = request.form.getlist('educational_stages') if request.method == 'POST' else none %}
+      {%- set saved_stages = (school.educational_stages.split(',') if school and school.educational_stages else []) %}
+      {%- set selected_stages = posted_stages if posted_stages is not none else saved_stages %}
+      <div class="card mb-4">
+        <div class="card-header">
+          <h6 class="mb-0">
+            <i class="bi bi-mortarboard me-2"></i>المراحل الدراسية
+            {% if not school %}<span class="text-danger">*</span>{% endif %}
+          </h6>
+        </div>
+        <div class="card-body">
+          <div class="row g-2">
+            {% for stage in all_stages %}
+            <div class="col-md-4">
+              <label class="d-flex align-items-center gap-2 p-2 rounded border
+                            {{ 'border-primary bg-primary bg-opacity-10' if stage in selected_stages else 'border-light' }}"
+                     style="cursor:pointer" for="stage_{{ loop.index }}">
+                <input class="form-check-input flex-shrink-0 mt-0" type="checkbox"
+                       name="educational_stages" value="{{ stage }}" id="stage_{{ loop.index }}"
+                       {{ 'checked' if stage in selected_stages }}>
+                <span>{{ stage_labels.get(stage, stage) }}</span>
+              </label>
+            </div>
+            {% endfor %}
+          </div>
+          <div class="form-text mt-2">
+            {% if school %}
+              {% if saved_stages %}
+                عند إضافة مرحلة تُنشأ صفوفها الناقصة مع شعبة <strong>أ</strong> وموادها الافتراضية فقط.
+                لا يمكن إزالة مرحلة مرتبطة ببيانات (طلاب، امتحانات، جداول، واجبات، محادثات، طلبات تسجيل).
+              {% else %}
+                هذه المدرسة تعمل حالياً بالوضع السابق (بدون مراحل محددة) ولن يتغيّر أي صف أو شعبة أو مادة
+                ما لم تختر مرحلة هنا. اختيار المراحل يفعّل إدارة الصفوف حسب المرحلة.
+              {% endif %}
+            {% else %}
+              اختر مرحلة واحدة على الأقل. سيتم إنشاء صفوف المراحل المحددة فقط، مع شعبة
+              <strong>أ</strong> لكل صف وموادها الافتراضية.
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
       <!-- Initial Academic Year (create only) -->
       {% if not school %}
       <div class="card mb-4">
         <div class="card-header">
-          <h6 class="mb-0"><i class="bi bi-calendar3 me-2"></i>العام الدراسي الأول (اختياري)</h6>
+          <h6 class="mb-0">
+            <i class="bi bi-calendar3 me-2"></i>العام الدراسي الأول
+            <span class="text-danger">*</span>
+          </h6>
         </div>
         <div class="card-body">
           <div class="row g-3">
             <div class="col-md-4">
-              <label class="form-label">اسم العام</label>
+              <label class="form-label">اسم العام <span class="text-danger">*</span></label>
               <input type="text" name="year_name" class="form-control"
-                     placeholder="مثال: 2025-2026">
+                     placeholder="مثال: 2025-2026"
+                     value="{{ request.form.get('year_name', '') }}" required>
             </div>
             <div class="col-md-4">
-              <label class="form-label">تاريخ البدء</label>
-              <input type="date" name="year_start" class="form-control">
+              <label class="form-label">تاريخ البدء <span class="text-danger">*</span></label>
+              <input type="date" name="year_start" class="form-control"
+                     value="{{ request.form.get('year_start', '') }}" required>
             </div>
             <div class="col-md-4">
-              <label class="form-label">تاريخ الانتهاء</label>
-              <input type="date" name="year_end" class="form-control">
+              <label class="form-label">تاريخ الانتهاء <span class="text-danger">*</span></label>
+              <input type="date" name="year_end" class="form-control"
+                     value="{{ request.form.get('year_end', '') }}" required>
             </div>
+          </div>
+          <div class="form-text mt-2">
+            مطلوب لإنشاء صفوف المراحل المحددة وشعبة <strong>أ</strong> وموادها الافتراضية.
           </div>
         </div>
       </div>

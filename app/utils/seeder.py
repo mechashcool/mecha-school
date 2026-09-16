@@ -928,8 +928,15 @@ def register_commands(app):
                   help='Academic year ID (default: current active year for the school).')
     @with_appcontext
     def setup_iraqi_grades_cmd(school_id, year_id):
-        """Create the 15 standard Iraqi school grades for a school's academic year."""
+        """Create the standard Iraqi school grades for a school's academic year.
+
+        Managed schools get the grades of their configured educational stages
+        only; legacy (NULL/blank) schools get all 15, exactly as before.
+        """
         from app.utils.iraqi_grades import ensure_iraqi_standard_grades
+        from app.utils.school_stages import (ERR_STORED_INVALID,
+                                             InvalidStageConfiguration,
+                                             school_stages)
 
         school = (School.query
                   .execution_options(bypass_tenant_scope=True)
@@ -962,7 +969,18 @@ def register_commands(app):
         click.echo(f'School : {school.school_name} (id={school_id})')
         click.echo(f'Year   : {year.name} (id={year.id})')
 
-        result = ensure_iraqi_standard_grades(school_id, year.id)
+        # AUTOMATIC defaults only: managed schools get their configured stages,
+        # legacy schools (NULL/blank) keep the original unfiltered behaviour.
+        try:
+            stages = school_stages(school)
+        except InvalidStageConfiguration:
+            click.echo(f'✗ {ERR_STORED_INVALID}')
+            return
+        if stages:
+            click.echo(f'Stages : {", ".join(stages)}')
+
+        result = ensure_iraqi_standard_grades(school_id, year.id,
+                                              only_stages=stages or None)
         db.session.commit()
 
         click.echo(f'✓ Created : {result["created"]}')
@@ -975,8 +993,15 @@ def register_commands(app):
                   help='Academic year ID (default: current active year for the school).')
     @with_appcontext
     def setup_standard_subjects_cmd(school_id, year_id):
-        """Create standard subjects linked to grades for a school's academic year."""
+        """Create standard subjects linked to grades for a school's academic year.
+
+        Managed schools get the subjects of their configured stages' grades
+        only; legacy (NULL/blank) schools keep the original behaviour.
+        """
         from app.utils.iraqi_subjects import ensure_standard_subjects
+        from app.utils.school_stages import (ERR_STORED_INVALID,
+                                             InvalidStageConfiguration,
+                                             school_stages, stage_grade_names)
 
         school = (School.query
                   .execution_options(bypass_tenant_scope=True)
@@ -1009,7 +1034,17 @@ def register_commands(app):
         click.echo(f'School : {school.school_name} (id={school_id})')
         click.echo(f'Year   : {year.name} (id={year.id})')
 
-        result = ensure_standard_subjects(school_id, year.id)
+        try:
+            stages = school_stages(school)
+        except InvalidStageConfiguration:
+            click.echo(f'✗ {ERR_STORED_INVALID}')
+            return
+        if stages:
+            click.echo(f'Stages : {", ".join(stages)}')
+
+        result = ensure_standard_subjects(
+            school_id, year.id,
+            only_grade_names=stage_grade_names(stages) if stages else None)
         db.session.commit()
 
         click.echo(f'✓ Created subjects : {result["created_subjects"]}')

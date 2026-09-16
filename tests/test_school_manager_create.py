@@ -19,7 +19,8 @@ from flask_login import login_user, logout_user
 
 from app import create_app
 from app.models import (
-    db, AcademicYear, Employee, Permission, Role, School, User,
+    db, AcademicYear, Employee, Grade, Permission, Role, School, Section,
+    Subject, User,
 )
 
 
@@ -132,6 +133,20 @@ class SchoolManagerTest(unittest.TestCase):
                 db.session.delete(user)
             db.session.flush()
 
+            # Every school created by this test class now owns an academic year
+            # plus the structure schools.create provisions for the selected
+            # stages. Remove them before the school itself: otherwise the ORM
+            # NULLs academic_years.school_id (NOT NULL) and the year delete
+            # trips grades_academic_year_id_fkey.
+            for key in ('manager_school_id', 'other_school_id', 'school_only_id'):
+                ident = ids.get(key)
+                if not ident:
+                    continue
+                for model in (Subject, Section, Grade, AcademicYear):
+                    model.query.execution_options(bypass_tenant_scope=True)\
+                        .filter_by(school_id=ident).delete()
+            db.session.flush()
+
             for model, key in [
                 (Employee, 'other_employee_id'),
                 (User,     'manager_id'),
@@ -219,6 +234,13 @@ class SchoolManagerTest(unittest.TestCase):
                 'manager_username': username,
                 'manager_email': f'{username}@example.test',
                 'manager_password': 'Password123',
+                # Educational stages and an initial academic year are both
+                # mandatory for a new school (app/utils/school_stages.py and
+                # schools.create); unrelated to this assertion.
+                'educational_stages': 'ابتدائية',
+                'year_name': f'AY {self.suffix}',
+                'year_start': '2025-08-01',
+                'year_end': '2026-06-30',
             },
         ):
             super_admin = db.session.get(

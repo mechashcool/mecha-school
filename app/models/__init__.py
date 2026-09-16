@@ -122,6 +122,19 @@ class School(db.Model):
     package_id  = db.Column(db.Integer, db.ForeignKey('feature_packages.id', ondelete='SET NULL'),
                             nullable=True)
 
+    # Optional per-school configuration: which educational stages this school
+    # runs.  Comma-separated canonical Arabic stage names, matching Grade.stage
+    # exactly (see app/utils/school_stages.py).
+    #
+    # NULL  = LEGACY mode.  The school predates this feature: its grades,
+    #         sections, subjects and external-registration behaviour are used
+    #         exactly as they are today and are never filtered or provisioned
+    #         by stage.  Existing schools are deliberately NOT backfilled.
+    # value = MANAGED mode.  Only the selected stages' standard grades (each
+    #         with section "أ") and their standard subjects are provisioned,
+    #         and the public registration form shows only those grades.
+    educational_stages = db.Column(db.String(120), nullable=True)
+
     # Optional per-school feature: external (public) student-registration link.
     # Default OFF so existing schools behave exactly as before. Only the Super
     # Admin enables/disables/regenerates the link.

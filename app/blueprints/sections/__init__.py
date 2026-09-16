@@ -6,7 +6,7 @@ from flask import (Blueprint, render_template, redirect, url_for,
                    flash, request)
 from flask_login import login_required
 from app.models import (
-    db, Grade, Section, Subject, AcademicYear, Employee, Student,
+    db, Grade, Section, Subject, AcademicYear, School, Employee, Student,
     Exam, Schedule, teacher_subjects, AttendanceShift, Homework,
 )
 from app.utils.decorators import (admin_required, permission_required,
@@ -197,6 +197,9 @@ def delete_grade(grade_id):
 def setup_iraqi_grades():
     """Create missing standard Iraqi grades for the selected academic year."""
     from app.utils.iraqi_grades import ensure_iraqi_standard_grades
+    from app.utils.school_stages import (ERR_STORED_INVALID,
+                                         InvalidStageConfiguration,
+                                         school_stages)
 
     year_id = request.form.get('academic_year_id', type=int)
     if not year_id:
@@ -204,7 +207,20 @@ def setup_iraqi_grades():
         return redirect(url_for('sections.index'))
 
     year = AcademicYear.query.get_or_404(year_id)
-    result = ensure_iraqi_standard_grades(year.school_id, year.id)
+
+    # AUTOMATIC defaults only: a managed school gets the standard grades of its
+    # configured stages, a legacy school (NULL/blank) gets the original
+    # unfiltered set. Manual grade creation/editing is untouched either way.
+    school = (School.query.execution_options(bypass_tenant_scope=True)
+              .get(year.school_id))
+    try:
+        stages = school_stages(school)
+    except InvalidStageConfiguration:
+        flash(ERR_STORED_INVALID, 'danger')
+        return redirect(url_for('sections.index', year_id=year_id))
+
+    result = ensure_iraqi_standard_grades(year.school_id, year.id,
+                                          only_stages=stages or None)
     db.session.commit()
 
     if result['created']:
@@ -226,6 +242,9 @@ def setup_iraqi_grades():
 def setup_standard_subjects():
     """Create missing standard subjects for the active academic year of the current school."""
     from app.utils.iraqi_subjects import ensure_standard_subjects
+    from app.utils.school_stages import (ERR_STORED_INVALID,
+                                         InvalidStageConfiguration,
+                                         school_stages, stage_grade_names)
 
     # Always use the active year for writes — never trust the URL/form year param,
     # which may point at a non-current year causing subjects to be invisible in the list.
@@ -239,7 +258,15 @@ def setup_standard_subjects():
         flash('لا يوجد عام دراسي نشط. يرجى تفعيل عام دراسي أولاً.', 'warning')
         return redirect(url_for('sections.index'))
 
-    result = ensure_standard_subjects(school.id, year.id)
+    try:
+        stages = school_stages(school)
+    except InvalidStageConfiguration:
+        flash(ERR_STORED_INVALID, 'danger')
+        return redirect(url_for('sections.index'))
+
+    result = ensure_standard_subjects(
+        school.id, year.id,
+        only_grade_names=stage_grade_names(stages) if stages else None)
     db.session.commit()
 
     if result['created_subjects']:

@@ -43,7 +43,8 @@ def _normalize(name: str) -> str:
     return _WS_RE.sub(' ', name).strip()
 
 
-def ensure_iraqi_standard_grades(school_id: int, academic_year_id: int) -> dict:
+def ensure_iraqi_standard_grades(school_id: int, academic_year_id: int,
+                                 only_stages: 'set[str] | list[str] | None' = None) -> dict:
     """
     Add any missing standard Iraqi grades to the given school + academic year.
 
@@ -55,8 +56,15 @@ def ensure_iraqi_standard_grades(school_id: int, academic_year_id: int) -> dict:
     - Custom (non-standard) grades are never touched.
     - No sections are created.
     - Does NOT commit — the caller is responsible for db.session.commit().
+
+    ``only_stages`` (optional) restricts creation to the given canonical stage
+    names ('ابتدائية' / 'متوسطة' / 'إعدادية').  Default None keeps the original
+    behaviour — every standard grade is considered — so existing callers are
+    unaffected.
     """
     from app.models import db, Grade
+
+    stage_filter = set(only_stages) if only_stages is not None else None
 
     existing_rows = (
         Grade.query
@@ -71,6 +79,8 @@ def ensure_iraqi_standard_grades(school_id: int, academic_year_id: int) -> dict:
     skipped = 0
 
     for name, stage in IRAQI_STANDARD_GRADES:
+        if stage_filter is not None and stage not in stage_filter:
+            continue
         if _normalize(name) in existing_names:
             skipped += 1
             continue

@@ -190,7 +190,8 @@ def _normalize(name: str) -> str:
     return _WS_RE.sub(' ', name).strip()
 
 
-def ensure_standard_subjects(school_id: int, academic_year_id: int) -> dict:
+def ensure_standard_subjects(school_id: int, academic_year_id: int,
+                             only_grade_names: 'set[str] | list[str] | None' = None) -> dict:
     """
     Add missing standard subjects for each standard grade in the given school+year.
     Each subject is linked to its grade via Subject.grade_id.
@@ -209,8 +210,15 @@ def ensure_standard_subjects(school_id: int, academic_year_id: int) -> dict:
     - Custom subjects and grades are never modified or deleted.
     - No sections are created.
     - Does NOT commit — the caller is responsible for db.session.commit().
+
+    ``only_grade_names`` (optional) restricts seeding to those grade names.
+    Default None keeps the original behaviour — every standard grade present in
+    the school/year is seeded — so existing callers are unaffected.
     """
     from app.models import db, Grade, Subject
+
+    name_filter = ({_normalize(n) for n in only_grade_names}
+                   if only_grade_names is not None else None)
 
     # Build a lookup: normalized grade name → Grade instance
     all_grades = (
@@ -226,6 +234,8 @@ def ensure_standard_subjects(school_id: int, academic_year_id: int) -> dict:
     skipped_grades: list[str] = []
 
     for grade_name, subject_names in STANDARD_SUBJECTS_BY_GRADE.items():
+        if name_filter is not None and _normalize(grade_name) not in name_filter:
+            continue
         grade = grade_map.get(_normalize(grade_name))
         if grade is None:
             skipped_grades.append(grade_name)

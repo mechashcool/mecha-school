@@ -41,6 +41,10 @@ from app.utils.registration_tokens import (hash_token, verify_token,
 # Same whitespace normalization used when the standard Iraqi grades are created,
 # so display ordering matches stored names regardless of spacing variations.
 from app.utils.iraqi_grades import _normalize as _normalize_grade_name
+# Per-school educational-stage configuration. Legacy schools (NULL) are never
+# filtered — their public form keeps showing exactly the grades it shows today.
+from app.utils.school_stages import (InvalidStageConfiguration,
+                                     grade_matches_stages, school_stages)
 # Reuse the SAME school-scoped residential-area helpers as the internal Add
 # Student form (single source of truth for loading + fail-closed validation).
 from app.blueprints.students import (_school_residential_areas,
@@ -179,10 +183,27 @@ def _grade_sort_key(grade):
 
 
 def _active_grades(school, year):
+    """Grades this school's public form may offer — the SINGLE source of truth
+    for both the rendered dropdown and the server-side POST validation.
+
+    Always scoped to THIS school + THIS active year, so another tenant's grade
+    id can never be accepted. When the school has educational stages configured
+    (managed mode) the list is additionally narrowed to those stages; a school
+    with ``educational_stages`` NULL/blank (legacy) is not filtered at all.
+
+    A stored value that is non-empty but invalid raises
+    ``InvalidStageConfiguration`` — it must never fall back to "show every
+    grade", which would silently turn filtering off on a public surface.
+    """
     grades = (Grade.query.execution_options(bypass_tenant_scope=True,
                                             include_all_years=True)
               .filter_by(school_id=school.id, academic_year_id=year.id)
               .order_by(Grade.name).all())
+
+    stages = school_stages(school)
+    if stages:
+        grades = [g for g in grades if grade_matches_stages(g, stages)]
+
     # Display-order only — same rows, same ids, nothing added or removed.
     return sorted(grades, key=_grade_sort_key)
 
@@ -219,7 +240,13 @@ def form(token):
         # Cannot register without an active academic year — same generic page.
         return _generic_unavailable()
 
-    grades = _active_grades(school, year)
+    try:
+        grades = _active_grades(school, year)
+    except InvalidStageConfiguration:
+        # Fail closed: a corrupt stage configuration must not expose grades the
+        # school no longer offers. Same generic page as every other failure.
+        return _generic_unavailable()
+
     form_cfg = get_student_form_config(school.id)
     enabled_features = get_enabled_features(school.id)
     # Same school-scoped, active-only residential areas the internal Add Student
@@ -253,7 +280,10 @@ def form(token):
 
     nonce = (request.form.get('submission_nonce') or '').strip()[:64] or None
 
-    # Grade must belong to THIS school's active year (server-side validated).
+    # Grade must belong to THIS school's active year AND — in managed mode — to
+    # one of its selected stages. Validated server-side against the same list
+    # that was rendered: a grade id from another tenant, another year, or an
+    # unselected stage matches nothing and is rejected.
     grade_id = request.form.get('desired_grade_id', type=int)
     grade = next((g for g in grades if g.id == grade_id), None)
     if grade is None:
