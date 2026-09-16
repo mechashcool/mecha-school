@@ -45,7 +45,11 @@ from app.models import (db, AttendanceDevice, DeviceEventLog,
                         DeviceStudentMapping, DeviceEmployeeMapping,
                         Student, Employee)
 from app.services.hikvision import sync_device, test_connection
+from app.utils.audit import log_action
 from app.utils.device_numbering import (DeviceNumberAllocationError,
+                                        DeviceNumberChangeError,
+                                        DeviceNumberConflictError,
+                                        change_student_device_number,
                                         ensure_student_device_mapping)
 from app.utils.decorators import (admin_required, permission_required,
                                    any_permission_required, super_admin_required,
@@ -708,9 +712,10 @@ def add_mapping(device_id):
             try:
                 mapping, created = ensure_student_device_mapping(dev, student.id, school.id)
                 db.session.commit()
-            except DeviceNumberAllocationError:
+            except DeviceNumberAllocationError as exc:
                 db.session.rollback()
-                flash('تعذر إنشاء رقم الطالب على الجهاز. يرجى المحاولة مرة أخرى.', 'danger')
+                flash(str(exc) if isinstance(exc, DeviceNumberConflictError) else
+                      'تعذر إنشاء رقم الطالب على الجهاز. يرجى المحاولة مرة أخرى.', 'danger')
                 return redirect(url_for('attendance_devices.mappings', device_id=device_id))
             if created:
                 flash(f'تم ربط الطالب {student.full_name} بالرقم '
@@ -775,6 +780,50 @@ def delete_mapping(mapping_id):
     db.session.delete(mapping)
     db.session.commit()
     flash('تم حذف الربط.', 'success')
+    return redirect(url_for('attendance_devices.mappings', device_id=device_id))
+
+
+@attendance_devices_bp.route('/mappings/<int:mapping_id>/change-number', methods=['POST'])
+@login_required
+@permission_required('manage_attendance_devices')
+@section_required('attendance_devices', 'student_mappings')
+def change_mapping_number(mapping_id):
+    """Change the student's device number on ALL of that student's bindings
+    in this school, so the number stays identical across devices.
+
+    Only the stored bindings change. Nothing is sent to the physical device:
+    a user already enrolled there under the old number stays enrolled under
+    that number until it is re-sent / removed with the existing actions.
+    """
+    school  = _school_or_abort()
+    mapping = DeviceStudentMapping.query.filter_by(
+        id=mapping_id, school_id=school.id
+    ).first_or_404()
+    device_id  = mapping.device_id
+    student_id = mapping.student_id
+    old_number = mapping.employee_no_string
+
+    try:
+        mappings, changed = change_student_device_number(
+            student_id, school.id, request.form.get('employee_no_string'))
+        db.session.commit()
+    except DeviceNumberChangeError as exc:
+        db.session.rollback()
+        flash(str(exc), 'danger')
+        return redirect(url_for('attendance_devices.mappings', device_id=device_id))
+
+    if not changed:
+        flash('الرقم المُدخل هو نفسه رقم الطالب الحالي. لم يتم أي تعديل.', 'warning')
+        return redirect(url_for('attendance_devices.mappings', device_id=device_id))
+
+    new_number = mappings[0].employee_no_string
+    log_action('edit', 'device_student_mapping', student_id,
+               f'device number {old_number} -> {new_number} '
+               f'on {len(mappings)} binding(s)')
+    flash(f'تم تعديل رقم الطالب في الجهاز إلى {new_number} في '
+          f'{len(mappings)} ربط. تم التعديل في النظام فقط — يجب إعادة إرسال '
+          f'الطالب إلى كل جهاز، ويبقى المستخدم المسجل على الجهاز بالرقم القديم '
+          f'({old_number}) حتى يُحذف منه.', 'success')
     return redirect(url_for('attendance_devices.mappings', device_id=device_id))
 
 

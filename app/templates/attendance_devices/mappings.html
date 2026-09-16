@@ -161,7 +161,28 @@
           <tbody>
             {% for m in student_mappings %}
             <tr id="stu-row-{{ m.id }}">
-              <td><code>{{ m.employee_no_string }}</code></td>
+              <td>
+                <code>{{ m.employee_no_string }}</code>
+                <button type="button" class="btn btn-link btn-sm p-0 ms-1"
+                        data-bs-toggle="collapse" data-bs-target="#stu-num-{{ m.id }}"
+                        title="تعديل رقم الطالب في الجهاز">
+                  <i class="bi bi-pencil-square"></i>
+                </button>
+                <form method="POST" id="stu-num-{{ m.id }}" class="collapse mt-1"
+                      action="{{ url_for('attendance_devices.change_mapping_number', mapping_id=m.id) }}"
+                      onsubmit="return confirm('سيتم تعديل رقم هذا الطالب في جميع ربطاته بأجهزة المدرسة.
+
+تنبيه: التعديل يتم في قاعدة البيانات فقط، ولا يغيّر تسجيل الطالب على الجهاز نفسه. قد تحتاج إلى استخدام زر «إرسال» لتسجيله بالرقم الجديد، ويبقى المستخدم المسجل بالرقم القديم على الجهاز (مع بصمته/وجهه) حتى يُحذف منه.
+
+متابعة؟')">
+                  <div class="input-group input-group-sm" style="min-width:210px">
+                    <input type="number" name="employee_no_string" class="form-control"
+                           min="1" max="999999999" step="1" required
+                           value="{{ m.employee_no_string }}">
+                    <button type="submit" class="btn btn-outline-primary">تعديل رقم الطالب في الجهاز</button>
+                  </div>
+                </form>
+              </td>
               <td>{{ m.student.full_name if m.student else '—' }}</td>
               <td class="text-muted small">{{ m.student.student_id if m.student else '—' }}</td>
               <td>

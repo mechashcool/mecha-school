@@ -189,13 +189,17 @@
         <p class="text-muted small mb-3">
           <i class="bi bi-info-circle me-1"></i>سيتم إنشاء رقم الطالب على جهاز الحضور تلقائياً.
         </p>
+        {# Default binding (first display only; a re-rendered POST keeps the
+           operator's choice): one device → pre-selected, several → all. #}
+        {% set dev_default = request.method != 'POST' %}
+        {% set dev_all_checked = active_devices|length > 1 and (sf.get('all_devices') == '1' or dev_default) %}
         <div class="row g-3 align-items-end">
           <div class="col-md-{{ '12' if active_devices|length == 1 else '9' }}">
             <label class="form-label">اختيار الجهاز</label>
-            <select name="device_id" class="form-select" id="deviceSelect">
+            <select name="device_id" class="form-select" id="deviceSelect" {{ 'disabled' if dev_all_checked }}>
               <option value="">— اختر الجهاز —</option>
               {% for dev in active_devices %}
-              <option value="{{ dev.id }}" {{ 'selected' if sf.get('device_id') == dev.id|string }}>{{ dev.name }}</option>
+              <option value="{{ dev.id }}" {{ 'selected' if sf.get('device_id') == dev.id|string or (dev_default and active_devices|length == 1) }}>{{ dev.name }}</option>
               {% endfor %}
             </select>
           </div>
@@ -203,7 +207,7 @@
           <div class="col-md-3 d-flex align-items-end pb-1">
             <div class="form-check">
               <input class="form-check-input" type="checkbox" name="all_devices" value="1"
-                     id="allDevicesCb" {{ 'checked' if sf.get('all_devices') == '1' }}
+                     id="allDevicesCb" {{ 'checked' if dev_all_checked }}
                      onchange="document.getElementById('deviceSelect').disabled = this.checked">
               <label class="form-check-label small" for="allDevicesCb">ربط بكل الأجهزة</label>
             </div>
