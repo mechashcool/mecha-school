@@ -164,21 +164,13 @@
             <tr id="stu-row-{{ m.id }}">
               <td>
                 <code>{{ m.employee_no_string }}</code>
-                <button type="button" class="btn btn-link btn-sm p-0 ms-1"
-                        data-bs-toggle="collapse" data-bs-target="#stu-num-{{ m.id }}"
-                        title="تعديل رقم الطالب في الجهاز">
+                <button type="button" class="btn btn-link btn-sm p-0 ms-1 stu-num-edit-btn"
+                        data-action="{{ url_for('attendance_devices.change_mapping_number', mapping_id=m.id) }}"
+                        data-number="{{ m.employee_no_string }}"
+                        data-student="{{ m.student.full_name if m.student else '' }}"
+                        title="تعديل رقم الطالب في الجهاز" aria-label="تعديل رقم الطالب في الجهاز">
                   <i class="bi bi-pencil-square"></i>
                 </button>
-                <form method="POST" id="stu-num-{{ m.id }}" class="collapse mt-1"
-                      action="{{ url_for('attendance_devices.change_mapping_number', mapping_id=m.id) }}">
-                  <div class="input-group input-group-sm" style="min-width:210px">
-                    <input type="number" name="employee_no_string" class="form-control"
-                           min="1" max="999999999" step="1" required
-                           value="{{ m.employee_no_string }}">
-                    <button type="submit" class="btn btn-outline-primary"
-                            data-confirm="سيتم حفظ هذا الرقم لهذا الطالب في جميع ربطاته بأجهزة المدرسة.&#10;&#10;تنبيه: الحفظ يتم في قاعدة البيانات فقط، ولا يغيّر تسجيل الطالب على الجهاز نفسه. استخدم زر «إرسال» بعد الحفظ لتسجيله بالرقم الجديد، ويبقى المستخدم المسجل بالرقم القديم على الجهاز (مع بصمته/وجهه) حتى يُحذف منه.&#10;&#10;متابعة؟">تعديل رقم الطالب في الجهاز</button>
-                  </div>
-                </form>
               </td>
               <td>{{ m.student.full_name if m.student else '—' }}</td>
               <td class="text-muted small">{{ m.student.student_id if m.student else '—' }}</td>
@@ -377,6 +369,35 @@
 {% endif %}{# /scope employees or mixed #}
 
 
+{# Edit student device number #}
+<div class="modal fade" id="numEditModal" tabindex="-1" aria-labelledby="numEditTitle" aria-hidden="true">
+  <div class="modal-dialog">
+    <form method="POST" id="numEditForm" class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="numEditTitle">تعديل رقم الطالب في الجهاز</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-2">الطالب: <strong id="numEditStudent">—</strong></p>
+        <p class="small text-muted mb-3">الرقم الحالي: <code id="numEditCurrent">—</code></p>
+        <label for="numEditInput" class="form-label fw-bold">رقم الطالب في الجهاز</label>
+        <input type="text" id="numEditInput" name="employee_no_string"
+               class="form-control form-control-lg mb-3" dir="ltr"
+               inputmode="numeric" pattern="[0-9٠-٩]+" maxlength="9"
+               autocomplete="off" required>
+        <div class="alert alert-warning small mb-0" role="alert">
+          <p class="mb-2">تنبيه: احذف تسجيل الطالب من جهاز الحضور بالرقم القديم أولًا، وليس ربطه بالنظام. بعد حفظ الرقم الجديد اضغط «إرسال» لإعادة تسجيله. حذف التسجيل من الجهاز قد يزيل بيانات بصمته/وجهه. تغيير الرقم لا يحذف ولا يرسل تلقائيًا.</p>
+          <p class="mb-0">يُطبَّق الرقم الجديد على جميع ربطات هذا الطالب بأجهزة المدرسة، وليس هذا الجهاز فقط؛ لذلك نفّذ هذه الخطوات اليدوية على كل جهاز مرتبط بالطالب.</p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+        <button type="submit" class="btn btn-primary" id="numEditSave">حفظ الرقم</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 {# Toast #}
 <div class="position-fixed bottom-0 start-0 p-3" style="z-index:1100">
   <div id="syncToast" class="toast align-items-center text-white border-0" role="alert">
@@ -529,6 +550,44 @@
         statusCheckBtn.disabled = false;
         statusCheckBtn.innerHTML = '<i class="bi bi-radar me-1"></i>فحص الاتصال';
       }
+    });
+  }
+
+  /* ── Edit student device number (dialog) ─────────────────────────────── */
+  const numEditModalEl = document.getElementById('numEditModal');
+  if (numEditModalEl) {
+    const numEditModal = bootstrap.Modal.getOrCreateInstance(numEditModalEl);
+    const numEditForm  = document.getElementById('numEditForm');
+    const numEditInput = document.getElementById('numEditInput');
+    const numEditSave  = document.getElementById('numEditSave');
+
+    document.querySelectorAll('.stu-num-edit-btn').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        if (!this.dataset.action) return;
+        numEditForm.setAttribute('action', this.dataset.action);
+        numEditInput.value = this.dataset.number || '';
+        document.getElementById('numEditCurrent').textContent = this.dataset.number || '—';
+        document.getElementById('numEditStudent').textContent = this.dataset.student || '—';
+        numEditSave.disabled = false;
+        numEditModal.show();
+      });
+    });
+    numEditModalEl.addEventListener('shown.bs.modal', function () {
+      numEditInput.focus();
+      numEditInput.select();
+    });
+    numEditModalEl.addEventListener('hidden.bs.modal', function () {
+      numEditForm.removeAttribute('action');
+      numEditInput.value = '';
+    });
+    numEditForm.addEventListener('submit', function (e) {
+      // Only a dialog opened from a pencil has a target; block double submits.
+      if (!numEditForm.getAttribute('action') || numEditSave.disabled) {
+        e.preventDefault();
+        return;
+      }
+      numEditSave.disabled = true;
     });
   }
 

@@ -242,6 +242,93 @@ class StudentDeviceNumberBindingTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(self._numbers('student_a1'), {d1: '9', d2: '9'})
 
+    def test_number_edit_dialog_saves_typed_value(self):
+        """Pencil → dialog with the current number → type 11 → save posts 11."""
+        import html as _html, json, os, re, shutil, subprocess, tempfile
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('node is required to execute the page script')
+
+        dev = self._device('a', 'd1')
+        m1 = self._map('a', dev, 'student_a1', '10')
+        client = self._client('a')
+        page = client.get(f'/attendance-devices/{dev}/mappings').get_data(as_text=True)
+
+        pencil = re.search(r'<button type="button"[^>]*stu-num-edit-btn[^>]*>', page, re.S).group(0)
+        action = _html.unescape(re.search(r'data-action="([^"]+)"', pencil).group(1))
+        self.assertIn('data-number="10"', pencil)
+        self.assertIn('<label for="numEditInput" class="form-label fw-bold">رقم الطالب في الجهاز</label>', page)
+        self.assertIn('تنبيه: احذف تسجيل الطالب من جهاز الحضور بالرقم القديم أولًا', page)
+        dialog = page[page.index('id="numEditModal"'):]
+        dialog = dialog[:dialog.index('</form>')]
+        self.assertEqual(dialog.count('<form'), 1, 'dialog form must not be nested')
+        script = next(s for s in re.findall(r'<script>(.*?)</script>', page, re.S)
+                      if 'numEditModal' in s)
+
+        harness = r"""
+const fs = require('fs');
+const cfg = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const els = {}, log = [];
+function el(id) { const e = {id, className: '', innerHTML: '', textContent: '', value: '', disabled: false,
+  dataset: {}, options: [], attrs: {}, listeners: {},
+  addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); },
+  fire(t, ev) { (this.listeners[t] || []).forEach(fn => fn.call(this, ev)); },
+  setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k] || null; },
+  removeAttribute(k) { delete this.attrs[k]; },
+  focus() { log.push('focus'); }, select() { log.push('select'); },
+  querySelector() { return null; }, classList: {add() {}, remove() {}}}; return e; }
+const pencil = el('pencil');
+pencil.dataset = {action: cfg.action, number: '10', student: 'Student a1'};
+global.document = {getElementById(id) { return els[id] || (els[id] = el(id)); },
+  querySelector() { return null; },
+  querySelectorAll(sel) { return sel === '.stu-num-edit-btn' ? [pencil] : []; }};
+global.window = {addEventListener() {}, removeEventListener() {}};
+global.bootstrap = {Toast: function () { this.show = function () {}; },
+  Modal: {getOrCreateInstance(m) { return {show() { log.push('show'); m.fire('shown.bs.modal'); }}; }}};
+global.fetch = async function () { log.push('fetch'); return {status: 500, json: async () => null}; };
+eval(cfg.script);
+const modal = document.getElementById('numEditModal'), form = document.getElementById('numEditForm'),
+      input = document.getElementById('numEditInput');
+const ev = () => ({prevented: false, preventDefault() { this.prevented = true; }});
+pencil.fire('click', ev());
+const opened = {value: input.value, action: form.getAttribute('action'),
+                current: document.getElementById('numEditCurrent').textContent};
+modal.fire('hidden.bs.modal');                       // cancel
+const afterCancel = {action: form.getAttribute('action'), value: input.value};
+pencil.fire('click', ev());
+input.value = '11';                                  // operator types the new number
+const submit = ev(); form.fire('submit', submit);
+const second = ev(); form.fire('submit', second);    // double click on save
+console.log(JSON.stringify({log, opened, afterCancel, submitPrevented: submit.prevented,
+  secondPrevented: second.prevented, action: form.getAttribute('action'), value: input.value}));
+"""
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, 'h.js'), 'w', encoding='utf-8') as fh:
+                fh.write(harness)
+            with open(os.path.join(tmp, 'cfg.json'), 'w', encoding='utf-8') as fh:
+                json.dump({'action': action, 'script': script}, fh)
+            run = subprocess.run([node, os.path.join(tmp, 'h.js'), os.path.join(tmp, 'cfg.json')],
+                                 capture_output=True, text=True, encoding='utf-8', timeout=60)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        out = json.loads(run.stdout.strip().splitlines()[-1])
+
+        self.assertEqual(out['opened'], {'value': '10', 'action': action, 'current': '10'})
+        self.assertIn('focus', out['log'])
+        self.assertIn('select', out['log'])
+        self.assertNotIn('fetch', out['log'])
+        self.assertEqual(out['afterCancel'], {'action': None, 'value': ''})
+        self.assertEqual(self._numbers('student_a1'), {dev: '10'}, 'open/cancel changes nothing')
+        self.assertFalse(out['submitPrevented'])
+        self.assertTrue(out['secondPrevented'])
+
+        # The browser would now POST the form: the typed value to the form action.
+        resp = client.post(out['action'], data={'employee_no_string': out['value']})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(self._numbers('student_a1'), {dev: '11'})
+
     def test_sync_all_sequential_requests_continue_after_one_failure(self):
         """Real endpoints (device send mocked) + the page's real syncAll script.
 
