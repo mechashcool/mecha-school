@@ -9,6 +9,7 @@ Covers
 """
 import unittest
 from datetime import date
+from unittest import mock
 from uuid import uuid4
 
 from sqlalchemy import text
@@ -224,11 +225,117 @@ class StudentDeviceNumberBindingTest(unittest.TestCase):
         # Same number in another school must not count as a collision.
         db_b = self._device('b', 'b1')
         self._map('b', db_b, 'student_b1', '9')
-        resp = self._client('a').post(f'/attendance-devices/mappings/{m1}/change-number',
-                                      data={'employee_no_string': '9'})
+        # Manual save: the typed number is stored as-is, with no allocation and
+        # nothing sent to a device.
+        with mock.patch('app.utils.device_numbering._next_device_number',
+                        side_effect=AssertionError('allocation must not run')),              mock.patch('app.services.aiface_sync.sync_person_to_device') as send:
+            resp = self._client('a').post(f'/attendance-devices/mappings/{m1}/change-number',
+                                          data={'employee_no_string': '9'})
+            send.assert_not_called()
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(self._numbers('student_a1'), {d1: '9', d2: '9'})
         self.assertEqual(self._numbers('student_b1'), {db_b: '9'})
+        self.assertEqual(self._numbers('student_a2'), {})
+        # A non-decimal digit is rejected cleanly (previously an HTTP 500).
+        resp = self._client('a').post(f'/attendance-devices/mappings/{m1}/change-number',
+                                      data={'employee_no_string': '²'})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(self._numbers('student_a1'), {d1: '9', d2: '9'})
+
+    def test_sync_all_sequential_requests_continue_after_one_failure(self):
+        """Real endpoints (device send mocked) + the page's real syncAll script.
+
+        success → failure → success: the third student is still attempted, the
+        summary is accurate and a second click does not start a second run.
+        """
+        import json, os, re, shutil, subprocess, tempfile
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('node is required to execute the page script')
+
+        dev = self._device('a', 'd1')
+        for key, number in (('student_a1', '1'), ('student_a2', '2'), ('student_a3', '3')):
+            self._map('a', dev, key, number)
+        client = self._client('a')
+        page = client.get(f'/attendance-devices/{dev}/mappings').get_data(as_text=True)
+        script = re.findall(r'<script>(.*?)</script>', page, re.S)
+        script = next(s for s in script if 'syncAllStudentsBtn' in s)
+
+        results = [
+            {'ok': True, 'message': 'ok'},
+            {'ok': False, 'error_type': 'device_rejected_user',
+             'error_message_ar': 'الجهاز رفض بيانات المستخدم'},
+            {'ok': True, 'message': 'ok'},
+        ]
+        responses = []
+        with mock.patch('app.services.aiface_sync.sync_person_to_device',
+                        side_effect=results) as send:
+            plan = client.post(f'/attendance-devices/{dev}/aiface-sync-all', json={'plan': True})
+            self.assertEqual(send.call_count, 0, 'plan mode must not send anything')
+            responses.append({'status': plan.status_code, 'data': plan.get_json()})
+            for item in plan.get_json()['items']:
+                r = client.post(f'/attendance-devices/{dev}/aiface-sync-student',
+                                json={'mapping_id': item['mapping_id']})
+                responses.append({'status': r.status_code, 'data': r.get_json()})
+        self.assertEqual([c.kwargs['enrollid'] for c in send.call_args_list], [1, 2, 3])
+        self.assertEqual([r['status'] for r in responses], [200, 200, 502, 200])
+
+        harness = r"""
+const fs = require('fs');
+const cfg = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const els = {}, calls = [];
+function el(id) { return {id, className: '', innerHTML: '', textContent: '', disabled: false,
+  dataset: {deviceId: String(cfg.deviceId)}, _click: null, options: [],
+  addEventListener(t, fn) { if (t === 'click') this._click = fn; },
+  querySelector() { return null; }, classList: {add() {}, remove() {}}}; }
+global.document = {getElementById(id) { return els[id] || (els[id] = el(id)); },
+  querySelector() { return null; }, querySelectorAll() { return []; }};
+global.window = {addEventListener() {}, removeEventListener() {}};
+global.bootstrap = {Toast: function () { this.show = function () {}; }};
+let n = 0;
+global.fetch = async function (url, init) {
+  const r = cfg.responses[n++]; calls.push([url, JSON.parse(init.body)]);
+  return {status: r.status, json: async () => r.data};
+};
+eval(cfg.script);
+const btn = document.getElementById('syncAllStudentsBtn');
+btn.innerHTML = 'ORIGINAL';
+btn._click.call(btn);
+btn._click.call(btn);   // duplicate start while running
+(async () => {
+  const box = document.getElementById('syncAllSummary');
+  for (let k = 0; k < 500 && !box.innerHTML.includes('btn-close'); k++)
+    await new Promise(r => setTimeout(r, 10));
+  console.log(JSON.stringify({calls, summary: box.innerHTML,
+                              disabled: btn.disabled, label: btn.innerHTML}));
+})();
+"""
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, 'h.js'), 'w', encoding='utf-8') as fh:
+                fh.write(harness)
+            with open(os.path.join(tmp, 'cfg.json'), 'w', encoding='utf-8') as fh:
+                json.dump({'deviceId': dev, 'script': script, 'responses': responses}, fh)
+            run = subprocess.run([node, os.path.join(tmp, 'h.js'), os.path.join(tmp, 'cfg.json')],
+                                 capture_output=True, text=True, encoding='utf-8', timeout=60)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        out = json.loads(run.stdout.strip().splitlines()[-1])
+
+        urls = [c[0] for c in out['calls']]
+        self.assertEqual(urls, [f'/attendance-devices/{dev}/aiface-sync-all']
+                         + [f'/attendance-devices/{dev}/aiface-sync-student'] * 3)
+        summary = out['summary']
+        self.assertIn('تمت معالجة 3 من 3', summary)
+        self.assertIn('نجاح مؤكَّد من الجهاز: 2', summary)
+        self.assertIn('فشل: 1', summary)
+        self.assertIn('Student a2 — رقم الجهاز <code>2</code> — الجهاز رفض بيانات المستخدم', summary)
+        self.assertNotIn('لم تتم محاولة', summary)
+        self.assertFalse(out['disabled'])
+        self.assertEqual(out['label'], 'ORIGINAL')
+        # Sending never renumbers.
+        self.assertEqual(self._numbers('student_a3'), {dev: '3'})
 
     def test_change_number_collision_on_one_device_changes_nothing(self):
         d1, d2 = self._device('a', 'd1'), self._device('a', 'd2')

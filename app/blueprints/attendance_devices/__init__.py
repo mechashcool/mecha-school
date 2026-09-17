@@ -1035,6 +1035,18 @@ def ajax_status_check(device_id):
     })
 
 
+_INVALID_NUMBER_AR = 'رقم الجهاز المخزّن غير صالح — يرجى تعديله ثم الإرسال'
+
+
+def _stored_enrollid(number):
+    """Stored device number as the int sent to the device, or None if unusable."""
+    try:
+        value = int((number or '').strip())
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
 @attendance_devices_bp.route('/<int:device_id>/aiface-sync-student', methods=['POST'])
 @login_required
 @permission_required('manage_attendance_devices')
@@ -1057,8 +1069,12 @@ def ajax_aiface_sync_student(device_id):
     ).first_or_404()
 
     student = db.session.get(Student, mapping.student_id)
-    if not student:
+    if not student or student.school_id != dev.school_id:
         return jsonify({'ok': False, 'error': 'الطالب غير موجود'}), 404
+    enrollid = _stored_enrollid(mapping.employee_no_string)
+    if enrollid is None:
+        return jsonify({'ok': False, 'error_type': 'invalid_number',
+                        'error': _INVALID_NUMBER_AR}), 400
 
     current_app.logger.info(
         '[aiface] sync-student request device_id=%d device_scope=%s device_sn=%s '
@@ -1068,7 +1084,7 @@ def ajax_aiface_sync_student(device_id):
 
     result = sync_person_to_device(
         dev,
-        enrollid=int(mapping.employee_no_string),
+        enrollid=enrollid,
         name=student.full_name,
         photo=student.photo,
         entity_type='student',
@@ -1107,8 +1123,12 @@ def ajax_aiface_sync_employee(device_id):
     ).first_or_404()
 
     employee = db.session.get(Employee, mapping.employee_id)
-    if not employee:
+    if not employee or employee.school_id != dev.school_id:
         return jsonify({'ok': False, 'error': 'الموظف غير موجود'}), 404
+    enrollid = _stored_enrollid(mapping.enrollment_no)
+    if enrollid is None:
+        return jsonify({'ok': False, 'error_type': 'invalid_number',
+                        'error': _INVALID_NUMBER_AR}), 400
 
     current_app.logger.info(
         '[aiface] sync-employee request device_id=%d device_scope=%s device_sn=%s '
@@ -1118,7 +1138,7 @@ def ajax_aiface_sync_employee(device_id):
 
     result = sync_person_to_device(
         dev,
-        enrollid=int(mapping.enrollment_no),
+        enrollid=enrollid,
         name=employee.full_name,
         photo=employee.photo,
         entity_type='employee',
@@ -1136,69 +1156,121 @@ def ajax_aiface_sync_employee(device_id):
 @permission_required('manage_attendance_devices')
 @action_required('attendance_devices', 'sync')
 def ajax_aiface_sync_all(device_id):
-    """AJAX: push all active mappings for this device (scope-aware)."""
+    """AJAX: push all active mappings for this device (scope-aware).
+
+    Each person is sent with the existing single-person operation
+    (``sync_person_to_device``) using the CURRENTLY stored number — nothing is
+    allocated or renumbered. One person's failure never stops the others; only
+    a device-wide disconnect stops the run, and the persons not yet attempted
+    are reported. A success means the device confirmed ``setuserinfo``.
+    """
     from app.services.aiface_sync import sync_person_to_device
 
     school = _school_or_abort()
     dev    = _get_device_or_404(device_id, school)
     scope  = getattr(dev, 'device_scope', 'students')
 
-    succeeded = []
-    failed    = []
+    work    = []   # persons to send, in order
+    skipped = []   # not sent: invalid data / other school
 
-    def _run_sync(enrollid_str, name, photo, entity_type, card=None):
-        res = sync_person_to_device(dev, int(enrollid_str), name, photo, entity_type,
-                                    card=card)
-        if res.get('offline'):
-            return res  # propagate offline signal up
-        if res['ok']:
-            succeeded.append(enrollid_str)
-        else:
-            failed.append({'enrollid': enrollid_str, 'name': name,
-                           'error': res.get('message', '')})
-        return None
+    def _row(mapping_id, entity_type, number, name):
+        return {'mapping_id': mapping_id, 'entity_type': entity_type,
+                'enrollid': number, 'name': name or '—'}
+
+    def _queue(mapping, entity_type, number, person, photo=None, card=None):
+        row = _row(mapping.id, entity_type, number,
+                   person.full_name if person is not None else None)
+        # A person of another school must never be sent, nor named in the reply.
+        if person is None or person.school_id != dev.school_id:
+            row['name'] = '—'
+            row['reason'] = 'السجل غير موجود أو لا ينتمي لمدرسة هذا الجهاز'
+            skipped.append(row)
+            return
+        enrollid = _stored_enrollid(number)
+        if enrollid is None:
+            row['reason'] = f'رقم الجهاز المخزّن غير صالح ({number or "فارغ"}) — يرجى تعديله ثم الإرسال'
+            skipped.append(row)
+            return
+        work.append({'row': row, 'enrollid': enrollid, 'photo': photo, 'card': card})
 
     if scope in ('students', 'mixed'):
-        active_mappings = (DeviceStudentMapping.query
-                           .filter_by(device_id=dev.id, school_id=school.id, is_active=True)
-                           .all())
-        for m in active_mappings:
+        for m in (DeviceStudentMapping.query
+                  .filter_by(device_id=dev.id, school_id=school.id, is_active=True)
+                  .order_by(DeviceStudentMapping.id).all()):
             student = db.session.get(Student, m.student_id)
-            if not student:
-                continue
-            offline_res = _run_sync(m.employee_no_string, student.full_name,
-                                    student.photo, 'student',
-                                    card=student.rfid_tag_id)
-            if offline_res:
-                return jsonify({'ok': False, 'offline': True,
-                                'message': offline_res.get('message')}), 503
+            _queue(m, 'student', m.employee_no_string, student,
+                   photo=student.photo if student else None,
+                   card=student.rfid_tag_id if student else None)
 
     if scope in ('employees', 'mixed'):
-        active_emp_mappings = (DeviceEmployeeMapping.query
-                               .filter_by(device_id=dev.id, school_id=school.id, is_active=True)
-                               .all())
-        for m in active_emp_mappings:
+        for m in (DeviceEmployeeMapping.query
+                  .filter_by(device_id=dev.id, school_id=school.id, is_active=True)
+                  .order_by(DeviceEmployeeMapping.id).all()):
             employee = db.session.get(Employee, m.employee_id)
-            if not employee:
-                continue
-            offline_res = _run_sync(m.enrollment_no, employee.full_name,
-                                    employee.photo, 'employee')
-            if offline_res:
-                return jsonify({'ok': False, 'offline': True,
-                                'message': offline_res.get('message')}), 503
+            _queue(m, 'employee', m.enrollment_no, employee,
+                   photo=employee.photo if employee else None)
 
-    total = len(succeeded) + len(failed)
-    if total == 0:
+    if not work and not skipped:
         return jsonify({'ok': False, 'message': 'لا توجد ربطات نشطة لهذا الجهاز'}), 400
 
-    return jsonify({
-        'ok':        len(failed) == 0,
-        'succeeded': len(succeeded),
-        'failed':    len(failed),
-        'errors':    failed,
-        'message':   (f'تم إرسال {len(succeeded)} شخص بنجاح'
-                      + (f'، فشل {len(failed)}' if failed else '')),
-    })
+    # Plan mode: return the complete eligible list without sending anything.
+    # The page then sends each person through the single-person endpoints, one
+    # request at a time, so no request has to outlive the proxy timeout.
+    if (request.get_json(silent=True) or {}).get('plan'):
+        return jsonify({'ok': True, 'total': len(work) + len(skipped),
+                        'items': [w['row'] for w in work],
+                        'skipped_items': skipped})
+
+    succeeded, failed, unattempted = [], [], []
+    device_error = None
+    for index, item in enumerate(work):
+        row = item['row']
+        try:
+            res = sync_person_to_device(dev, item['enrollid'], row['name'], item['photo'],
+                                        row['entity_type'], card=item['card'])
+        except Exception:
+            current_app.logger.exception(
+                '[aiface] sync-all unexpected error device_id=%d mapping_id=%d',
+                dev.id, row['mapping_id'])
+            res = {'ok': False, 'error_message_ar': 'خطأ داخلي أثناء إرسال البيانات للجهاز'}
+
+        if res.get('ok'):
+            succeeded.append(row)
+            continue
+        failed.append({**row, 'reason': (res.get('error_message_ar')
+                                         or res.get('message') or 'فشل الإرسال')})
+        if res.get('offline'):
+            device_error = res.get('error_message_ar') or res.get('message') or 'الجهاز غير متصل'
+            unattempted = [w['row'] for w in work[index + 1:]]
+            break
+
+    parts = [f'تم إرسال {len(succeeded)} بنجاح (أكّد الجهاز الاستلام)']
+    if failed:
+        parts.append(f'فشل {len(failed)}')
+    if skipped:
+        parts.append(f'تم تخطي {len(skipped)}')
+    if unattempted:
+        parts.append(f'لم تتم محاولة {len(unattempted)} بسبب انقطاع الجهاز')
+
+    body = {
+        'ok':           not (failed or skipped or unattempted),
+        'offline':      device_error is not None,
+        'device_error': device_error,
+        'succeeded':    len(succeeded),
+        'failed':       len(failed),
+        'skipped':      len(skipped),
+        'unattempted':  len(unattempted),
+        'succeeded_items':   succeeded,
+        'failed_items':      failed,
+        'skipped_items':     skipped,
+        'unattempted_items': unattempted,
+        # Kept for existing consumers of this endpoint.
+        'errors':       [{'enrollid': r['enrollid'], 'name': r['name'], 'error': r['reason']}
+                         for r in failed + skipped],
+        'message':      '، '.join(parts),
+    }
+    # 503 only when the device was unreachable before anything was delivered.
+    return jsonify(body), (503 if device_error and not succeeded else 200)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -42,6 +42,7 @@
 </div>
 
 {# Status check result panel (hidden until button clicked) #}
+<div id="syncAllSummary" class="d-none mb-3" aria-live="polite"></div>
 <div id="statusPanel" class="alert alert-info alert-dismissible d-none mb-3" role="alert">
   <div id="statusPanelBody"></div>
   <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
@@ -169,17 +170,13 @@
                   <i class="bi bi-pencil-square"></i>
                 </button>
                 <form method="POST" id="stu-num-{{ m.id }}" class="collapse mt-1"
-                      action="{{ url_for('attendance_devices.change_mapping_number', mapping_id=m.id) }}"
-                      onsubmit="return confirm('سيتم تعديل رقم هذا الطالب في جميع ربطاته بأجهزة المدرسة.
-
-تنبيه: التعديل يتم في قاعدة البيانات فقط، ولا يغيّر تسجيل الطالب على الجهاز نفسه. قد تحتاج إلى استخدام زر «إرسال» لتسجيله بالرقم الجديد، ويبقى المستخدم المسجل بالرقم القديم على الجهاز (مع بصمته/وجهه) حتى يُحذف منه.
-
-متابعة؟')">
+                      action="{{ url_for('attendance_devices.change_mapping_number', mapping_id=m.id) }}">
                   <div class="input-group input-group-sm" style="min-width:210px">
                     <input type="number" name="employee_no_string" class="form-control"
                            min="1" max="999999999" step="1" required
                            value="{{ m.employee_no_string }}">
-                    <button type="submit" class="btn btn-outline-primary">تعديل رقم الطالب في الجهاز</button>
+                    <button type="submit" class="btn btn-outline-primary"
+                            data-confirm="سيتم حفظ هذا الرقم لهذا الطالب في جميع ربطاته بأجهزة المدرسة.&#10;&#10;تنبيه: الحفظ يتم في قاعدة البيانات فقط، ولا يغيّر تسجيل الطالب على الجهاز نفسه. استخدم زر «إرسال» بعد الحفظ لتسجيله بالرقم الجديد، ويبقى المستخدم المسجل بالرقم القديم على الجهاز (مع بصمته/وجهه) حتى يُحذف منه.&#10;&#10;متابعة؟">تعديل رقم الطالب في الجهاز</button>
                   </div>
                 </form>
               </td>
@@ -599,22 +596,179 @@
   });
 
   /* ── Sync all ────────────────────────────────────────────────────────────── */
-  async function syncAll(btn, deviceId) {
-    btn.disabled = true;
-    const original = btn.innerHTML;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> جاري الإرسال…';
+  /* The complete eligible list comes from the server (plan mode, nothing is
+     sent), then each person is sent through the SAME single-person endpoint as
+     the row «إرسال» button — one request at a time, so no request outlives the
+     proxy timeout. Results accumulate in the summary panel as they arrive. */
+  const PER_PERSON_TIMEOUT_MS = 115000;   // below nginx proxy_read_timeout (120 s)
+  let syncAllRunning = false;
+
+  function escHtml(v) {
+    return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function rowStatus(r, state) {
+    setStatus((r.entity_type === 'employee' ? 'emp' : 'stu') + '-sync-status-' + r.mapping_id, state);
+  }
+
+  function renderSyncAllSummary(st) {
+    const box = document.getElementById('syncAllSummary');
+    if (!box) return;
+
+    function list(title, items, withReason) {
+      if (!items.length) return '';
+      return '<div class="mt-2"><strong>' + escHtml(title) + ' (' + items.length + '):</strong>'
+        + '<ul class="mb-0 small">' + items.map(function (r) {
+            return '<li>' + escHtml(r.name) + ' — رقم الجهاز <code>' + escHtml(r.enrollid) + '</code>'
+              + (withReason && r.reason ? ' — ' + escHtml(r.reason) : '') + '</li>';
+          }).join('') + '</ul></div>';
+    }
+
+    const processed = st.succeeded.length + st.failed.length + st.unconfirmed.length + st.skipped.length;
+    const problems  = st.failed.length + st.unconfirmed.length + st.skipped.length + st.unattempted.length;
+    let html = '<div class="d-flex justify-content-between align-items-start">'
+      + '<strong>نتيجة إرسال الكل للجهاز'
+      + (st.running ? ' <span class="spinner-border spinner-border-sm ms-1"></span>' : '') + '</strong>'
+      + (st.running ? '' : '<button type="button" class="btn-close" aria-label="إغلاق"></button>') + '</div>'
+      + '<div>تمت معالجة ' + processed + ' من ' + st.total
+      + ' — نجاح مؤكَّد من الجهاز: ' + st.succeeded.length
+      + '، فشل: ' + st.failed.length
+      + '، غير مؤكَّد: ' + st.unconfirmed.length
+      + '، تم تخطي: ' + st.skipped.length
+      + (st.unattempted.length ? '، لم تتم محاولة: ' + st.unattempted.length : '') + '</div>';
+    if (st.running) {
+      html += '<div class="small text-muted mt-1">يرجى إبقاء هذه الصفحة مفتوحة حتى ينتهي الإرسال.</div>';
+    }
+    if (st.stopReason) {
+      html += '<div class="mt-2 text-danger"><i class="bi bi-exclamation-triangle-fill me-1"></i>'
+        + escHtml(st.stopReason) + '</div>';
+    }
+    html += list('فشل الإرسال', st.failed, true)
+         +  list('غير مؤكَّد — تحقق من الجهاز قبل إعادة الإرسال', st.unconfirmed, true)
+         +  list('تم التخطي', st.skipped, true)
+         +  list('لم تتم محاولة إرسالهم', st.unattempted, false);
+    if (!st.running && problems) {
+      html += '<div class="mt-2 small text-muted">صحّح البيانات ثم أعد إرسال كل شخص بزر «إرسال» في صفه.</div>';
+    }
+
+    box.className = 'alert mb-3 ' + (st.running ? 'alert-info' : (problems ? 'alert-warning' : 'alert-success'));
+    box.innerHTML = html;
+    const closeBtn = box.querySelector('.btn-close');
+    if (closeBtn) closeBtn.addEventListener('click', function () {
+      box.className = 'd-none mb-3';
+      box.innerHTML = '';
+    });
+  }
+
+  // POST JSON with a client-side time limit. Returns {status, data}; data is
+  // null when the reply was not JSON (proxy error page, login redirect, …).
+  async function postJson(url, payload, timeoutMs) {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(function () { ctrl.abort(); }, timeoutMs);
     try {
-      const resp = await fetch(
-        '/attendance-devices/' + deviceId + '/aiface-sync-all',
-        {method: 'POST', headers: {'Content-Type': 'application/json'}}
-      );
-      const data = await resp.json();
-      showToast(data.message || (data.ok ? 'تم إرسال الكل' : 'فشل الإرسال'), data.ok);
-    } catch (err) {
-      showToast('خطأ في الاتصال بالخادم', false);
+      const resp = await fetch(url, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload), signal: ctrl.signal,
+      });
+      let data = null;
+      try { data = await resp.json(); } catch (_) {}
+      return {status: resp.status, data: data};
     } finally {
-      btn.disabled = false;
-      btn.innerHTML = original;
+      clearTimeout(timer);
+    }
+  }
+
+  // Classify one single-person reply. Returns {bucket, reason, stop}.
+  function classifySyncResult(res) {
+    const d = res.data;
+    if (d && d.ok) return {bucket: 'succeeded'};
+    if (!d) {
+      // No JSON reply: timeout, network/proxy error or expired session. The
+      // server may still be sending this person, so the outcome is unknown and
+      // nothing further is sent over it.
+      return {bucket: 'unconfirmed', stop: true,
+              reason: res.aborted ? 'انتهت مهلة الطلب — قد يكون الإرسال قد تم أو لا'
+                                  : 'لم يصل رد صالح من الخادم (HTTP ' + (res.status || '—') + ') — النتيجة غير معروفة'};
+    }
+    if (d.offline) {
+      // Device-wide disconnect. A disconnect after setuserinfo was sent (that
+      // reply carries deleteuser_result) leaves delivery unknown.
+      return {bucket: ('deleteuser_result' in d) ? 'unconfirmed' : 'failed', stop: true,
+              reason: d.error_message_ar || d.message || 'الجهاز غير متصل'};
+    }
+    if (d.error_type === 'setuserinfo_timeout') {
+      return {bucket: 'unconfirmed', reason: d.error_message_ar || d.message};
+    }
+    if (d.error_type === 'invalid_number') return {bucket: 'skipped', reason: d.error};
+    return {bucket: 'failed', reason: d.error_message_ar || d.error || d.message || 'فشل الإرسال'};
+  }
+
+  async function syncAll(btn, deviceId) {
+    if (syncAllRunning) return;
+    syncAllRunning = true;
+    const buttons = [document.getElementById('syncAllStudentsBtn'),
+                     document.getElementById('syncAllEmployeesBtn')].filter(Boolean);
+    const originals = buttons.map(function (b) { return b.innerHTML; });
+    buttons.forEach(function (b) { b.disabled = true; });
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> جاري الإرسال…';
+    const warnLeave = function (e) { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warnLeave);
+
+    const st = {running: true, total: 0, succeeded: [], failed: [], unconfirmed: [],
+                skipped: [], unattempted: [], stopReason: ''};
+    const base = '/attendance-devices/' + deviceId;
+    try {
+      // 1. Complete eligible list — this request sends nothing to the device.
+      let plan;
+      try {
+        plan = await postJson(base + '/aiface-sync-all', {plan: true}, 30000);
+      } catch (err) {
+        plan = {status: 0, data: null};
+      }
+      if (!plan.data || !plan.data.ok) {
+        showToast((plan.data && (plan.data.message || plan.data.error)) || 'تعذر تحميل قائمة الربطات', false);
+        return;
+      }
+      const items = plan.data.items || [];
+      st.skipped = (plan.data.skipped_items || []).slice();
+      st.total   = items.length + st.skipped.length;
+      st.skipped.forEach(function (r) { rowStatus(r, 'error'); });
+      renderSyncAllSummary(st);
+
+      // 2. One person per request, strictly sequential.
+      for (let i = 0; i < items.length; i++) {
+        const r = items[i];
+        const endpoint = base + (r.entity_type === 'employee' ? '/aiface-sync-employee' : '/aiface-sync-student');
+        rowStatus(r, 'loading');
+        let res;
+        try {
+          res = await postJson(endpoint, {mapping_id: r.mapping_id}, PER_PERSON_TIMEOUT_MS);
+        } catch (err) {
+          res = {status: 0, data: null, aborted: !!(err && err.name === 'AbortError')};
+        }
+        const out = classifySyncResult(res);
+        st[out.bucket].push(out.bucket === 'succeeded' ? r : Object.assign({}, r, {reason: out.reason}));
+        rowStatus(r, {succeeded: 'ok', unconfirmed: 'queued'}[out.bucket] || 'error');
+        if (out.stop) {
+          st.unattempted = items.slice(i + 1);
+          st.stopReason = (res.data && res.data.offline)
+            ? 'توقف الإرسال لأن الجهاز غير متصل: ' + out.reason
+            : 'توقف الإرسال لعدم وصول رد مؤكد من الخادم؛ لم تُرسل الأسماء المتبقية لتجنب تداخل الأوامر على الجهاز.';
+          break;
+        }
+        renderSyncAllSummary(st);
+      }
+    } finally {
+      st.running = false;
+      if (st.total) {
+        renderSyncAllSummary(st);
+        const clean = !(st.failed.length || st.unconfirmed.length || st.skipped.length || st.unattempted.length);
+        showToast(clean ? 'تم إرسال الكل وأكّد الجهاز الاستلام' : 'انتهى الإرسال مع وجود مشكلات — راجع الملخص', clean);
+      }
+      window.removeEventListener('beforeunload', warnLeave);
+      buttons.forEach(function (b, idx) { b.disabled = false; b.innerHTML = originals[idx]; });
+      syncAllRunning = false;
     }
   }
 

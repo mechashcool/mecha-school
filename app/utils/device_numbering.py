@@ -263,7 +263,8 @@ def change_student_device_number(student_id, school_id, new_number):
     from app.models import db, DeviceStudentMapping
 
     raw = (new_number or '').strip()
-    if not raw.isdigit() or int(raw) <= 0 or int(raw) > MAX_DEVICE_NUMBER:
+    # isdecimal, not isdigit: '²' passes isdigit but int('²') raises.
+    if not raw.isdecimal() or int(raw) <= 0 or int(raw) > MAX_DEVICE_NUMBER:
         raise DeviceNumberChangeError(
             f'رقم الطالب في الجهاز يجب أن يكون عدداً صحيحاً موجباً '
             f'لا يتجاوز {MAX_DEVICE_NUMBER}.')
