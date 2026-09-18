@@ -64,13 +64,21 @@ def create_shift():
     late_after_time   = _parse_time(request.form.get('late_after_time', ''))
     dismissal_time    = _parse_time(request.form.get('dismissal_time', ''))
 
+    # Lateness is OPTIONAL for institutes only (School.is_institute); a blank
+    # value means "no lateness for this shift". Schools keep the existing
+    # required-field validation unchanged.
+    lateness_optional = bool(getattr(school, 'is_institute', False))
+
     if not name:
         flash('اسم الشفت مطلوب.', 'danger')
         return redirect(url_for('admin.attendance_settings'))
-    if not start_time or not late_after_time:
+    if not start_time:
+        flash('وقت بداية الدوام مطلوب.', 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+    if late_after_time is None and not lateness_optional:
         flash('أوقات البداية والتأخر مطلوبة.', 'danger')
         return redirect(url_for('admin.attendance_settings'))
-    if late_after_time <= start_time:
+    if late_after_time is not None and late_after_time <= start_time:
         flash('وقت التأخر يجب أن يكون بعد وقت البداية.', 'warning')
         return redirect(url_for('admin.attendance_settings'))
 
@@ -83,10 +91,11 @@ def create_shift():
         return redirect(url_for('admin.attendance_settings'))
 
     # absent_after_time is LEGACY: it is never read for the auto-absence
-    # decision (School.shift_absent_after_time is), but the column is still
-    # NOT NULL, so give it a consistent value — the school-wide cutoff when one
-    # is configured, otherwise the shift's own late threshold as an inert
-    # placeholder.  Nothing reads it either way.
+    # decision (School.shift_absent_after_time is).  Populate it with the
+    # school-wide cutoff when one is configured, otherwise the shift's own late
+    # threshold as an inert placeholder.  When neither exists (an institute that
+    # left lateness blank) it stays NULL — no time is invented and start_time is
+    # never substituted.  Nothing reads it either way.
     legacy_absent = getattr(school, 'shift_absent_after_time', None) or late_after_time
 
     shift = AttendanceShift(
@@ -125,10 +134,17 @@ def edit_shift(shift_id):
     late_after_time   = _parse_time(request.form.get('late_after_time', ''))
     dismissal_time    = _parse_time(request.form.get('dismissal_time', ''))
 
-    if not start_time or not late_after_time:
+    # Lateness is OPTIONAL for institutes only; clearing the field switches
+    # lateness off for this shift. Schools keep the existing validation.
+    lateness_optional = bool(getattr(school, 'is_institute', False))
+
+    if not start_time:
+        flash('وقت بداية الدوام مطلوب.', 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+    if late_after_time is None and not lateness_optional:
         flash('أوقات البداية والتأخر مطلوبة.', 'danger')
         return redirect(url_for('admin.attendance_settings'))
-    if late_after_time <= start_time:
+    if late_after_time is not None and late_after_time <= start_time:
         flash('وقت التأخر يجب أن يكون بعد وقت البداية.', 'warning')
         return redirect(url_for('admin.attendance_settings'))
 

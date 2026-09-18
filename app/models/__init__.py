@@ -358,11 +358,15 @@ class AttendanceShift(db.Model):
                                   nullable=False, index=True)
     name              = db.Column(db.String(100), nullable=False)
     start_time        = db.Column(db.Time, nullable=False)
-    late_after_time   = db.Column(db.Time, nullable=False)
-    # LEGACY — historical per-shift cutoff. Kept NOT NULL and populated on
-    # create purely to satisfy the existing constraint; never read for
-    # behaviour.  See School.shift_absent_after_time.
-    absent_after_time = db.Column(db.Time, nullable=False)
+    # NULL = lateness is switched off for this shift.  Only an INSTITUTE can
+    # store NULL here: the school shift forms and their server-side validation
+    # still require a value, so existing schools are unaffected.
+    late_after_time   = db.Column(db.Time, nullable=True)
+    # LEGACY — historical per-shift cutoff, never read for behaviour (see
+    # School.shift_absent_after_time).  Nullable only because the create path
+    # derives it from late_after_time; when lateness is left blank there is no
+    # honest value to store and none is invented.
+    absent_after_time = db.Column(db.Time, nullable=True)
     dismissal_time    = db.Column(db.Time, nullable=True)
     is_active         = db.Column(db.Boolean, default=True, nullable=False,
                                   server_default=db.true())

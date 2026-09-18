@@ -421,6 +421,31 @@ def edit(school_id):
         # unrecognised) preserves the stored choice rather than resetting it.
         _posted_type = _parse_institution_type(request.form.get('institution_type'))
         if _posted_type is not None:
+            # Switching an institute back to "مدرسة" re-imposes the school rule
+            # that every shift has a lateness cutoff. Institute shifts may have
+            # none. Validate BEFORE assigning and report exactly which shifts
+            # need a time, instead of storing a school that silently runs with
+            # missing settings. Nothing is written and no time is invented.
+            if (school.is_institute
+                    and _posted_type == School.INSTITUTION_SCHOOL):
+                from app.models import AttendanceShift
+                incomplete = (AttendanceShift.query
+                              .execution_options(bypass_tenant_scope=True)
+                              .filter(AttendanceShift.school_id == school.id,
+                                      AttendanceShift.late_after_time.is_(None))
+                              .order_by(AttendanceShift.name)
+                              .all())
+                if incomplete:
+                    db.session.rollback()
+                    names = '، '.join(s.name for s in incomplete)
+                    flash(
+                        'لا يمكن التحويل إلى «مدرسة» قبل تحديد حد التأخر '
+                        f'للشفتات التالية: {names}. حدد حد التأخر لكل شفت '
+                        'من إعدادات الحضور ثم أعد المحاولة. '
+                        'لم يتم تغيير أي بيانات.',
+                        'danger')
+                    return render_template('schools/form.html',
+                                           school=School.query.get(school_id))
             school.institution_type = _posted_type
 
         # Attendance time thresholds

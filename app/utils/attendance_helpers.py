@@ -60,22 +60,27 @@ def determine_check_in_status(check_in_time, settings, shift=None):
     disables lateness everywhere it is the source (unified mode, and shiftless
     students in shift mode): the check below returns 'present'.
 
-    ``AttendanceShift.late_after_time`` is NOT NULL, so an institute running
-    shifts cannot switch lateness off by clearing a field.  For an institute
-    ONLY, the school-level threshold is therefore authoritative: when it is not
-    configured, student lateness is off and the shift time is not consulted.
-    When it IS configured, nothing changes — the existing priority (shift time
-    first, school time second) runs exactly as before.
+    For an institute running shifts there are two independent off switches, and
+    either one alone disables lateness:
 
-    `shift` is passed only by STUDENT check-in paths; employee attendance calls
-    this helper without one (app/blueprints/employees), so staff lateness,
-    payroll and every existing school are unaffected.  Stored shift times are
-    read-only here and are never modified.
+      * GLOBAL — the institute has no school-level ``att_late_threshold``.
+      * PER SHIFT — this shift's own ``late_after_time`` was left blank or
+        cleared (it is nullable for institutes; school forms still require it).
+
+    Neither ever falls back to the other, so a cleared shift cutoff cannot be
+    silently revived by a school-level time.  When a cutoff IS configured the
+    existing calculation and the existing shift-first priority run unchanged.
+
+    Employee attendance calls this helper WITHOUT a shift (employees have no
+    shifts at all), so for staff the school-level threshold remains the single
+    switch — already optional, since that column is nullable. Existing schools,
+    payroll and stored shift times are unaffected; nothing here writes.
     """
-    if (shift is not None
-            and getattr(settings, 'is_institute', False)
-            and getattr(settings, 'att_late_threshold', None) is None):
-        return 'present'
+    if shift is not None and getattr(settings, 'is_institute', False):
+        if getattr(settings, 'att_late_threshold', None) is None:
+            return 'present'
+        if getattr(shift, 'late_after_time', None) is None:
+            return 'present'
 
     threshold = None
     if shift is not None:

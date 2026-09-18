@@ -646,10 +646,14 @@
         </div>
         <div class="col-md-2">
           <label class="form-label fw-600 small">
-            <i class="bi bi-clock text-warning me-1"></i>حد التأخر <span class="text-danger">*</span>
+            <i class="bi bi-clock text-warning me-1"></i>حد التأخر
+            {% if not is_institute %}<span class="text-danger">*</span>{% endif %}
           </label>
           <input type="time" name="late_after_time" class="form-control"
-                 style="border-color:#e8a020" required>
+                 style="border-color:#e8a020" {{ '' if is_institute else 'required' }}>
+          {% if is_institute %}
+          <small class="text-muted">اختياري — اتركه فارغاً لتعطيل التأخر</small>
+          {% endif %}
         </div>
         <div class="col-md-3">
           <label class="form-label fw-600 small">
@@ -687,8 +691,14 @@
                 <input type="time" name="start_time" id="editShiftStart" class="form-control" required>
               </div>
               <div class="col-6">
-                <label class="form-label fw-600">حد التأخر <span class="text-danger">*</span></label>
-                <input type="time" name="late_after_time" id="editShiftLate" class="form-control" required>
+                <label class="form-label fw-600">حد التأخر
+                  {% if not is_institute %}<span class="text-danger">*</span>{% endif %}
+                </label>
+                <input type="time" name="late_after_time" id="editShiftLate"
+                       class="form-control" {{ '' if is_institute else 'required' }}>
+                {% if is_institute %}
+                <small class="text-muted">اختياري — اتركه فارغاً لتعطيل التأخر</small>
+                {% endif %}
               </div>
               <div class="col-6">
                 <label class="form-label fw-600">وقت الانصراف</label>
