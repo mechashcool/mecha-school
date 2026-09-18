@@ -114,11 +114,18 @@ def _get_settings():
     return SchoolSettings.get()
 
 
+_INSTITUTE_AUTO_ABSENCE_MSG = (
+    'هذه المؤسسة مسجّلة كـ«معهد»، والغياب التلقائي للطلاب معطّل. '
+    'يمكن تسجيل الحضور والغياب يدوياً كالمعتاد.'
+)
+
+
 def _run_auto_absent(school, year, settings, recorded_by_id=None, target_date=None):
     """
     Mark all active students who have no attendance record for `target_date` as absent.
     Sets source='automatic'. Blocked if current time is before att_absence_threshold,
-    or if the target date is a weekly holiday / named school holiday.
+    if the target date is a weekly holiday / named school holiday, or if the
+    institution is explicitly classified as an institute (institution_type).
     Sends parent notifications for newly marked students.
     Returns {'too_early': bool, 'holiday': bool, 'count': int, 'students': list}.
 
@@ -141,6 +148,18 @@ def _run_auto_absent(school, year, settings, recorded_by_id=None, target_date=No
         now_local.strftime('%H:%M:%S'), cutoff,
         year.id if year else None,
     )
+
+    # INSTITUTE MODE — student automatic absence is disabled for this institution.
+    # Explicit opt-in only (School.institution_type == 'institute'); NULL/'school'
+    # keeps the existing behaviour untouched.  Placed before ANY attendance write
+    # or parent notification, so the scheduler, the midnight catch-up, the
+    # attendance index auto-trigger and the manual "mark absent today" button all
+    # skip generation.  Historical records and att_* settings are left as they are.
+    if getattr(school, 'is_institute', False):
+        _log.info('[attendance] school_id=%s "%s" date=%s — institute mode, '
+                  'automatic absence skipped', school_id, school_name, today)
+        return {'too_early': False, 'holiday': False, 'count': 0,
+                'students': [], 'institute': True}
 
     # Skip too_early check when target_date is supplied explicitly — caller already
     # verified the cutoff passed.  When target_date is None (web-triggered call),
@@ -764,6 +783,9 @@ def mark_absent_today():
     if school and year and getattr(school, 'enable_attendance_shifts', False):
         from app.services.auto_attendance import run_school_shift_auto_absent_now
         summary = run_school_shift_auto_absent_now(school, year, settings)
+        if summary.get('institute'):
+            flash(_INSTITUTE_AUTO_ABSENCE_MSG, 'info')
+            return redirect(url_for('attendance.index'))
         if summary.get('holiday'):
             flash('هذا اليوم عطلة، لا يتم تسجيل الغياب التلقائي.', 'info')
             return redirect(url_for('attendance.index'))
@@ -777,6 +799,10 @@ def mark_absent_today():
 
     # ── Normal mode (unchanged behaviour) ────────────────────────────────────
     result = _run_auto_absent(school, year, settings, recorded_by_id=current_user.id)
+
+    if result.get('institute'):
+        flash(_INSTITUTE_AUTO_ABSENCE_MSG, 'info')
+        return redirect(url_for('attendance.index'))
 
     if result['too_early']:
         cutoff = getattr(settings, 'att_absence_threshold', None)

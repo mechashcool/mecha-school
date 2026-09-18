@@ -354,6 +354,13 @@ def _run_auto_absent_for_shift(school, year, shift, target_date) -> dict:
 
     school_id = school.id
 
+    # INSTITUTE MODE — explicit opt-in disables student automatic absence.
+    # Before any attendance write or parent notification.
+    if getattr(school, 'is_institute', False):
+        _log.info('[attendance-shift] school_id=%s shift_id=%s date=%s — institute '
+                  'mode, automatic absence skipped', school_id, shift.id, target_date)
+        return {'count': 0}
+
     _log.info(
         '[attendance-shift] school_id=%s shift_id=%s "%s" date=%s year_id=%s — collecting students',
         school_id, shift.id, shift.name, target_date, year.id if year else None,
@@ -592,6 +599,14 @@ def _run_auto_absent_shiftless(school, year, settings, target_date,
     from app.blueprints.attendance import _notify_absent_parents
 
     school_id = school.id
+
+    # INSTITUTE MODE — explicit opt-in disables student automatic absence.
+    # Before any attendance write or parent notification.
+    if getattr(school, 'is_institute', False):
+        _log.info('[attendance-shift-fallback] school_id=%s date=%s — institute mode, '
+                  'automatic absence skipped', school_id, target_date)
+        return {'count': 0}
+
     cutoff = getattr(settings, 'att_absence_threshold', None)
 
     if not cutoff:
@@ -719,6 +734,14 @@ def run_school_shift_auto_absent_now(school, year, settings) -> dict:
     local_now  = get_local_now(school)
     local_date = get_local_date(school)
     now_time   = local_now.time()
+
+    # INSTITUTE MODE — nothing to generate. Returned explicitly (rather than
+    # relying on the inner guards) so the caller can report it accurately instead
+    # of showing the "all students already have records" message.
+    if getattr(school, 'is_institute', False):
+        _log.info('[attendance-shift] web-trigger school_id=%s date=%s — institute '
+                  'mode, automatic absence skipped', school.id, local_date)
+        return {'holiday': False, 'count': 0, 'institute': True}
 
     if is_holiday_date(local_date, school.id, school):
         _log.info('[attendance-shift] web-trigger school_id=%s date=%s — holiday, skip',

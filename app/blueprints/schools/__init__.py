@@ -50,6 +50,21 @@ def _school_form_context(school=None):
     return {'school': school}
 
 
+def _parse_institution_type(raw):
+    """
+    Normalise the posted 'نوع المؤسسة' value.
+
+    Returns 'school', 'institute', or None when the field was absent, blank or
+    not a recognised value.  None means "no explicit choice" and the caller must
+    leave the stored value untouched — institute mode is opt-in only, so an
+    unrecognised value can never silently switch an institution into it.
+    """
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip().lower()
+    return value if value in School.INSTITUTION_TYPES else None
+
+
 @schools_bp.context_processor
 def _inject_stage_constants():
     """Constants for the educational-stage selector on schools/form.html."""
@@ -276,6 +291,9 @@ def create():
             price_per_student = pps,
             # Validated above; a new school is always created in managed mode.
             educational_stages = ','.join(stages),
+            # None when unset/unrecognised → default school behaviour.
+            institution_type  = _parse_institution_type(
+                request.form.get('institution_type')),
         )
 
         try:
@@ -397,6 +415,13 @@ def edit(school_id):
         school.enable_buildings   = bool(request.form.get('enable_buildings'))
         school.governorate        = request.form.get('governorate', '').strip() or None
         school.price_per_student  = pps
+
+        # Institution type — overwritten ONLY when this request posts a
+        # recognised value. An edit that omits the field (or posts something
+        # unrecognised) preserves the stored choice rather than resetting it.
+        _posted_type = _parse_institution_type(request.form.get('institution_type'))
+        if _posted_type is not None:
+            school.institution_type = _posted_type
 
         # Attendance time thresholds
         from datetime import time as _time

@@ -50,6 +50,11 @@ class School(db.Model):
     """
     __tablename__ = 'schools'
 
+    # institution_type values. NULL / anything else = school behaviour.
+    INSTITUTION_SCHOOL    = 'school'
+    INSTITUTION_INSTITUTE = 'institute'
+    INSTITUTION_TYPES     = (INSTITUTION_SCHOOL, INSTITUTION_INSTITUTE)
+
     id              = db.Column(db.Integer, primary_key=True)
     school_name     = db.Column(db.String(200), nullable=False)
     school_name_ar  = db.Column(db.String(200), nullable=True)
@@ -135,6 +140,20 @@ class School(db.Model):
     #         and the public registration form shows only those grades.
     educational_stages = db.Column(db.String(120), nullable=True)
 
+    # Optional per-institution classification.
+    #
+    # NULL  = LEGACY / default.  The row behaves EXACTLY as a school does today:
+    #         student automatic absence runs with its existing settings.
+    #         Existing rows are deliberately NOT backfilled.
+    # 'school'    = explicitly a school — identical behaviour to NULL.
+    # 'institute' = explicit opt-in.  Student AUTOMATIC absence generation is
+    #         skipped entirely (scheduler, catch-up and web-triggered paths).
+    #         Nothing else changes: daily manual attendance, historical records,
+    #         att_* cutoff settings and reports are untouched, so switching back
+    #         to 'school' restores the previous behaviour from the same stored
+    #         settings.  See School.is_institute.
+    institution_type = db.Column(db.String(20), nullable=True)
+
     # Optional per-school feature: external (public) student-registration link.
     # Default OFF so existing schools behave exactly as before. Only the Super
     # Admin enables/disables/regenerates the link.
@@ -154,6 +173,16 @@ class School(db.Model):
     # Relationships
     academic_years = db.relationship('AcademicYear', backref='school', lazy='dynamic')
     package        = db.relationship('FeaturePackage', foreign_keys=[package_id])
+
+    @property
+    def is_institute(self):
+        """
+        True ONLY when this institution is explicitly classified as an institute.
+
+        NULL, '', 'school' and any unrecognised value all return False, so every
+        existing row keeps its current behaviour without any backfill.
+        """
+        return (self.institution_type or '').strip().lower() == self.INSTITUTION_INSTITUTE
 
     @property
     def current_year(self):

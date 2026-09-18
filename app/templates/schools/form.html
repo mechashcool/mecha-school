@@ -72,6 +72,20 @@
               </div>
             </div>
 
+            <!-- ── INSTITUTION TYPE — institute disables student auto-absence ── -->
+            {%- set inst_type = school.institution_type if school else none %}
+            <div class="col-md-4">
+              <label class="form-label">نوع المؤسسة</label>
+              <select name="institution_type" class="form-select">
+                <option value="school" {{ 'selected' if inst_type != 'institute' }}>مدرسة</option>
+                <option value="institute" {{ 'selected' if inst_type == 'institute' }}>معهد</option>
+              </select>
+              <div class="form-text">
+                اختيار <strong>معهد</strong> يوقف تسجيل <strong>الغياب التلقائي للطلاب</strong> فقط.
+                تسجيل الحضور والغياب اليومي يدوياً والسجلات السابقة وإعدادات أوقات الحضور تبقى كما هي.
+              </div>
+            </div>
+
             <div class="col-md-4">
               <label class="form-label">المحافظة</label>
               <input type="text" name="governorate" class="form-control"
