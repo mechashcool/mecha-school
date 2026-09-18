@@ -2950,10 +2950,17 @@ def attendance_settings():
             except (ValueError, AttributeError, IndexError):
                 return None
 
-        settings_row.att_start_time        = _parse_time(request.form.get('att_start_time', ''))
-        settings_row.att_late_threshold    = _parse_time(request.form.get('att_late_threshold', ''))
-        settings_row.att_absence_threshold = _parse_time(request.form.get('att_absence_threshold', ''))
-        settings_row.att_departure_time    = _parse_time(request.form.get('att_departure_time', ''))
+        # A key that is ABSENT from the submission preserves the stored value;
+        # only a key that is PRESENT — including one deliberately cleared to
+        # empty — is written.  Institute mode hides the student
+        # automatic-absence control, and without this its saved cutoff would be
+        # wiped every time any other setting on this form was saved.
+        # For a school every field is always rendered, so behaviour is unchanged.
+        for _field in ('att_start_time', 'att_late_threshold',
+                       'att_absence_threshold', 'att_departure_time'):
+            if _field in request.form:
+                setattr(settings_row, _field,
+                        _parse_time(request.form.get(_field, '')))
 
         # Employee absence limit settings (saved on School object only)
         if is_school_obj:

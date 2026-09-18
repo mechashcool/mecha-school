@@ -53,7 +53,30 @@ def determine_check_in_status(check_in_time, settings, shift=None):
     If `shift` is provided (AttendanceShift), its late_after_time is used.
     Otherwise falls back to settings.att_late_threshold (existing behaviour).
     Passing shift=None is fully backwards-compatible with all existing callers.
+
+    INSTITUTE ONLY — optional student lateness
+    ──────────────────────────────────────────
+    ``School.att_late_threshold`` is nullable, so leaving it empty already
+    disables lateness everywhere it is the source (unified mode, and shiftless
+    students in shift mode): the check below returns 'present'.
+
+    ``AttendanceShift.late_after_time`` is NOT NULL, so an institute running
+    shifts cannot switch lateness off by clearing a field.  For an institute
+    ONLY, the school-level threshold is therefore authoritative: when it is not
+    configured, student lateness is off and the shift time is not consulted.
+    When it IS configured, nothing changes — the existing priority (shift time
+    first, school time second) runs exactly as before.
+
+    `shift` is passed only by STUDENT check-in paths; employee attendance calls
+    this helper without one (app/blueprints/employees), so staff lateness,
+    payroll and every existing school are unaffected.  Stored shift times are
+    read-only here and are never modified.
     """
+    if (shift is not None
+            and getattr(settings, 'is_institute', False)
+            and getattr(settings, 'att_late_threshold', None) is None):
+        return 'present'
+
     threshold = None
     if shift is not None:
         threshold = getattr(shift, 'late_after_time', None)

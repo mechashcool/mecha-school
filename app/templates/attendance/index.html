@@ -19,7 +19,10 @@
     <a href="{{ url_for('attendance.report') }}" class="btn btn-outline-primary">
       <i class="bi bi-bar-chart-fill me-1"></i>تقرير الحضور
     </a>
-    {% if current_user.is_admin_user and not is_historical_year %}
+    {# Automatic-absence trigger — hidden for institutes, where automatic
+       absence is disabled. Manual attendance and reports above are untouched. #}
+    {% if current_user.is_admin_user and not is_historical_year
+          and not settings.is_institute %}
     {% if is_holiday_sel and sel_date == today %}
     <button type="button" class="btn btn-secondary" disabled
             title="هذا اليوم عطلة — الغياب التلقائي معطّل">

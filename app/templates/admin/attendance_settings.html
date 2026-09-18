@@ -42,6 +42,14 @@
   </li>
 </ul>
 
+{# Institute mode (School.institution_type == 'institute'). `settings` IS the
+   current institution when is_school_obj; the SchoolSettings fallback has no
+   such attribute, hence the guard. Only STUDENT automatic-absence controls are
+   hidden — manual attendance, shift management, employee settings and every
+   other setting render exactly as before. Hidden time inputs are simply not
+   posted, and the save handler preserves any field it does not receive. #}
+{% set is_institute = is_school_obj and settings.is_institute %}
+
 {# ══════════════════════════════════════════════════════════════════════════
    MAIN SETTINGS FORM — wraps tab-general + tab-employees
    (both tabs are inside this form so all fields post together in one request)
@@ -153,9 +161,16 @@
                          value="{{ settings.att_late_threshold.strftime('%H:%M') if settings.att_late_threshold else '' }}"
                          class="form-control form-control-sm text-center fw-700 mt-2"
                          style="border-color:#e8a020">
+                  {% if is_institute %}
+                  <div class="att-time-hint" style="color:#e8a020">
+                    اختياري — اتركه فارغاً لتعطيل التأخر
+                  </div>
+                  {% else %}
                   <div class="att-time-hint" style="color:#e8a020">بعده → متأخر</div>
+                  {% endif %}
                 </div>
               </div>
+              {% if not is_institute %}
               <div class="col-6 col-lg-3">
                 <div class="att-time-card" style="border-top-color:#e03e3e">
                   <div class="att-time-icon" style="background:#fff0f0">
@@ -169,6 +184,7 @@
                   <div class="att-time-hint text-danger">بعده → غائب</div>
                 </div>
               </div>
+              {% endif %}
               <div class="col-6 col-lg-3">
                 <div class="att-time-card" style="border-top-color:#6c757d">
                   <div class="att-time-icon" style="background:#f5f5f5">
@@ -248,6 +264,7 @@
                   {{ settings.att_late_threshold.strftime('%H:%M') if settings.att_late_threshold else '—' }}
                 </span>
               </li>
+              {% if not is_institute %}
               <li class="list-group-item d-flex justify-content-between align-items-center">
                 <span class="text-muted">
                   <span class="att-dot" style="background:#e03e3e"></span>حد الغياب
@@ -256,6 +273,7 @@
                   {{ settings.att_absence_threshold.strftime('%H:%M') if settings.att_absence_threshold else '—' }}
                 </span>
               </li>
+              {% endif %}
               <li class="list-group-item d-flex justify-content-between align-items-center">
                 <span class="text-muted">
                   <span class="att-dot" style="background:#6c757d"></span>وقت الانصراف
@@ -420,7 +438,10 @@
     </div>
   </div>
 
-  {# Manual absence trigger #}
+  {# Manual absence trigger — this button runs AUTOMATIC absence generation,
+     which is disabled for institutes, so it is hidden for them. Manual
+     present/absent marking is a different flow and is untouched. #}
+  {% if not is_institute %}
   <div class="card">
     <div class="card-header">
       <i class="bi bi-calendar-x text-danger me-1"></i>تسجيل الغياب اليدوي
@@ -438,6 +459,7 @@
       </form>
     </div>
   </div>
+  {% endif %}{# /not is_institute — automatic absence trigger #}
 
 </div>{# /tab-students #}
 
@@ -484,6 +506,12 @@
      sits outside the main settings form and nested forms are invalid HTML.
      Unified mode's att_absence_threshold is a separate setting and is not
      touched here. ── #}
+  {# Hidden entirely for an institute: heading, description, missing-cutoff
+     warning, input, helper text and save button. Because this is its own
+     <form>, hiding it means shifts.update_global_absence is never posted, so
+     the stored School.shift_absent_after_time is preserved untouched and
+     returns as-is if the institution is switched back to "مدرسة". #}
+  {% if not is_institute %}
   <div class="card mb-4" style="border-top:3px solid #e03e3e">
     <div class="card-header">
       <i class="bi bi-x-circle text-danger me-1"></i>وقت الغياب التلقائي للشفتات
@@ -522,6 +550,7 @@
       </form>
     </div>
   </div>
+  {% endif %}{# /not is_institute — shift automatic-absence cutoff #}
 
   {# Shifts list #}
   {% if active_shifts or inactive_shifts %}
