@@ -135,7 +135,7 @@ def resolve_upload_owner(value: str | None) -> dict | None:
     if not candidates:
         return None
 
-    def first(model_name: str, column_name: str):
+    def first(model_name: str, column_name: str, extra=None):
         model = getattr(m, model_name, None)
         if model is None:
             return None
@@ -143,10 +143,13 @@ def resolve_upload_owner(value: str | None) -> dict | None:
         if col is None:
             return None
         try:
-            return (model.query
-                    .execution_options(bypass_tenant_scope=True, include_all_years=True)
-                    .filter(col.in_(candidates))
-                    .first())
+            query = (model.query
+                     .execution_options(bypass_tenant_scope=True,
+                                        include_all_years=True)
+                     .filter(col.in_(candidates)))
+            if extra is not None:
+                query = query.filter(extra(model))
+            return query.first()
         except Exception:
             return None
 
@@ -162,7 +165,16 @@ def resolve_upload_owner(value: str | None) -> dict | None:
         }
 
     # Order: most-specific document tables first, then photos, then attachments.
-    row = first('StudentDocument', 'file_path')
+    # A SOFT-DELETED student document must not authorize access to its object:
+    # the deleted-document recycle bin is Super-Admin-only, so ordinary
+    # student-document viewing/downloading may not resolve through it. Access to
+    # the same stored object through an independently authorized, ACTIVE
+    # admission record still resolves further down (the admissions flow shares
+    # the object without re-uploading it), and restoring the document makes it
+    # authorize again. When nothing else references the object the resolver
+    # returns None, which callers treat as deny.
+    row = first('StudentDocument', 'file_path',
+                extra=lambda model: model.deleted_at.is_(None))
     if row:
         return owner(row, student_id=getattr(row, 'student_id', None), kind='student_document')
 

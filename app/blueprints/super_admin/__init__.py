@@ -15,6 +15,10 @@ Routes:
   POST /admin/super/billing/<billing_id>/pay      — Record a payment on a billing record
   POST /admin/super/billing/<billing_id>/delete   — Delete a billing record
   GET  /admin/super/billing                       — Global billing overview
+  GET  /admin/super/recycle-bin                   — سلة المحذوفات: soft-deleted
+                                                    student documents of the
+                                                    selected school
+  POST /admin/super/recycle-bin/documents/<id>/restore — Restore one of them
 """
 from datetime import date as _date, datetime as _dt
 from decimal import Decimal, InvalidOperation
@@ -29,7 +33,8 @@ from app.models import (db, School, SchoolBilling, AcademicYear,
                          FeeInstallment, Revenue, Expense,
                          Grade, Section, Subject, FeeType,
                          Role, MobileDeviceToken, INVESTOR_ROLE)
-from app.utils.decorators import super_admin_required
+from app.utils.decorators import (super_admin_required,
+                                  historical_guard)
 from app.utils.audit import log_action
 from app.utils import code_generator
 
@@ -1016,3 +1021,198 @@ def billing_overview():
         status_filter = status_filter,
         status_types  = SchoolBilling.STATUS_TYPES,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  سلة المحذوفات  —  soft-deleted STUDENT DOCUMENTS of the selected school
+# ─────────────────────────────────────────────────────────────────────────────
+#  Scope: student documents only. This page does not restore any other kind of
+#  record, and it never deletes anything permanently.
+#
+#  Authorization: @super_admin_required (role.name == 'super_admin' AND
+#  school_id IS NULL — see User.is_super_admin). A school_admin never passes it.
+#
+#  School selection: the portal's existing switcher, i.e. session
+#  ['active_school_id'] resolved server-side by get_current_school(). A
+#  school_id in the request body is never accepted as authorization; every
+#  query and every write is filtered by the resolved school's own id.
+
+RECYCLE_BIN_PER_PAGE = 25
+
+
+def _selected_portal_school():
+    """The school selected in the portal switcher, or None for the global view.
+
+    Uses the existing trusted mechanism (get_current_school() reads
+    session['active_school_id'] for a super admin) — never a client-supplied
+    school_id.
+    """
+    from app.utils.decorators import get_current_school
+    return get_current_school()
+
+
+def _deleted_document_query(school_id, search=''):
+    """Soft-deleted student documents of ONE school, newest deletion first.
+
+    School filtering is applied in the database query itself (not after
+    fetching), and it also governs the row count and the pagination, so a
+    search can never reach across schools. bypass_tenant_scope is explicit
+    here because a super admin has no implicit ORM school scope — the school_id
+    equality below is the only filter that matters.
+    """
+    from app.models import StudentDocument as _SD
+
+    query = (_SD.query
+             .execution_options(bypass_tenant_scope=True, include_all_years=True)
+             .join(Student, Student.id == _SD.student_id)
+             .filter(_SD.school_id == school_id,
+                     Student.school_id == school_id,
+                     _SD.deleted_at.isnot(None)))
+    term = (search or '').strip()
+    if term:
+        like = f'%{term}%'
+        query = query.filter(db.or_(Student.full_name.ilike(like),
+                                    Student.student_id.ilike(like),
+                                    _SD.document_type.ilike(like)))
+    return query.order_by(_SD.deleted_at.desc(), _SD.id.desc())
+
+
+@super_admin_bp.route('/recycle-bin')
+@login_required
+@super_admin_required
+def recycle_bin():
+    """List the selected school's soft-deleted student documents."""
+    from app.blueprints.students import (_stored_document_filename,
+                                         _stored_document_present)
+
+    school = _selected_portal_school()
+    search = (request.args.get('q') or '').strip()
+
+    if school is None:
+        # No school selected → nothing is queried and nothing is listed.
+        return render_template('super_admin/recycle_bin.html',
+                               school=None, rows=[], pagination=None,
+                               search=search)
+
+    page = request.args.get('page', 1, type=int)
+    pagination = (_deleted_document_query(school.id, search)
+                  .paginate(page=page, per_page=RECYCLE_BIN_PER_PAGE,
+                            error_out=False))
+
+    rows = []
+    for doc in pagination.items:
+        student = doc.student
+        rows.append({
+            'id':              doc.id,
+            'document_type':   doc.document_type,
+            'student_name':    student.full_name if student else '',
+            'student_code':    student.student_id if student else '',
+            'student_id':      doc.student_id,
+            'deleted_at':      doc.deleted_at,
+            'deleted_by_name': (doc.deleted_by.full_name
+                                if doc.deleted_by else ''),
+            'was_replaced':    doc.replaced_by_id is not None,
+            'filename':        _stored_document_filename(doc.file_path),
+            'file_present':    _stored_document_present(doc.file_path),
+        })
+
+    return render_template('super_admin/recycle_bin.html',
+                           school=school, rows=rows, pagination=pagination,
+                           search=search)
+
+
+@super_admin_bp.route('/recycle-bin/documents/<int:doc_id>/restore',
+                      methods=['POST'])
+@login_required
+@super_admin_required
+@historical_guard
+def restore_student_document(doc_id):
+    """Reactivate ONE soft-deleted student document of the SELECTED school.
+
+    Every check is server-side and against the resolved portal school:
+      * a school must be selected (a bare doc_id is not enough),
+      * the document must exist, be soft-deleted, and belong to that school,
+      * its student must still exist and belong to that same school,
+      * no ACTIVE document of the same type may exist (no silent overwrite),
+      * the student's ACTIVE document count must stay within the limit.
+
+    A stale form submitted after switching schools fails the school-equality
+    check and is rejected. The document keeps its id, file_path and ownership;
+    nothing is re-uploaded, moved or created.
+    """
+    from app.models import StudentDocument as _SD
+    from app.blueprints.students import (MAX_STUDENT_DOCUMENTS,
+                                         active_student_document_count,
+                                         _stored_document_present)
+
+    school = _selected_portal_school()
+    if school is None:
+        flash('يرجى اختيار المدرسة أولاً.', 'danger')
+        return redirect(url_for('super_admin.recycle_bin'))
+
+    # Scoped from the start: id + school + soft-deleted state.
+    doc = (_SD.query
+           .execution_options(bypass_tenant_scope=True, include_all_years=True)
+           .filter(_SD.id == doc_id,
+                   _SD.school_id == school.id,
+                   _SD.deleted_at.isnot(None))
+           .first())
+    if doc is None:
+        # Wrong school, unknown id, or already active — one safe answer.
+        flash('المستمسك غير موجود في سلة محذوفات المدرسة المحددة.', 'danger')
+        return redirect(url_for('super_admin.recycle_bin'))
+
+    student = (Student.query
+               .execution_options(bypass_tenant_scope=True,
+                                  include_all_years=True)
+               .filter_by(id=doc.student_id, school_id=school.id)
+               .first())
+    if student is None:
+        # Never recreate a missing student/school automatically.
+        flash('تعذّر الاسترجاع: سجل الطالب غير موجود أو لا ينتمي إلى '
+              'المدرسة المحددة.', 'danger')
+        return redirect(url_for('super_admin.recycle_bin'))
+
+    if not _stored_document_present(doc.file_path):
+        flash(f'تعذّر الاسترجاع: ملف المستمسك «{doc.document_type}» غير موجود '
+              f'في المخزن.', 'danger')
+        return redirect(url_for('super_admin.recycle_bin'))
+
+    conflict = (_SD.query
+                .execution_options(bypass_tenant_scope=True,
+                                   include_all_years=True)
+                .filter(_SD.student_id == student.id,
+                        _SD.school_id == school.id,
+                        _SD.document_type == doc.document_type,
+                        _SD.deleted_at.is_(None))
+                .first())
+    if conflict is not None:
+        flash(f'يوجد مستمسك فعّال من نوع «{doc.document_type}» لهذا الطالب. '
+              f'لم يتم تغيير أي مستمسك.', 'danger')
+        return redirect(url_for('super_admin.recycle_bin'))
+
+    active_count = active_student_document_count(student)
+    if active_count >= MAX_STUDENT_DOCUMENTS:
+        flash(f'لا يمكن الاسترجاع: الطالب لديه {active_count} مستمسكات فعّالة '
+              f'والحد الأقصى {MAX_STUDENT_DOCUMENTS}. لم يتم تغيير أي مستمسك.',
+              'danger')
+        return redirect(url_for('super_admin.recycle_bin'))
+
+    doc_label, student_code = doc.document_type, student.student_id
+    doc.deleted_at         = None
+    doc.deleted_by_user_id = None
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        flash('تعذّر استرجاع المستمسك. لم يتم تغيير أي مستمسك.', 'danger')
+        return redirect(url_for('super_admin.recycle_bin'))
+
+    log_action('restore', 'student_document', doc.id,
+               f'استرجاع المستمسك «{doc_label}» من سلة المحذوفات — '
+               f'المدرسة {school.id}، الطالب {student.id} ({student_code}), '
+               f'بواسطة مسؤول النظام {current_user.id}')
+    flash(f'تم استرجاع المستمسك «{doc_label}» للطالب {student.full_name} '
+          f'بنفس ملفه الأصلي.', 'success')
+    return redirect(url_for('super_admin.recycle_bin'))
+

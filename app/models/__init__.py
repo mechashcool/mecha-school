@@ -975,8 +975,37 @@ class StudentDocument(db.Model):
     file_path     = db.Column(db.String(255), nullable=False)
     uploaded_at   = db.Column(db.DateTime, default=datetime.utcnow)
 
+    # ── Soft delete (student documents only — NOT a system-wide pattern) ──────
+    # An active document is deleted_at IS NULL. A deleted or replaced document
+    # keeps its row AND its original file_path forever, so the stored object
+    # never becomes unreferenced and the document stays restorable. Nothing is
+    # ever purged automatically. All three columns are nullable, so every
+    # pre-existing row is active without any backfill.
+    deleted_at         = db.Column(db.DateTime, nullable=True)
+    deleted_by_user_id = db.Column(db.Integer,
+                                   db.ForeignKey('users.id', ondelete='SET NULL'),
+                                   nullable=True)
+    # Replacement history: the old row points at the new active row. ON DELETE
+    # SET NULL keeps this self-reference from adding any delete-ordering
+    # dependency to student deletion or school cleanup.
+    replaced_by_id     = db.Column(db.Integer,
+                                   db.ForeignKey('student_documents.id',
+                                                 ondelete='SET NULL'),
+                                   nullable=True)
+
     school = db.relationship('School', foreign_keys=[school_id])
     academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    deleted_by = db.relationship('User', foreign_keys=[deleted_by_user_id])
+
+    __table_args__ = (
+        # Serves the hot "active documents of this student" query.
+        db.Index('ix_student_documents_student_active',
+                 'student_id', 'deleted_at'),
+    )
+
+    @property
+    def is_deleted(self):
+        return self.deleted_at is not None
 
     def __repr__(self):
         return f'<StudentDocument {self.document_type} for {self.student_id}>'

@@ -498,6 +498,82 @@
       </div>
       {% endif %}
 
+      {# ── Existing attachments (المستمسكات) ─────────────────────────────────
+         Read-only display plus per-document actions. The replace/delete forms
+         themselves live OUTSIDE the main form (see the bottom of this file) to
+         avoid illegal nesting AND so that saving the student can never carry
+         an attachment action. Values come from the `existing_documents` view
+         model, so this template never touches a stored file path. #}
+      {% if student and form_cfg.section_visible('student_documents') %}
+      <div class="card mb-4">
+        <div class="card-header">
+          <i class="bi bi-paperclip text-accent"></i>المستمسكات المرفوعة
+        </div>
+        {% if existing_documents %}
+        <div class="card-body p-0">
+          {% for d in existing_documents %}
+          <div class="px-3 py-3 border-bottom">
+            <div class="d-flex align-items-start gap-2">
+              <i class="bi bi-file-earmark-text-fill text-accent" style="font-size:18px"></i>
+              <div class="flex-grow-1" style="min-width:0">
+                <div style="font-weight:700;font-size:14px;color:#1e2b3a">{{ d.document_type }}</div>
+                <div style="font-size:12px;color:#9aabb8;word-break:break-all">{{ d.filename }}</div>
+                <div style="font-size:11px;color:#9aabb8">
+                  {{ d.uploaded_at.strftime('%Y-%m-%d') if d.uploaded_at else '' }}
+                </div>
+              </div>
+            </div>
+
+            {% if d.file_present %}
+            <div class="d-flex gap-2 mt-2">
+              <a href="{{ d.url }}" target="_blank" rel="noopener"
+                 class="btn btn-sm btn-outline-primary flex-grow-1">
+                <i class="bi bi-eye me-1"></i>عرض
+              </a>
+              <a href="{{ d.url }}" download
+                 class="btn btn-sm btn-outline-secondary flex-grow-1">
+                <i class="bi bi-download me-1"></i>تنزيل
+              </a>
+            </div>
+            {% else %}
+            <div class="alert alert-warning py-2 px-2 mt-2 mb-0" style="font-size:12px">
+              <i class="bi bi-exclamation-triangle me-1"></i>
+              الملف غير موجود في المخزن. السجل محفوظ ولم يُحذف — يمكنك استبداله برفع ملف جديد.
+            </div>
+            {% endif %}
+
+            {% if 'students.documents_upload' in enabled_features %}
+            <div class="mt-2">
+              <label class="form-label mb-1" style="font-size:12px">استبدال هذا المستمسك</label>
+              <input type="file" name="document_file" required
+                     form="doc-replace-{{ d.id }}"
+                     class="form-control form-control-sm"
+                     accept=".pdf,.jpg,.jpeg,.png">
+              <button type="submit" form="doc-replace-{{ d.id }}"
+                      class="btn btn-sm btn-outline-warning w-100 mt-2"
+                      onclick="return confirm('هل أنت متأكد من استبدال ملف هذا المستمسك؟ لن يتم تعديل أي مستمسك آخر.')">
+                <i class="bi bi-arrow-repeat me-1"></i>استبدال الملف
+              </button>
+            </div>
+            {% endif %}
+
+            <button type="submit" form="doc-delete-{{ d.id }}"
+                    class="btn btn-sm btn-outline-danger w-100 mt-2"
+                    onclick="return confirm('هل أنت متأكد من حذف هذا المستمسك؟ لن يتم حذف أي مستمسك آخر.')">
+              <i class="bi bi-trash me-1"></i>حذف الملف
+            </button>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="card-body text-center text-muted py-4" style="font-size:13px">
+          <i class="bi bi-folder" style="font-size:28px;opacity:.3;display:block;margin-bottom:6px"></i>
+          لا توجد مستمسكات مرفوعة لهذا الطالب.
+        </div>
+        {% endif %}
+      </div>
+      {% endif %}
+
       {% if 'students.documents_upload' in enabled_features and form_cfg.section_visible('student_documents') %}
       <div class="card mb-4">
         <div class="card-header"><i class="bi bi-folder-fill text-accent"></i>مستندات الطالب</div>
@@ -516,7 +592,7 @@
               </div>
               <div class="col-6">
                 <label class="form-label">اختر الملف</label>
-                <input type="file" name="document_file[]" class="form-control" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+                <input type="file" name="document_file[]" class="form-control" accept=".pdf,.jpg,.jpeg,.png">
               </div>
             </div>
           </div>
@@ -526,6 +602,12 @@
           <div class="text-muted mt-2" style="font-size:12px">
             يمكنك رفع أكثر من مستند في نفس الوقت.
           </div>
+          {% if student and missing_document_types %}
+          <div class="text-muted mt-1" style="font-size:12px">
+            <i class="bi bi-info-circle me-1"></i>
+            غير مرفوع بعد: {{ missing_document_types|join('، ') }}
+          </div>
+          {% endif %}
         </div>
       </div>
       {% endif %}
@@ -557,6 +639,24 @@
 <form id="unlink-form-{{ p.id }}" method="POST"
       action="{{ url_for('students.unlink_parent', student_id=student.id) }}">
   <input type="hidden" name="parent_user_id" value="{{ p.id }}">
+</form>
+{% endfor %}
+{% endif %}
+
+{# Attachment replace / delete forms live OUTSIDE the main form, like the
+   unlink-parent forms above: a normal student save therefore carries no
+   attachment identifier at all and can never replace or delete a file. Each
+   form targets exactly one document id, which the server re-verifies against
+   this student and school before writing anything. #}
+{% if student and existing_documents %}
+{% for d in existing_documents %}
+<form id="doc-replace-{{ d.id }}" method="POST" enctype="multipart/form-data"
+      action="{{ url_for('students.replace_document', student_id=student.id, doc_id=d.id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+</form>
+<form id="doc-delete-{{ d.id }}" method="POST"
+      action="{{ url_for('students.delete_document', student_id=student.id, doc_id=d.id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 </form>
 {% endfor %}
 {% endif %}
@@ -616,7 +716,7 @@
       </div>
       <div class="col-5">
         <label class="form-label">اختر الملف</label>
-        <input type="file" name="document_file[]" class="form-control" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+        <input type="file" name="document_file[]" class="form-control" accept=".pdf,.jpg,.jpeg,.png">
       </div>
       <div class="col-1">
         <button type="button" class="btn btn-danger btn-sm w-100 remove-document-row" title="إزالة">

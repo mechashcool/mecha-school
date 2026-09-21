@@ -1,4 +1,5 @@
 """Mecha-School — Students Blueprint  (Phase 6: multi-tenant + capacity check)"""
+import os
 import re
 from decimal import Decimal, InvalidOperation
 
@@ -14,6 +15,8 @@ from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    get_current_school, get_active_year, get_view_year,
                                    historical_guard)
 from app.utils.helpers import save_uploaded_file, resolve_photo_url
+from app.utils.upload_access import (object_path_of, protected_upload_url,
+                                     resolve_upload_owner)
 from app.utils import code_generator
 from app.utils.features import feature_required, is_feature_enabled
 from app.utils.student_form_config import get_student_form_config
@@ -33,6 +36,190 @@ students_bp = Blueprint('students', __name__,
 # Maximum number of documents a student may have uploaded through the Add
 # Student form. Mirrored by the client-side row limit in create_wizard.html.
 MAX_STUDENT_DOCUMENTS = 4
+
+
+# ── Student attachments (المستمسكات) — one upload policy, one ownership check ──
+# The restrictions below are the ones the public registration intake already
+# applies to student documents (app/blueprints/registration): an extension
+# allow-list, a magic-byte content check and a per-file size cap. The filename
+# and Content-Type sent by the browser are never trusted — the extension only
+# selects which signature must match, and save_uploaded_file() generates the
+# stored filename (uuid based) and the storage path.
+STUDENT_DOC_ALLOWED_EXTS = {'pdf', 'jpg', 'jpeg', 'png'}
+STUDENT_DOC_MAX_BYTES    = 5 * 1024 * 1024        # 5 MB per file
+
+_STUDENT_DOC_MAGIC = {
+    'pdf':  (b'%PDF',),
+    'png':  (b'\x89PNG\r\n\x1a\n',),
+    'jpg':  (b'\xff\xd8\xff',),
+    'jpeg': (b'\xff\xd8\xff',),
+}
+
+# The standard document types the student forms offer, so the edit page can
+# point out which of them are not attached yet. Same four labels as the
+# <select> options in students/form.html and students/create_wizard.html.
+STUDENT_DOCUMENT_TYPES = ('الهوية الوطنية', 'بطاقة السكن',
+                          'الوثيقة الدراسية', 'التقرير الطبي')
+
+
+def validate_student_document_file(file_storage):
+    """Validate ONE uploaded student document before anything is stored.
+
+    Returns ``(ext, None)`` when the file is acceptable, otherwise
+    ``(None, message)`` with a ready-to-flash Arabic message. The stream
+    position is restored, so the caller can still hand the same FileStorage to
+    ``save_uploaded_file()``.
+    """
+    name = file_storage.filename or ''
+    ext = name.rsplit('.', 1)[1].lower() if '.' in name else ''
+    if ext not in STUDENT_DOC_ALLOWED_EXTS:
+        return None, ('نوع الملف غير مدعوم. الصيغ المسموح بها: '
+                      'PDF أو JPG أو JPEG أو PNG.')
+    try:
+        pos = file_storage.stream.tell()
+        file_storage.stream.seek(0, os.SEEK_END)
+        size = file_storage.stream.tell()
+        file_storage.stream.seek(pos)
+        head = file_storage.stream.read(16)
+        file_storage.stream.seek(pos)
+    except Exception:
+        return None, 'تعذّر قراءة الملف المرفوع. يرجى المحاولة مرة أخرى.'
+    if not size:
+        return None, 'الملف المرفوع فارغ.'
+    if size > STUDENT_DOC_MAX_BYTES:
+        return None, 'حجم الملف أكبر من الحد المسموح (5 ميغابايت).'
+    if not any(head.startswith(sig) for sig in _STUDENT_DOC_MAGIC.get(ext, ())):
+        return None, 'محتوى الملف لا يطابق صيغته. يرجى رفع ملف صالح.'
+    return ext, None
+
+
+def _stored_document_filename(stored_value):
+    """Basename of a stored upload value — never the directory and never a
+    signed query string, so the page can show a filename without exposing the
+    storage layout."""
+    if not stored_value:
+        return ''
+    return stored_value.split('?', 1)[0].rstrip('/').rsplit('/', 1)[-1]
+
+
+def _stored_document_present(stored_value):
+    """True when the referenced file can be confirmed to exist.
+
+    Only locally-stored uploads are checked — verifying a remote (Supabase)
+    object would need a network round-trip on every page render, so it is
+    reported as present. A legacy row whose local file is gone is reported as
+    missing, which is what lets the edit page open and say so instead of
+    failing.
+    """
+    if not stored_value:
+        return False
+    if stored_value.startswith(('http://', 'https://')):
+        return True
+    op = object_path_of(stored_value)
+    if not op:
+        return False
+    try:
+        return os.path.isfile(os.path.join(current_app.root_path, 'static',
+                                           *op.split('/')))
+    except Exception:
+        return False
+
+
+def active_student_documents(student):
+    """This student's ACTIVE attachments (newest first) — soft-deleted excluded.
+
+    Every student-facing list goes through here, so a soft-deleted document is
+    never shown, linked or counted anywhere in the normal UI.
+    """
+    return (student.documents
+            .filter(StudentDocument.deleted_at.is_(None))
+            .order_by(StudentDocument.uploaded_at.desc())
+            .all())
+
+
+def student_document_rows(student):
+    """Read-only view model of a student's ACTIVE attachments (newest first).
+
+    Plain dicts, so the template never touches ``file_path``: each row carries
+    the stored label, the basename, the protected view URL built by the
+    existing upload-access policy (``protected_upload_url``), and whether the
+    physical file could be confirmed.
+    """
+    rows = []
+    for doc in active_student_documents(student):
+        rows.append({
+            'id':            doc.id,
+            'document_type': doc.document_type,
+            'uploaded_at':   doc.uploaded_at,
+            'filename':      _stored_document_filename(doc.file_path),
+            'url':           protected_upload_url(doc.file_path),
+            'file_present':  _stored_document_present(doc.file_path),
+        })
+    return rows
+
+
+def active_student_document_count(student):
+    """How many ACTIVE documents this student has.
+
+    Soft-deleted rows are excluded, so a deleted or replaced version never
+    consumes one of the student's MAX_STUDENT_DOCUMENTS slots. Shared by the
+    edit page's add path and by the Super Admin restore action.
+    """
+    return (student.documents
+            .filter(StudentDocument.deleted_at.is_(None))
+            .count())
+
+
+def _authorize_student_document_action(student_id):
+    """Resolve the student for an attachment action under edit()'s own guards.
+
+    Returns ``(student, None)`` when the operator may manage this student's
+    attachments, or ``(None, response)`` with the response to return. Applies,
+    server-side: the student is loaded through the school-scoped ORM criteria,
+    their school must equal the operator's resolved school, the building scope
+    must allow them, and a teacher must own the student's section — the same
+    checks ``edit()`` performs. Login, the ``edit_student`` permission,
+    historical-year read-only mode and CSRF come from the route decorators and
+    CSRFProtect.
+    """
+    student = (Student.query.execution_options(include_all_years=True)
+               .get_or_404(student_id))
+    school = get_current_school()
+    if school and student.school_id and student.school_id != school.id:
+        abort(403)
+    if not user_can_access_student(current_user, school, student):
+        flash('ليس لديك صلاحية الوصول إلى بيانات هذه البناية', 'danger')
+        return None, redirect(url_for('students.index'))
+    if _is_teacher() and student.section_id not in get_teacher_section_ids(current_user):
+        flash('لا يمكنك تعديل بيانات طالب خارج شعبتك.', 'danger')
+        return None, redirect(url_for('students.index'))
+    return student, None
+
+
+def _get_student_document_or_404(doc_id, student, *, state='active'):
+    """Fetch ONE attachment, scoped from the start to this student and school.
+
+    The filter carries id + student_id + school_id on top of the school
+    criteria the ORM already applies, so an id belonging to another student or
+    another school is simply not found — nothing is fetched globally and
+    authorised afterwards, and the response does not reveal that the row exists
+    elsewhere.
+
+    ``state`` also pins the soft-delete state the caller requires, so deleting
+    or replacing an already-deleted document, or restoring an active one, is a
+    404 rather than a second write to the same row.
+    """
+    query = (StudentDocument.query
+             .filter_by(id=doc_id, student_id=student.id,
+                        school_id=student.school_id))
+    if state == 'active':
+        query = query.filter(StudentDocument.deleted_at.is_(None))
+    elif state == 'deleted':
+        query = query.filter(StudentDocument.deleted_at.isnot(None))
+    doc = query.first()
+    if doc is None:
+        abort(404)
+    return doc
 
 
 def _is_teacher():
@@ -1200,7 +1387,8 @@ def create_success(student_id):
                 'password_available': False,
             }
 
-    docs = student.documents.order_by(StudentDocument.uploaded_at.desc()).all()
+    # Active documents only — a soft-deleted document is never listed.
+    docs = active_student_documents(student)
     device_mappings = student.device_mappings.all()
 
     # ── Fees (same scoping as students.view) — only for fee-authorised users ──
@@ -1341,6 +1529,15 @@ def edit(student_id):
 
     form_cfg = get_student_form_config(school.id) if school else get_student_form_config(0)
 
+    # Existing attachments shown on the form. Display data only — replacing or
+    # deleting one is a separate explicit POST route, so this list can never be
+    # acted on by a normal save.
+    existing_documents = student_document_rows(student)
+    _attached_doc_types = {(r['document_type'] or '').strip()
+                           for r in existing_documents}
+    missing_document_types = [t for t in STUDENT_DOCUMENT_TYPES
+                              if t not in _attached_doc_types]
+
     parent_role = Role.query.filter_by(name='parent').first()
     available_parents = []
     if school and parent_role:
@@ -1375,7 +1572,47 @@ def edit(student_id):
                 buildings_list=buildings_for_form,
                 selected_building_id=student.building_id,
                 residential_areas_list=residential_areas_for_form,
+                existing_documents=existing_documents,
+                missing_document_types=missing_document_types,
             )
+
+        # ── New attachments (المستمسكات) — validated BEFORE any field is
+        # mutated and before any file is stored, so an unsupported or corrupt
+        # file is reported instead of being silently dropped and can never
+        # leave the student half saved. This form only ADDS: a row with no
+        # chosen file is skipped entirely, so an omitted or empty file input
+        # never clears, replaces or deletes an existing attachment. Replacing
+        # or deleting one is a separate explicit action
+        # (students.replace_document / students.delete_document).
+        _new_docs = []
+        if (is_feature_enabled(school.id if school else None,
+                               'students.documents_upload')
+                and form_cfg.section_visible('student_documents')):
+            for _doc_type_in, _doc_file_in in zip(
+                    request.form.getlist('document_type[]'),
+                    request.files.getlist('document_file[]')):
+                if not (_doc_file_in and _doc_file_in.filename):
+                    continue
+                _doc_ext, _doc_err = validate_student_document_file(_doc_file_in)
+                if _doc_err:
+                    # Nothing has been mutated or stored yet on this path.
+                    flash(_doc_err, 'danger')
+                    return redirect(url_for('students.edit',
+                                            student_id=student.id))
+                _new_docs.append((_doc_type_in, _doc_file_in))
+
+            # Same MAX_STUDENT_DOCUMENTS cap the Add Student form applies,
+            # counted against ACTIVE documents only: a soft-deleted or
+            # replaced version never occupies a slot, so deleting one active
+            # document frees exactly one. Checked before any upload or DB
+            # write, so a rejected submission changes nothing.
+            if _new_docs:
+                _active_docs = active_student_document_count(student)
+                if _active_docs + len(_new_docs) > MAX_STUDENT_DOCUMENTS:
+                    flash(f'يمكن رفع {MAX_STUDENT_DOCUMENTS} مستندات كحد أقصى للطالب. '
+                          f'المستمسكات الفعّالة حالياً: {_active_docs}.', 'danger')
+                    return redirect(url_for('students.edit',
+                                            student_id=student.id))
 
         # ── RFID card (optional) — validated BEFORE any field is mutated ─────
         # Same normalisation, format rule and one-card-one-student rule as the
@@ -1403,6 +1640,8 @@ def edit(student_id):
                 buildings_list=buildings_for_form,
                 selected_building_id=student.building_id,
                 residential_areas_list=residential_areas_for_form,
+                existing_documents=existing_documents,
+                missing_document_types=missing_document_types,
             )
 
         new_section_id = request.form.get('section_id', type=int)
@@ -1514,6 +1753,8 @@ def edit(student_id):
                     buildings_list=buildings_for_form,
                     selected_building_id=student.building_id,
                     residential_areas_list=residential_areas_for_form,
+                    existing_documents=existing_documents,
+                    missing_document_types=missing_document_types,
                 )
 
         if form_cfg.section_visible('notes'):
@@ -1526,22 +1767,30 @@ def edit(student_id):
             if photo_path:
                 student.photo = photo_path
 
-        if is_feature_enabled(_edit_school_id, 'students.documents_upload') and form_cfg.section_visible('student_documents'):
-            doc_types = request.form.getlist('document_type[]')
-            doc_files = request.files.getlist('document_file[]')
-            for doc_type, doc_file in zip(doc_types, doc_files):
-                if doc_file and doc_file.filename:
-                    saved = save_uploaded_file(
-                        doc_file,
-                        'students/documents',
-                        prefix=f"{student.student_id}_{doc_type or 'document'}"
-                    )
-                    if saved:
-                        db.session.add(StudentDocument(
-                            student_id=student.id,
-                            document_type=doc_type.strip() or 'وثيقة',
-                            file_path=saved,
-                        ))
+        # ── Add the new attachments validated above ────────────────────
+        # Same subfolder, prefix and storage helper the Add Student form uses,
+        # now with the student-document extension / size policy applied. A
+        # failed upload rolls the whole save back rather than committing a
+        # partially attached student; existing attachment rows are never read
+        # or written here.
+        for _doc_type, _doc_file in _new_docs:
+            saved = save_uploaded_file(
+                _doc_file,
+                'students/documents',
+                prefix=f"{student.student_id}_{_doc_type or 'document'}",
+                allowed_exts=STUDENT_DOC_ALLOWED_EXTS,
+                max_size=STUDENT_DOC_MAX_BYTES,
+            )
+            if not saved:
+                db.session.rollback()
+                flash('تعذّر رفع أحد المستمسكات الجديدة، ولم يتم حفظ التعديلات. '
+                      'لم يتغير أي مستمسك حالي.', 'danger')
+                return redirect(url_for('students.edit', student_id=student.id))
+            db.session.add(StudentDocument(
+                student_id=student.id,
+                document_type=_doc_type.strip() or 'وثيقة',
+                file_path=saved,
+            ))
 
         # ── Attendance device mapping create ─────────────────────────────────
         # One device user number is allocated automatically and shared by all
@@ -1662,8 +1911,215 @@ def edit(student_id):
                            buildings_enabled=buildings_on,
                            buildings_list=buildings_for_form,
                            selected_building_id=student.building_id,
-                           residential_areas_list=residential_areas_for_form)
+                           residential_areas_list=residential_areas_for_form,
+                           existing_documents=existing_documents,
+                           missing_document_types=missing_document_types)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Student attachments (المستمسكات) — replace / soft-delete
+# ─────────────────────────────────────────────────────────────────────────────
+#  All three actions live on their own POST routes and are never part of the
+#  student edit form. A normal edit submission therefore carries no attachment
+#  identifier at all and cannot delete or replace a file; each action
+#  here names exactly one document id, which is re-verified against the
+#  authenticated operator's school and against this exact student before
+#  anything is written.
+#
+#  Soft delete (student documents only — not a system-wide pattern):
+#    * A StudentDocument row is NEVER deleted from the database.
+#    * A stored object is NEVER deleted from disk or from the bucket, with one
+#      exception: an object this request itself just uploaded, when the
+#      operation then failed and no database row references it.
+#    * Active document  = deleted_at IS NULL.
+#    * A deleted or replaced row keeps its original file_path forever, so the
+#      object stays referenced (it may also be referenced by an admission
+#      document) and the document stays restorable indefinitely. Nothing is
+#      purged automatically by this feature.
+
+
+def _verify_stored_upload(stored_value):
+    """Confirm the value returned by save_uploaded_file() is really stored.
+
+    ``save_uploaded_file`` returns a Supabase URL only after the storage API
+    answered 2xx, so a remote value is already proof of a successful upload.
+    A local (development / fallback) value is verified against the filesystem:
+    the file must exist and be non-empty. Returns True when the upload can be
+    trusted, so the caller only switches the database over after that.
+    """
+    if not stored_value:
+        return False
+    if stored_value.startswith(('http://', 'https://')):
+        return True
+    op = object_path_of(stored_value)
+    if not op:
+        return False
+    try:
+        full = os.path.join(current_app.root_path, 'static', *op.split('/'))
+        return os.path.isfile(full) and os.path.getsize(full) > 0
+    except Exception:
+        return False
+
+
+def _discard_unreferenced_upload(stored_value):
+    """Remove an object THIS request uploaded, after its operation failed.
+
+    Only ever called once the database has been rolled back, and only when
+    ``resolve_upload_owner`` confirms that no database row anywhere references
+    the exact value — so a shared or historical object can never be touched.
+    Best effort: this change deliberately adds no cleanup/outbox table, so a
+    failure here is logged and the object is simply left in place (it is
+    unreferenced, never a broken reference).
+    """
+    if not stored_value:
+        return
+    try:
+        if resolve_upload_owner(stored_value) is not None:
+            return                      # referenced by a row — never touch it
+        from app.utils.helpers import delete_uploaded_file
+        if not delete_uploaded_file(stored_value):
+            current_app.logger.warning(
+                '[student_documents] could not remove unreferenced upload after '
+                'a failed operation; object left in storage')
+    except Exception:
+        current_app.logger.warning(
+            '[student_documents] error while removing an unreferenced upload',
+            exc_info=True)
+
+
+@students_bp.route('/<int:student_id>/documents/<int:doc_id>/replace',
+                   methods=['POST'])
+@login_required
+@historical_guard
+@permission_required('edit_student')
+@feature_required('students.documents_upload')
+def replace_document(student_id, doc_id):
+    """Replace ONE attachment: a new active row, the old one soft-deleted.
+
+    Order of operations, so no partial update is possible:
+      1. authorise the operator for this student (same guards as ``edit()``),
+      2. re-fetch the ACTIVE document scoped to this student + school,
+      3. validate the new file (extension, magic bytes, size),
+      4. upload it to a NEW unique path — the old path is never overwritten,
+      5. verify the upload really landed,
+      6. in ONE transaction: insert the new active document and soft-delete the
+         old one (deleted_at / deleted_by_user_id / replaced_by_id → new row),
+      7. on any failure: roll back, so the original document stays active and
+         completely unchanged, and discard the just-uploaded object only if no
+         row references it.
+
+    The old row and its old file_path are preserved, so the previous version
+    remains restorable and its stored object stays referenced.
+    """
+    from datetime import datetime as dt
+
+    student, err = _authorize_student_document_action(student_id)
+    if err:
+        return err
+    doc = _get_student_document_or_404(doc_id, student, state='active')
+
+    new_file = request.files.get('document_file')
+    if not (new_file and new_file.filename):
+        flash('يرجى اختيار ملف بديل.', 'danger')
+        return redirect(url_for('students.edit', student_id=student.id))
+
+    _ext, err_msg = validate_student_document_file(new_file)
+    if err_msg:
+        flash(err_msg, 'danger')
+        return redirect(url_for('students.edit', student_id=student.id))
+
+    # Same helper, subfolder and prefix the Add Student form uses. The stored
+    # name is a fresh uuid, so this is always a NEW object — the previous
+    # file_path is never written to.
+    doc_type = doc.document_type
+    saved = save_uploaded_file(
+        new_file,
+        'students/documents',
+        prefix=f"{student.student_id}_{doc_type or 'document'}",
+        allowed_exts=STUDENT_DOC_ALLOWED_EXTS,
+        max_size=STUDENT_DOC_MAX_BYTES,
+    )
+    if not saved or not _verify_stored_upload(saved):
+        _discard_unreferenced_upload(saved)
+        flash('تعذّر رفع الملف الجديد. لم يتم تغيير المستمسك الحالي.', 'danger')
+        return redirect(url_for('students.edit', student_id=student.id))
+
+    try:
+        new_doc = StudentDocument(
+            student_id=student.id,
+            school_id=doc.school_id,
+            academic_year_id=doc.academic_year_id,
+            document_type=doc_type,
+            file_path=saved,
+        )
+        db.session.add(new_doc)
+        db.session.flush()              # need the new id for replaced_by_id
+
+        doc.deleted_at         = dt.utcnow()
+        doc.deleted_by_user_id = current_user.id
+        doc.replaced_by_id     = new_doc.id
+
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        # The original row was never committed as deleted, so it is still
+        # active with its original file_path. Only the new upload is orphaned.
+        _discard_unreferenced_upload(saved)
+        flash('تعذّر تحديث المستمسك. لم يتم تغيير الملف الحالي.', 'danger')
+        return redirect(url_for('students.edit', student_id=student.id))
+
+    log_action('replace', 'student_document', new_doc.id,
+               f'استبدال المستمسك «{doc_type}» للطالب {student.student_id} — '
+               f'السجل السابق {doc.id} تم أرشفته (حذف منطقي) مع الاحتفاظ بملفه')
+    flash(f'تم استبدال المستمسك «{doc_type}». '
+          f'النسخة السابقة محفوظة ولم يُحذف ملفها.', 'success')
+    return redirect(url_for('students.edit', student_id=student.id))
+
+
+@students_bp.route('/<int:student_id>/documents/<int:doc_id>/delete',
+                   methods=['POST'])
+@login_required
+@historical_guard
+@permission_required('edit_student')
+def delete_document(student_id, doc_id):
+    """Soft-delete ONE attachment after verifying it belongs to this student.
+
+    The database row and the stored object are both kept; only the soft-delete
+    metadata (who / when) is written, and the document disappears from every
+    active list, link and count. It stays restorable indefinitely.
+    """
+    from datetime import datetime as dt
+
+    student, err = _authorize_student_document_action(student_id)
+    if err:
+        return err
+    doc = _get_student_document_or_404(doc_id, student, state='active')
+
+    doc_label, doc_log_id = doc.document_type, doc.id
+    doc.deleted_at         = dt.utcnow()
+    doc.deleted_by_user_id = current_user.id
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        flash('تعذّر حذف المستمسك. لم يتم تغيير أي مستمسك.', 'danger')
+        return redirect(url_for('students.edit', student_id=student.id))
+
+    log_action('delete', 'student_document', doc_log_id,
+               f'حذف منطقي للمستمسك «{doc_label}» للطالب {student.student_id} '
+               f'(السجل والملف محفوظان وقابلان للاستعادة)')
+    # School-facing message only: it must not reference restoration, the recycle
+    # bin, Super Admin, or permanent deletion. The audit entry above keeps the
+    # full detail. Behaviour is unchanged — the row and the file are preserved.
+    flash('تم حذف الملف بنجاح.', 'success')
+    return redirect(url_for('students.edit', student_id=student.id))
+
+
+# NOTE: restoring a soft-deleted student document is NOT available in the
+# school interface. It lives exclusively in the Super Admin portal's
+# سلة المحذوفات (super_admin.recycle_bin / super_admin.restore_student_document),
+# behind super_admin_required + the portal's selected-school mechanism, so
+# edit_student alone can never reach it.
 
 @students_bp.route('/<int:student_id>')
 @login_required
@@ -1690,7 +2146,8 @@ def view(student_id):
             flash('لا يمكنك عرض بيانات طالب خارج شعبتك.', 'danger')
             return redirect(url_for('students.index'))
 
-    docs = student.documents.order_by(StudentDocument.uploaded_at.desc()).all()
+    # Active documents only — a soft-deleted document is never listed.
+    docs = active_student_documents(student)
 
     # Fee records — only loaded for users authorised to manage fees.
     # Scoped by student.id + student.school_id; spans all academic years.

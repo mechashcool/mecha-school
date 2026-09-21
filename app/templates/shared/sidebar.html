@@ -295,9 +295,11 @@
     {% if current_user.is_super_admin or current_user.has_permission('view_dashboard') %}
     {# Super admin: dedicated portal + schools overview #}
     {% if current_user.is_super_admin %}
+    {% set _recycle_endpoints = ['super_admin.recycle_bin', 'super_admin.restore_student_document'] %}
     <li class="nav-item">
       <a href="{{ url_for('super_admin.dashboard') }}"
-         class="{{ 'active' if request.blueprint == 'super_admin' }}">
+         class="{{ 'active' if request.blueprint == 'super_admin'
+                   and request.endpoint not in _recycle_endpoints }}">
         <i class="bi bi-shield-lock-fill"></i> بوابة المشرف العام
       </a>
     </li>
@@ -319,6 +321,14 @@
       <a href="{{ url_for('schools.features_overview') }}"
          class="{{ 'active' if request.endpoint in _feature_endpoints }}">
         <i class="bi bi-toggles2"></i> إدارة ميزات المدارس
+      </a>
+    </li>
+    {# Soft-deleted student documents of the school selected in the switcher
+       above. Super-admin only — never shown in the school interface. #}
+    <li class="nav-item">
+      <a href="{{ url_for('super_admin.recycle_bin') }}"
+         class="{{ 'active' if request.endpoint in _recycle_endpoints }}">
+        <i class="bi bi-trash3-fill"></i> سلة المحذوفات
       </a>
     </li>
     {% endif %}

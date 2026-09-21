@@ -1,0 +1,155 @@
+{% extends "shared/base.html" %}
+{% block title %}سلة المحذوفات{% endblock %}
+{% block page_title %}سلة المحذوفات{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">سلة المحذوفات</h1>
+    <p class="page-subtitle">
+      مستمسكات الطلاب المحذوفة
+      {% if school %}— {{ school.school_name_ar or school.school_name }}{% endif %}
+    </p>
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb">
+        <li class="breadcrumb-item">
+          <a href="{{ url_for('super_admin.dashboard') }}">بوابة المشرف العام</a>
+        </li>
+        <li class="breadcrumb-item active">سلة المحذوفات</li>
+      </ol>
+    </nav>
+  </div>
+</div>
+
+{# This page covers student documents only. #}
+<div class="alert alert-info py-2" style="font-size:13px">
+  <i class="bi bi-info-circle me-1"></i>
+  تعرض هذه الصفحة <strong>مستمسكات الطلاب</strong> المحذوفة فقط. لا يتم حذف أي ملف
+  فعلياً، ولا تشمل هذه السلة أي نوع آخر من البيانات.
+</div>
+
+{% if not school %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">
+    <i class="bi bi-buildings" style="font-size:40px;opacity:.3;display:block;margin-bottom:10px"></i>
+    يرجى اختيار المدرسة لعرض المحذوفات.
+    <div class="mt-2" style="font-size:12px">
+      استخدم «تبديل المدرسة» في الشريط الجانبي.
+    </div>
+  </div>
+</div>
+{% else %}
+
+<div class="card mb-3">
+  <div class="card-body py-3">
+    <form method="GET" action="{{ url_for('super_admin.recycle_bin') }}"
+          class="d-flex gap-2 flex-wrap align-items-center">
+      <input type="search" name="q" value="{{ search }}"
+             class="form-control form-control-sm" style="max-width:320px"
+             placeholder="بحث باسم الطالب أو رقمه أو نوع المستمسك">
+      <button type="submit" class="btn btn-sm btn-primary">
+        <i class="bi bi-search me-1"></i>بحث
+      </button>
+      {% if search %}
+      <a href="{{ url_for('super_admin.recycle_bin') }}"
+         class="btn btn-sm btn-outline-secondary">إلغاء البحث</a>
+      {% endif %}
+      <span class="ms-auto text-muted" style="font-size:12px">
+        الإجمالي: {{ pagination.total }}
+      </span>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  {% if rows %}
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>الطالب</th>
+          <th>رقم الطالب</th>
+          <th>نوع المستمسك</th>
+          <th>الملف</th>
+          <th>تاريخ الحذف</th>
+          <th>حُذف بواسطة</th>
+          <th>الحالة</th>
+          <th class="text-center">إجراء</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td style="font-weight:700">{{ r.student_name }}</td>
+          <td style="font-size:12px;color:#6c7a89">{{ r.student_code }}</td>
+          <td>{{ r.document_type }}</td>
+          <td style="font-size:12px;color:#9aabb8;word-break:break-all;max-width:220px">
+            {{ r.filename }}
+            {% if not r.file_present %}
+            <div style="color:#c99a00">
+              <i class="bi bi-exclamation-triangle me-1"></i>غير موجود في المخزن
+            </div>
+            {% endif %}
+          </td>
+          <td style="font-size:12px">
+            {{ r.deleted_at.strftime('%Y-%m-%d %H:%M') if r.deleted_at else '' }}
+          </td>
+          <td style="font-size:12px">{{ r.deleted_by_name or '—' }}</td>
+          <td>
+            {% if r.was_replaced %}
+            <span class="badge bg-light text-dark">نسخة مُستبدلة</span>
+            {% else %}
+            <span class="badge bg-secondary">محذوف</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            <form method="POST"
+                  action="{{ url_for('super_admin.restore_student_document', doc_id=r.id) }}"
+                  class="d-inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn btn-sm btn-outline-success"
+                      {% if not r.file_present %}disabled
+                      title="الملف غير موجود في المخزن"{% endif %}
+                      onclick="return confirm('هل تريد استرجاع هذا المستمسك بنفس ملفه الأصلي؟')">
+                <i class="bi bi-arrow-counterclockwise me-1"></i>استرجاع
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if pagination.pages > 1 %}
+  <div class="card-body d-flex justify-content-center py-3">
+    <nav>
+      <ul class="pagination pagination-sm mb-0">
+        {% for p in pagination.iter_pages() %}
+        {% if p %}
+        <li class="page-item {{ 'active' if p == pagination.page }}">
+          <a class="page-link"
+             href="{{ url_for('super_admin.recycle_bin', page=p, q=search) }}">{{ p }}</a>
+        </li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link">…</span></li>
+        {% endif %}
+        {% endfor %}
+      </ul>
+    </nav>
+  </div>
+  {% endif %}
+
+  {% else %}
+  <div class="card-body text-center text-muted py-5">
+    <i class="bi bi-trash3" style="font-size:40px;opacity:.3;display:block;margin-bottom:10px"></i>
+    {% if search %}
+    لا نتائج مطابقة للبحث في محذوفات هذه المدرسة.
+    {% else %}
+    لا توجد مستمسكات محذوفة لهذه المدرسة.
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}
