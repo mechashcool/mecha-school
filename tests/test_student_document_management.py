@@ -1000,5 +1000,229 @@ class StudentDocumentManagementTest(unittest.TestCase):
             self._track_stored(path)
 
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    #  12. Add-document card visibility at the active limit (UI only)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    # Unique to the add card itself. (name="document_file[]" also appears
+    # inside the add-row JS template, so it is not a usable marker.)
+    ADD_CARD_MARKER = 'id="add-document-row"'
+
+    def _fill_to(self, n):
+        """Bring student A1 up to n ACTIVE documents (starts with 2)."""
+        extra = ('الوثيقة الدراسية', 'التقرير الطبي', 'مستمسك إضافي')
+        i = 0
+        while len(self._active(self.student_a_id)) < n:
+            resp = self._edit(self.student_a_id, **{
+                'document_type[]': extra[i],
+                'document_file[]': (io.BytesIO(_PDF), f'f{i}.pdf'),
+            })
+            self.assertIn(resp.status_code, (200, 302))
+            i += 1
+        for _id, (_t, path) in self._active(self.student_a_id).items():
+            self._track_stored(path)
+
+    def test_add_card_visible_at_three_and_hidden_at_four(self):
+        self._login(self.admin_a_name)
+
+        # 3 active → the add card is present.
+        self._fill_to(3)
+        self.assertEqual(len(self._active(self.student_a_id)), 3)
+        body = self.client.get(
+            f'/students/{self.student_a_id}/edit').get_data(as_text=True)
+        self.assertIn(self.ADD_CARD_MARKER, body)
+        self.assertIn('مستندات الطالب', body)
+
+        # 4 active → the add card is gone …
+        self._fill_to(4)
+        self.assertEqual(len(self._active(self.student_a_id)), 4)
+        body = self.client.get(
+            f'/students/{self.student_a_id}/edit').get_data(as_text=True)
+        self.assertNotIn(self.ADD_CARD_MARKER, body)
+        self.assertNotIn('إضافة مستند آخر', body)
+
+        # … while all four existing documents keep every action.
+        active = self._active(self.student_a_id)
+        self.assertEqual(len(active), 4)
+        for doc_id, (_type, path) in active.items():
+            self.assertIn(f'doc-replace-{doc_id}', body)           # استبدال
+            self.assertIn(f'doc-delete-{doc_id}', body)            # حذف
+            self.assertIn(f'/documents/{doc_id}/download', body)   # تنزيل
+            # «عرض» stays inline: its href embeds the stored object name.
+            self.assertIn(os.path.basename(path), body)
+
+        # Soft-deleting one frees a slot and the card comes back on reload.
+        victim = sorted(active)[0]
+        self.assertEqual(self._delete(self.student_a_id, victim).status_code, 302)
+        self.assertEqual(len(self._active(self.student_a_id)), 3)
+        body = self.client.get(
+            f'/students/{self.student_a_id}/edit').get_data(as_text=True)
+        self.assertIn(self.ADD_CARD_MARKER, body)
+        # The soft-deleted row still exists and no longer consumes a slot:
+        # 4 rows in total, 3 of them active.
+        self.assertIsNotNone(self._row(victim)['deleted_at'])
+        self.assertEqual(len(self._all_ids(self.student_a_id)), 4)
+        self.assertEqual(len(self._active(self.student_a_id)), 3)
+
+    def test_server_side_limit_is_still_authoritative_when_the_card_is_hidden(self):
+        """Hiding the card must not be the only protection."""
+        self._login(self.admin_a_name)
+        self._fill_to(4)
+        at_limit = self._active(self.student_a_id)
+
+        # A hand-crafted submission bypassing the hidden card is still refused.
+        resp = self.client.post(
+            f'/students/{self.student_a_id}/edit',
+            data=self._edit_payload(**{
+                'document_type[]': 'مستمسك خامس',
+                'document_file[]': (io.BytesIO(_PDF), 'fifth.pdf'),
+            }),
+            content_type='multipart/form-data', follow_redirects=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('كحد أقصى للطالب', resp.get_data(as_text=True))
+        self.assertEqual(self._active(self.student_a_id), at_limit)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    #  13. «تنزيل» performs a real download; «عرض» stays inline
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def _flashes(self, body):
+        """Only the rendered flash messages (base.html renders each as a
+        .flash-item alert), so unrelated page text cannot leak into the
+        assertions — the sidebar, for instance, has a fees «استرجاع» entry.
+        """
+        import re
+        blocks = re.findall(
+            r'<div class="alert [^"]*flash-item[^"]*">(.*?)</div>', body, re.S)
+        return [re.sub(r'<[^>]+>', '', b).strip() for b in blocks]
+
+    def _download(self, student_id, doc_id):
+        return self.client.get(
+            f'/students/{student_id}/documents/{doc_id}/download')
+
+    def test_download_returns_attachment_with_a_safe_filename(self):
+        stored = self._row(self.doc_id)['file_path']
+        self._login(self.admin_a_name)
+
+        resp = self._download(self.student_a_id, self.doc_id)
+        self.assertEqual(resp.status_code, 200)
+        cd = resp.headers.get('Content-Disposition', '')
+        self.assertTrue(cd.lower().startswith('attachment'), cd)
+        # Safe filename: ASCII, right extension, no CR/LF, no path separators.
+        self.assertIn('.png', cd)
+        for bad in ('\r', '\n', '/', '\\', '..'):
+            self.assertNotIn(bad, cd)
+        # The bytes really are the stored file.
+        with open(self._full(stored), 'rb') as fh:
+            self.assertEqual(resp.get_data(), fh.read())
+
+    def test_safe_download_name_sanitizes_hostile_values(self):
+        from app.blueprints.students import _safe_download_name
+        cases = {
+            'uploads/students/documents/a_b-1234.pdf': '.pdf',
+            'uploads/x/../../etc/passwd': None,
+            'uploads/x/ev il"; \r\nSet-Cookie: a=b.png': '.png',
+            'uploads/x/.....png': '.png',
+        }
+        for value, ext in cases.items():
+            name = _safe_download_name(value)
+            for bad in ('\r', '\n', '/', '\\', '..', '"', ';', ' '):
+                self.assertNotIn(bad, name, f'{value} -> {name}')
+            self.assertTrue(name, value)
+            if ext:
+                self.assertTrue(name.endswith(ext), f'{value} -> {name}')
+
+    def test_view_link_stays_inline_and_is_not_the_download_route(self):
+        self._login(self.admin_a_name)
+        body = self.client.get(
+            f'/students/{self.student_a_id}/edit').get_data(as_text=True)
+        stored_base = os.path.basename(self._row(self.doc_id)['file_path'])
+        # «عرض» still points at the inline protected/static URL (which embeds
+        # the stored object name) and still opens in a new tab …
+        self.assertIn(stored_base, body)
+        self.assertIn('target="_blank"', body)
+        self.assertIn('>عرض', body)
+        # … and exactly one download-route link exists per document.
+        self.assertEqual(body.count(f'/documents/{self.doc_id}/download'), 1)
+
+    def test_other_school_cannot_download(self):
+        self._login(self.admin_b_name)
+        self.assertIn(self._download(self.student_a_id, self.doc_id).status_code,
+                      (403, 404))
+        # Their own student paired with our document id is also refused.
+        self.assertEqual(self._download(self.student_b_id, self.doc_id).status_code,
+                         404)
+
+    def test_soft_deleted_document_cannot_be_downloaded(self):
+        self._login(self.admin_a_name)
+        self.assertEqual(self._delete(self.student_a_id, self.doc_id).status_code, 302)
+        self.assertEqual(self._download(self.student_a_id, self.doc_id).status_code,
+                         404)
+
+    def test_download_of_a_missing_file_errors_without_touching_the_database(self):
+        with self._db():
+            student = (Student.query.execution_options(bypass_tenant_scope=True)
+                       .filter_by(id=self.student_a_id).first())
+            ghost = self._make_doc(
+                student, 'التقرير الطبي',
+                file_path=f'uploads/students/documents/gone-{_uid()}.png')
+            db.session.commit()
+        before = self._row(ghost)
+
+        self._login(self.admin_a_name)
+        resp = self._download(self.student_a_id, ghost)
+        self.assertEqual(resp.status_code, 302)          # flash + redirect
+        self.assertEqual(self._row(ghost), before, 'the row changed')
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    #  14. School-facing success messages are exactly as specified
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def test_replace_success_message_is_exact(self):
+        self._login(self.admin_a_name)
+        before_active = self._active(self.student_a_id)
+
+        resp = self.client.post(
+            f'/students/{self.student_a_id}/documents/{self.doc_id}/replace',
+            data={'document_file': (io.BytesIO(_PDF), 'new.pdf')},
+            content_type='multipart/form-data', follow_redirects=True)
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_data(as_text=True)
+
+        # Exactly this message, and nothing else about the old version.
+        flashes = self._flashes(body)
+        self.assertIn('تم استبدال الملف بنجاح.', flashes)
+        shown = ' '.join(flashes)
+        for banned in ('النسخة السابقة', 'المستمسكات المحذوفة',
+                       'سلة المحذوفات', 'مسؤول النظام', 'استرجاع',
+                       'الحذف النهائي', 'ملفها'):
+            self.assertNotIn(banned, shown, banned)
+
+        # One new active row, one soft-deleted previous row, still ≤ 4 active.
+        after_active = self._active(self.student_a_id)
+        self.assertEqual(len(after_active), len(before_active))
+        self.assertLessEqual(len(after_active), 4)
+        self.assertNotIn(self.doc_id, after_active)
+        self.assertIsNotNone(self._row(self.doc_id)['deleted_at'])
+        self.assertEqual(len(self._all_ids(self.student_a_id)),
+                         len(before_active) + 1)
+        for _id, (_t, path) in after_active.items():
+            self._track_stored(path)
+
+    def test_delete_success_message_is_exact(self):
+        self._login(self.admin_a_name)
+        resp = self.client.post(
+            f'/students/{self.student_a_id}/documents/{self.doc_id}/delete',
+            follow_redirects=True)
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_data(as_text=True)
+        flashes = self._flashes(body)
+        self.assertIn('تم حذف الملف بنجاح.', flashes)
+        shown = ' '.join(flashes)
+        for banned in ('المستمسكات المحذوفة', 'سلة المحذوفات',
+                       'مسؤول النظام', 'قابلان للاستعادة', 'استرجاع'):
+            self.assertNotIn(banned, shown, banned)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -530,7 +530,12 @@
                  class="btn btn-sm btn-outline-primary flex-grow-1">
                 <i class="bi bi-eye me-1"></i>عرض
               </a>
-              <a href="{{ d.url }}" download
+              {# Forced download: the response carries
+                 Content-Disposition: attachment, which the HTML
+                 `download` attribute cannot guarantee for a
+                 cross-origin Supabase URL. «عرض» above stays inline. #}
+              <a href="{{ url_for('students.download_document',
+                                  student_id=student.id, doc_id=d.id) }}"
                  class="btn btn-sm btn-outline-secondary flex-grow-1">
                 <i class="bi bi-download me-1"></i>تنزيل
               </a>
@@ -574,7 +579,14 @@
       </div>
       {% endif %}
 
-      {% if 'students.documents_upload' in enabled_features and form_cfg.section_visible('student_documents') %}
+      {# The add-new-document card disappears once the student has
+         MAX_STUDENT_DOCUMENTS active documents (can_add_documents is
+         computed from the active list only). The existing document
+         cards above keep all of their actions. Server-side validation
+         remains authoritative. #}
+      {% if 'students.documents_upload' in enabled_features
+            and form_cfg.section_visible('student_documents')
+            and (can_add_documents is not defined or can_add_documents) %}
       <div class="card mb-4">
         <div class="card-header"><i class="bi bi-folder-fill text-accent"></i>مستندات الطالب</div>
         <div class="card-body">

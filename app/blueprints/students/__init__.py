@@ -3,8 +3,11 @@ import os
 import re
 from decimal import Decimal, InvalidOperation
 
+from urllib.parse import quote
+
 from flask import (Blueprint, render_template, redirect, url_for,
-                   flash, request, abort, jsonify, session, current_app)
+                   flash, request, abort, jsonify, session, current_app,
+                   send_from_directory)
 from flask_login import login_required, current_user
 from sqlalchemy.orm import joinedload
 from app.models import (db, Student, Section, Grade, AcademicYear, StudentDocument,
@@ -16,7 +19,7 @@ from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    historical_guard)
 from app.utils.helpers import save_uploaded_file, resolve_photo_url
 from app.utils.upload_access import (object_path_of, protected_upload_url,
-                                     resolve_upload_owner)
+                                     resolve_upload_owner, storage_ref_of)
 from app.utils import code_generator
 from app.utils.features import feature_required, is_feature_enabled
 from app.utils.student_form_config import get_student_form_config
@@ -135,6 +138,30 @@ def active_student_documents(student):
             .filter(StudentDocument.deleted_at.is_(None))
             .order_by(StudentDocument.uploaded_at.desc())
             .all())
+
+
+_UNSAFE_DOWNLOAD_CHARS = re.compile(r'[^A-Za-z0-9._-]+')
+
+
+def _safe_download_name(stored_value):
+    """A safe ``Content-Disposition`` filename for a stored document.
+
+    The browser's original filename is deliberately not persisted (
+    ``save_uploaded_file`` generates a uuid name), so the stored basename is
+    the safest source already available — no schema change is needed for this.
+    Everything outside ``[A-Za-z0-9._-]`` is stripped, which removes CR/LF
+    (header injection), quotes, and every path separator including ``..``.
+    """
+    base = _stored_document_filename(stored_value).replace('\\', '/')
+    base = base.rsplit('/', 1)[-1]
+    ext = ''
+    if '.' in base:
+        base, _, ext = base.rpartition('.')
+        ext = _UNSAFE_DOWNLOAD_CHARS.sub('', ext)[:10].lower()
+    base = _UNSAFE_DOWNLOAD_CHARS.sub('_', base).strip('._')[:80]
+    if not base:
+        base = 'document'
+    return f'{base}.{ext}' if ext else base
 
 
 def student_document_rows(student):
@@ -1533,6 +1560,12 @@ def edit(student_id):
     # deleting one is a separate explicit POST route, so this list can never be
     # acted on by a normal save.
     existing_documents = student_document_rows(student)
+    # Hide the add-new-document card once the student is at the active
+    # limit. Counted from the list already loaded above (active rows only,
+    # deleted_at IS NULL), so this costs no extra query and soft-deleted or
+    # replaced rows never occupy a slot. UI only — the authoritative check
+    # stays in the POST handler below.
+    can_add_documents = len(existing_documents) < MAX_STUDENT_DOCUMENTS
     _attached_doc_types = {(r['document_type'] or '').strip()
                            for r in existing_documents}
     missing_document_types = [t for t in STUDENT_DOCUMENT_TYPES
@@ -1573,6 +1606,7 @@ def edit(student_id):
                 selected_building_id=student.building_id,
                 residential_areas_list=residential_areas_for_form,
                 existing_documents=existing_documents,
+                can_add_documents=can_add_documents,
                 missing_document_types=missing_document_types,
             )
 
@@ -1641,6 +1675,7 @@ def edit(student_id):
                 selected_building_id=student.building_id,
                 residential_areas_list=residential_areas_for_form,
                 existing_documents=existing_documents,
+                can_add_documents=can_add_documents,
                 missing_document_types=missing_document_types,
             )
 
@@ -1754,6 +1789,7 @@ def edit(student_id):
                     selected_building_id=student.building_id,
                     residential_areas_list=residential_areas_for_form,
                     existing_documents=existing_documents,
+                    can_add_documents=can_add_documents,
                     missing_document_types=missing_document_types,
                 )
 
@@ -1913,6 +1949,7 @@ def edit(student_id):
                            selected_building_id=student.building_id,
                            residential_areas_list=residential_areas_for_form,
                            existing_documents=existing_documents,
+                           can_add_documents=can_add_documents,
                            missing_document_types=missing_document_types)
 
 
@@ -1987,6 +2024,63 @@ def _discard_unreferenced_upload(stored_value):
             exc_info=True)
 
 
+@students_bp.route('/<int:student_id>/documents/<int:doc_id>/download')
+@login_required
+@permission_required('view_students')
+def download_document(student_id, doc_id):
+    """Force a real download of ONE ACTIVE document of this student.
+
+    «عرض» keeps using the existing inline protected URL and is untouched. This
+    route exists only because «تنزيل» must actually download: the HTML
+    ``download`` attribute is ignored by browsers for cross-origin Supabase
+    URLs, so the attachment disposition has to come from the response itself.
+
+    Authorization reuses the same guards as the other document actions (school
+    equality, building scope, teacher scope) plus the same strictly scoped
+    lookup, and it resolves an ACTIVE row only — so another school's document
+    is unreachable and a soft-deleted document is not downloadable from the
+    school interface. Read-only: no database row is written on any path,
+    including the missing-file path.
+    """
+    student, err = _authorize_student_document_action(student_id)
+    if err:
+        return err
+    doc = _get_student_document_or_404(doc_id, student, state='active')
+
+    stored = doc.file_path or ''
+    download_name = _safe_download_name(stored)
+
+    # ── Supabase-stored object → let the provider force the download ─────────
+    # Supabase Storage answers with Content-Disposition: attachment when the
+    # object URL carries ?download=<name>, so the bytes stream from the CDN and
+    # are never buffered in this worker. A short-lived signed URL is used when
+    # signing is available; otherwise the already-stored URL is reused — the
+    # same object the inline view resolves to today, so no new access path and
+    # no service credential is exposed.
+    ref = storage_ref_of(stored)
+    if ref is not None:
+        from app.utils.helpers import _supabase_sign
+        bucket, object_path = ref
+        ttl = current_app.config.get('SIGNED_FILE_TTL_SECONDS', 900)
+        target = _supabase_sign(object_path, bucket=bucket, ttl=ttl) or stored
+        joiner = '&' if '?' in target else '?'
+        return redirect(f'{target}{joiner}download={quote(download_name)}')
+
+    # ── Locally-stored file → stream it with an attachment disposition ───────
+    op = object_path_of(stored)
+    static_root = os.path.join(current_app.root_path, 'static')
+    if op:
+        candidate = os.path.join(static_root, *op.split('/'))
+        if os.path.isfile(candidate):
+            # send_from_directory streams the file (no full read into memory)
+            # and werkzeug's safe_join blocks traversal.
+            return send_from_directory(static_root, op, as_attachment=True,
+                                       download_name=download_name, max_age=0)
+
+    flash('الملف غير موجود في المخزن.', 'danger')
+    return redirect(url_for('students.edit', student_id=student.id))
+
+
 @students_bp.route('/<int:student_id>/documents/<int:doc_id>/replace',
                    methods=['POST'])
 @login_required
@@ -2059,6 +2153,15 @@ def replace_document(student_id, doc_id):
         doc.deleted_by_user_id = current_user.id
         doc.replaced_by_id     = new_doc.id
 
+        # Read every value the audit line needs BEFORE committing. commit()
+        # expires all loaded instances, so touching doc/new_doc/student
+        # afterwards would re-SELECT each one attribute-by-attribute — nine
+        # extra round-trips per replacement against a hosted database.
+        _new_doc_id   = new_doc.id
+        _old_doc_id   = doc.id
+        _student_code = student.student_id
+        _student_pk   = student.id
+
         db.session.commit()
     except Exception:
         db.session.rollback()
@@ -2068,12 +2171,14 @@ def replace_document(student_id, doc_id):
         flash('تعذّر تحديث المستمسك. لم يتم تغيير الملف الحالي.', 'danger')
         return redirect(url_for('students.edit', student_id=student.id))
 
-    log_action('replace', 'student_document', new_doc.id,
-               f'استبدال المستمسك «{doc_type}» للطالب {student.student_id} — '
-               f'السجل السابق {doc.id} تم أرشفته (حذف منطقي) مع الاحتفاظ بملفه')
-    flash(f'تم استبدال المستمسك «{doc_type}». '
-          f'النسخة السابقة محفوظة ولم يُحذف ملفها.', 'success')
-    return redirect(url_for('students.edit', student_id=student.id))
+    log_action('replace', 'student_document', _new_doc_id,
+               f'استبدال المستمسك «{doc_type}» للطالب {_student_code} — '
+               f'السجل السابق {_old_doc_id} تم أرشفته (حذف منطقي) مع الاحتفاظ بملفه')
+    # School-facing message only: no wording about the preserved previous
+    # version, restoration, the recycle bin, Super Admin, or permanent
+    # deletion. The audit entry above keeps the full detail.
+    flash('تم استبدال الملف بنجاح.', 'success')
+    return redirect(url_for('students.edit', student_id=_student_pk))
 
 
 @students_bp.route('/<int:student_id>/documents/<int:doc_id>/delete',
@@ -2095,7 +2200,11 @@ def delete_document(student_id, doc_id):
         return err
     doc = _get_student_document_or_404(doc_id, student, state='active')
 
+    # Captured before the commit: commit() expires loaded instances, so
+    # reading these afterwards would cost one re-SELECT per attribute.
     doc_label, doc_log_id = doc.document_type, doc.id
+    _student_code = student.student_id
+    _student_pk = student.id
     doc.deleted_at         = dt.utcnow()
     doc.deleted_by_user_id = current_user.id
     try:
@@ -2106,13 +2215,13 @@ def delete_document(student_id, doc_id):
         return redirect(url_for('students.edit', student_id=student.id))
 
     log_action('delete', 'student_document', doc_log_id,
-               f'حذف منطقي للمستمسك «{doc_label}» للطالب {student.student_id} '
+               f'حذف منطقي للمستمسك «{doc_label}» للطالب {_student_code} '
                f'(السجل والملف محفوظان وقابلان للاستعادة)')
     # School-facing message only: it must not reference restoration, the recycle
     # bin, Super Admin, or permanent deletion. The audit entry above keeps the
     # full detail. Behaviour is unchanged — the row and the file are preserved.
     flash('تم حذف الملف بنجاح.', 'success')
-    return redirect(url_for('students.edit', student_id=student.id))
+    return redirect(url_for('students.edit', student_id=_student_pk))
 
 
 # NOTE: restoring a soft-deleted student document is NOT available in the
