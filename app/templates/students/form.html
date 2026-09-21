@@ -712,7 +712,27 @@
   const addDocumentRowBtn = document.getElementById('add-document-row');
   const documentRows = document.getElementById('document-rows');
 
+  /* Same row limit the Add Student wizard applies (create_wizard.html), with
+     this student's already-active documents counted into the SAME total of 4:
+         active documents + visible upload rows <= MAX_DOCS
+     Only real rows in the DOM are counted — the row markup below lives in a
+     JS template string and is not part of the document until appended. At 4
+     active documents the whole card is not rendered at all, so the elements
+     above are null and syncAddDocumentBtn() simply does nothing. The server
+     validation stays authoritative either way. */
+  const MAX_DOCS = 4;
+  const ACTIVE_DOCS = {{ (existing_documents | default([], true)) | length }};
+  const syncAddDocumentBtn = () => {
+    if (!addDocumentRowBtn || !documentRows) return;
+    const visibleRows = documentRows.querySelectorAll('.document-row').length;
+    const atMax = (ACTIVE_DOCS + visibleRows) >= MAX_DOCS;
+    addDocumentRowBtn.disabled = atMax;
+    addDocumentRowBtn.style.display = atMax ? 'none' : '';
+  };
+
   addDocumentRowBtn?.addEventListener('click', () => {
+    if ((ACTIVE_DOCS + documentRows.querySelectorAll('.document-row').length)
+        >= MAX_DOCS) return;
     const row = document.createElement('div');
     row.className = 'row g-3 align-items-end mb-3 document-row';
     row.innerHTML = `
@@ -737,13 +757,18 @@
       </div>
     `;
     documentRows.appendChild(row);
+    syncAddDocumentBtn();
   });
 
   documentRows?.addEventListener('click', event => {
     if (event.target.closest('.remove-document-row')) {
       event.target.closest('.document-row')?.remove();
+      syncAddDocumentBtn();
     }
   });
+
+  /* Correct state on initial page load, too. */
+  syncAddDocumentBtn();
 
 /* ════════════ Inline "add new residence area" toggle ════════════ */
 /* Identical to the Add Student wizard: the new-area name input is only shown
