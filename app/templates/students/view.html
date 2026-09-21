@@ -161,8 +161,12 @@
                class="btn btn-sm btn-outline-primary">
               <i class="bi bi-eye me-1"></i>عرض
             </a>
-            <a href="{{ upload_url(doc.file_path) }}"
-               download
+            {# Forced download: the response carries
+               Content-Disposition: attachment, which the HTML `download`
+               attribute cannot guarantee for a cross-origin Supabase URL.
+               Same protected route the edit page uses. «عرض» stays inline. #}
+            <a href="{{ url_for('students.download_document',
+                                student_id=student.id, doc_id=doc.id) }}"
                class="btn btn-sm btn-outline-secondary">
               <i class="bi bi-download me-1"></i>تنزيل
             </a>
