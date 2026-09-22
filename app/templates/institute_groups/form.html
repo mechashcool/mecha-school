@@ -3,11 +3,23 @@
 {% block title %}{{ 'تعديل مجموعة دراسية' if editing else 'إضافة مجموعة دراسية' }}{% endblock %}
 {% block page_title %}{{ 'تعديل مجموعة دراسية' if editing else 'إضافة مجموعة دراسية' }}{% endblock %}
 
-{#- `form` holds request.form after a failed POST so the operator's submitted
-    choices survive a validation error; otherwise fall back to the stored row. -#}
-{% macro val(field, stored) -%}
-{{ form.get(field) if form else (stored if stored is not none else '') }}
-{%- endmacro %}
+{#- The selected subject is the ONLY thing stored on the group. Stage and grade
+    are filtering inputs: they narrow the subject list here and are re-checked
+    server-side, but no stage or grade column exists on InstituteStudyGroup.
+
+    Preselection order, so a failed POST keeps the operator's own choices:
+      1. request.form  (re-render after a validation error)
+      2. the group's current subject, and the stage/grade derived from it
+      3. empty (create) -#}
+{% set legacy = taxonomy.legacy_subject %}
+{% set cur_subject_id = (form.get('subject_id')|int if form and form.get('subject_id')
+                         else (group.subject_id if editing else none)) %}
+{% set cur_subject = taxonomy.subjects | selectattr('id', 'equalto', cur_subject_id) | first %}
+{% set cur_grade_id = (form.get('grade_id')|int if form and form.get('grade_id')
+                       else (cur_subject.grade_id if cur_subject else none)) %}
+{% set cur_grade = taxonomy.grades | selectattr('id', 'equalto', cur_grade_id) | first %}
+{% set cur_stage = (form.get('stage') if form and form.get('stage') is not none
+                    else (cur_grade.stage if cur_grade else '')) %}
 
 {% block content %}
 <div class="page-header">
@@ -31,24 +43,7 @@
         <div class="col-md-6">
           <label class="form-label">اسم المجموعة <span class="text-danger">*</span></label>
           <input type="text" name="name" class="form-control" maxlength="150" required
-                 value="{{ val('name', group.name if editing else '') }}">
-        </div>
-
-        <div class="col-md-6">
-          <label class="form-label">المادة <span class="text-danger">*</span></label>
-          {% set sel_subject = (form.get('subject_id')|int if form and form.get('subject_id')
-                                else (group.subject_id if editing else none)) %}
-          <select name="subject_id" class="form-select" required>
-            <option value="">— اختر المادة —</option>
-            {% for s in subjects %}
-            <option value="{{ s.id }}" {{ 'selected' if sel_subject == s.id }}>{{ s.name }}</option>
-            {% endfor %}
-          </select>
-          {% if not subjects %}
-          <div class="form-text text-danger">
-            لا توجد مواد دراسية لهذا العام. أضف مادة أولاً من صفحة المواد الدراسية.
-          </div>
-          {% endif %}
+                 value="{{ form.get('name') if form else (group.name if editing else '') }}">
         </div>
 
         <div class="col-md-6">
@@ -64,6 +59,77 @@
             {% endfor %}
           </select>
           <div class="form-text">المجموعة المفعّلة يجب أن يكون لها مدرّس.</div>
+        </div>
+
+        {# ── المرحلة → الصف → المادة ──────────────────────────────────────── #}
+        {% if legacy %}
+        <div class="col-12">
+          <div class="alert alert-warning mb-0" style="font-size:13px">
+            <i class="bi bi-exclamation-triangle me-1"></i>
+            المادة الحالية <strong>{{ legacy.name }}</strong> غير مرتبطة بصف دراسي
+            (مادة قديمة). يمكنك حفظ المجموعة كما هي، أو اختيار مرحلة وصف ومادة
+            جديدة لاستبدالها. لا يمكن اختيار مواد غير مرتبطة بصف من جديد.
+          </div>
+        </div>
+        {% endif %}
+
+        <div class="col-md-4">
+          <label class="form-label">المرحلة الدراسية
+            {% if not legacy %}<span class="text-danger">*</span>{% endif %}
+          </label>
+          <select name="stage" id="fStage" class="form-select">
+            <option value="">— اختر المرحلة —</option>
+            {% for s in taxonomy.stages %}
+            <option value="{{ s.value }}" {{ 'selected' if cur_stage == s.value and cur_grade }}>
+              {{ s.label }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">الصف
+            {% if not legacy %}<span class="text-danger">*</span>{% endif %}
+          </label>
+          <select name="grade_id" id="fGrade" class="form-select">
+            <option value="">— اختر الصف —</option>
+            {% for g in taxonomy.grades %}
+            <option value="{{ g.id }}" data-stage="{{ g.stage }}"
+                    {{ 'selected' if cur_grade_id == g.id }}>{{ g.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">المادة <span class="text-danger">*</span></label>
+          <select name="subject_id" id="fSubject" class="form-select" required>
+            <option value="">— اختر المادة —</option>
+            {#- The legacy subject is rendered ONLY when the group already uses
+                it, so it can be saved unchanged; it is never a new choice. -#}
+            {% if legacy %}
+            <option value="{{ legacy.id }}" data-grade-id="" data-legacy="1"
+                    {{ 'selected' if cur_subject_id == legacy.id }}>
+              {{ legacy.name }}{% if legacy.code %} ({{ legacy.code }}){% endif %} — بدون صف
+            </option>
+            {% endif %}
+            {#- Two subjects may share a name under different grades. They are
+                different records and both stay listed; nothing is merged. -#}
+            {% for s in taxonomy.subjects %}
+            <option value="{{ s.id }}" data-grade-id="{{ s.grade_id }}"
+                    {{ 'selected' if cur_subject_id == s.id }}>
+              {{ s.name }}{% if s.code %} ({{ s.code }}){% endif %}
+            </option>
+            {% endfor %}
+          </select>
+          <div class="form-text text-danger" id="fSubjectEmpty" style="display:none">
+            لا توجد مواد مرتبطة بهذا الصف في العام الدراسي المحدد.
+          </div>
+          {% if not taxonomy.subjects %}
+          <div class="form-text text-danger">
+            لا توجد مواد مرتبطة بصفوف دراسية لهذا العام. أضف صفاً ومادة أولاً من
+            صفحتي «الصفوف والشعب» و«المواد الدراسية».
+          </div>
+          {% endif %}
         </div>
 
         <div class="col-md-3">
@@ -104,4 +170,73 @@
     </form>
   </div>
 </div>
+
+<script>
+(function () {
+  // Dependent dropdowns over data the server already authorized and rendered.
+  // Convenience only: the POST handler re-resolves stage, grade and subject
+  // against this institute and academic year and rejects any mismatch, so
+  // disabling JavaScript cannot widen what may be saved.
+  const stageEl   = document.getElementById('fStage');
+  const gradeEl   = document.getElementById('fGrade');
+  const subjectEl = document.getElementById('fSubject');
+  const emptyMsg  = document.getElementById('fSubjectEmpty');
+  if (!stageEl || !gradeEl || !subjectEl) return;
+
+  const gradeOpts   = Array.from(gradeEl.options).slice(1);
+  const subjectOpts = Array.from(subjectEl.options).slice(1);
+
+  function show(opt, visible) {
+    opt.hidden = !visible;
+    opt.disabled = !visible;
+  }
+
+  function syncGrades(reset) {
+    const stage = stageEl.value;
+    let visible = 0;
+    for (const opt of gradeOpts) {
+      // A legacy grade bucket uses the empty stage, so compare exactly.
+      const ok = stage === '' ? false : opt.dataset.stage === stage;
+      show(opt, ok);
+      if (ok) visible++;
+    }
+    if (reset && gradeEl.selectedOptions.length
+        && gradeEl.selectedOptions[0].hidden) {
+      gradeEl.value = '';
+    }
+    return visible;
+  }
+
+  function syncSubjects(reset) {
+    const gradeId = gradeEl.value;
+    let visible = 0;
+    for (const opt of subjectOpts) {
+      // The legacy option (data-legacy) stays available while it is the
+      // group's current subject; it is filtered out of grade-based browsing.
+      const isLegacy = opt.dataset.legacy === '1';
+      const ok = isLegacy ? !gradeId : (gradeId !== '' && opt.dataset.gradeId === gradeId);
+      show(opt, ok);
+      if (ok && !isLegacy) visible++;
+    }
+    if (reset && subjectEl.selectedOptions.length
+        && subjectEl.selectedOptions[0].hidden) {
+      subjectEl.value = '';
+    }
+    if (emptyMsg) {
+      emptyMsg.style.display = (gradeId !== '' && visible === 0) ? '' : 'none';
+    }
+  }
+
+  stageEl.addEventListener('change', function () {
+    syncGrades(true);
+    syncSubjects(true);
+  });
+  gradeEl.addEventListener('change', function () { syncSubjects(true); });
+
+  // Initial pass keeps whatever the server preselected (edit, or a re-render
+  // after a validation error) without clearing it.
+  syncGrades(false);
+  syncSubjects(false);
+})();
+</script>
 {% endblock %}

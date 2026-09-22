@@ -58,15 +58,54 @@ class InstituteStudyGroupTest(unittest.TestCase):
         db.session.add(year)
         db.session.flush()
 
-        subject = Subject(school_id=school.id, academic_year_id=year.id,
-                          name=f'{label} Subject', code=f'{label[:2].upper()}{self.suffix[:6]}')
         employee = Employee(school_id=school.id, employee_id=f'E-{label[:2]}-{self.suffix}',
                             full_name=f'{label} Instructor', base_salary=0, status='active')
-        db.session.add_all([subject, employee])
+        db.session.add(employee)
+        db.session.flush()
+
+        # A subject that predates grade classification. Institutes keep one so
+        # the legacy path stays covered; it must never be offered as a NEW
+        # choice, only preserved on a group that already uses it.
+        legacy = Subject(school_id=school.id, academic_year_id=year.id,
+                         name=f'{label} Legacy', grade_id=None, stage=None,
+                         code=f'LG{self.suffix[:6]}')
+        db.session.add(legacy)
         db.session.flush()
 
         grade_id = section_id = None
-        if not institute:
+        prep_grade_id = mid_grade_id = None
+        math_prep_id = math_mid_id = None
+
+        if institute:
+            # Two grades in DIFFERENT stages, each carrying a subject with the
+            # SAME name. That is the real-world case this feature exists for:
+            # الرياضيات under الإعدادية and under متوسطة are distinct records.
+            prep = Grade(school_id=school.id, academic_year_id=year.id,
+                         name=f'{label} Prep Grade', stage='إعدادية')
+            mid = Grade(school_id=school.id, academic_year_id=year.id,
+                        name=f'{label} Mid Grade', stage='متوسطة')
+            db.session.add_all([prep, mid])
+            db.session.flush()
+
+            math_prep = Subject(school_id=school.id, academic_year_id=year.id,
+                                name='الرياضيات', grade_id=prep.id,
+                                code=f'MP{self.suffix[:6]}')
+            math_mid = Subject(school_id=school.id, academic_year_id=year.id,
+                               name='الرياضيات', grade_id=mid.id,
+                               code=f'MM{self.suffix[:6]}')
+            db.session.add_all([math_prep, math_mid])
+            db.session.flush()
+
+            prep_grade_id, mid_grade_id = prep.id, mid.id
+            math_prep_id, math_mid_id = math_prep.id, math_mid.id
+            subject = math_prep          # the default, grade-classified subject
+            grade_id = prep.id
+        else:
+            subject = Subject(school_id=school.id, academic_year_id=year.id,
+                              name=f'{label} Subject',
+                              code=f'{label[:2].upper()}{self.suffix[:6]}')
+            db.session.add(subject)
+            db.session.flush()
             grade = Grade(school_id=school.id, academic_year_id=year.id,
                           name=f'{label} Grade')
             db.session.add(grade)
@@ -89,6 +128,9 @@ class InstituteStudyGroupTest(unittest.TestCase):
         return {'school_id': school.id, 'year_id': year.id,
                 'subject_id': subject.id, 'employee_id': employee.id,
                 'grade_id': grade_id, 'section_id': section_id,
+                'legacy_subject_id': legacy.id,
+                'prep_grade_id': prep_grade_id, 'mid_grade_id': mid_grade_id,
+                'math_prep_id': math_prep_id, 'math_mid_id': math_mid_id,
                 'admin_id': admin.id}
 
     def _make_student(self, org, name, *, section_id=None):
@@ -146,12 +188,22 @@ class InstituteStudyGroupTest(unittest.TestCase):
             db.session.flush()
 
             for org in (self.inst, self.other, self.school):
-                for model, key in [(User, 'admin_id'), (Section, 'section_id'),
-                                   (Grade, 'grade_id'), (Employee, 'employee_id'),
-                                   (Subject, 'subject_id'),
-                                   (AcademicYear, 'year_id'), (School, 'school_id')]:
+                for model, key in [(User, 'admin_id'), (Section, 'section_id')]:
                     if org.get(key) is None:
                         continue
+                    obj = db.session.get(model, org[key], execution_options=opts)
+                    if obj is not None:
+                        db.session.delete(obj)
+                db.session.flush()
+                # Subjects and grades are now several per org, so sweep by
+                # school_id instead of by tracked id. Subjects first: a subject
+                # references its grade.
+                for model in (Subject, Grade, Employee):
+                    for row in (model.query.execution_options(**opts)
+                                .filter_by(school_id=org['school_id']).all()):
+                        db.session.delete(row)
+                    db.session.flush()
+                for model, key in [(AcademicYear, 'year_id'), (School, 'school_id')]:
                     obj = db.session.get(model, org[key], execution_options=opts)
                     if obj is not None:
                         db.session.delete(obj)
@@ -471,6 +523,166 @@ class InstituteStudyGroupTest(unittest.TestCase):
                          'tenant scope must hide another school\'s groups')
         self.assertNotIn(self.other['school_id'], enrol_school_ids,
                          'tenant scope must hide another school\'s enrollments')
+
+
+    # ══ Stage → grade → subject dependent selection ═══════════════════════════
+
+    def _taxonomy(self, org, year_id=None, current_subject=None):
+        from app.blueprints.institute_groups import _form_taxonomy
+        school = db.session.get(School, org['school_id'],
+                                execution_options={'bypass_tenant_scope': True})
+        year = db.session.get(AcademicYear, year_id or org['year_id'],
+                              execution_options={'bypass_tenant_scope': True})
+        return _form_taxonomy(school, year, current_subject=current_subject)
+
+    def test_taxonomy_filters_stage_then_grade_then_subject(self):
+        with self.app.app_context():
+            tax = self._taxonomy(self.inst)
+
+            # Stages come from grades that actually carry subjects, in the
+            # canonical order.
+            self.assertEqual([s['value'] for s in tax['stages']],
+                             ['متوسطة', 'إعدادية'])
+
+            by_stage = {}
+            for g in tax['grades']:
+                by_stage.setdefault(g['stage'], []).append(g['id'])
+            self.assertEqual(by_stage['إعدادية'], [self.inst['prep_grade_id']])
+            self.assertEqual(by_stage['متوسطة'], [self.inst['mid_grade_id']])
+
+            for grade_id, subject_id in (
+                    (self.inst['prep_grade_id'], self.inst['math_prep_id']),
+                    (self.inst['mid_grade_id'], self.inst['math_mid_id'])):
+                got = [s['id'] for s in tax['subjects'] if s['grade_id'] == grade_id]
+                self.assertEqual(got, [subject_id])
+
+    def test_same_subject_name_in_two_grades_stays_distinct(self):
+        with self.app.app_context():
+            tax = self._taxonomy(self.inst)
+            maths = [s for s in tax['subjects'] if s['name'] == 'الرياضيات']
+            self.assertEqual(len(maths), 2, 'equal names must not be merged')
+            self.assertEqual({m['id'] for m in maths},
+                             {self.inst['math_prep_id'], self.inst['math_mid_id']})
+            self.assertEqual({m['grade_id'] for m in maths},
+                             {self.inst['prep_grade_id'], self.inst['mid_grade_id']})
+
+    def test_legacy_subject_is_not_offered_as_a_new_choice(self):
+        with self.app.app_context():
+            tax = self._taxonomy(self.inst)
+            self.assertNotIn(self.inst['legacy_subject_id'],
+                             [s['id'] for s in tax['subjects']])
+            self.assertIsNone(tax['legacy_subject'])
+
+    def test_edit_preselects_stage_and_grade_from_the_current_subject(self):
+        with self.app.app_context():
+            group_id = self._make_group(self.inst, 'Preselect')
+            db.session.commit()
+            group = db.session.get(InstituteStudyGroup, group_id,
+                                   execution_options={'bypass_tenant_scope': True})
+            # The fixture group uses the إعدادية maths subject.
+            self.assertEqual(group.subject_id, self.inst['math_prep_id'])
+
+            tax = self._taxonomy(self.inst)
+            subject = next(s for s in tax['subjects'] if s['id'] == group.subject_id)
+            grade = next(g for g in tax['grades'] if g['id'] == subject['grade_id'])
+            self.assertEqual(grade['id'], self.inst['prep_grade_id'])
+            self.assertEqual(grade['stage'], 'إعدادية')
+
+    def test_create_rejects_forged_subject_grade_and_year_with_no_write(self):
+        from app.blueprints.institute_groups import new
+        cases = {
+            'cross-school subject': {'subject_id': self.other['math_prep_id'],
+                                     'grade_id': self.inst['prep_grade_id'],
+                                     'stage': 'إعدادية'},
+            'mismatched grade': {'subject_id': self.inst['math_prep_id'],
+                                 'grade_id': self.inst['mid_grade_id'],
+                                 'stage': 'متوسطة'},
+            'mismatched stage': {'subject_id': self.inst['math_prep_id'],
+                                 'grade_id': self.inst['prep_grade_id'],
+                                 'stage': 'متوسطة'},
+            'legacy subject as new': {'subject_id': self.inst['legacy_subject_id'],
+                                      'grade_id': '', 'stage': ''},
+        }
+        for label, extra in cases.items():
+            payload = {'name': 'Forged ' + label,
+                       'instructor_id': str(self.inst['employee_id']),
+                       'is_active': '1'}
+            payload.update({k: str(v) for k, v in extra.items()})
+            with self.app.test_request_context('/institute-groups/new',
+                                               method='POST', data=payload):
+                self._login(self.inst)
+                body, status = new()
+                self.assertEqual(status, 400, label + ' must be rejected')
+                logout_user()
+
+            with self.app.app_context():
+                self.assertIsNone(
+                    InstituteStudyGroup.query
+                    .execution_options(bypass_tenant_scope=True)
+                    .filter_by(school_id=self.inst['school_id'],
+                               name='Forged ' + label).first(),
+                    'no group may be written for: ' + label)
+
+    def test_existing_legacy_group_keeps_its_subject_on_edit(self):
+        from app.blueprints.institute_groups import edit as edit_view
+        with self.app.app_context():
+            # A group created before grade classification existed.
+            group = InstituteStudyGroup(
+                school_id=self.inst['school_id'],
+                academic_year_id=self.inst['year_id'],
+                subject_id=self.inst['legacy_subject_id'],
+                instructor_id=self.inst['employee_id'],
+                name='Legacy Group', is_active=True)
+            db.session.add(group)
+            db.session.commit()
+            group_id = group.id
+
+            # It stays visible on its own form...
+            legacy_subject = db.session.get(
+                Subject, self.inst['legacy_subject_id'],
+                execution_options={'bypass_tenant_scope': True})
+            tax = self._taxonomy(self.inst, current_subject=legacy_subject)
+            self.assertIsNotNone(tax['legacy_subject'])
+            self.assertEqual(tax['legacy_subject']['id'],
+                             self.inst['legacy_subject_id'])
+
+        # ...and can be saved unchanged.
+        with self.app.test_request_context(
+                '/institute-groups/%d/edit' % group_id, method='POST',
+                data={'name': 'Legacy Group Renamed',
+                      'subject_id': str(self.inst['legacy_subject_id']),
+                      'instructor_id': str(self.inst['employee_id']),
+                      'is_active': '1'}):
+            self._login(self.inst)
+            response = edit_view(group_id)
+            self.assertEqual(getattr(response, 'status_code', None), 302,
+                             'a legacy group must remain saveable')
+            logout_user()
+
+        with self.app.app_context():
+            saved = db.session.get(InstituteStudyGroup, group_id,
+                                   execution_options={'bypass_tenant_scope': True})
+            self.assertEqual(saved.name, 'Legacy Group Renamed')
+            self.assertEqual(saved.subject_id, self.inst['legacy_subject_id'],
+                             'the legacy subject must survive unchanged')
+
+    def test_school_grades_and_subjects_are_untouched(self):
+        """The school path keeps exactly the rows the fixture gave it."""
+        with self.app.app_context():
+            grades = (Grade.query.execution_options(bypass_tenant_scope=True)
+                      .filter_by(school_id=self.school['school_id']).all())
+            subjects = (Subject.query.execution_options(bypass_tenant_scope=True)
+                        .filter_by(school_id=self.school['school_id']).all())
+            self.assertEqual([g.id for g in grades], [self.school['grade_id']])
+            self.assertIsNone(grades[0].stage, 'school grade stage untouched')
+            self.assertEqual({s.id for s in subjects},
+                             {self.school['subject_id'],
+                              self.school['legacy_subject_id']})
+            # No institute row was created for the school.
+            self.assertEqual(
+                InstituteStudyGroup.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter_by(school_id=self.school['school_id']).count(), 0)
 
 
 if __name__ == '__main__':

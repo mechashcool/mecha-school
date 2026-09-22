@@ -33,11 +33,13 @@ from flask import (Blueprint, render_template, redirect, url_for,
                    flash, request, abort)
 from flask_login import login_required
 
-from app.models import (db, Employee, InstituteGroupEnrollment,
-                        InstituteStudyGroup, Student, Subject)
+from app.models import (db, AcademicYear, Employee, Grade,
+                        InstituteGroupEnrollment, InstituteStudyGroup,
+                        Student, Subject)
 from app.utils.audit import log_action
 from app.utils.decorators import (permission_required, get_current_school,
                                   get_active_year, historical_guard)
+from app.utils.school_stages import ALL_STAGES, STAGE_LABELS
 
 institute_groups_bp = Blueprint('institute_groups', __name__,
                                 template_folder='../../templates/institute_groups')
@@ -77,13 +79,101 @@ def _get_group_or_404(group_id, school):
     return group
 
 
+# Bucket key for a grade that carries no stage. Kept as the empty string so it
+# round-trips through the form as a normal (falsy) value, matching how
+# sections/subjects.html already groups unclassified rows.
+_NO_STAGE = ''
+_NO_STAGE_LABEL = 'بدون مرحلة'
+
+
+def _stage_of(grade):
+    """Canonical stage token for a grade, or _NO_STAGE when it has none."""
+    return (getattr(grade, 'stage', None) or '').strip() or _NO_STAGE
+
+
 def _institute_subjects(school, year):
-    """Subjects of THIS institute in THIS academic year, ordered by name."""
+    """Subjects of THIS institute in THIS academic year, ordered by name.
+
+    Kept as the single source of the subject set; the taxonomy helper below
+    splits it into grade-classified and legacy rows.
+    """
     return (Subject.query
             .execution_options(bypass_tenant_scope=True)
             .filter_by(school_id=school.id, academic_year_id=year.id)
             .order_by(Subject.name)
             .all())
+
+
+def _institute_grades(school, year):
+    """Grades of THIS institute in THIS academic year, ordered by name."""
+    return (Grade.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(school_id=school.id, academic_year_id=year.id)
+            .order_by(Grade.name)
+            .all())
+
+
+def _form_taxonomy(school, year, current_subject=None):
+    """Build the stage -> grade -> subject data the form cascade needs.
+
+    Everything is resolved server-side from rows that already belong to THIS
+    institute and THIS academic year, so the browser only ever filters data it
+    was authorized to see. No AJAX route is introduced.
+
+    Returns a dict with:
+      stages         [{value, label}]   only stages that actually have a grade
+                                        carrying at least one subject
+      grades         [{id, name, stage}] only grades that have >= 1 subject
+      subjects       [{id, name, code, grade_id}] grade-classified subjects only
+      legacy_subject {id, name, code} | None
+                     the group's CURRENT subject when it predates grade
+                     classification (grade_id IS NULL). It stays selectable so
+                     an existing group can be saved unchanged, but it is never
+                     offered as a new choice.
+
+    Subjects are never merged or de-duplicated by name: two rows named
+    الرياضيات under different grades are different records and both appear,
+    each under its own grade.
+    """
+    all_subjects = _institute_subjects(school, year)
+    grades_by_id = {g.id: g for g in _institute_grades(school, year)}
+
+    # Grade-classified subjects only. A subject whose grade_id points outside
+    # this institute/year is dropped defensively rather than shown.
+    classified = [s for s in all_subjects
+                  if s.grade_id is not None and s.grade_id in grades_by_id]
+
+    used_grade_ids = {s.grade_id for s in classified}
+    used_grades = [grades_by_id[gid] for gid in used_grade_ids]
+
+    # Stage list derived from the grades that actually carry subjects, so a
+    # stage with no usable grade is never offered.
+    present = {_stage_of(g) for g in used_grades}
+    ordered = [s for s in ALL_STAGES if s in present]
+    ordered += sorted(s for s in present if s and s not in ALL_STAGES)
+    if _NO_STAGE in present:
+        ordered.append(_NO_STAGE)
+
+    stages = [{'value': s,
+               'label': STAGE_LABELS.get(s, s) if s else _NO_STAGE_LABEL}
+              for s in ordered]
+
+    legacy_subject = None
+    if current_subject is not None and current_subject.grade_id is None:
+        legacy_subject = {'id': current_subject.id,
+                          'name': current_subject.name,
+                          'code': current_subject.code}
+
+    return {
+        'stages': stages,
+        'grades': sorted(
+            ({'id': g.id, 'name': g.name, 'stage': _stage_of(g)}
+             for g in used_grades),
+            key=lambda g: g['name']),
+        'subjects': [{'id': s.id, 'name': s.name, 'code': s.code,
+                      'grade_id': s.grade_id} for s in classified],
+        'legacy_subject': legacy_subject,
+    }
 
 
 def _institute_instructors(school):
@@ -113,11 +203,20 @@ def _parse_date(raw):
         return None, False
 
 
-def _validate_group_form(school, year, *, exclude_group_id=None):
+def _validate_group_form(school, year, *, exclude_group_id=None,
+                         current_subject_id=None):
     """Validate the posted group form against THIS institute and year.
 
     Returns (data_dict, errors_list). Every id is verified to belong to the
     authenticated institute; nothing posted is trusted.
+
+    `current_subject_id` is the subject the group ALREADY has (edit only). It is
+    the single exception that lets a legacy subject with no grade_id be saved
+    unchanged, so existing rows never become uneditable.
+
+    stage and grade are UI/filtering inputs only. They are re-checked here
+    against the subject so a forged combination is rejected, but neither is
+    stored on the group: subject_id remains the only persisted link.
     """
     errors = []
 
@@ -129,8 +228,17 @@ def _validate_group_form(school, year, *, exclude_group_id=None):
 
     is_active = request.form.get('is_active') == '1'
 
-    # Subject — must belong to this institute AND this academic year.
+    # ── Stage → grade → subject ────────────────────────────────────────
+    # The browser cascade is a convenience, never the authority. Each level is
+    # re-resolved here against this institute and this academic year, and the
+    # chain subject → grade → stage is re-checked, so a hand-crafted POST that
+    # pairs a valid subject with someone else's grade or a mismatched stage is
+    # rejected. Nothing is written until every check below has passed.
+    posted_grade_id = request.form.get('grade_id', type=int) or None
+    posted_stage    = (request.form.get('stage') or '').strip()
+
     subject_id = request.form.get('subject_id', type=int)
+    subject = None
     if not subject_id:
         errors.append('المادة مطلوبة.')
     else:
@@ -140,8 +248,44 @@ def _validate_group_form(school, year, *, exclude_group_id=None):
                               academic_year_id=year.id)
                    .first())
         if not subject:
-            errors.append('المادة المحددة غير صالحة أو لا تنتمي إلى هذه المؤسسة.')
+            # Covers another school, another academic year and a non-existent
+            # id alike, without revealing which one it was.
+            errors.append('المادة المحددة غير صالحة أو لا تنتمي إلى هذه المؤسسة '
+                          'أو إلى العام الدراسي المحدد.')
             subject_id = None
+
+    if subject is not None:
+        if subject.grade_id is None:
+            # Legacy/unclassified subject. Allowed ONLY when it is the subject
+            # this group already has, so existing data keeps working; it is
+            # never selectable as a new choice.
+            if current_subject_id is None or subject.id != current_subject_id:
+                errors.append('المادة المحددة غير مرتبطة بصف دراسي. '
+                              'اختر المرحلة ثم الصف ثم المادة.')
+                subject_id = None
+            elif posted_grade_id:
+                errors.append('المادة الحالية غير مرتبطة بصف دراسي، '
+                              'ولا يمكن ربطها بصف من هذا النموذج.')
+                subject_id = None
+        else:
+            # The subject's own grade is the authority; a posted grade_id must
+            # agree with it rather than replace it.
+            grade = (Grade.query
+                     .execution_options(bypass_tenant_scope=True)
+                     .filter_by(id=subject.grade_id, school_id=school.id,
+                                academic_year_id=year.id)
+                     .first())
+            if not grade:
+                errors.append('الصف المرتبط بالمادة غير صالح لهذه المؤسسة '
+                              'في العام الدراسي المحدد.')
+                subject_id = None
+            else:
+                if posted_grade_id and posted_grade_id != grade.id:
+                    errors.append('المادة المحددة لا تنتمي إلى الصف المختار.')
+                    subject_id = None
+                if posted_stage and posted_stage != _stage_of(grade):
+                    errors.append('الصف المختار لا ينتمي إلى المرحلة المختارة.')
+                    subject_id = None
 
     # Instructor — must be an employee of this institute.
     instructor_id = request.form.get('instructor_id', type=int) or None
@@ -240,7 +384,7 @@ def new():
     if not year:
         return redirect(url_for('institute_groups.index'))
 
-    subjects    = _institute_subjects(school, year)
+    taxonomy    = _form_taxonomy(school, year)
     instructors = _institute_instructors(school)
 
     if request.method == 'POST':
@@ -248,8 +392,10 @@ def new():
         if errors:
             for e in errors:
                 flash(e, 'danger')
+            # request.form is passed straight back so the operator's stage,
+            # grade and subject choices survive the error.
             return render_template('institute_groups/form.html', group=None,
-                                   subjects=subjects, instructors=instructors,
+                                   taxonomy=taxonomy, instructors=instructors,
                                    form=request.form), 400
 
         group = InstituteStudyGroup(school_id=school.id,
@@ -266,7 +412,7 @@ def new():
         return redirect(url_for('institute_groups.detail', group_id=group.id))
 
     return render_template('institute_groups/form.html', group=None,
-                           subjects=subjects, instructors=instructors, form=None)
+                           taxonomy=taxonomy, instructors=instructors, form=None)
 
 
 # ─── Edit ─────────────────────────────────────────────────────────────────────
@@ -282,17 +428,38 @@ def edit(group_id):
     if not year:
         return redirect(url_for('institute_groups.index'))
 
-    group       = _get_group_or_404(group_id, school)
-    subjects    = _institute_subjects(school, year)
+    group = _get_group_or_404(group_id, school)
+
+    # A group is edited inside ITS OWN academic year, not the newest one. For a
+    # historical group the active year would offer a different year's grades and
+    # subjects and would reject the group's own subject, making the row
+    # uneditable; it would also run the duplicate check against the wrong year.
+    # The stored academic_year_id is never rewritten by this form.
+    group_year = (AcademicYear.query
+                  .execution_options(bypass_tenant_scope=True)
+                  .filter_by(id=group.academic_year_id, school_id=school.id)
+                  .first()) or year
+
+    current_subject = (Subject.query
+                       .execution_options(bypass_tenant_scope=True)
+                       .filter_by(id=group.subject_id, school_id=school.id)
+                       .first())
+
+    taxonomy    = _form_taxonomy(school, group_year, current_subject=current_subject)
     instructors = _institute_instructors(school)
 
     if request.method == 'POST':
-        data, errors = _validate_group_form(school, year, exclude_group_id=group.id)
+        data, errors = _validate_group_form(
+            school, group_year, exclude_group_id=group.id,
+            current_subject_id=group.subject_id)
         if errors:
             for e in errors:
                 flash(e, 'danger')
+            # Nothing has been assigned to the group yet, so a failed POST
+            # leaves it completely untouched. request.form is echoed back so the
+            # submitted stage/grade/subject survive.
             return render_template('institute_groups/form.html', group=group,
-                                   subjects=subjects, instructors=instructors,
+                                   taxonomy=taxonomy, instructors=instructors,
                                    form=request.form), 400
 
         for field, value in data.items():
@@ -308,7 +475,7 @@ def edit(group_id):
         return redirect(url_for('institute_groups.detail', group_id=group.id))
 
     return render_template('institute_groups/form.html', group=group,
-                           subjects=subjects, instructors=instructors, form=None)
+                           taxonomy=taxonomy, instructors=instructors, form=None)
 
 
 # ─── Activate / deactivate ────────────────────────────────────────────────────
