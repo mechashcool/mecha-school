@@ -23,7 +23,8 @@ def _models():
         EmployeeAttendance, EmployeeDocument, EmployeeEvaluation,
         EmployeeLeaveRequest, Exam,
         ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord,
-        FeeType, Grade, InventoryCategory, InventoryCount, InventoryItem,
+        FeeType, Grade, InstituteGroupEnrollment, InstituteStudyGroup,
+        InventoryCategory, InventoryCount, InventoryItem,
         InventoryItemStock, InventoryMovement, InventoryWarehouse,
         LeaveRequest, Notification, PayrollItem,
         PayrollSettings, PushNotification, Revenue,
@@ -42,7 +43,8 @@ def _models():
         EmployeeAttendance, EmployeeDocument, EmployeeEvaluation,
         EmployeeLeaveRequest, Exam,
         ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord,
-        FeeType, Grade, InventoryCategory, InventoryCount, InventoryItem,
+        FeeType, Grade, InstituteGroupEnrollment, InstituteStudyGroup,
+        InventoryCategory, InventoryCount, InventoryItem,
         InventoryItemStock, InventoryMovement, InventoryWarehouse,
         LeaveRequest, Notification, PayrollItem,
         PayrollSettings, PushNotification, Revenue,
@@ -67,7 +69,11 @@ def _models():
     # across academic years, like SchoolBuilding.
     year_scoped = (
         Complaint, EmployeeAttendance, EmployeeEvaluation, Exam, ExamResult, Expense,
-        FeeInstallment, FeeRecord, FeeType, Grade, InventoryCategory,
+        FeeInstallment, FeeRecord, FeeType, Grade,
+        # InstituteStudyGroup is school+year scoped. InstituteGroupEnrollment is
+        # school-scoped ONLY: its year comes from the group, and Student (which
+        # it links) deliberately persists across years.
+        InstituteStudyGroup, InventoryCategory,
         InventoryCount, InventoryItem, InventoryItemStock, InventoryMovement,
         PayrollItem, Revenue,
         SalaryRecord, Schedule, Section, StudentAttendance, Subject, LeaveRequest,

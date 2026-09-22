@@ -57,6 +57,12 @@ PERMISSION_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ('view_subjects',           'عرض المواد الدراسية'),
         ('manage_subjects',         'إدارة المواد الدراسية (إضافة/تعديل/حذف)'),
     ]),
+    # Institute institutions only (School.is_institute). The routes also
+    # require is_institute, so granting this to a school-type institution
+    # unlocks nothing.
+    ('المجموعات الدراسية (المعاهد)', [
+        ('manage_institute_groups', 'إدارة المجموعات الدراسية واشتراكات الطلاب'),
+    ]),
     ('الجداول الدراسية', [
         ('view_schedules',          'عرض الجداول الدراسية'),
         ('manage_schedules',        'إدارة الجداول (إضافة/حذف)'),
@@ -151,6 +157,10 @@ LANDING_PAGES: list[tuple[tuple, str, str | None]] = [
     (('manage_homework',),                       'homework.index',           'homework'),
     (('view_sections', 'manage_sections'),       'sections.index',           'sections'),
     (('view_subjects', 'manage_subjects'),       'sections.subjects',        'subjects'),
+    # Institute-only surface: no module key (the blueprint is gated by
+    # School.is_institute, exactly like buildings.index is gated by
+    # School.enable_buildings).
+    (('manage_institute_groups',),               'institute_groups.index',   None),
     (('view_schedules', 'manage_schedules',
       'print_schedules'),                        'schedules.index',          'schedules'),
     (('manage_fees',),                           'fees.index',               'fees'),

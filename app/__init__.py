@@ -125,6 +125,8 @@ def create_app(config_name=None):
     from app.blueprints.student_records   import student_records_bp
     from app.blueprints.buildings         import buildings_bp
     from app.blueprints.shifts            import shifts_bp
+    # Institute study groups — institutes only (School.is_institute)
+    from app.blueprints.institute_groups  import institute_groups_bp
     # Live badge polling — lightweight JSON for in-page badge sync
     from app.blueprints.live              import live_bp
     # Media — serves locally-stored uploads independently of the nginx /static alias
@@ -171,6 +173,10 @@ def create_app(config_name=None):
     app.register_blueprint(student_records_bp,     url_prefix='/student-registration-records')
     app.register_blueprint(buildings_bp,           url_prefix='/buildings')
     app.register_blueprint(shifts_bp,              url_prefix='/attendance-shifts')
+    # No BLUEPRINT_MODULE entry: this surface is gated by School.is_institute
+    # and the manage_institute_groups permission, not by a per-school module
+    # toggle — the same convention the buildings blueprint uses.
+    app.register_blueprint(institute_groups_bp,    url_prefix='/institute-groups')
     app.register_blueprint(live_bp,                url_prefix='/live')
     app.register_blueprint(media_bp)          # route already includes the /media prefix
     app.register_blueprint(public_pages_bp)   # public routes — no login required

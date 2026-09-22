@@ -843,6 +843,176 @@ teacher_subjects = db.Table(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  3b. INSTITUTE STUDY GROUPS  (institute institutions only — School.is_institute)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# An institute organises teaching as  subject → study group → instructor,
+# instead of the school model  stage → grade → section.  These two tables are
+# entirely separate from Grade / Section / Student.section_id / teacher_subjects,
+# which are left exactly as they are: a school row never gets an institute row
+# and nothing here is read by any school code path.
+#
+# Instructors reuse Employee.  Subjects reuse Subject.  No parallel teacher or
+# subject entity is introduced.
+#
+# CROSS-SCHOOL SAFETY IS ENFORCED BY THE DATABASE, not only by route checks.
+# Each table carries its own school_id and pairs it with the referenced row's
+# school_id in a COMPOSITE foreign key against a UNIQUE (id, school_id) key on
+# the parent table.  A group can therefore never point at another school's
+# subject or employee, and an enrollment can never join a student to a group
+# from a different school — the insert is rejected by PostgreSQL itself.
+#
+# Because school_id participates in several of those composite keys, every
+# relationship below is viewonly=True with an explicit primaryjoin.  The
+# scalar FK columns are what routes assign; the relationships are read-only
+# conveniences, so SQLAlchemy never tries to write school_id through two
+# different relationships at once.
+
+
+class InstituteStudyGroup(db.Model):
+    """One study group: a named cohort of an institute's subject, led by one
+    instructor, inside one academic year.
+
+    A group is never hard-deleted from the normal interface — is_active is
+    toggled instead, so its enrollment history stays intact and auditable.
+    Deactivating a group does NOT end or remove its enrollments.
+    """
+    __tablename__ = 'institute_study_groups'
+    __school_scoped__ = True
+    __year_scoped__ = True
+
+    id               = db.Column(db.Integer, primary_key=True)
+    school_id        = db.Column(db.Integer, nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'),
+                                 nullable=False, index=True)
+    subject_id       = db.Column(db.Integer, nullable=False, index=True)
+    # Nullable at DB level so deleting an employee clears the assignment rather
+    # than blocking the delete.  An ACTIVE group must still have an instructor
+    # — that rule is enforced in the institute_groups routes, not by the column,
+    # because ON DELETE SET NULL must remain able to null it.
+    instructor_id    = db.Column(db.Integer, nullable=True, index=True)
+    name             = db.Column(db.String(150), nullable=False)
+    start_date       = db.Column(db.Date, nullable=True)
+    end_date         = db.Column(db.Date, nullable=True)
+    is_active        = db.Column(db.Boolean, nullable=False, default=True,
+                                 server_default=db.true())
+    created_at       = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at       = db.Column(db.DateTime, default=datetime.utcnow,
+                                 onupdate=datetime.utcnow)
+
+    school        = db.relationship(
+        'School', viewonly=True,
+        primaryjoin='foreign(InstituteStudyGroup.school_id) == School.id')
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    subject       = db.relationship(
+        'Subject', viewonly=True,
+        primaryjoin='foreign(InstituteStudyGroup.subject_id) == Subject.id')
+    instructor    = db.relationship(
+        'Employee', viewonly=True,
+        primaryjoin='foreign(InstituteStudyGroup.instructor_id) == Employee.id')
+
+    __table_args__ = (
+        db.ForeignKeyConstraint(['school_id'], ['schools.id'],
+                                name='fk_institute_group_school'),
+        # Same-school ownership of the subject, enforced by PostgreSQL.
+        db.ForeignKeyConstraint(
+            ['subject_id', 'school_id'], ['subjects.id', 'subjects.school_id'],
+            name='fk_institute_group_subject_school'),
+        # Same-school ownership of the instructor.  The column-list form of
+        # ON DELETE SET NULL (PostgreSQL 15+) nulls ONLY instructor_id; a plain
+        # SET NULL would also try to null the NOT NULL school_id and would turn
+        # employee deletion into a constraint error.
+        db.ForeignKeyConstraint(
+            ['instructor_id', 'school_id'], ['employees.id', 'employees.school_id'],
+            name='fk_institute_group_instructor_school',
+            ondelete='SET NULL (instructor_id)'),
+        db.UniqueConstraint('school_id', 'academic_year_id', 'subject_id', 'name',
+                            name='uq_institute_group_school_year_subject_name'),
+        # Parent side of the enrollment composite FK.
+        db.UniqueConstraint('id', 'school_id', name='uq_institute_group_id_school'),
+        db.Index('ix_institute_group_school_year_active',
+                 'school_id', 'academic_year_id', 'is_active'),
+    )
+
+    def __repr__(self):
+        return f'<InstituteStudyGroup {self.id} – {self.name} (school={self.school_id})>'
+
+
+class InstituteGroupEnrollment(db.Model):
+    """One student's membership of one study group.
+
+    A student may hold several ACTIVE enrollments at once (one per group).
+    Membership is never deleted: leaving a group sets status='ended' and
+    stamps ended_at, so the history row survives and the student can be
+    re-enrolled later as a new row.
+
+    School-scoped but deliberately NOT year-scoped: the academic year comes
+    from the group, and Student itself is a master record that persists across
+    years (see app/utils/scoping.py).  A second academic_year_id here would be
+    a duplicate source of truth.
+    """
+    __tablename__ = 'institute_group_enrollments'
+    __school_scoped__ = True
+
+    STATUS_ACTIVE = 'active'
+    STATUS_ENDED  = 'ended'
+
+    id          = db.Column(db.Integer, primary_key=True)
+    school_id   = db.Column(db.Integer, nullable=False, index=True)
+    group_id    = db.Column(db.Integer, nullable=False, index=True)
+    student_id  = db.Column(db.Integer, nullable=False, index=True)
+    enrolled_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    ended_at    = db.Column(db.DateTime, nullable=True)
+    status      = db.Column(db.String(20), nullable=False,
+                            default=STATUS_ACTIVE, server_default=STATUS_ACTIVE)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at  = db.Column(db.DateTime, default=datetime.utcnow,
+                            onupdate=datetime.utcnow)
+
+    school  = db.relationship(
+        'School', viewonly=True,
+        primaryjoin='foreign(InstituteGroupEnrollment.school_id) == School.id')
+    group   = db.relationship(
+        'InstituteStudyGroup', viewonly=True,
+        primaryjoin=('foreign(InstituteGroupEnrollment.group_id) '
+                     '== InstituteStudyGroup.id'),
+        backref=db.backref('enrollments', viewonly=True, lazy='dynamic'))
+    student = db.relationship(
+        'Student', viewonly=True,
+        primaryjoin='foreign(InstituteGroupEnrollment.student_id) == Student.id',
+        backref=db.backref('institute_enrollments', viewonly=True, lazy='dynamic'))
+
+    __table_args__ = (
+        db.ForeignKeyConstraint(['school_id'], ['schools.id'],
+                                name='fk_institute_enrollment_school'),
+        # RESTRICT on both sides: a group or student with enrollment history
+        # can never be silently orphaned by a cascade.
+        db.ForeignKeyConstraint(
+            ['group_id', 'school_id'],
+            ['institute_study_groups.id', 'institute_study_groups.school_id'],
+            name='fk_institute_enrollment_group_school', ondelete='RESTRICT'),
+        db.ForeignKeyConstraint(
+            ['student_id', 'school_id'], ['students.id', 'students.school_id'],
+            name='fk_institute_enrollment_student_school', ondelete='RESTRICT'),
+        db.CheckConstraint(
+            "(status = 'active' AND ended_at IS NULL) OR "
+            "(status = 'ended' AND ended_at IS NOT NULL)",
+            name='ck_institute_enrollment_status_ended_at'),
+        db.Index('ix_institute_enrollment_school_student_status',
+                 'school_id', 'student_id', 'status'),
+        db.Index('ix_institute_enrollment_group_status', 'group_id', 'status'),
+        # At most ONE active enrollment per (group, student). Partial unique
+        # index — ended rows are excluded, so re-enrollment stays possible.
+        db.Index('uq_institute_enrollment_active', 'group_id', 'student_id',
+                 unique=True, postgresql_where=db.text("status = 'active'")),
+    )
+
+    def __repr__(self):
+        return (f'<InstituteGroupEnrollment {self.id} group={self.group_id} '
+                f'student={self.student_id} status={self.status}>')
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  4. STUDENTS  (with RFID + school + year)
 # ═════════════════════════════════════════════════════════════════════════════
 

@@ -99,7 +99,7 @@
             {% endif %}
 
             {# class / section — stage + grade + section #}
-            {% if form_cfg.section_visible('class_section') %}
+            {% if form_cfg.section_visible('class_section') and not is_institute %}
             <div class="col-md-4">
               <label class="form-label">المرحلة الدراسية</label>
               <select id="fStage" class="form-select">
@@ -136,6 +136,48 @@
                 </option>
                 {% endfor %}
               </select>
+            </div>
+            {% endif %}
+
+            {# ── INSTITUTE MODE ── study groups replace stage/grade/section.
+               Rendered ONLY for an institute; a normal school keeps the
+               selector above exactly as it was. #}
+            {% if is_institute %}
+            <div class="col-12">
+              <label class="form-label fw-600">
+                <i class="bi bi-collection me-1"></i>المجموعات الدراسية
+              </label>
+              {% if institute_groups %}
+              <div style="max-height:240px;overflow-y:auto;border:1px solid #e3e8ef;border-radius:8px;padding:12px">
+                <div class="row g-2">
+                  {% for g in institute_groups %}
+                  <div class="col-md-6">
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox"
+                             name="institute_group_ids" value="{{ g.id }}"
+                             id="grp{{ g.id }}"
+                             {{ 'checked' if g.id in selected_group_ids }}>
+                      <label class="form-check-label" for="grp{{ g.id }}">
+                        {{ g.name }}
+                        <span class="text-muted" style="font-size:12px">
+                          — {{ g.subject.name if g.subject else 'بدون مادة' }}
+                          {%- if g.instructor %} / {{ g.instructor.full_name }}{% endif %}
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                  {% endfor %}
+                </div>
+              </div>
+              <div class="form-text">
+                يمكن تسجيل الطالب في أكثر من مجموعة، أو عدم اختيار أي مجموعة.
+                إزالة الاختيار تُنهي الاشتراك مع الاحتفاظ بالسجل التاريخي.
+              </div>
+              {% else %}
+              <p class="text-muted mb-0">
+                لا توجد مجموعات دراسية مفعّلة لهذا العام.
+              </p>
+              {% endif %}
             </div>
             {% endif %}
 

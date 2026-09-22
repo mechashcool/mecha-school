@@ -23,6 +23,14 @@ from app.utils.upload_access import (object_path_of, protected_upload_url,
 from app.utils import code_generator
 from app.utils.features import feature_required, is_feature_enabled
 from app.utils.student_form_config import get_student_form_config
+# Institute study groups. Every helper below is reached ONLY behind
+# institute_enabled(school), so a school-type institution never touches them
+# and its section behaviour stays byte-identical.
+from app.utils.institute_groups import (
+    active_enrollments_for_student, active_group_ids_for_student,
+    active_groups_for_form, institute_enabled, parse_posted_group_ids,
+    stage_enrollment_changes, stage_enrollments, validate_group_ids,
+)
 from app.utils.buildings import (
     school_buildings_enabled, get_active_buildings,
     apply_building_scope_to_students, user_allowed_building_ids,
@@ -826,6 +834,12 @@ def create():
 
     form_cfg = get_student_form_config(school.id)
 
+    # Institute study groups (institutes only). For a school-type institution
+    # both stay False/[] and the template renders the existing
+    # stage/grade/section block exactly as before.
+    is_institute     = institute_enabled(school)
+    institute_groups = active_groups_for_form(school.id, year.id) if is_institute else []
+
     # ── Buildings (optional feature) ─────────────────────────────────────────
     buildings_on = school_buildings_enabled(school)
     allowed_building_ids = user_allowed_building_ids(current_user, school)
@@ -870,6 +884,15 @@ def create():
         device_id               = int(_dev_id_raw) if _dev_id_raw.isdigit() else None
         all_devices_flag        = request.form.get('all_devices') == '1'
 
+        def _posted_group_ids_for_form():
+            """Submitted group ids as ints, for re-checking the boxes after a
+            validation error. Never used for authorization — the write path
+            re-validates every id against this institute."""
+            if not is_institute:
+                return []
+            ids, _ok = parse_posted_group_ids(request.form.getlist('institute_group_ids'))
+            return ids
+
         def _re_render(msg, error_step=1):
             if msg:
                 flash(msg, 'danger')
@@ -880,6 +903,9 @@ def create():
                                    available_parents=available_parents,
                                    linked_parents=[], existing_device_mappings=[],
                                    form_cfg=form_cfg,
+                                   is_institute=is_institute,
+                                   institute_groups=institute_groups,
+                                   selected_group_ids=_posted_group_ids_for_form(),
                                    buildings_enabled=buildings_on,
                                    buildings_list=buildings_for_form,
                                    selected_building_id=request.form.get('building_id', type=int),
@@ -998,7 +1024,23 @@ def create():
         student_id = code_generator.generate_student_id(school.id)
 
         section_id = request.form.get('section_id', type=int)
-        if _is_teacher() and section_id not in get_teacher_section_ids(current_user):
+        # INSTITUTE MODE — an institute student is sectionless by definition.
+        # Any posted section_id is discarded rather than trusted, so a crafted
+        # request can never attach an institute student to a section (or to
+        # another school's section). Schools keep the original behaviour below.
+        institute_group_ids = []
+        if is_institute:
+            section_id = None
+            _gids, _gok = parse_posted_group_ids(
+                request.form.getlist('institute_group_ids'))
+            if not _gok:
+                return _re_render('قائمة المجموعات الدراسية المرسلة غير صالحة.')
+            # Validated against THIS institute and THIS academic year before the
+            # student row is created, so one bad id writes nothing at all.
+            institute_group_ids, _gerr = validate_group_ids(_gids, school.id, year.id)
+            if _gerr:
+                return _re_render(_gerr)
+        elif _is_teacher() and section_id not in get_teacher_section_ids(current_user):
             abort(403)
 
         _school_id_for_feat = school.id if school else None
@@ -1296,6 +1338,15 @@ def create():
                 db.session.rollback()
                 raise
 
+        # ── Institute study-group enrollments ─────────────────────────────
+        # Staged, not committed: they join the single final commit below, so a
+        # failure anywhere in this request leaves neither the student nor a
+        # partial set of memberships behind. No-op for a school.
+        _institute_enrolled = 0
+        if is_institute and institute_group_ids:
+            _institute_enrolled = stage_enrollments(
+                school.id, student.id, institute_group_ids)
+
         # Captured before commit: after db.session.commit() SQLAlchemy expires
         # attributes and a lazy reload goes through the year-scoped ORM filter.
         _student_id_for_notify = student.id
@@ -1324,6 +1375,8 @@ def create():
                 _op, student_id=_student_id_for_notify, school_id=school.id)
 
         flash(f'تم إضافة الطالب {student.full_name} برقم {student.student_id}.', 'success')
+        if _institute_enrolled:
+            flash(f'تم تسجيل الطالب في {_institute_enrolled} مجموعة دراسية.', 'success')
         if parent_created:
             flash(
                 'تم إنشاء حساب ولي الأمر بنجاح. '
@@ -1354,6 +1407,9 @@ def create():
                            available_parents=available_parents,
                            linked_parents=[], existing_device_mappings=[],
                            form_cfg=form_cfg,
+                           is_institute=is_institute,
+                           institute_groups=institute_groups,
+                           selected_group_ids=[],
                            buildings_enabled=buildings_on,
                            buildings_list=buildings_for_form,
                            selected_building_id=None,
@@ -1556,6 +1612,16 @@ def edit(student_id):
 
     form_cfg = get_student_form_config(school.id) if school else get_student_form_config(0)
 
+    # Institute study groups (institutes only). For a school-type institution
+    # these stay False/[]/set() and nothing about the section flow changes.
+    is_institute = institute_enabled(school)
+    institute_groups = (active_groups_for_form(school.id, year.id)
+                        if is_institute and school and year else [])
+    # The student's CURRENT active memberships — used to pre-check the boxes on
+    # GET, and as the baseline the submitted selection is reconciled against.
+    current_group_ids = (active_group_ids_for_student(school.id, student.id)
+                         if is_institute and school else set())
+
     # Existing attachments shown on the form. Display data only — replacing or
     # deleting one is a separate explicit POST route, so this list can never be
     # acted on by a normal save.
@@ -1588,6 +1654,17 @@ def edit(student_id):
         from datetime import datetime as dt
         from sqlalchemy.exc import IntegrityError as _EditIntegrityError
 
+        def _sticky_group_ids():
+            """Submitted group ids, so a validation failure re-renders the form
+            with the operator's own selection instead of silently reverting to
+            the stored memberships. Display only — never an authorization
+            input; the write path re-validates every id."""
+            if not is_institute:
+                return []
+            _ids, _ok = parse_posted_group_ids(
+                request.form.getlist('institute_group_ids'))
+            return _ids if _ok else sorted(current_group_ids)
+
         # ── Backend enforcement of required fields per school config ─────────
         _cfg_errors = form_cfg.validate(request.form)
         if _cfg_errors:
@@ -1601,6 +1678,9 @@ def edit(student_id):
                 linked_parents=linked_parents,
                 existing_device_mappings=existing_device_mappings,
                 form_cfg=form_cfg,
+                is_institute=is_institute,
+                institute_groups=institute_groups,
+                selected_group_ids=_sticky_group_ids(),
                 buildings_enabled=buildings_on,
                 buildings_list=buildings_for_form,
                 selected_building_id=student.building_id,
@@ -1670,6 +1750,9 @@ def edit(student_id):
                 linked_parents=linked_parents,
                 existing_device_mappings=existing_device_mappings,
                 form_cfg=form_cfg,
+                is_institute=is_institute,
+                institute_groups=institute_groups,
+                selected_group_ids=_sticky_group_ids(),
                 buildings_enabled=buildings_on,
                 buildings_list=buildings_for_form,
                 selected_building_id=student.building_id,
@@ -1680,7 +1763,62 @@ def edit(student_id):
             )
 
         new_section_id = request.form.get('section_id', type=int)
-        if _is_teacher() and new_section_id not in get_teacher_section_ids(current_user):
+        # INSTITUTE MODE — sectionless. A posted section_id is discarded, never
+        # trusted. Group ids are validated here, BEFORE the first field is
+        # written, so an invalid id aborts the whole edit without having altered
+        # the student or any membership.
+        posted_group_ids = []
+        if is_institute:
+            new_section_id = None
+            _gids, _gok = parse_posted_group_ids(
+                request.form.getlist('institute_group_ids'))
+            if not _gok:
+                flash('قائمة المجموعات الدراسية المرسلة غير صالحة.', 'danger')
+                return render_template(
+                    'students/form.html', student=student, sections=sections,
+                    grades=grades, stages=['ابتدائية', 'متوسطة', 'إعدادية'],
+                    selected_grade_id=selected_grade_id, selected_stage=selected_stage,
+                    active_devices=active_devices, available_parents=available_parents,
+                    linked_parents=linked_parents,
+                    existing_device_mappings=existing_device_mappings,
+                    form_cfg=form_cfg,
+                    is_institute=is_institute,
+                    institute_groups=institute_groups,
+                    selected_group_ids=_sticky_group_ids(),
+                    buildings_enabled=buildings_on,
+                    buildings_list=buildings_for_form,
+                    selected_building_id=student.building_id,
+                    residential_areas_list=residential_areas_for_form,
+                    existing_documents=existing_documents,
+                    can_add_documents=can_add_documents,
+                    missing_document_types=missing_document_types,
+                ), 400
+            posted_group_ids, _gerr = validate_group_ids(
+                _gids, school.id, year.id if year else 0)
+            if _gerr:
+                # Nothing has been mutated yet on this path — the student row and
+                # every existing membership are untouched.
+                flash(_gerr, 'danger')
+                return render_template(
+                    'students/form.html', student=student, sections=sections,
+                    grades=grades, stages=['ابتدائية', 'متوسطة', 'إعدادية'],
+                    selected_grade_id=selected_grade_id, selected_stage=selected_stage,
+                    active_devices=active_devices, available_parents=available_parents,
+                    linked_parents=linked_parents,
+                    existing_device_mappings=existing_device_mappings,
+                    form_cfg=form_cfg,
+                    is_institute=is_institute,
+                    institute_groups=institute_groups,
+                    selected_group_ids=_sticky_group_ids(),
+                    buildings_enabled=buildings_on,
+                    buildings_list=buildings_for_form,
+                    selected_building_id=student.building_id,
+                    residential_areas_list=residential_areas_for_form,
+                    existing_documents=existing_documents,
+                    can_add_documents=can_add_documents,
+                    missing_document_types=missing_document_types,
+                ), 400
+        elif _is_teacher() and new_section_id not in get_teacher_section_ids(current_user):
             abort(403)
 
         # full_name — always updated
@@ -1700,7 +1838,11 @@ def edit(student_id):
             if dob_str:
                 student.date_of_birth = dt.strptime(dob_str, '%Y-%m-%d').date()
 
-        if form_cfg.section_visible('class_section'):
+        if is_institute:
+            # Force NULL. Explicit rather than implicit so an institute student
+            # that somehow carries a stale section is corrected on next save.
+            student.section_id = None
+        elif form_cfg.section_visible('class_section'):
             student.section_id = new_section_id
             # Keep academic_year_id in sync with the assigned section's year so
             # the student's record reflects the year they are actively enrolled in.
@@ -1784,6 +1926,9 @@ def edit(student_id):
                     linked_parents=linked_parents,
                     existing_device_mappings=existing_device_mappings,
                     form_cfg=form_cfg,
+                    is_institute=is_institute,
+                    institute_groups=institute_groups,
+                    selected_group_ids=_sticky_group_ids(),
                     buildings_enabled=buildings_on,
                     buildings_list=buildings_for_form,
                     selected_building_id=student.building_id,
@@ -1916,6 +2061,15 @@ def edit(student_id):
                     )
                     _linked_parent_name = _ep.full_name
 
+        # ── Institute study-group memberships ───────────────────────────
+        # Kept memberships are left untouched; newly selected ones are added;
+        # de-selected ones are ENDED (status + ended_at), never deleted. Staged
+        # only, so it rolls back with the rest if the commit below fails.
+        _grp_added = _grp_ended = 0
+        if is_institute:
+            _grp_added, _grp_ended = stage_enrollment_changes(
+                school.id, student.id, posted_group_ids)
+
         try:
             db.session.commit()
         except _EditIntegrityError as _exc:
@@ -1930,6 +2084,10 @@ def edit(student_id):
             return redirect(url_for('students.edit', student_id=student_id))
 
         flash('تم تحديث بيانات الطالب بنجاح.', 'success')
+        if _grp_added:
+            flash(f'تم تسجيل الطالب في {_grp_added} مجموعة دراسية جديدة.', 'success')
+        if _grp_ended:
+            flash(f'تم إنهاء {_grp_ended} اشتراك مع الاحتفاظ بالسجل التاريخي.', 'info')
         if _parent_added:
             flash('تم إنشاء حساب ولي الأمر وربطه بالطالب بنجاح.', 'success')
         if _linked_parent_name:
@@ -1944,6 +2102,9 @@ def edit(student_id):
                            linked_parents=linked_parents,
                            existing_device_mappings=existing_device_mappings,
                            form_cfg=form_cfg,
+                           is_institute=is_institute,
+                           institute_groups=institute_groups,
+                           selected_group_ids=sorted(current_group_ids),
                            buildings_enabled=buildings_on,
                            buildings_list=buildings_for_form,
                            selected_building_id=student.building_id,
@@ -2292,8 +2453,17 @@ def view(student_id):
                 (fr, _inst_map.get(fr.id, [])) for fr in _fee_records
             ]
 
+    # Institute study groups the student is CURRENTLY enrolled in. Empty list
+    # for a school-type institution, where the card is not rendered at all.
+    institute_enrollments = (
+        active_enrollments_for_student(school.id, student.id)
+        if institute_enabled(school) else []
+    )
+
     return render_template('students/view.html', student=student, docs=docs,
-                           fee_records_with_inst=fee_records_with_inst)
+                           fee_records_with_inst=fee_records_with_inst,
+                           is_institute=institute_enabled(school),
+                           institute_enrollments=institute_enrollments)
 
 
 @students_bp.route('/<int:student_id>/archive', methods=['POST'])

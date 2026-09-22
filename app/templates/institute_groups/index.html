@@ -1,0 +1,93 @@
+{% extends "shared/base.html" %}
+{% block title %}المجموعات الدراسية{% endblock %}
+{% block page_title %}المجموعات الدراسية{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">المجموعات الدراسية</h1>
+    <p class="page-subtitle">
+      {% if year %}
+        العام الدراسي {{ year.name }} — إجمالي {{ groups|length }} مجموعة
+      {% else %}
+        لا يوجد عام دراسي نشط
+      {% endif %}
+    </p>
+  </div>
+  {% if year %}
+  <a href="{{ url_for('institute_groups.new') }}" class="btn btn-primary">
+    <i class="bi bi-plus-lg me-2"></i>إضافة مجموعة
+  </a>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>اسم المجموعة</th>
+          <th>المادة</th>
+          <th>المدرّس</th>
+          <th>الفترة</th>
+          <th>الطلاب المسجّلون</th>
+          <th>الحالة</th>
+          <th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for g in groups %}
+        <tr>
+          <td class="fw-600">
+            <i class="bi bi-collection me-1 text-primary-custom"></i>{{ g.name }}
+          </td>
+          <td>{{ g.subject.name if g.subject else '—' }}</td>
+          <td>
+            {% if g.instructor %}
+              {{ g.instructor.full_name }}
+            {% else %}
+              <span class="text-danger" style="font-size:13px">غير معيّن</span>
+            {% endif %}
+          </td>
+          <td style="font-size:13px;color:#6b7a8d">
+            {{ g.start_date.strftime('%Y-%m-%d') if g.start_date else '—' }}
+            &rarr;
+            {{ g.end_date.strftime('%Y-%m-%d') if g.end_date else '—' }}
+          </td>
+          <td>
+            <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
+              {{ active_counts.get(g.id, 0) }}
+            </span>
+          </td>
+          <td>
+            {% if g.is_active %}
+            <span class="badge-status badge-active">مفعّلة</span>
+            {% else %}
+            <span class="badge-status badge-inactive">معطّلة</span>
+            {% endif %}
+          </td>
+          <td>
+            <div class="d-flex gap-1">
+              <a href="{{ url_for('institute_groups.detail', group_id=g.id) }}"
+                 class="btn btn-sm btn-outline-primary" title="التفاصيل والطلاب">
+                <i class="bi bi-people"></i>
+              </a>
+              <a href="{{ url_for('institute_groups.edit', group_id=g.id) }}"
+                 class="btn btn-sm btn-outline-secondary" title="تعديل">
+                <i class="bi bi-pencil"></i>
+              </a>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7" class="text-center text-muted py-4">
+            لا توجد مجموعات دراسية بعد.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

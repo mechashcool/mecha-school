@@ -103,6 +103,8 @@
           {{ info_row('تاريخ الميلاد', student.date_of_birth.strftime('%Y-%m-%d') if student.date_of_birth) }}
           {{ info_row('الجنسية', student.nationality) }}
           {{ info_row('الهاتف', student.phone) }}
+          {#- An institute student is sectionless, so this row is simply empty
+              for them; the institute's own card below shows their groups. -#}
           {{ info_row('الصف', (student.section.grade.name + ' / شعبة ' + student.section.name) if student.section) }}
           {% if school and school.enable_buildings and student.building %}
           {{ info_row('البناية', student.building.name) }}
@@ -117,6 +119,41 @@
         </div>
       </div>
     </div>
+
+    {# المجموعات الدراسية — institutes only; a normal school never renders this. #}
+    {% if is_institute %}
+    <div class="card mb-4">
+      <div class="card-header">
+        <i class="bi bi-collection text-accent"></i>المجموعات الدراسية الحالية
+        <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">
+          {{ institute_enrollments|length }}
+        </span>
+      </div>
+      <div class="card-body">
+        {% if institute_enrollments %}
+        <div class="d-flex flex-column gap-2">
+          {% for e in institute_enrollments %}
+          <div class="d-flex justify-content-between align-items-center"
+               style="padding:8px 12px;background:#f8fafc;border-radius:8px">
+            <div>
+              <span class="fw-600">{{ e.group.name if e.group else '—' }}</span>
+              <span class="text-muted" style="font-size:12px">
+                — {{ e.group.subject.name if e.group and e.group.subject else 'بدون مادة' }}
+                {%- if e.group and e.group.instructor %} / {{ e.group.instructor.full_name }}{% endif %}
+              </span>
+            </div>
+            <span class="text-muted" style="font-size:12px">
+              منذ {{ e.enrolled_at.strftime('%Y-%m-%d') if e.enrolled_at else '—' }}
+            </span>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">الطالب غير مسجّل في أي مجموعة دراسية حالياً.</p>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
 
     <div class="card">
       <div class="card-header"><i class="bi bi-people-fill text-accent"></i>بيانات ولي الأمر</div>

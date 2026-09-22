@@ -12,6 +12,7 @@ from app.models import (
     EmployeeEvaluation, EmployeeLeaveRequest, Exam, ExamResult, Expense,
     ExpenseCategory,
     FeeInstallment, FeeRecord, FeeRefundEvent, FeeReminderLog, FeeType, Grade,
+    InstituteGroupEnrollment, InstituteStudyGroup,
     InventoryCategory, InventoryCount, InventoryItem, InventoryItemStock,
     InventoryMovement, InventoryWarehouse,
     LeaveRequest, Notification, NotificationRead, PayrollItem, PayrollSettings,
@@ -93,6 +94,9 @@ LINKED_SCHOOL_MODELS = (
     (SchoolVideo, 'مقاطع لوحة المدرسة'),
     (SchoolAnnouncement, 'إعلانات لوحة المدرسة'),
     (SchoolContentRead, 'قراءات محتوى لوحة المدرسة'),
+    # Institute-only; always 0 for a school-type institution.
+    (InstituteStudyGroup, 'المجموعات الدراسية'),
+    (InstituteGroupEnrollment, 'اشتراكات المجموعات الدراسية'),
 )
 
 
@@ -183,6 +187,15 @@ SCHOOL_DELETE_ORDER = (
     # dependents (ItemStock/Movement/Count above) are already gone here.
     (InventoryWarehouse, 'المخازن'),
     # ── Core school-year structure ─────────────────────────────────────────────
+    # ── Institute study groups (institute institutions only) ─────────────────
+    # Enrollments hold ON DELETE RESTRICT composite FKs to
+    # institute_study_groups AND to students, so they must precede both.
+    # Groups in turn hold composite FKs to subjects and employees, so they
+    # must precede Subject and Employee. Nothing cascades here by design:
+    # institute membership history is never removed implicitly, only as part
+    # of an explicit full-school teardown.
+    (InstituteGroupEnrollment, 'اشتراكات المجموعات الدراسية'),
+    (InstituteStudyGroup, 'المجموعات الدراسية'),
     (Student, 'الطلاب'),
     (Section, 'الشُعب'),
     (Subject, 'المواد'),

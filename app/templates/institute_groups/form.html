@@ -1,0 +1,107 @@
+{% extends "shared/base.html" %}
+{% set editing = group is not none %}
+{% block title %}{{ 'تعديل مجموعة دراسية' if editing else 'إضافة مجموعة دراسية' }}{% endblock %}
+{% block page_title %}{{ 'تعديل مجموعة دراسية' if editing else 'إضافة مجموعة دراسية' }}{% endblock %}
+
+{#- `form` holds request.form after a failed POST so the operator's submitted
+    choices survive a validation error; otherwise fall back to the stored row. -#}
+{% macro val(field, stored) -%}
+{{ form.get(field) if form else (stored if stored is not none else '') }}
+{%- endmacro %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ 'تعديل مجموعة دراسية' if editing else 'إضافة مجموعة دراسية' }}</h1>
+    <p class="page-subtitle">المجموعة الدراسية تربط مادة واحدة بمدرّس واحد</p>
+  </div>
+  <a href="{{ url_for('institute_groups.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-2"></i>رجوع
+  </a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST"
+          action="{{ url_for('institute_groups.edit', group_id=group.id) if editing
+                     else url_for('institute_groups.new') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="row g-3">
+
+        <div class="col-md-6">
+          <label class="form-label">اسم المجموعة <span class="text-danger">*</span></label>
+          <input type="text" name="name" class="form-control" maxlength="150" required
+                 value="{{ val('name', group.name if editing else '') }}">
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">المادة <span class="text-danger">*</span></label>
+          {% set sel_subject = (form.get('subject_id')|int if form and form.get('subject_id')
+                                else (group.subject_id if editing else none)) %}
+          <select name="subject_id" class="form-select" required>
+            <option value="">— اختر المادة —</option>
+            {% for s in subjects %}
+            <option value="{{ s.id }}" {{ 'selected' if sel_subject == s.id }}>{{ s.name }}</option>
+            {% endfor %}
+          </select>
+          {% if not subjects %}
+          <div class="form-text text-danger">
+            لا توجد مواد دراسية لهذا العام. أضف مادة أولاً من صفحة المواد الدراسية.
+          </div>
+          {% endif %}
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">المدرّس</label>
+          {% set sel_instr = (form.get('instructor_id')|int if form and form.get('instructor_id')
+                              else (group.instructor_id if editing else none)) %}
+          <select name="instructor_id" class="form-select">
+            <option value="">— بدون مدرّس —</option>
+            {% for e in instructors %}
+            <option value="{{ e.id }}" {{ 'selected' if sel_instr == e.id }}>
+              {{ e.full_name }}{% if e.job_title %} — {{ e.job_title }}{% endif %}
+            </option>
+            {% endfor %}
+          </select>
+          <div class="form-text">المجموعة المفعّلة يجب أن يكون لها مدرّس.</div>
+        </div>
+
+        <div class="col-md-3">
+          <label class="form-label">تاريخ البداية</label>
+          <input type="date" name="start_date" class="form-control"
+                 value="{{ form.get('start_date') if form
+                           else (group.start_date.strftime('%Y-%m-%d') if editing and group.start_date else '') }}">
+        </div>
+
+        <div class="col-md-3">
+          <label class="form-label">تاريخ النهاية</label>
+          <input type="date" name="end_date" class="form-control"
+                 value="{{ form.get('end_date') if form
+                           else (group.end_date.strftime('%Y-%m-%d') if editing and group.end_date else '') }}">
+        </div>
+
+        <div class="col-12">
+          {% set is_active_checked = (form.get('is_active') == '1') if form
+                                      else (group.is_active if editing else true) %}
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="is_active"
+                   value="1" id="fIsActive" {{ 'checked' if is_active_checked }}>
+            <label class="form-check-label" for="fIsActive">مجموعة مفعّلة</label>
+          </div>
+          <div class="form-text">
+            تعطيل المجموعة لا يحذف اشتراكات الطلاب ولا ينهيها — السجل التاريخي يبقى كما هو.
+          </div>
+        </div>
+
+      </div>
+
+      <div class="d-flex gap-2 mt-4">
+        <button type="submit" class="btn btn-primary">
+          <i class="bi bi-check-lg me-2"></i>حفظ
+        </button>
+        <a href="{{ url_for('institute_groups.index') }}" class="btn btn-outline-secondary">إلغاء</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -458,7 +458,12 @@
     {% set _can_sections = current_user.has_permission('view_sections') or current_user.has_permission('manage_sections') %}
     {% set _can_subjects = current_user.has_permission('view_subjects') or current_user.has_permission('manage_subjects') %}
     {% set _can_schedules = current_user.has_permission('view_schedules') or current_user.has_permission('manage_schedules') or current_user.has_permission('print_schedules') %}
-    {% if ('grades' in enabled_modules and current_user.has_permission('enter_grades')) or
+    {# Institute study groups. Rendered ONLY for an institution explicitly
+       classified as an institute; a normal school never sees this item and its
+       routes stay unreachable (institute_groups.* aborts 403 for a school). #}
+    {% set _can_inst_groups = school and school.is_institute and current_user.has_permission('manage_institute_groups') %}
+    {% if _can_inst_groups or
+          ('grades' in enabled_modules and current_user.has_permission('enter_grades')) or
           ('homework' in enabled_modules and current_user.has_permission('manage_homework') and school_cfg.action_enabled('homework', 'view')) or
           ('sections' in enabled_modules and _can_sections) or
           ('subjects' in enabled_modules and _can_subjects) or
@@ -469,6 +474,14 @@
         <i class="bi bi-chevron-left chevron"></i>
       </button>
       <ul class="nav-group-items">
+        {% if _can_inst_groups %}
+        <li class="nav-item">
+          <a href="{{ url_for('institute_groups.index') }}"
+             class="{{ 'active' if request.blueprint == 'institute_groups' }}">
+            <i class="bi bi-collection"></i> المجموعات الدراسية
+          </a>
+        </li>
+        {% endif %}
         {% if 'grades' in enabled_modules and current_user.has_permission('enter_grades') %}
         <li class="nav-item">
           <a href="{{ url_for('grades.index') }}"
