@@ -28,10 +28,11 @@ the database itself rejects a cross-school link through the composite foreign
 keys on both tables, so a route bug cannot produce mixed-school data.
 """
 from datetime import datetime
+from functools import wraps
 
 from flask import (Blueprint, render_template, redirect, url_for,
                    flash, request, abort)
-from flask_login import login_required
+from flask_login import login_required, current_user
 
 from app.models import (db, AcademicYear, Employee, Grade,
                         InstituteGroupEnrollment, InstituteStudyGroup,
@@ -39,6 +40,8 @@ from app.models import (db, AcademicYear, Employee, Grade,
 from app.utils.audit import log_action
 from app.utils.decorators import (permission_required, get_current_school,
                                   get_active_year, historical_guard)
+from app.utils.institute_groups import (active_enrollment_count_map,
+                                        active_roster, instructor_groups)
 from app.utils.school_stages import ALL_STAGES, STAGE_LABELS
 
 institute_groups_bp = Blueprint('institute_groups', __name__,
@@ -66,6 +69,42 @@ def _require_institute():
         flash('لا يوجد عام دراسي نشط لهذه المؤسسة.', 'warning')
         return school, None
     return school, year
+
+
+def _is_group_manager() -> bool:
+    """True for a user who may ADMINISTER institute groups.
+
+    Exactly the existing permission — no new permission or role is introduced.
+    Admin tiers short-circuit through User.has_permission() as everywhere else.
+    A teacher is deliberately NOT a manager even if the permission were ever
+    granted to their role, mirroring homework._is_admin().
+    """
+    if current_user.role and current_user.role.name == 'teacher':
+        return False
+    return current_user.has_permission('manage_institute_groups')
+
+
+def _is_instructor() -> bool:
+    """True for the existing school-wide teacher role."""
+    return bool(current_user.role and current_user.role.name == 'teacher')
+
+
+def group_read_access_required(f):
+    """Allow managers (manage_institute_groups) AND teachers (read-only).
+
+    Mirrors homework_access_required: one decorator for the read surface, while
+    every mutating route below keeps permission_required('manage_institute_groups')
+    untouched. Teachers therefore gain no write capability anywhere.
+    """
+    @wraps(f)
+    @login_required
+    def wrapper(*args, **kwargs):
+        if not current_user.role:
+            abort(403)
+        if not (_is_group_manager() or _is_instructor()):
+            abort(403)
+        return f(*args, **kwargs)
+    return wrapper
 
 
 def _get_group_or_404(group_id, school):
@@ -337,38 +376,37 @@ def _validate_group_form(school, year, *, exclude_group_id=None,
 # ─── List ─────────────────────────────────────────────────────────────────────
 
 @institute_groups_bp.route('/')
-@login_required
-@permission_required('manage_institute_groups')
+@group_read_access_required
 def index():
     school, year = _require_institute()
     if not school:
         return redirect(url_for('admin.dashboard'))
+
+    is_manager = _is_group_manager()
     if not year:
         return render_template('institute_groups/index.html',
-                               groups=[], active_counts={}, year=None)
+                               groups=[], active_counts={}, year=None,
+                               is_manager=is_manager)
 
-    groups = (InstituteStudyGroup.query
-              .execution_options(bypass_tenant_scope=True)
-              .filter_by(school_id=school.id, academic_year_id=year.id)
-              .order_by(InstituteStudyGroup.is_active.desc(),
-                        InstituteStudyGroup.name)
-              .all())
+    if is_manager:
+        # Unchanged administrator view: every group of the institute, active
+        # and inactive, with the existing management controls.
+        groups = (InstituteStudyGroup.query
+                  .execution_options(bypass_tenant_scope=True)
+                  .filter_by(school_id=school.id, academic_year_id=year.id)
+                  .order_by(InstituteStudyGroup.is_active.desc(),
+                            InstituteStudyGroup.name)
+                  .all())
+    else:
+        # Instructor view — ONLY the ACTIVE groups assigned to this instructor.
+        # An unlinked account resolves to [], never to the full list.
+        groups = instructor_groups(school, current_user, year)
 
-    # Active-member count per group, in one query rather than N.
-    active_counts = {}
-    if groups:
-        rows = (db.session.query(InstituteGroupEnrollment.group_id,
-                                 db.func.count(InstituteGroupEnrollment.id))
-                .filter(InstituteGroupEnrollment.school_id == school.id,
-                        InstituteGroupEnrollment.group_id.in_([g.id for g in groups]),
-                        InstituteGroupEnrollment.status
-                        == InstituteGroupEnrollment.STATUS_ACTIVE)
-                .group_by(InstituteGroupEnrollment.group_id)
-                .all())
-        active_counts = {gid: cnt for gid, cnt in rows}
+    active_counts = active_enrollment_count_map(school, [g.id for g in groups])
 
     return render_template('institute_groups/index.html',
-                           groups=groups, active_counts=active_counts, year=year)
+                           groups=groups, active_counts=active_counts, year=year,
+                           is_manager=is_manager)
 
 
 # ─── Create ───────────────────────────────────────────────────────────────────
@@ -520,15 +558,33 @@ def toggle_active(group_id):
 # ─── Detail + roster ──────────────────────────────────────────────────────────
 
 @institute_groups_bp.route('/<int:group_id>')
-@login_required
-@permission_required('manage_institute_groups')
+@group_read_access_required
 def detail(group_id):
     school, year = _require_institute()
     if not school:
         return redirect(url_for('admin.dashboard'))
 
     group = _get_group_or_404(group_id, school)
+    is_manager = _is_group_manager()
 
+    if not is_manager:
+        # INSTRUCTOR — read-only, and only for a group assigned to them.
+        # Any other group (another instructor's, an inactive one, or one from
+        # another institute) is a plain 404: the same response the caller would
+        # get for a non-existent id, so nothing is disclosed either way.
+        if group.id not in {g.id for g in instructor_groups(school, current_user, year)}:
+            abort(404)
+
+        # Roster = ACTIVE enrollments only. Ended rows are not shown to the
+        # instructor and are not touched; they remain stored for the admin view.
+        roster = active_roster(school, group.id)
+        return render_template('institute_groups/detail.html',
+                               group=group, year=year,
+                               active_rows=[e for e, _s in roster],
+                               ended_rows=[], candidates=[],
+                               is_manager=False)
+
+    # Unchanged administrator view below.
     enrollments = (InstituteGroupEnrollment.query
                    .execution_options(bypass_tenant_scope=True)
                    .filter_by(school_id=school.id, group_id=group.id)
@@ -552,7 +608,7 @@ def detail(group_id):
     return render_template('institute_groups/detail.html',
                            group=group, year=year,
                            active_rows=active_rows, ended_rows=ended_rows,
-                           candidates=candidates)
+                           candidates=candidates, is_manager=True)
 
 
 # ─── Bulk enroll ──────────────────────────────────────────────────────────────

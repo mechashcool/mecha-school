@@ -1,11 +1,14 @@
 {% extends "shared/base.html" %}
-{% block title %}المجموعات الدراسية{% endblock %}
-{% block page_title %}المجموعات الدراسية{% endblock %}
+{#- Administrators keep the existing label and controls. An instructor sees a
+    read-only view of only their own groups, under their own heading. -#}
+{% set page_heading = 'المجموعات الدراسية' if is_manager else 'مجموعاتي الدراسية' %}
+{% block title %}{{ page_heading }}{% endblock %}
+{% block page_title %}{{ page_heading }}{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">المجموعات الدراسية</h1>
+    <h1 class="page-title">{{ page_heading }}</h1>
     <p class="page-subtitle">
       {% if year %}
         العام الدراسي {{ year.name }} — إجمالي {{ groups|length }} مجموعة
@@ -14,7 +17,7 @@
       {% endif %}
     </p>
   </div>
-  {% if year %}
+  {% if year and is_manager %}
   <a href="{{ url_for('institute_groups.new') }}" class="btn btn-primary">
     <i class="bi bi-plus-lg me-2"></i>إضافة مجموعة
   </a>
@@ -72,17 +75,24 @@
                  class="btn btn-sm btn-outline-primary" title="التفاصيل والطلاب">
                 <i class="bi bi-people"></i>
               </a>
+              {% if is_manager %}
               <a href="{{ url_for('institute_groups.edit', group_id=g.id) }}"
                  class="btn btn-sm btn-outline-secondary" title="تعديل">
                 <i class="bi bi-pencil"></i>
               </a>
+              {% endif %}
             </div>
           </td>
         </tr>
         {% else %}
         <tr>
           <td colspan="7" class="text-center text-muted py-4">
-            لا توجد مجموعات دراسية بعد.
+            {% if is_manager %}
+              لا توجد مجموعات دراسية بعد.
+            {% else %}
+              لا توجد مجموعات دراسية مسندة إليك حالياً.
+              راجع إدارة المعهد لإسناد مجموعة إلى حسابك.
+            {% endif %}
           </td>
         </tr>
         {% endfor %}

@@ -28,7 +28,9 @@ from app.utils.student_form_config import get_student_form_config
 # and its section behaviour stays byte-identical.
 from app.utils.institute_groups import (
     active_enrollments_for_student, active_group_ids_for_student,
-    active_groups_for_form, institute_enabled, parse_posted_group_ids,
+    active_groups_for_form, institute_enabled,
+    instructor_can_access_student, instructor_student_ids,
+    parse_posted_group_ids,
     stage_enrollment_changes, stage_enrollments, validate_group_ids,
 )
 from app.utils.buildings import (
@@ -225,8 +227,8 @@ def _authorize_student_document_action(student_id):
     if not user_can_access_student(current_user, school, student):
         flash('ليس لديك صلاحية الوصول إلى بيانات هذه البناية', 'danger')
         return None, redirect(url_for('students.index'))
-    if _is_teacher() and student.section_id not in get_teacher_section_ids(current_user):
-        flash('لا يمكنك تعديل بيانات طالب خارج شعبتك.', 'danger')
+    if _is_teacher() and not _teacher_can_access_student(student, school):
+        flash('لا يمكنك تعديل بيانات طالب خارج نطاقك.', 'danger')
         return None, redirect(url_for('students.index'))
     return student, None
 
@@ -261,6 +263,46 @@ def _is_teacher():
     return (current_user.is_authenticated and
             current_user.role and
             current_user.role.name == 'teacher')
+
+
+def _teacher_scope_student_query(query, school):
+    """Restrict a Student query to what THIS teacher may see. Fails closed.
+
+    SCHOOL  (unchanged): the teacher's sections, via get_teacher_section_ids().
+    INSTITUTE: the DISTINCT students actively enrolled in the ACTIVE study
+    groups assigned to this instructor. Institute students carry no section, so
+    they are never reachable through the section branch.
+
+    Both branches narrow to an explicit id set and fall back to the same
+    impossible predicate when that set is empty, so an unlinked account or an
+    instructor with no groups sees nothing rather than everything.
+    """
+    if institute_enabled(school):
+        year = get_active_year(school.id) if school else None
+        sids = instructor_student_ids(school, current_user, year)
+        return (query.filter(Student.id.in_(sids)) if sids
+                else query.filter(Student.id == -1))
+
+    teacher_sids = get_teacher_section_ids(current_user)
+    if teacher_sids:
+        return query.filter(Student.section_id.in_(teacher_sids))
+    return query.filter(Student.id == -1)
+
+
+def _teacher_can_access_student(student, school) -> bool:
+    """True when THIS teacher may open this specific student.
+
+    SCHOOL  (unchanged): the student sits in one of the teacher's sections.
+    INSTITUTE: the student holds an ACTIVE enrollment in an ACTIVE group
+    assigned to this instructor — one EXISTS query, so a student-detail URL
+    cannot be reached by id alone.
+    """
+    if student is None:
+        return False
+    if institute_enabled(school):
+        year = get_active_year(school.id) if school else None
+        return instructor_can_access_student(school, current_user, year, student.id)
+    return student.section_id in get_teacher_section_ids(current_user)
 
 
 # ─── Residential areas helpers (school-scoped lookup list) ───────────────────
@@ -495,11 +537,7 @@ def index():
     query = apply_building_scope_to_students(query, current_user, school)
 
     if _is_teacher():
-        teacher_sids = get_teacher_section_ids(current_user)
-        if teacher_sids:
-            query = query.filter(Student.section_id.in_(teacher_sids))
-        else:
-            query = query.filter(Student.id == -1)
+        query = _teacher_scope_student_query(query, school)
 
     if search:
         query = query.filter(
@@ -657,11 +695,7 @@ def search():
     query = apply_building_scope_to_students(query, current_user, school)
 
     if _is_teacher():
-        teacher_sids = get_teacher_section_ids(current_user)
-        if teacher_sids:
-            query = query.filter(Student.section_id.in_(teacher_sids))
-        else:
-            query = query.filter(Student.id == -1)
+        query = _teacher_scope_student_query(query, school)
 
     if q:
         query = query.filter(
@@ -1582,10 +1616,12 @@ def edit(student_id):
                     .all())
 
     if _is_teacher():
-        section_ids = get_teacher_section_ids(current_user)
-        if student.section_id not in section_ids:
-            flash('لا يمكنك تعديل بيانات طالب خارج شعبتك.', 'danger')
+        if not _teacher_can_access_student(student, school):
+            flash('لا يمكنك تعديل بيانات طالب خارج نطاقك.', 'danger')
             return redirect(url_for('students.index'))
+        # The section dropdown stays section-scoped for schools. An institute
+        # hides the section block entirely, so an empty list here is correct.
+        section_ids = get_teacher_section_ids(current_user)
         sections = [s for s in all_sections if s.id in section_ids]
     else:
         sections = all_sections
@@ -2410,11 +2446,9 @@ def view(student_id):
         flash('ليس لديك صلاحية الوصول إلى بيانات هذه البناية', 'danger')
         return redirect(url_for('students.index'))
 
-    if _is_teacher():
-        section_ids = get_teacher_section_ids(current_user)
-        if student.section_id not in section_ids:
-            flash('لا يمكنك عرض بيانات طالب خارج شعبتك.', 'danger')
-            return redirect(url_for('students.index'))
+    if _is_teacher() and not _teacher_can_access_student(student, school):
+        flash('لا يمكنك عرض بيانات طالب خارج نطاقك.', 'danger')
+        return redirect(url_for('students.index'))
 
     # Active documents only — a soft-deleted document is never listed.
     docs = active_student_documents(student)
@@ -2652,9 +2686,7 @@ def export_excel():
     # Building scope — restricted users only export their own buildings' students.
     query = apply_building_scope_to_students(query, current_user, school)
     if _is_teacher():
-        section_ids = get_teacher_section_ids(current_user)
-        query = query.filter(Student.section_id.in_(section_ids)) if section_ids \
-                else query.filter(Student.id == -1)
+        query = _teacher_scope_student_query(query, school)
 
     students = query.order_by(Student.full_name).all()
     data = export_students(students)

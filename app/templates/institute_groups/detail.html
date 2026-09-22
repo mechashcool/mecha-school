@@ -21,6 +21,7 @@
     </p>
   </div>
   <div class="d-flex gap-2">
+    {% if is_manager %}
     <a href="{{ url_for('institute_groups.edit', group_id=group.id) }}"
        class="btn btn-outline-secondary">
       <i class="bi bi-pencil me-2"></i>تعديل
@@ -36,6 +37,7 @@
         {{ 'تعطيل' if group.is_active else 'تفعيل' }}
       </button>
     </form>
+    {% endif %}
     <a href="{{ url_for('institute_groups.index') }}" class="btn btn-outline-secondary">
       <i class="bi bi-arrow-right me-2"></i>رجوع
     </a>
@@ -43,7 +45,7 @@
 </div>
 
 {# ── Bulk add existing students ─────────────────────────────────────────── #}
-{% if group.is_active %}
+{% if is_manager and group.is_active %}
 <div class="card mb-4">
   <div class="card-header"><i class="bi bi-person-plus-fill text-accent"></i>إضافة طلاب إلى المجموعة</div>
   <div class="card-body">
@@ -93,7 +95,7 @@
           <th>الطالب</th>
           <th>رقم الطالب</th>
           <th>تاريخ التسجيل</th>
-          <th>الإجراءات</th>
+          {% if is_manager %}<th>الإجراءات</th>{% endif %}
         </tr>
       </thead>
       <tbody>
@@ -104,6 +106,7 @@
           <td style="font-size:13px;color:#6b7a8d">
             {{ e.enrolled_at.strftime('%Y-%m-%d') if e.enrolled_at else '—' }}
           </td>
+          {% if is_manager %}
           <td>
             <form method="POST"
                   action="{{ url_for('institute_groups.end_enrollment',
@@ -116,9 +119,10 @@
               </button>
             </form>
           </td>
+          {% endif %}
         </tr>
         {% else %}
-        <tr><td colspan="4" class="text-center text-muted py-4">لا يوجد طلاب مسجّلون.</td></tr>
+        <tr><td colspan="{{ 4 if is_manager else 3 }}" class="text-center text-muted py-4">لا يوجد طلاب مسجّلون.</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -126,6 +130,7 @@
 </div>
 
 {# ── Historical (ended) enrollments — never deleted ─────────────────────── #}
+{% if is_manager %}
 <div class="card">
   <div class="card-header">
     <i class="bi bi-clock-history text-accent"></i>سجل الاشتراكات المنتهية
@@ -156,6 +161,7 @@
     </table>
   </div>
 </div>
+{% endif %}
 
 <script>
 (function () {

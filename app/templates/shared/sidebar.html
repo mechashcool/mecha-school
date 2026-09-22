@@ -170,6 +170,20 @@
       </a>
     </li>
 
+    {#- Institute instructors: their own study groups. Rendered ONLY for an
+        institution explicitly classified as an institute, so a school teacher's
+        nav is unchanged. The route is authoritative either way — it shows an
+        instructor only the groups assigned to them. -#}
+    {% if school and school.is_institute %}
+    <li class="nav-section-label">المجموعات</li>
+    <li class="nav-item">
+      <a href="{{ url_for('institute_groups.index') }}"
+         class="{{ 'active' if request.blueprint == 'institute_groups' }}">
+        <i class="bi bi-collection"></i> مجموعاتي الدراسية
+      </a>
+    </li>
+    {% endif %}
+
     {% if current_user.has_permission('view_students') and 'students' in enabled_modules %}
     <li class="nav-section-label">الطلاب</li>
     <li class="nav-item">
