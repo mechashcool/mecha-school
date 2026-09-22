@@ -3,12 +3,30 @@
 {% block page_title %}إدخال الدرجات{% endblock %}
 
 {% block content %}
+{% set is_institute = is_institute|default(false) %}
+{# Posted values are echoed back only on the institute branch, so the school
+   form renders exactly as before. #}
+{% set _p = posted if (is_institute and posted) else None %}
+{% set hist_rows = hist_rows|default([]) %}
+{% set res_status = res_status|default('current') %}
+{% set group_is_active = group_is_active|default(true) %}
+{# The save action exists only when there is at least one editable row. #}
+{% set can_save = is_institute and group_is_active and students|length > 0
+                  if is_institute else true %}
 <div class="page-header">
   <div>
     <h1 class="page-title">إدخال الدرجات</h1>
     <p class="page-subtitle">
-      {{ exam.exam_type.name }} — {{ exam.subject.name }} —
-      {{ exam.section.grade.name }} / {{ exam.section.name }} —
+      {% if exam.exam_type %}{{ exam.exam_type.name }} — {% endif %}
+      {{ exam.subject.name if exam.subject else '—' }} —
+      {% if exam.institute_group %}
+        <i class="bi bi-collection me-1"></i>{{ exam.institute_group.name }}
+        {% if exam.institute_group.instructor %}
+          ({{ exam.institute_group.instructor.full_name }})
+        {% endif %}
+      {% elif exam.section %}
+        {{ exam.section.grade.name if exam.section.grade else '—' }} / {{ exam.section.name }}
+      {% else %}—{% endif %} —
       {{ exam.exam_date.strftime('%Y-%m-%d') }}
     </p>
   </div>
@@ -17,11 +35,53 @@
   </a>
 </div>
 
+{% if is_institute and not group_is_active %}
+<div class="alert alert-secondary d-flex gap-2 align-items-start">
+  <i class="bi bi-clock-history flex-shrink-0 mt-1"></i>
+  <div>
+    <strong>المجموعة الدراسية غير فعّالة.</strong><br>
+    هذه السجلات تاريخية ومعروضة للاطلاع فقط. لا يمكن رصد درجة جديدة أو تعديل
+    أي درجة محفوظة.
+  </div>
+</div>
+{% endif %}
+
+{% if is_institute %}
+<div class="card mb-3">
+  <div class="card-body py-2 px-3">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-auto">
+        <label class="form-label small mb-1 text-muted">عرض</label>
+        <select name="status" class="form-select form-select-sm" style="min-width:170px">
+          {% if group_is_active %}
+          <option value="current" {% if res_status == 'current' %}selected{% endif %}>الطلاب الحاليون</option>
+          {% endif %}
+          <option value="historical" {% if res_status == 'historical' %}selected{% endif %}>السجلات التاريخية</option>
+          <option value="all" {% if res_status == 'all' %}selected{% endif %}>الكل</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-sm btn-primary"><i class="bi bi-funnel-fill me-1"></i>عرض</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
 <form method="POST">
+  {# Echoed back so a save returns to the exam list on the same status view. #}
+  <input type="hidden" name="status" value="{{ res_status }}">
+  <input type="hidden" name="exam_status" value="{{ request.args.get('exam_status', 'current') }}">
   <div class="card">
     <div class="card-header d-flex align-items-center">
       <i class="bi bi-pencil-square text-accent me-2"></i>
-      درجات {{ students|length }} طالب
+      درجات {{ students|length }}
+      {% if is_institute %}طالب مسجّل في المجموعة{% else %}طالب{% endif %}
+      {% if hist_rows %}
+      <span class="badge bg-secondary ms-2">
+        <i class="bi bi-clock-history me-1"></i>{{ hist_rows|length }} سجل تاريخي
+      </span>
+      {% endif %}
       <span class="ms-auto text-muted" style="font-size:12.5px">
         الدرجة العظمى: {{ exam.max_marks }} | درجة النجاح: {{ exam.pass_marks }}
       </span>
@@ -51,7 +111,8 @@
                      data-max="{{ exam.max_marks }}" data-pass="{{ exam.pass_marks }}"
                      data-index="{{ loop.index }}"
                      min="0" max="{{ exam.max_marks }}" step="0.5"
-                     value="{{ res.marks if res else '' }}"
+                     value="{{ (_p.get('marks_' ~ student.id) if _p else None)
+                               or (res.marks if res else '') }}"
                      placeholder="أدخل الدرجة">
             </td>
             <td>
@@ -65,18 +126,62 @@
               </span>
             </td>
           </tr>
-          {% else %}
-          <tr>
-            <td colspan="6" class="text-center text-muted py-4">لا يوجد طلاب</td>
+          {% endfor %}
+
+          {# ── Historical stored results — read-only, never an input ─────── #}
+          {% for stu, res, label in hist_rows %}
+          <tr class="table-light text-muted">
+            <td class="text-muted">{{ students|length + loop.index }}</td>
+            <td><code>{{ stu.student_id }}</code></td>
+            <td>
+              {{ stu.full_name }}
+              <span class="badge bg-secondary ms-1" style="font-size:11px">
+                <i class="bi bi-clock-history me-1"></i>{{ label }}
+              </span>
+            </td>
+            {# No input element at all: nothing can be submitted for this row. #}
+            <td><span class="fw-600">{{ res.marks }}</span></td>
+            <td>
+              <span class="badge" style="background:#f0f4f8;color:#1a3a5c;min-width:40px;text-align:center">
+                {{ res.grade_letter or '—' }}
+              </span>
+            </td>
+            <td>
+              <span class="badge-status {{ 'badge-active' if res.is_pass else 'badge-inactive' }}">
+                {{ 'ناجح' if res.is_pass else 'راسب' }}
+              </span>
+            </td>
           </tr>
           {% endfor %}
+
+          {% if not students and not hist_rows %}
+          <tr>
+            <td colspan="6" class="text-center text-muted py-4">
+              {% if is_institute and res_status == 'historical' %}
+                لا توجد سجلات تاريخية لهذا الاختبار.
+              {% elif is_institute %}
+                لا يوجد طلاب مسجّلون حالياً في هذه المجموعة الدراسية.
+                لا يمكن رصد درجات قبل تسجيل الطلاب.
+              {% else %}
+                لا يوجد طلاب
+              {% endif %}
+            </td>
+          </tr>
+          {% endif %}
         </tbody>
       </table>
     </div>
     <div class="card-footer d-flex justify-content-end">
+      {% if can_save %}
       <button type="submit" class="btn btn-primary px-5">
         <i class="bi bi-save-fill me-2"></i>حفظ الدرجات وحساب الترتيب
       </button>
+      {% else %}
+      <span class="text-muted small">
+        <i class="bi bi-lock-fill me-1"></i>
+        لا توجد صفوف قابلة للتعديل في هذا العرض — السجلات للاطلاع فقط.
+      </span>
+      {% endif %}
     </div>
   </div>
 </form>

@@ -3,6 +3,20 @@
 {% block page_title %}إنشاء اختبار جديد{% endblock %}
 
 {% block content %}
+{# Defaults keep this template renderable from any call site. #}
+{% set is_institute = is_institute|default(false) %}
+{% set institute_groups = institute_groups|default([]) %}
+{# Posted values are echoed back only on the institute branch, so the school
+   form renders exactly as before. #}
+{% set _p = posted if (is_institute and posted) else None %}
+{% set v_name = (_p.get('exam_name') if _p else None) or '' %}
+{% set v_date = (_p.get('exam_date') if _p else None) or '' %}
+{% set v_max  = (_p.get('max_marks') if _p else None) or '100' %}
+{% set v_pass = (_p.get('pass_marks') if _p else None) or '50' %}
+{% set _sel_group = ((_p.get('institute_group_id')|int) if (_p and _p.get('institute_group_id')) else none) %}
+{# A single eligible group is preselected for convenience only; the server
+   re-validates whatever is submitted. #}
+{% set _sel_group = _sel_group or (institute_groups[0].id if institute_groups|length == 1 else none) %}
 <div class="page-header">
   <div><h1 class="page-title">اختبار جديد</h1></div>
   <a href="{{ url_for('grades.index') }}" class="btn btn-outline-secondary">
@@ -22,7 +36,7 @@
             <div class="col-md-6">
               <label class="form-label">اسم الاختبار <span class="text-danger">*</span></label>
               <input type="text" name="exam_name" class="form-control" required
-                     placeholder="مثلاً: الامتحان النهائي">
+                     placeholder="مثلاً: الامتحان النهائي" value="{{ v_name }}">
             </div>
             <div class="col-md-6">
               <label class="form-label">فئة الاختبار</label>
@@ -33,6 +47,44 @@
                 {% endfor %}
               </select>
             </div>
+
+            {% if is_institute %}
+            {# ── Institute target: ONE study group; subject is derived ────── #}
+            {% set _sel_obj = (institute_groups | selectattr('id', 'equalto', _sel_group) | list | first)
+                              if _sel_group else None %}
+            <div class="col-md-6">
+              <label class="form-label">المجموعة الدراسية <span class="text-danger">*</span></label>
+              <select name="institute_group_id" id="institute-group-select"
+                      class="form-select" required>
+                <option value="">— اختر المجموعة الدراسية —</option>
+                {% for g in institute_groups %}
+                <option value="{{ g.id }}"
+                        data-subject="{{ g.subject.name if g.subject else 'غير محدد' }}"
+                        data-instructor="{{ g.instructor.full_name if g.instructor else 'غير معيّن' }}"
+                        {{ 'selected' if _sel_group == g.id }}>
+                  {{ g.name }}{% if g.subject %} — {{ g.subject.name }}{% endif %}
+                </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">تُعرض فقط المجموعات المفعّلة المتاحة لحسابك.</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">المادة</label>
+              {# Read-only on purpose: the server always takes the subject from
+                 the selected group, so an editable field here would be a lie. #}
+              <input type="text" class="form-control" id="institute-subject" readonly
+                     value="{{ _sel_obj.subject.name if _sel_obj and _sel_obj.subject else '' }}"
+                     placeholder="تُحدّد تلقائياً من المجموعة">
+              <div class="form-text">مشتقّة من المجموعة الدراسية ولا يمكن اختيارها بشكل مستقل.</div>
+            </div>
+            <div class="col-12">
+              <p class="small text-muted mb-0" id="institute-instructor-line">
+                <i class="bi bi-person-badge me-1"></i>
+                المدرّس: <strong>{{ _sel_obj.instructor.full_name
+                                     if _sel_obj and _sel_obj.instructor else 'غير معيّن' }}</strong>
+              </p>
+            </div>
+            {% else %}
 
             {# ── Row 2: Stage → Grade → Section cascade ──────────────────── #}
             <div class="col-md-4">
@@ -76,8 +128,10 @@
                 {% endfor %}
               </select>
             </div>
+            {% endif %}{# end institute / school target #}
 
             {# ── Row 4: Academic year & exam date ────────────────────────── #}
+            {% if not is_institute %}
             <div class="col-md-6">
               <label class="form-label">العام الدراسي <span class="text-danger">*</span></label>
               <select name="academic_year_id" class="form-select" required>
@@ -87,19 +141,21 @@
                 {% endfor %}
               </select>
             </div>
+            {% endif %}
             <div class="col-md-6">
               <label class="form-label">تاريخ الاختبار <span class="text-danger">*</span></label>
-              <input type="date" name="exam_date" class="form-control" required>
+              <input type="date" name="exam_date" class="form-control" required
+                     value="{{ v_date }}">
             </div>
 
             {# ── Row 5: Max marks & pass marks ───────────────────────────── #}
             <div class="col-md-6">
               <label class="form-label">الدرجة العظمى</label>
-              <input type="number" name="max_marks" class="form-control" value="100" min="1" step="0.5">
+              <input type="number" name="max_marks" class="form-control" value="{{ v_max }}" min="1" step="0.5">
             </div>
             <div class="col-md-6">
               <label class="form-label">درجة النجاح</label>
-              <input type="number" name="pass_marks" class="form-control" value="50" min="0" step="0.5">
+              <input type="number" name="pass_marks" class="form-control" value="{{ v_pass }}" min="0" step="0.5">
             </div>
 
           </div>
@@ -118,6 +174,24 @@
 
 <script>
 (function () {
+  /* ── Institute: mirror the chosen group's subject/instructor ──────────────
+     Display only. The server derives the real subject from the group; nothing
+     typed or scripted here is ever read back. */
+  var groupEl = document.getElementById('institute-group-select');
+  if (groupEl) {
+    var subjEl = document.getElementById('institute-subject');
+    var instEl = document.getElementById('institute-instructor-line');
+    groupEl.addEventListener('change', function () {
+      var opt = groupEl.options[groupEl.selectedIndex];
+      if (subjEl) subjEl.value = (opt && opt.value) ? opt.dataset.subject : '';
+      if (instEl) {
+        instEl.querySelector('strong').textContent =
+          (opt && opt.value) ? opt.dataset.instructor : 'غير معيّن';
+      }
+    });
+    return;   /* no stage/grade/section cascade on an institute form */
+  }
+
   var stageEl   = document.getElementById('stage-select');
   var gradeEl   = document.getElementById('grade-select');
   var sectionEl = document.getElementById('section-select');

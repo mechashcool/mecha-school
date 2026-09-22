@@ -10,6 +10,12 @@ from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    get_current_school, get_active_year, get_view_year,
                                    historical_guard)
 from app.utils.helpers import calculate_grade_letter
+from app.utils.institute_groups import (active_roster_students,
+                                        active_student_ids_in_group,
+                                        eligible_groups_for_user,
+                                        historical_result_rows,
+                                        institute_enabled,
+                                        resolve_eligible_group)
 
 grades_bp = Blueprint('grades', __name__, template_folder='../../templates/grades')
 
@@ -31,6 +37,142 @@ def _teacher_subject_ids():
                   .filter(teacher_subjects.c.employee_id == emp.id)
                   .all()
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  INSTITUTE TARGETING  (School.is_institute only)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# A school exam targets a Section; that code path is untouched below. An
+# institute exam targets an InstituteStudyGroup instead, because an institute
+# student belongs to several groups and carries no section.
+#
+# Every institute route resolves what the account may act on through the ONE
+# shared helper eligible_groups_for_user() in app/utils/institute_groups.py,
+# so there is a single authorization query rather than a slightly different
+# condition per route. Instructors resolve through the existing
+# Employee.user_id link; no new identity, role or permission is introduced.
+# enter_grades still gates every route exactly as before.
+
+
+def _is_institute_manager() -> bool:
+    """True for an account that may act on ANY group of this institute.
+
+    Decided by permission, never by a hard-coded role name alone: admins, and
+    any other role holding the EXISTING manage_institute_groups permission.
+    A teacher keeps the narrow instructor branch even if that permission is
+    ever added to their role, mirroring how the homework module already
+    separates the two.
+    """
+    if getattr(current_user, 'is_admin_user', False):
+        return True
+    if current_user.is_authenticated and current_user.role \
+            and current_user.role.name == 'teacher':
+        return False
+    return current_user.has_permission('manage_institute_groups')
+
+
+# ── Two deliberately separate scopes ─────────────────────────────────────────
+#   _institute_groups()            — ACTIVE only. What may be CREATED or
+#                                    MUTATED. Every write path uses this and
+#                                    nothing below widens it.
+#   _institute_groups_readable()   — active + inactive. Read-only, so an
+#                                    authorised account can still OPEN an exam
+#                                    whose group was later deactivated.
+# Both apply the identical manager/instructor split, school and academic-year
+# bounds; the history mode never changes WHO may act, only WHICH existing rows
+# may be read.
+
+EXAM_STATUS_CURRENT    = 'current'
+EXAM_STATUS_HISTORICAL = 'historical'
+EXAM_STATUS_ALL        = 'all'
+EXAM_STATUSES = (EXAM_STATUS_CURRENT, EXAM_STATUS_HISTORICAL, EXAM_STATUS_ALL)
+
+
+def _clean_status(raw, default=EXAM_STATUS_CURRENT):
+    """An unknown or forged status value falls back to the safe default.
+
+    The status is a VIEW filter only. It is never consulted for authorization:
+    every row it can reach was already bounded by school, academic year and the
+    manager/instructor scope before the filter was applied.
+    """
+    return raw if raw in EXAM_STATUSES else default
+
+
+def _institute_groups(school, year):
+    """ACTIVE groups the current user may target — the CREATE/MUTATE scope."""
+    return eligible_groups_for_user(school, current_user, year,
+                                    is_manager=_is_institute_manager())
+
+
+def _institute_groups_readable(school, year):
+    """Active AND inactive groups this user may READ. Never a write scope."""
+    return eligible_groups_for_user(school, current_user, year,
+                                    is_manager=_is_institute_manager(),
+                                    include_inactive=True)
+
+
+def _resolve_institute_group(school, year, group_id):
+    """(group, error) for a posted group id — see resolve_eligible_group()."""
+    return resolve_eligible_group(school, current_user, year, group_id,
+                                  is_manager=_is_institute_manager())
+
+
+def _exam_year(school, exam):
+    """The academic year an existing exam belongs to.
+
+    Authorization for a stored exam is resolved against its OWN year, not
+    whichever year is currently being viewed, so a historical institute exam
+    keeps a stable scope. Filtered by school_id, so a foreign year id can never
+    be resolved.
+    """
+    if school is None or exam is None or not exam.academic_year_id:
+        return None
+    return AcademicYear.query.filter_by(id=exam.academic_year_id,
+                                        school_id=school.id).first()
+
+
+def _institute_exam_group(school, exam, *, include_inactive=False):
+    """The study group of an institute exam this account may act on, or None.
+
+    Used by every direct-object lookup. An exam of another instructor, another
+    school or another year is never in scope, and an institute exam with no
+    group at all is refused rather than falling back to a wider rule.
+
+    include_inactive=True is the READ scope: it additionally admits an exam
+    whose group was deactivated after the fact. It still requires the same
+    institute, the same academic year and the same instructor ownership, so it
+    never exposes another instructor's or another institute's record.
+    """
+    if not institute_enabled(school) or exam is None:
+        return None
+    if not exam.institute_group_id:
+        return None
+    if exam.school_id != school.id:
+        return None
+    year = _exam_year(school, exam)
+    groups = (_institute_groups_readable(school, year) if include_inactive
+              else _institute_groups(school, year))
+    return next((g for g in groups if g.id == exam.institute_group_id), None)
+
+
+def _institute_exam_in_scope(school, exam, *, include_inactive=False) -> bool:
+    """True when this account may act on this institute exam."""
+    return _institute_exam_group(school, exam,
+                                 include_inactive=include_inactive) is not None
+
+
+def _exam_has_results(exam_id) -> bool:
+    """Dependency guard: True once ANY result row hangs off this exam.
+
+    The project has no exam-edit or exam-delete route, so nothing can retarget
+    or remove an exam through the interface today. This helper is the guard any
+    such route must call, and the institute create path uses it to refuse
+    reusing an exam id.
+    """
+    return db.session.query(
+        ExamResult.query.filter(ExamResult.exam_id == exam_id).exists()
+    ).scalar()
 
 
 def _build_exam_query(base_query, search, exam_type_filter, subject_filter, start_date, end_date):
@@ -61,6 +203,44 @@ def _apply_teacher_scope(query):
     if subject_ids:
         query = query.filter(Exam.subject_id.in_(subject_ids))
     return query
+
+
+def _institute_scope_group_ids(school, year, status):
+    """The group ids visible under one status, already authorization-bounded.
+
+    current    — the account's ACTIVE groups.
+    historical — the account's INACTIVE groups (readable, never writable).
+    all        — the union, which is exactly the readable scope.
+
+    Each list is derived from the same manager/instructor scope inside the same
+    institute and academic year, so the status can only ever NARROW what the
+    account was already entitled to see. A group belongs to exactly one of the
+    two sets, so `all` cannot produce a duplicate exam.
+    """
+    if status == EXAM_STATUS_CURRENT:
+        return [g.id for g in _institute_groups(school, year)]
+    readable = _institute_groups_readable(school, year)
+    if status == EXAM_STATUS_ALL:
+        return [g.id for g in readable]
+    return [g.id for g in readable if not g.is_active]
+
+
+def _apply_institute_scope(query, school, year, status=EXAM_STATUS_CURRENT):
+    """Restrict an Exam query to the institute groups this account may see.
+
+    A manager sees every group-targeted exam of the institute; an instructor
+    sees only their own groups'. Section-targeted rows are excluded from an
+    institute list entirely, and an account with no eligible group sees
+    nothing at all — never a wider fallback.
+
+    An exam whose group was later deactivated is preserved in the database and
+    simply moves from the default `current` view to `historical`. It is never
+    deleted, retargeted or reclassified in storage.
+    """
+    group_ids = _institute_scope_group_ids(school, year, status)
+    if not group_ids:
+        return query.filter(Exam.id == -1)
+    return query.filter(Exam.institute_group_id.in_(group_ids))
 
 
 def _notify_grade_results(exam, students):
@@ -145,26 +325,46 @@ def _notify_new_exam(exam):
             exam_id, school_id, section_id, subject_id, exam_name,
         )
 
-        if not section_id or not school_id:
+        group_id = exam.institute_group_id
+
+        if not school_id or (not section_id and not group_id):
             _log.warning(
-                '[exam-notify] SKIP exam_id=%s — section_id=%s or '
-                'school_id=%s is falsy',
-                exam_id, section_id, school_id,
+                '[exam-notify] SKIP exam_id=%s — no target '
+                '(section_id=%s group_id=%s) or school_id=%s is falsy',
+                exam_id, section_id, group_id, school_id,
             )
             return
 
         # Active students — bypass_tenant_scope=True + explicit school_id so
         # this query is correct regardless of the ORM scope active at call time.
-        section_students = (
-            Student.query
-            .execution_options(bypass_tenant_scope=True)
-            .filter(
-                Student.section_id == section_id,
-                Student.school_id  == school_id,
-                Student.status     == 'active',
+        if group_id:
+            # INSTITUTE: only students holding an ACTIVE enrollment in this
+            # exact group. Never a grade, a section, the whole institute or
+            # another instructor's students. The id list comes from the same
+            # query the group roster uses and is re-filtered by school_id and
+            # status here, so an ended membership receives nothing.
+            enrolled_ids = active_student_ids_in_group(school_id, group_id)
+            section_students = (
+                Student.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter(
+                    Student.id.in_(enrolled_ids),
+                    Student.school_id == school_id,
+                    Student.status    == 'active',
+                )
+                .all()
+            ) if enrolled_ids else []
+        else:
+            section_students = (
+                Student.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter(
+                    Student.section_id == section_id,
+                    Student.school_id  == school_id,
+                    Student.status     == 'active',
+                )
+                .all()
             )
-            .all()
-        )
 
         _log.warning(
             '[exam-notify] exam_id=%s school_id=%s section_id=%s '
@@ -310,10 +510,62 @@ def index():
 
     school = get_current_school()
     year   = get_view_year(school.id) if school else None
+    is_institute = institute_enabled(school)
 
     base = Exam.query
     if year:
         base = base.filter(Exam.academic_year_id == year.id)
+
+    # ══ INSTITUTE BRANCH ══════════════════════════════════════════
+    # An institute filters by study group. Stage / grade / section do not exist
+    # for it, so those URL params are dropped before they can reach a query.
+    if is_institute:
+        # Institute-only history filter. Absent or forged -> 'current'.
+        exam_status = _clean_status(request.args.get('status'))
+        # The group dropdown lists exactly the groups of the selected status,
+        # so a group id from outside it cannot be used to widen the result.
+        institute_groups_list = [
+            g for g in _institute_groups_readable(school, year)
+            if g.id in set(_institute_scope_group_ids(school, year, exam_status))]
+        base = _apply_institute_scope(base, school, year, exam_status)
+
+        group_filter = request.args.get('institute_group_id', type=int)
+        if group_filter and group_filter not in {
+                g.id for g in institute_groups_list}:
+            group_filter = None
+        if group_filter:
+            base = base.filter(Exam.institute_group_id == group_filter)
+
+        exams = _build_exam_query(
+            base, search, exam_type_filter, subject_filter, start_date, end_date
+        ).order_by(Exam.exam_date.desc()).all()
+
+        # Subjects offered for filtering are exactly the ones carried by the
+        # eligible groups — derived, never an independent list.
+        seen, institute_subjects = set(), []
+        for g in institute_groups_list:
+            if g.subject and g.subject.id not in seen:
+                seen.add(g.subject.id)
+                institute_subjects.append(g.subject)
+        institute_subjects.sort(key=lambda x: x.name or '')
+
+        return render_template('grades/index.html',
+                               exams=exams,
+                               exam_types=ExamType.query.all(),
+                               subjects=institute_subjects,
+                               all_grades=[], all_sections=[], stages=[],
+                               is_institute=True,
+                               institute_groups=institute_groups_list,
+                               group_filter=group_filter,
+                               exam_status=exam_status,
+                               search=search,
+                               exam_type_filter=exam_type_filter,
+                               subject_filter=subject_filter,
+                               start_date=start_date,
+                               end_date=end_date,
+                               stage_filter='', grade_filter=None,
+                               section_filter=None)
+
     if _is_teacher():
         base = _apply_teacher_scope(base)
 
@@ -418,7 +670,11 @@ def index():
                            end_date=end_date,
                            stage_filter=stage_filter,
                            grade_filter=grade_filter,
-                           section_filter=section_filter)
+                           section_filter=section_filter,
+                           is_institute=False,
+                           institute_groups=[],
+                           group_filter=None,
+                           exam_status=EXAM_STATUS_CURRENT)
 
 
 @grades_bp.route('/export/excel')
@@ -506,12 +762,27 @@ def create_exam():
         years_q = years_q.filter_by(school_id=school.id)
     years = years_q.order_by(AcademicYear.start_date.desc()).all()
 
+    # ══ INSTITUTE BRANCH ══════════════════════════════════════════
+    # An institute exam targets ONE study group. Grade / section / subject
+    # selectors do not apply: the subject is derived from the group on the
+    # server, so no independent subject list is offered and none is accepted.
+    is_institute = institute_enabled(school)
+    institute_groups_list = (_institute_groups(school, active_year)
+                             if is_institute else [])
+    if is_institute and not institute_groups_list:
+        flash('لا توجد مجموعات دراسية مفعّلة متاحة لحسابك في العام '
+              'الدراسي الحالي. لا يمكن إنشاء اختبار. راجع إدارة '
+              'المعهد لإسناد مجموعة إليك.', 'warning')
+        return redirect(url_for('grades.index'))
+
     # Grade list for cascade (school + year scoped)
     grades_q = (Grade.query
                 .filter_by(school_id=school.id, academic_year_id=active_year.id)
                 .order_by(Grade.name))
 
-    if _is_teacher():
+    if is_institute:
+        sections, subjects, grades = [], [], []
+    elif _is_teacher():
         section_ids = get_teacher_section_ids(current_user)
         subject_ids = _teacher_subject_ids()
         sections = Section.query.filter(Section.id.in_(section_ids)).order_by(Section.name).all() if section_ids else []
@@ -533,14 +804,69 @@ def create_exam():
 
         def _form_error(msg):
             flash(msg, 'danger')
+            # request.form is echoed back so a validation failure does not wipe
+            # the chosen group; it is redisplay only — the authoritative check
+            # runs again against the eligible set on the next POST.
             return render_template('grades/exam_form.html',
                                    exam_types=exam_types, subjects=subjects,
-                                   sections=sections, grades=grades, years=years)
+                                   sections=sections, grades=grades, years=years,
+                                   is_institute=is_institute,
+                                   institute_groups=institute_groups_list,
+                                   posted=request.form)
 
         if not exam_name:
             return _form_error('يرجى إدخال اسم الاختبار.')
 
-        # ── Resolve target sections ──────────────────────────────────────────
+        # ══ INSTITUTE: one exam, one group, derived subject ════════════════
+        if is_institute:
+            group, group_err = _resolve_institute_group(
+                school, active_year, request.form.get('institute_group_id',
+                                                      type=int))
+            if group_err:
+                return _form_error(group_err)
+
+            # The group's stored subject_id is authoritative. Any posted
+            # subject_id / grade_id / section_id / instructor / school /
+            # academic-year value is discarded here, so none of them can be
+            # forged into the saved row. The year is the institute's ACTIVE
+            # year, the one the group was just validated against — never the
+            # posted academic_year_id.
+            try:
+                exam_date = dt.strptime(request.form.get('exam_date', ''),
+                                        '%Y-%m-%d').date()
+            except (ValueError, TypeError):
+                return _form_error('تاريخ الاختبار غير صالح.')
+            try:
+                max_marks  = float(request.form.get('max_marks', 100))
+                pass_marks = float(request.form.get('pass_marks', 50))
+            except (ValueError, TypeError):
+                return _form_error('الدرجة العظمى ودرجة النجاح يجب أن تكونا أرقاماً.')
+            if max_marks <= 0:
+                return _form_error('الدرجة العظمى يجب أن تكون أكبر من صفر.')
+            if pass_marks < 0 or pass_marks > max_marks:
+                return _form_error('درجة النجاح يجب أن تكون بين صفر والدرجة العظمى.')
+
+            exam = Exam(
+                school_id          = school.id,
+                exam_name          = exam_name,
+                exam_type_id       = request.form.get('exam_type_id', type=int) or None,
+                subject_id         = group.subject_id,   # derived, never posted
+                section_id         = None,               # never both targets
+                institute_group_id = group.id,
+                academic_year_id   = active_year.id,
+                exam_date          = exam_date,
+                max_marks          = max_marks,
+                pass_marks         = pass_marks,
+            )
+            db.session.add(exam)
+            db.session.commit()
+
+            _notify_new_exam(exam)
+
+            flash('تم إنشاء الاختبار للمجموعة الدراسية بنجاح.', 'success')
+            return redirect(url_for('grades.enter_results', exam_id=exam.id))
+
+        # ── Resolve target sections ─────────────────────────────────────
         # Section selected → single exam for it.
         # No section       → one exam per section of the selected grade.
         if section_id:
@@ -618,7 +944,10 @@ def create_exam():
 
     return render_template('grades/exam_form.html',
                            exam_types=exam_types, subjects=subjects,
-                           sections=sections, grades=grades, years=years)
+                           sections=sections, grades=grades, years=years,
+                           is_institute=is_institute,
+                           institute_groups=institute_groups_list,
+                           posted=None)
 
 
 @grades_bp.route('/exams/<int:exam_id>/results', methods=['GET', 'POST'])
@@ -637,17 +966,201 @@ def enter_results(exam_id):
         if _school and exam.school_id and exam.school_id != _school.id:
             abort(403)
 
-    if _is_teacher():
-        allowed_sections = get_teacher_section_ids(current_user)
-        allowed_subjects = _teacher_subject_ids()
-        if exam.section_id not in allowed_sections or exam.subject_id not in allowed_subjects:
-            flash('لا يمكنك إدخال درجات لاختبار خارج نطاق صلاحياتك.', 'danger')
-            return redirect(url_for('grades.index'))
+    school = get_current_school()
+    is_institute = institute_enabled(school)
 
-    students = Student.query.filter_by(section_id=exam.section_id, status='active').all()
+    hist_rows = []
+    group_is_active = True
+    res_status = EXAM_STATUS_CURRENT
+
+    if is_institute:
+        # ONE check covers: the institution is an institute, the exam belongs
+        # to it, it targets a study group, the group is in the applicable year,
+        # and the group is assigned to this instructor unless they manage the
+        # institute. 404 rather than 403 so a foreign or nonexistent exam id is
+        # indistinguishable — another instructor's exam discloses nothing.
+        #
+        # include_inactive is the READ widening: an authorised manager or the
+        # group's own instructor may still OPEN an exam whose group was later
+        # deactivated. It does NOT grant any write — that is re-decided from
+        # group.is_active below, on the server, for every POST.
+        group = _institute_exam_group(school, exam, include_inactive=True)
+        if group is None:
+            abort(404)
+        group_is_active = bool(group.is_active)
+
+        # An inactive group has no current students at all, so its whole result
+        # set is historical and the page opens on that view.
+        default_status = (EXAM_STATUS_CURRENT if group_is_active
+                          else EXAM_STATUS_HISTORICAL)
+        res_status = _clean_status(
+            request.values.get('status'), default=default_status)
+        if not group_is_active:
+            res_status = (EXAM_STATUS_ALL if res_status == EXAM_STATUS_ALL
+                          else EXAM_STATUS_HISTORICAL)
+
+        # Currently eligible roster: ACTIVE enrollment in THIS exact ACTIVE
+        # group and an active student record. One joined query, no N+1, and the
+        # partial unique index on (group_id, student_id) WHERE status='active'
+        # makes a duplicate row impossible.
+        current_students = (active_roster_students(school.id,
+                                                   exam.institute_group_id)
+                            if group_is_active else [])
+
+        # `students` stays the EDITABLE roster on every branch, so the write
+        # path below is unchanged and cannot be widened by the view filter.
+        students = ([] if res_status == EXAM_STATUS_HISTORICAL
+                    else current_students)
+        if res_status in (EXAM_STATUS_HISTORICAL, EXAM_STATUS_ALL):
+            # Stored results whose student is no longer currently eligible.
+            # Excluding the current roster makes the union distinct by
+            # construction and lets current eligibility win outright.
+            hist_rows = historical_result_rows(
+                school.id, exam_id, exam.institute_group_id,
+                exclude_student_ids=[st.id for st in current_students])
+    else:
+        if _is_teacher():
+            allowed_sections = get_teacher_section_ids(current_user)
+            allowed_subjects = _teacher_subject_ids()
+            if exam.section_id not in allowed_sections or exam.subject_id not in allowed_subjects:
+                flash('لا يمكنك إدخال درجات لاختبار خارج نطاق صلاحياتك.', 'danger')
+                return redirect(url_for('grades.index'))
+
+        # A section-less exam can only be an institute one. Reaching here means
+        # there is no institute context to authorise it (for example a super
+        # admin with no active school selected), so refuse rather than fall
+        # through to filter_by(section_id=None), which would match every
+        # section-less student in scope. A school exam always has a section, so
+        # this can never fire for one.
+        if not exam.section_id:
+            abort(404)
+
+        students = Student.query.filter_by(section_id=exam.section_id, status='active').all()
+
     existing = {r.student_id: r for r in ExamResult.query.filter_by(exam_id=exam_id).all()}
 
     if request.method == 'POST':
+        # ══ INSTITUTE: validate EVERYTHING before writing anything ══════════
+        # Nothing is added to the session until every submitted row has passed,
+        # so one invalid or unauthorised row leaves the whole save untouched —
+        # there is no partial commit. The school branch below is unchanged.
+        if is_institute:
+            # A deactivated group is read-only, whatever the UI or the posted
+            # filter claims. Re-decided here from the stored group row, so a
+            # forged POST is refused before a single value is parsed.
+            if not group_is_active:
+                flash('المجموعة الدراسية غير فعّالة. السجلات معروضة للاطلاع '
+                      'فقط ولا يمكن رصد أو تعديل أي درجة.', 'danger')
+                return render_template('grades/results_form.html',
+                                       exam=exam, students=[],
+                                       existing=existing,
+                                       is_institute=True, posted=None,
+                                       hist_rows=hist_rows,
+                                       res_status=res_status,
+                                       group_is_active=False)
+
+            # The editable roster, re-resolved from the database on this
+            # request. A historical or unrelated student id is simply not in
+            # it, so the loop below rejects the whole submission.
+            roster_ids = {st.id for st in students}
+            by_id      = {st.id: st for st in students}
+            max_allowed = float(exam.max_marks)
+            parsed = []          # (student, marks) — built, not written
+
+            for key, raw in request.form.items():
+                if not key.startswith('marks_'):
+                    continue
+                try:
+                    sid = int(key[len('marks_'):])
+                except (TypeError, ValueError):
+                    continue
+                value = (raw or '').strip()
+                if value == '':
+                    # Empty stays "not entered": no row is created and any
+                    # existing row is left exactly as it is. This preserves the
+                    # current distinction between an unentered mark and 0.
+                    continue
+                if sid not in roster_ids:
+                    # A forged id, a student of another group, an ended
+                    # enrollment or a deactivated student. Refuse the whole
+                    # submission; never silently drop just this row.
+                    flash('تعذر حفظ الدرجات: أحد الطلاب المرسلين غير مسجّل '
+                          'حالياً في هذه المجموعة الدراسية. لم يتم حفظ أي درجة.',
+                          'danger')
+                    return render_template('grades/results_form.html',
+                                           exam=exam, students=students,
+                                           existing=existing,
+                                           is_institute=True,
+                                           posted=request.form,
+                                           hist_rows=hist_rows,
+                                           res_status=res_status,
+                                           group_is_active=group_is_active)
+                try:
+                    marks = float(value)
+                except (TypeError, ValueError):
+                    flash(f'قيمة الدرجة غير صالحة للطالب '
+                          f'{by_id[sid].full_name}. لم يتم حفظ أي درجة.', 'danger')
+                    return render_template('grades/results_form.html',
+                                           exam=exam, students=students,
+                                           existing=existing,
+                                           is_institute=True,
+                                           posted=request.form,
+                                           hist_rows=hist_rows,
+                                           res_status=res_status,
+                                           group_is_active=group_is_active)
+                if marks < 0 or marks > max_allowed:
+                    flash(f'درجة الطالب {by_id[sid].full_name} يجب أن تكون بين '
+                          f'0 و {max_allowed:g}. لم يتم حفظ أي درجة.', 'danger')
+                    return render_template('grades/results_form.html',
+                                           exam=exam, students=students,
+                                           existing=existing,
+                                           is_institute=True,
+                                           posted=request.form,
+                                           hist_rows=hist_rows,
+                                           res_status=res_status,
+                                           group_is_active=group_is_active)
+                parsed.append((by_id[sid], marks))
+
+            graded_students = []
+            for student, marks in parsed:
+                grade = calculate_grade_letter(marks, max_allowed)
+                is_p  = marks >= float(exam.pass_marks)
+                if student.id in existing:
+                    existing[student.id].marks        = marks
+                    existing[student.id].grade_letter = grade
+                    existing[student.id].is_pass      = is_p
+                    existing[student.id].entered_by   = current_user.id
+                else:
+                    # exam_id and the exam's own school_id / academic_year_id
+                    # are copied from the stored exam, never from the request,
+                    # so a result can never land in another school or year.
+                    db.session.add(ExamResult(
+                        exam_id          = exam_id,
+                        student_id       = student.id,
+                        school_id        = exam.school_id,
+                        academic_year_id = exam.academic_year_id,
+                        marks            = marks,
+                        grade_letter     = grade,
+                        is_pass          = is_p,
+                        entered_by       = current_user.id,
+                    ))
+                graded_students.append(student)
+
+            db.session.commit()
+
+            results = ExamResult.query.filter_by(exam_id=exam_id)\
+                                      .order_by(ExamResult.marks.desc()).all()
+            for rank, res in enumerate(results, 1):
+                res.rank = rank
+            db.session.commit()
+
+            _notify_grade_results(exam, graded_students)
+
+            flash('تم حفظ الدرجات وحساب الترتيب.', 'success')
+            return redirect(url_for('grades.index',
+                                    status=request.values.get('exam_status')
+                                    or EXAM_STATUS_CURRENT))
+
         graded_students = []
         for student in students:
             marks_str = request.form.get(f'marks_{student.id}', '')
@@ -693,7 +1206,10 @@ def enter_results(exam_id):
         return redirect(url_for('grades.index'))
 
     return render_template('grades/results_form.html',
-                           exam=exam, students=students, existing=existing)
+                           exam=exam, students=students, existing=existing,
+                           is_institute=is_institute, posted=None,
+                           hist_rows=hist_rows, res_status=res_status,
+                           group_is_active=group_is_active)
 
 
 def _pivot_data(section_id, subject_filter, exam_type_filter, start_date, end_date):

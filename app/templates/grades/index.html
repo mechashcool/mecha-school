@@ -153,6 +153,11 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
   el.textContent = new Date().toLocaleDateString('ar-SA', {year:'numeric',month:'long',day:'numeric'});
 });
 </script>
+{# Defaults keep this template renderable from any call site. #}
+{% set is_institute = is_institute|default(false) %}
+{% set institute_groups = institute_groups|default([]) %}
+{% set group_filter = group_filter|default(none) %}
+{% set exam_status = exam_status|default('current') %}
 <div class="page-header">
   <div><h1 class="page-title">الاختبارات والدرجات</h1></div>
   <div class="d-flex gap-2">
@@ -163,12 +168,15 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
     <button type="button" class="btn btn-outline-secondary" onclick="window.print()">
       <i class="bi bi-printer-fill me-1"></i>طباعة
     </button>
+    {% if not is_institute %}
+    {# Both pages pivot on Grade/Section, which an institute does not use. #}
     <a href="{{ url_for('grades.gradebook') }}" class="btn btn-outline-primary">
       <i class="bi bi-grid-3x3-gap-fill me-1"></i>كشف الدرجات
     </a>
     <a href="{{ url_for('grades.report') }}" class="btn btn-outline-primary">
       <i class="bi bi-person-lines-fill me-1"></i>نتائج الطلاب
     </a>
+    {% endif %}
     {% if not is_historical_year %}
     <a href="{{ url_for('grades.create_exam') }}" class="btn btn-primary">
       <i class="bi bi-plus-circle-fill me-2"></i>اختبار جديد
@@ -181,7 +189,39 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
   <div class="card-body py-3">
     <form method="GET" class="row g-2 align-items-end">
 
-      {# ── Row 1: Academic cascade filters ── #}
+      {# ── Row 1: study group (institute) or academic cascade (school) ── #}
+      {% if is_institute %}
+      <div class="col-6 col-md-3">
+        <label class="form-label fw-600 small">الحالة</label>
+        <select name="status" class="form-select">
+          <option value="current" {% if exam_status == 'current' %}selected{% endif %}>الحالية</option>
+          <option value="historical" {% if exam_status == 'historical' %}selected{% endif %}>السجلات التاريخية</option>
+          <option value="all" {% if exam_status == 'all' %}selected{% endif %}>الكل</option>
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label fw-600 small">المجموعة الدراسية</label>
+        <select name="institute_group_id" class="form-select">
+          <option value="">كل المجموعات</option>
+          {% for g in institute_groups %}
+          <option value="{{ g.id }}" {% if group_filter == g.id %}selected{% endif %}>
+            {{ g.name }}{% if g.subject %} — {{ g.subject.name }}{% endif %}
+            {% if g.instructor %} ({{ g.instructor.full_name }}){% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label small">المادة</label>
+        <select name="subject_id" class="form-select">
+          <option value="all" {% if subject_filter == 'all' %}selected{% endif %}>كل المواد</option>
+          {% for subj in subjects %}
+          <option value="{{ subj.id }}"
+                  {% if subject_filter == subj.id|string %}selected{% endif %}>{{ subj.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% else %}
       <div class="col-6 col-md-3">
         <label class="form-label fw-600 small">المرحلة</label>
         <select name="stage" class="form-select" id="idxStage">
@@ -229,6 +269,7 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
           {% endfor %}
         </select>
       </div>
+      {% endif %}{# end institute / school filters #}
 
       {# ── Row 2: Refinement filters + submit ── #}
       <div class="col-6 col-md-2">
@@ -263,6 +304,7 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
   </div>
 </div>
 
+{% if not is_institute %}
 <script>
 (function () {
   var stageEl   = document.getElementById('idxStage');
@@ -321,6 +363,7 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
   filterGrades();
 })();
 </script>
+{% endif %}{# end school cascade JS #}
 
 {# ── Exam list table ── #}
 <div class="card">
@@ -328,7 +371,8 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
     <table class="table table-hover">
       <thead>
         <tr>
-          <th>اسم الاختبار</th><th>الفئة</th><th>المادة</th><th>الصف / الشعبة</th>
+          <th>اسم الاختبار</th><th>الفئة</th><th>المادة</th>
+          <th>{% if is_institute %}المجموعة الدراسية{% else %}الصف / الشعبة{% endif %}</th>
           <th>التاريخ</th><th>الدرجة العظمى</th><th>درجة النجاح</th><th>عدد النتائج</th><th><span class="no-print">الإجراءات</span><span class="print-only">نسبة النجاح</span></th>
         </tr>
       </thead>
@@ -345,8 +389,26 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
             <span class="text-muted">—</span>
             {% endif %}
           </td>
-          <td>{{ exam.subject.name }}</td>
-          <td>{{ exam.section.grade.name }} / {{ exam.section.name }}</td>
+          <td>{{ exam.subject.name if exam.subject else '—' }}</td>
+          <td>
+            {% if exam.institute_group %}
+              <i class="bi bi-collection me-1 text-primary-custom"></i>{{ exam.institute_group.name }}
+              {% if not exam.institute_group.is_active %}
+              <span class="badge bg-secondary" title="المجموعة غير فعّالة — هذا سجل تاريخي للعرض فقط">
+                <i class="bi bi-clock-history me-1"></i>سجل تاريخي
+              </span>
+              {% endif %}
+              {% if exam.institute_group.instructor %}
+              <span class="text-muted" style="font-size:12px">
+                — {{ exam.institute_group.instructor.full_name }}
+              </span>
+              {% endif %}
+            {% elif exam.section %}
+              {{ exam.section.grade.name if exam.section.grade else '—' }} / {{ exam.section.name }}
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
           <td>{{ exam.exam_date.strftime('%Y-%m-%d') }}</td>
           <td>{{ exam.max_marks }}</td>
           <td>{{ exam.pass_marks }}</td>
@@ -357,10 +419,19 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
             {# Screen: action button; Print: pass rate percentage #}
             <span class="no-print">
               {% if not is_historical_year %}
+              {% if is_institute and exam.institute_group
+                    and not exam.institute_group.is_active %}
               <a href="{{ url_for('grades.enter_results', exam_id=exam.id) }}"
+                 class="btn btn-sm btn-outline-secondary">
+                <i class="bi bi-clock-history me-1"></i>عرض السجل
+              </a>
+              {% else %}
+              <a href="{{ url_for('grades.enter_results', exam_id=exam.id,
+                                  exam_status=exam_status if is_institute else none) }}"
                  class="btn btn-sm btn-outline-primary">
                 <i class="bi bi-pencil-square me-1"></i>إدخال الدرجات
               </a>
+              {% endif %}
               {% else %}
               <span class="text-muted" style="font-size:12px">للعرض فقط</span>
               {% endif %}
@@ -382,7 +453,17 @@ document.querySelectorAll('.js-print-date').forEach(function(el){
         <tr>
           <td colspan="9" class="text-center text-muted py-5">
             <i class="bi bi-clipboard-data" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-            لا توجد اختبارات بعد
+            {% if is_institute and not institute_groups %}
+              {% if exam_status == 'historical' %}
+                لا توجد سجلات تاريخية — لا توجد مجموعات غير فعّالة في حسابك لهذا العام الدراسي.
+              {% else %}
+                لا توجد مجموعات دراسية متاحة لحسابك في هذا العام الدراسي.
+              {% endif %}
+            {% elif is_institute and exam_status == 'historical' %}
+              لا توجد اختبارات ضمن السجلات التاريخية.
+            {% else %}
+              لا توجد اختبارات بعد
+            {% endif %}
           </td>
         </tr>
         {% endfor %}

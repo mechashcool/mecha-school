@@ -328,3 +328,183 @@ def active_student_ids_in_group(school_id: int, group_id) -> list[int]:
             .distinct()
             .all())
     return [r[0] for r in rows]
+
+
+def eligible_groups_for_user(school, user, year, *, is_manager: bool,
+                            include_inactive: bool = False):
+    """ACTIVE study groups this user may target, for THIS institute and year.
+
+    The single authorization query behind every institute-scoped surface that
+    has to answer "which groups may this account act on":
+
+      * institute manager    -> every active group of the institute that year
+      * institute instructor -> only groups whose instructor_id is their own
+                                Employee row (the existing Employee.user_id
+                                link, never a second identity)
+      * anything else        -> []
+
+    `is_manager` is decided by the CALLER from the existing permission
+    catalogue, never from a hard-coded role name here.
+
+    Returns [] — never a wider set — for a school, a missing year, an account
+    with no linked Employee row, or an instructor with no groups. Callers match
+    a posted id against this list, so failing closed here fails closed
+    everywhere.
+
+    include_inactive is a READ-ONLY widening and DEFAULTS TO FALSE, so every
+    existing caller — exam creation, homework, the student forms — keeps the
+    active-only scope it was written against. It exists purely so an authorised
+    account can still open an exam whose group was later deactivated. It never
+    widens WHICH accounts may act: the manager/instructor split is identical in
+    both modes, and the academic year, school and instructor ownership are all
+    still applied. Never pass it on a create or mutate path.
+    """
+    if not institute_enabled(school) or year is None:
+        return []
+    if is_manager:
+        return (all_groups_for_year(school.id, year.id) if include_inactive
+                else active_groups_for_form(school.id, year.id))
+    return instructor_groups(school, user, year,
+                             active_only=not include_inactive)
+
+
+def all_groups_for_year(school_id: int, academic_year_id: int):
+    """Every group of THIS institute in THIS year, active or not.
+
+    The manager counterpart of active_groups_for_form() for HISTORICAL READS
+    only. Still bounded by school_id and academic_year_id, so it can never
+    reach another institute or another year.
+    """
+    if not school_id or not academic_year_id:
+        return []
+    return (InstituteStudyGroup.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(school_id=school_id, academic_year_id=academic_year_id)
+            .order_by(InstituteStudyGroup.name)
+            .all())
+
+
+# Arabic labels for why a stored result is historical, most specific first.
+HIST_STUDENT_INACTIVE   = 'طالب غير فعّال'
+HIST_ENROLLMENT_ENDED   = 'اشتراك منتهٍ'
+HIST_ENROLLMENT_MISSING = 'اشتراك غير فعّال'
+HIST_GROUP_INACTIVE     = 'نتيجة تاريخية'
+
+
+def historical_result_rows(school_id: int, exam_id, group_id,
+                           exclude_student_ids=()):
+    """[(student, result, label)] for stored results no longer editable.
+
+    A row qualifies ONLY when an ExamResult already exists for this exact exam
+    and the student is not currently eligible (their enrollment ended, the
+    enrollment row is gone, the student was deactivated, or the group itself
+    was deactivated). An ended or inactive student WITHOUT a stored result is
+    deliberately absent: there is no history to show.
+
+    exclude_student_ids is the currently eligible roster, so a student who is
+    still active and enrolled never appears here — current eligibility always
+    wins and the union with the current roster is distinct by construction.
+
+    Two queries total regardless of roster size: one join for the results and
+    one for the enrollment states. Nothing is written, updated or deleted.
+    """
+    if not school_id or not exam_id:
+        return []
+    from app.models import ExamResult
+
+    exclude = set(exclude_student_ids or ())
+    rows = (db.session.query(ExamResult, Student)
+            .join(Student, Student.id == ExamResult.student_id)
+            .filter(ExamResult.exam_id == exam_id,
+                    ExamResult.school_id == school_id,
+                    Student.school_id == school_id)
+            .order_by(Student.full_name)
+            .all())
+    rows = [(res, stu) for res, stu in rows if stu.id not in exclude]
+    if not rows:
+        return []
+
+    # One extra query for every enrollment state at once — never per student.
+    enrollment_by_student = {}
+    if group_id:
+        for enr in (InstituteGroupEnrollment.query
+                    .execution_options(bypass_tenant_scope=True)
+                    .filter(InstituteGroupEnrollment.school_id == school_id,
+                            InstituteGroupEnrollment.group_id == group_id,
+                            InstituteGroupEnrollment.student_id.in_(
+                                [stu.id for _, stu in rows]))
+                    .all()):
+            # An ACTIVE row outranks an older ended one for labelling.
+            prev = enrollment_by_student.get(enr.student_id)
+            if prev is None or enr.status == InstituteGroupEnrollment.STATUS_ACTIVE:
+                enrollment_by_student[enr.student_id] = enr
+
+    out = []
+    for res, stu in rows:
+        enr = enrollment_by_student.get(stu.id)
+        if (stu.status or '') != 'active':
+            label = HIST_STUDENT_INACTIVE
+        elif enr is None:
+            label = HIST_ENROLLMENT_MISSING
+        elif enr.status == InstituteGroupEnrollment.STATUS_ENDED:
+            label = HIST_ENROLLMENT_ENDED
+        elif enr.status != InstituteGroupEnrollment.STATUS_ACTIVE:
+            label = HIST_ENROLLMENT_MISSING
+        else:
+            # Still actively enrolled and active: the only way to land here is
+            # a deactivated group, whose whole result set is historical.
+            label = HIST_GROUP_INACTIVE
+        out.append((stu, res, label))
+    return out
+
+
+def resolve_eligible_group(school, user, year, group_id, *, is_manager: bool):
+    """(group, error) for a posted/URL group id, or (None, message).
+
+    ONE check covers all of: the institution is an institute, the group belongs
+    to it, the group belongs to the applicable academic year, the group is
+    active, and the instructor owns it unless they manage the institute.
+
+    A forged, foreign, inactive, cross-year or nonexistent id yields the same
+    Arabic message and discloses nothing about whether it exists elsewhere.
+    """
+    if not group_id:
+        return None, 'المجموعة الدراسية مطلوبة.'
+    allowed = {g.id: g for g in
+               eligible_groups_for_user(school, user, year, is_manager=is_manager)}
+    group = allowed.get(group_id)
+    if group is None:
+        return None, ('المجموعة الدراسية المحددة غير صالحة أو غير مرتبطة '
+                      'بحسابك. لم يتم حفظ أي تغيير.')
+    return group, None
+
+
+def active_roster_students(school_id: int, group_id):
+    """Student rows eligible to RECEIVE a new grade in one study group.
+
+    Requires BOTH an active enrollment in this exact group and an active
+    student record, mirroring the school roster, which is
+    Student.filter_by(section_id=…, status='active').
+
+    Cannot duplicate a student: the partial unique index
+    uq_institute_enrollment_active guarantees at most one ACTIVE enrollment per
+    (group, student), and the query is an inner join on that. One query, never
+    N+1. Returns [] for a missing school or group.
+
+    An ended enrollment or a deactivated student drops off this roster, which
+    is exactly what blocks a NEW grade for them — their already stored
+    ExamResult rows are never read, written or deleted here.
+    """
+    if not school_id or not group_id:
+        return []
+    return (db.session.query(Student)
+            .join(InstituteGroupEnrollment,
+                  InstituteGroupEnrollment.student_id == Student.id)
+            .filter(InstituteGroupEnrollment.school_id == school_id,
+                    InstituteGroupEnrollment.group_id == group_id,
+                    InstituteGroupEnrollment.status
+                    == InstituteGroupEnrollment.STATUS_ACTIVE,
+                    Student.school_id == school_id,
+                    Student.status == 'active')
+            .order_by(Student.full_name)
+            .all())

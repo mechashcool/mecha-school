@@ -484,7 +484,8 @@ def _validate_relationship_scope(session_, obj):
     from app.models import (
         AcademicYear, Complaint, Employee, EmployeeAttendance, EmployeeDocument,
         EmployeeEvaluation, Exam, ExamResult, Expense, FeeInstallment,
-        FeeRecord, Grade, InventoryCategory, InventoryCount, InventoryItem,
+        FeeRecord, Grade, InstituteStudyGroup, InventoryCategory,
+        InventoryCount, InventoryItem,
         InventoryItemStock, InventoryMovement, InventoryWarehouse,
         LeaveRequest, PayrollItem, Revenue, RevenueCategory,
         SalaryRecord, Schedule,
@@ -572,10 +573,22 @@ def _validate_relationship_scope(session_, obj):
         require(employee and employee.school_id == obj.school_id,
                 'EmployeeAttendance must match employee school')
     elif isinstance(obj, Exam):
-        section = obj.section or load(Section, obj.section_id)
-        require(section and section.school_id == obj.school_id
-                and section.academic_year_id == obj.academic_year_id,
-                'Exam must match section school/year')
+        # An exam targets EITHER a section (school) or an institute study group.
+        # The school branch is unchanged; the institute branch applies the same
+        # school+year ownership rule to the group instead, so neither target can
+        # ever be borrowed from another school or academic year.
+        if getattr(obj, 'institute_group_id', None):
+            group = load(InstituteStudyGroup, obj.institute_group_id)
+            require(group and group.school_id == obj.school_id
+                    and group.academic_year_id == obj.academic_year_id,
+                    'Exam must match institute group school/year')
+            require(obj.section_id is None,
+                    'Exam cannot target both a section and an institute group')
+        else:
+            section = obj.section or load(Section, obj.section_id)
+            require(section and section.school_id == obj.school_id
+                    and section.academic_year_id == obj.academic_year_id,
+                    'Exam must match section school/year')
         subject = obj.subject or load(Subject, obj.subject_id)
         if subject:
             require(subject.school_id == obj.school_id
