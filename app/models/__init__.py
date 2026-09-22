@@ -2087,8 +2087,15 @@ class Exam(db.Model):
     exam_type_id     = db.Column(db.Integer, db.ForeignKey('exam_types.id'),     nullable=True)
     exam_name        = db.Column(db.String(200), nullable=True)
     subject_id       = db.Column(db.Integer, db.ForeignKey('subjects.id'),       nullable=False)
-    section_id       = db.Column(db.Integer, db.ForeignKey('sections.id'),       nullable=False)
+    # Nullable ONLY so an institute exam can target a study group instead of a
+    # section. Every school exam still sets it, and ck_exam_single_target makes
+    # a school exam without a section impossible at the database level.
+    section_id       = db.Column(db.Integer, db.ForeignKey('sections.id'),       nullable=True)
     academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'), nullable=False)
+    # ΓöÇΓöÇ Institute target (School.is_institute only) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    # An institute organises teaching as subject -> study group -> instructor and
+    # its students carry no section, so an institute exam cannot use section_id.
+    institute_group_id = db.Column(db.Integer, nullable=True, index=True)
     exam_date        = db.Column(db.Date,    nullable=False)
     exam_time        = db.Column(db.Time,    nullable=True)
     duration_minutes = db.Column(db.Integer, nullable=True)
@@ -2103,6 +2110,39 @@ class Exam(db.Model):
     school        = db.relationship('School',       foreign_keys=[school_id],
                                     backref=db.backref('exams', lazy='dynamic'))
     results       = db.relationship('ExamResult',   backref='exam', lazy='dynamic')
+    # Read-only with an explicit primaryjoin: school_id already participates in
+    # the composite FK below, so SQLAlchemy must never try to write it through a
+    # second relationship. Same convention as the institute models themselves.
+    institute_group = db.relationship(
+        'InstituteStudyGroup', viewonly=True,
+        primaryjoin='foreign(Exam.institute_group_id) == InstituteStudyGroup.id')
+
+    __table_args__ = (
+        # Cross-school safety enforced by PostgreSQL, not only by route checks:
+        # an exam of school A can never point at a study group of school B.
+        # The parent key uq_institute_group_id_school comes from k1n2s3t4g5r6.
+        #
+        # ON DELETE RESTRICT, deliberately NOT a cascade and NOT SET NULL: an
+        # exam (and therefore its results) must never be deleted or silently
+        # detached because a group was removed. A group that carries exams
+        # cannot be deleted at all ΓÇö the same dependency-guard posture the
+        # enrollment table already uses.
+        db.ForeignKeyConstraint(
+            ['institute_group_id', 'school_id'],
+            ['institute_study_groups.id', 'institute_study_groups.school_id'],
+            name='fk_exam_institute_group_school', ondelete='RESTRICT'),
+        # Exactly one target, never both and never neither. Safe to enforce in
+        # the database because section_id was NOT NULL until this revision, so
+        # every pre-existing row has a section and a NULL group ΓÇö the predicate
+        # holds for 100% of legacy rows by construction. Verified by validating
+        # the constraint against the isolated local instance.
+        db.CheckConstraint(
+            '(section_id IS NOT NULL AND institute_group_id IS NULL) OR '
+            '(section_id IS NULL AND institute_group_id IS NOT NULL)',
+            name='ck_exam_single_target'),
+        db.Index('ix_exam_school_year_group',
+                 'school_id', 'academic_year_id', 'institute_group_id'),
+    )
 
     @property
     def display_name(self) -> str:
