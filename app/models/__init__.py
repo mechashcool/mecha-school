@@ -3068,6 +3068,16 @@ class Homework(db.Model):
                                  nullable=True, index=True)
     section_id       = db.Column(db.Integer, db.ForeignKey('sections.id', ondelete='SET NULL'),
                                  nullable=True, index=True)
+    # ── Institute target (School.is_institute only) ───────────────────────────
+    # A school assignment keeps targeting section_id exactly as before and
+    # leaves this NULL.  An institute assignment targets a study group instead,
+    # because an institute student belongs to several groups and carries no
+    # section.  Exactly one of the two is set by the application; no CHECK
+    # constraint is added because every pre-existing row legitimately has
+    # institute_group_id IS NULL while section_id may already be NULL too
+    # (ON DELETE SET NULL on sections), and such a legacy row must stay
+    # readable.  The one-target rule is enforced in the homework routes.
+    institute_group_id = db.Column(db.Integer, nullable=True, index=True)
     title            = db.Column(db.String(300), nullable=False)
     description      = db.Column(db.Text, nullable=True)
     publish_date     = db.Column(db.Date, nullable=False)
@@ -3088,6 +3098,33 @@ class Homework(db.Model):
     subject       = db.relationship('Subject', foreign_keys=[subject_id])
     section       = db.relationship('Section', foreign_keys=[section_id],
                                     backref=db.backref('homework_list', lazy='dynamic'))
+    # Read-only, explicit primaryjoin: school_id already participates in the
+    # composite FK below, so SQLAlchemy must never try to write it through a
+    # second relationship.  Same convention as the institute models themselves.
+    institute_group = db.relationship(
+        'InstituteStudyGroup', viewonly=True,
+        primaryjoin='foreign(Homework.institute_group_id) == InstituteStudyGroup.id')
+
+    __table_args__ = (
+        # Cross-school safety enforced by PostgreSQL, not only by route checks:
+        # a homework row of school A can never point at a study group of school
+        # B, because (institute_group_id, school_id) must match a real
+        # (id, school_id) pair in institute_study_groups.
+        #
+        # The column-list form of ON DELETE SET NULL (PostgreSQL 15+) nulls ONLY
+        # institute_group_id.  A plain SET NULL would also try to null the NOT
+        # NULL school_id and would turn group deletion into a constraint error.
+        # Groups are never hard-deleted through the interface (is_active is
+        # toggled instead); this path exists only for a full-school teardown,
+        # where the homework rows are removed moments later anyway.
+        db.ForeignKeyConstraint(
+            ['institute_group_id', 'school_id'],
+            ['institute_study_groups.id', 'institute_study_groups.school_id'],
+            name='fk_homework_institute_group_school',
+            ondelete='SET NULL (institute_group_id)'),
+        db.Index('ix_homework_school_year_group',
+                 'school_id', 'academic_year_id', 'institute_group_id'),
+    )
 
     def __repr__(self):
         return f'<Homework {self.id} — {self.title}>'

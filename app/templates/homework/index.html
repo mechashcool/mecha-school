@@ -3,6 +3,10 @@
 {% block page_title %}الواجبات{% endblock %}
 
 {% block content %}
+{# Defaults keep this template renderable from any call site. #}
+{% set is_institute = is_institute|default(false) %}
+{% set filter_groups = filter_groups|default([]) %}
+{% set f_group_id = f_group_id|default(none) %}
 <div class="page-header d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3">
   <div>
     <h1 class="page-title mb-0">الواجبات</h1>
@@ -17,8 +21,43 @@
   {% endif %}
 </div>
 
-{# ── Filter Panel ──────────────────────────────────────────────────────── #}
-{% if filter_grades or filter_subjects %}
+{# ── Institute filter panel ─────────────────────────────────── #}
+{% if is_institute %}
+{% if filter_groups %}
+<div class="card mb-3">
+  <div class="card-body py-2 px-3">
+    <form method="GET" action="{{ url_for('homework.index') }}" id="hw-filter-form">
+      <div class="row g-2 align-items-end flex-wrap">
+        <div class="col-auto">
+          <label class="form-label small mb-1 text-muted">المجموعة الدراسية</label>
+          <select id="f_group_id" name="f_group_id" class="form-select form-select-sm"
+                  style="min-width:180px">
+            <option value="">كل المجموعات</option>
+            {% for g in filter_groups %}
+            <option value="{{ g.id }}" {% if f_group_id == g.id %}selected{% endif %}>
+              {{ g.name }}{% if g.subject %} — {{ g.subject.name }}{% endif %}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-auto d-flex gap-1 align-items-end">
+          <button type="submit" class="btn btn-primary btn-sm">
+            <i class="bi bi-funnel-fill me-1"></i>تصفية
+          </button>
+          {% if f_group_id %}
+          <a href="{{ url_for('homework.index') }}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-x-lg me-1"></i>إلغاء التصفية
+          </a>
+          {% endif %}
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+{# ── School filter Panel ────────────────────────────────────── #}
+{% elif filter_grades or filter_subjects %}
 <div class="card mb-3">
   <div class="card-body py-2 px-3">
     <form method="GET" action="{{ url_for('homework.index') }}" id="hw-filter-form">
@@ -102,8 +141,14 @@
 </div>
 {% endif %}
 
-{# ── Active filter summary ─────────────────────────────────────────────── #}
-{% if f_grade_id or f_section_id or f_subject_id %}
+{# ── Active filter summary ──────────────────────────────────── #}
+{% if is_institute and f_group_id %}
+<p class="text-muted small mb-2">
+  <i class="bi bi-funnel me-1"></i>
+  يُعرض مجموعة دراسية محددة &mdash;
+  <a href="{{ url_for('homework.index') }}" class="text-decoration-none">عرض الكل</a>
+</p>
+{% elif not is_institute and (f_grade_id or f_section_id or f_subject_id) %}
 <p class="text-muted small mb-2">
   <i class="bi bi-funnel me-1"></i>
   يُعرض
@@ -130,7 +175,14 @@
               {% if hw.subject %}
               <span class="badge bg-primary">{{ hw.subject.name }}</span>
               {% endif %}
-              {% if hw.section %}
+              {% if hw.institute_group %}
+              <span class="badge bg-info text-dark">
+                <i class="bi bi-collection me-1"></i>{{ hw.institute_group.name }}
+              </span>
+              {% if hw.institute_group.instructor %}
+              <span class="badge bg-secondary">{{ hw.institute_group.instructor.full_name }}</span>
+              {% endif %}
+              {% elif hw.section %}
               <span class="badge bg-info text-dark">{{ hw.section.name }}</span>
               {% if hw.section.grade %}
               <span class="badge bg-secondary">{{ hw.section.grade.name }}</span>
@@ -223,7 +275,7 @@
   {% endfor %}
 </div>
 
-{% elif f_grade_id or f_section_id or f_subject_id %}
+{% elif f_grade_id or f_section_id or f_subject_id or f_group_id %}
 <div class="card">
   <div class="card-body text-center text-muted py-5">
     <i class="bi bi-funnel" style="font-size:3rem;opacity:.3;display:block;margin-bottom:12px"></i>
@@ -238,7 +290,13 @@
 <div class="card">
   <div class="card-body text-center text-muted py-5">
     <i class="bi bi-journal-text" style="font-size:3rem;opacity:.3;display:block;margin-bottom:12px"></i>
-    <p class="mb-0">لا توجد واجبات مسجلة لهذا العام الدراسي.</p>
+    <p class="mb-0">
+      {% if is_institute and not filter_groups %}
+        لا توجد مجموعات دراسية متاحة لحسابك في هذا العام الدراسي.
+      {% else %}
+        لا توجد واجبات مسجلة لهذا العام الدراسي.
+      {% endif %}
+    </p>
     {% if school_cfg.action_enabled('homework', 'create') %}
     <a href="{{ url_for('homework.create') }}" class="btn btn-primary mt-3">
       <i class="bi bi-plus-lg me-1"></i>إضافة أول واجب
@@ -248,8 +306,9 @@
 </div>
 {% endif %}
 
-{# ── Cascade JS for filter dropdowns ─────────────────────────────────── #}
-{% if filter_grades or filter_subjects %}
+{# ── Cascade JS for filter dropdowns (school only — an institute has one
+      flat group list with nothing to cascade) ──────────────────────── #}
+{% if not is_institute and (filter_grades or filter_subjects) %}
 <script>
 (function () {
   var stageEl   = document.getElementById('f_stage');

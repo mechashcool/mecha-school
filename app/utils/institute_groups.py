@@ -306,3 +306,25 @@ def active_roster(school, group_id):
                     Student.school_id == school.id)
             .order_by(Student.full_name)
             .all())
+
+
+def active_student_ids_in_group(school_id: int, group_id) -> list[int]:
+    """DISTINCT ids of students holding an ACTIVE enrollment in ONE group.
+
+    The audience of anything targeted at a study group — currently homework and
+    the notifications homework raises. Ended memberships are excluded, so a
+    student who left the group stops receiving its assignments while the
+    history row itself stays untouched.
+
+    Returns [] for a missing school or group, never a wider audience.
+    """
+    if not school_id or not group_id:
+        return []
+    rows = (db.session.query(InstituteGroupEnrollment.student_id)
+            .filter(InstituteGroupEnrollment.school_id == school_id,
+                    InstituteGroupEnrollment.group_id == group_id,
+                    InstituteGroupEnrollment.status
+                    == InstituteGroupEnrollment.STATUS_ACTIVE)
+            .distinct()
+            .all())
+    return [r[0] for r in rows]

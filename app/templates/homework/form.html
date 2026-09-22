@@ -10,7 +10,25 @@
   </a>
 </div>
 
-{% if not sections and not current_user.is_admin_user %}
+{# An institute has no sections at all; its route already redirects when the
+   user has no eligible study group, so this school-only notice is skipped. #}
+{% set is_institute = is_institute|default(false) %}
+{% set groups = groups|default([]) %}
+{# Posted values are echoed back only on the institute branch, so the school
+   form renders byte-for-byte as before. #}
+{% set _p = posted if (is_institute and posted) else None %}
+{% set v_title = (_p.get('title') if _p else None) or (hw.title if hw else '') %}
+{% set v_pub   = (_p.get('publish_date') if _p else None)
+                 or (hw.publish_date.strftime('%Y-%m-%d') if hw else today.strftime('%Y-%m-%d')) %}
+{% set v_due   = (_p.get('due_date') if _p else None)
+                 or (hw.due_date.strftime('%Y-%m-%d') if hw else '') %}
+{% set v_desc  = (_p.get('description') if _p else None) or (hw.description if hw else '') %}
+{% set _sel_group = ((_p.get('institute_group_id')|int) if (_p and _p.get('institute_group_id'))
+                     else (hw.institute_group_id if hw else None)) %}
+{# A single eligible group is preselected for convenience only; the server
+   re-validates whatever is submitted. #}
+{% set _sel_group = _sel_group or (groups[0].id if groups|length == 1 else None) %}
+{% if not is_institute and not sections and not current_user.is_admin_user %}
 {# No sections — show blocking notice, hide form #}
 <div class="alert alert-warning d-flex gap-2 align-items-start">
   <i class="bi bi-exclamation-triangle-fill flex-shrink-0 mt-1"></i>
@@ -49,8 +67,48 @@
               <label class="form-label">عنوان الواجب <span class="text-danger">*</span></label>
               <input type="text" name="title" class="form-control" required
                      placeholder="مثال: حل تمارين الفصل الثالث"
-                     value="{{ hw.title if hw else '' }}">
+                     value="{{ v_title }}">
             </div>
+
+            {% if is_institute %}
+            {# ── Institute target: ONE study group; the subject is derived ───── #}
+            <div class="col-md-6">
+              <label class="form-label">المجموعة الدراسية <span class="text-danger">*</span></label>
+              <select name="institute_group_id" id="instituteGroupSelect"
+                      class="form-select" required>
+                <option value="">— اختر المجموعة الدراسية —</option>
+                {% for g in groups %}
+                <option value="{{ g.id }}"
+                        data-subject="{{ g.subject.name if g.subject else 'غير محدد' }}"
+                        data-instructor="{{ g.instructor.full_name if g.instructor else 'غير معيّن' }}"
+                        {{ 'selected' if _sel_group == g.id }}>
+                  {{ g.name }}{% if g.subject %} — {{ g.subject.name }}{% endif %}
+                </option>
+                {% endfor %}
+              </select>
+              <div class="form-text">تُعرض فقط المجموعات المفعّلة المتاحة لحسابك.</div>
+            </div>
+
+            {% set _sel_obj = (groups | selectattr('id', 'equalto', _sel_group) | list | first)
+                              if _sel_group else None %}
+            <div class="col-md-6">
+              <label class="form-label">المادة</label>
+              {# Read-only on purpose: the server always takes the subject from
+                 the selected group, so an editable field here would be a lie. #}
+              <input type="text" class="form-control" id="instituteSubject" readonly
+                     value="{{ _sel_obj.subject.name if _sel_obj and _sel_obj.subject else '' }}"
+                     placeholder="تُحدّد تلقائياً من المجموعة">
+              <div class="form-text">مشتقّة من المجموعة الدراسية ولا يمكن اختيارها بشكل مستقل.</div>
+            </div>
+
+            <div class="col-12">
+              <p class="small text-muted mb-0" id="instituteInstructorLine">
+                <i class="bi bi-person-badge me-1"></i>
+                المدرّس: <strong>{{ _sel_obj.instructor.full_name
+                                     if _sel_obj and _sel_obj.instructor else 'غير معيّن' }}</strong>
+              </p>
+            </div>
+            {% else %}
 
             {# Stage — derived from Grade.stage; UI filter only, not submitted #}
             {% set _hw_stage = hw.section.grade.stage if hw and hw.section and hw.section.grade else '' %}
@@ -126,13 +184,14 @@
               {% endif %}
             </div>
             {% endif %}
+            {% endif %}{# end institute / school target #}
 
             {# Publish date #}
             {% if school_cfg.field_visible('homework', 'publish_date') %}
             <div class="col-md-6">
               <label class="form-label">تاريخ النشر <span class="text-danger">*</span></label>
               <input type="date" name="publish_date" class="form-control" required
-                     value="{{ hw.publish_date.strftime('%Y-%m-%d') if hw else today.strftime('%Y-%m-%d') }}">
+                     value="{{ v_pub }}">
             </div>
             {% endif %}
 
@@ -141,7 +200,7 @@
             <div class="col-md-6">
               <label class="form-label">تاريخ التسليم <span class="text-danger">*</span></label>
               <input type="date" name="due_date" class="form-control" required
-                     value="{{ hw.due_date.strftime('%Y-%m-%d') if hw else '' }}"
+                     value="{{ v_due }}"
                      id="dueDate">
             </div>
             {% endif %}
@@ -151,7 +210,7 @@
             <div class="col-12">
               <label class="form-label">الملاحظات / وصف الواجب</label>
               <textarea name="description" class="form-control" rows="4"
-                        placeholder="اكتب تعليمات الواجب هنا...">{{ hw.description if hw else '' }}</textarea>
+                        placeholder="اكتب تعليمات الواجب هنا...">{{ v_desc }}</textarea>
             </div>
             {% endif %}
 
@@ -210,7 +269,17 @@
         </div>
         <div class="card-body">
 
-          {% if not current_user.is_admin_user %}
+          {% if is_institute %}
+          {# Institute summary — groups replace sections/grades entirely #}
+          <p class="small text-muted mb-1">
+            <i class="bi bi-collection me-1"></i>
+            المجموعات المتاحة: <strong>{{ groups|length }}</strong>
+          </p>
+          <div class="alert alert-light border small py-2 mt-2">
+            <i class="bi bi-shield-lock me-1 text-primary"></i>
+            تُعرض فقط المجموعات المرتبطة بحسابك، وتُشتقّ المادة من المجموعة.
+          </div>
+          {% elif not current_user.is_admin_user %}
           {# Teacher-scope summary #}
           {% if not subjects %}
           <div class="alert alert-info small py-2 mb-2">
@@ -248,7 +317,8 @@
 
           <div class="d-grid gap-2">
             <button type="submit" class="btn btn-primary"
-                    {{ 'disabled' if not sections and not current_user.is_admin_user }}>
+                    {{ 'disabled' if not is_institute and not sections
+                                     and not current_user.is_admin_user }}>
               <i class="bi bi-check-lg me-1"></i>
               {{ 'حفظ التعديلات' if hw else 'إضافة الواجب' }}
             </button>
@@ -353,6 +423,25 @@
       filterSections();
       filterSubjects();
     }
+  }
+
+  /* ── Institute: mirror the chosen group's subject/instructor ──────────
+     Display only. The server derives the real subject from the group; nothing
+     typed or scripted here is ever read back. */
+  var groupEl = document.getElementById('instituteGroupSelect');
+  if (groupEl) {
+    var subjEl = document.getElementById('instituteSubject');
+    var instEl = document.getElementById('instituteInstructorLine');
+    groupEl.addEventListener('change', function () {
+      var opt = groupEl.options[groupEl.selectedIndex];
+      var subj = (opt && opt.dataset.subject) || '';
+      var inst = (opt && opt.dataset.instructor) || '';
+      if (subjEl) subjEl.value = opt && opt.value ? subj : '';
+      if (instEl) {
+        instEl.querySelector('strong').textContent =
+          opt && opt.value ? inst : 'غير معيّن';
+      }
+    });
   }
 
   /* ── Due date >= publish date ────────────────────────────────────────── */

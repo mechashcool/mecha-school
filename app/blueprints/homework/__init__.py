@@ -31,6 +31,9 @@ from app.models import (db, Employee, Grade, Homework, Section, Subject,
                         AcademicYear, Notification, teacher_subjects)
 from app.utils.decorators import get_current_school, get_active_year
 from app.utils.helpers import save_uploaded_file, resolve_photo_url
+from app.utils.institute_groups import (active_groups_for_form,
+                                        active_student_ids_in_group,
+                                        institute_enabled, instructor_groups)
 
 homework_bp = Blueprint('homework', __name__,
                         template_folder='../../templates/homework')
@@ -122,14 +125,19 @@ def _is_admin() -> bool:
 
 
 def _hw_exists(school_id: int, year_id: int, teacher_id, subject_id,
-               section_id, title: str, pub_dt) -> bool:
-    """True when an active homework with identical key fields already exists (duplicate guard)."""
+               section_id, title: str, pub_dt, institute_group_id=None) -> bool:
+    """True when an active homework with identical key fields already exists (duplicate guard).
+
+    institute_group_id defaults to None, which is exactly what every school
+    homework row carries, so the school duplicate check is unchanged.
+    """
     return Homework.query.filter_by(
         school_id=school_id,
         academic_year_id=year_id,
         teacher_id=teacher_id,
         subject_id=subject_id or None,
         section_id=section_id,
+        institute_group_id=institute_group_id,
         title=title,
         publish_date=pub_dt,
         is_active=True,
@@ -144,35 +152,134 @@ def _get_school_and_year():
     return school, year
 
 
-def _notify_section_parents(hw: Homework, school_id: int) -> None:
-    """Create in-app Notification rows + FCM push for all parents of students in hw's section.
+# ═════════════════════════════════════════════════════════════════════════════
+#  INSTITUTE TARGETING  (School.is_institute only)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# A school assignment targets a Section; that code path below is untouched.
+# An institute assignment targets an InstituteStudyGroup instead, because an
+# institute student belongs to several groups and carries no section.
+#
+# Everything an institute route is allowed to see or write flows through the
+# ONE function _eligible_groups(), so there is a single authorization query
+# rather than a slightly different condition per route. It reuses the helpers
+# already written for the institute-groups blueprint — no second identity, no
+# new permission and no new role: an instructor is resolved through the same
+# Employee.user_id link every other teacher surface uses, and a manager is
+# whoever _is_admin() already recognises.
+
+
+def _hw_year(school, hw):
+    """The academic year a stored homework belongs to.
+
+    Editing must stay inside the homework's OWN year, not whichever year is
+    currently active, otherwise a historical assignment would find no eligible
+    group and silently become uneditable. Scoped by school_id, so a foreign
+    year id can never be resolved.
+    """
+    if school is None or hw is None or not hw.academic_year_id:
+        return None
+    return AcademicYear.query.filter_by(id=hw.academic_year_id,
+                                        school_id=school.id).first()
+
+
+def _eligible_groups(school, year, is_admin):
+    """ACTIVE study groups this user may target, for THIS institute and year.
+
+    * institute manager  → every active group of the institute in that year
+    * institute instructor → only the groups assigned to their Employee row
+    * anything else (a school, no year, an unlinked account) → []
+
+    Returning [] rather than a wider set is what makes every caller fail
+    closed: a posted group id is accepted only when it is a key of this list.
+    """
+    if not institute_enabled(school) or year is None:
+        return []
+    if is_admin:
+        return active_groups_for_form(school.id, year.id)
+    return instructor_groups(school, current_user, year)
+
+
+def _resolve_posted_group(school, year, is_admin, raw_group_id):
+    """(group, error) for a posted institute_group_id.
+
+    The id is matched against the freshly recomputed eligible set, so ONE check
+    covers all of: the institution is an institute, the group belongs to it,
+    the group belongs to the right academic year, the group is active, and the
+    instructor owns it unless they hold the management permission. A forged,
+    foreign, ended or nonexistent id yields the same message and discloses
+    nothing about whether it exists elsewhere.
+    """
+    if not raw_group_id:
+        return None, 'المجموعة الدراسية مطلوبة.'
+    allowed = {g.id: g for g in _eligible_groups(school, year, is_admin)}
+    group = allowed.get(raw_group_id)
+    if group is None:
+        return None, ('المجموعة الدراسية المحددة غير صالحة أو غير مرتبطة '
+                      'بحسابك. لم يتم حفظ أي تغيير.')
+    return group, None
+
+
+def _no_groups_message(is_admin: bool) -> str:
+    return ('لا توجد مجموعات دراسية مفعّلة في هذا المعهد للعام الدراسي الحالي. '
+            'أضف مجموعة أولاً.') if is_admin else (
+        'لا توجد مجموعات دراسية مسندة إلى حسابك. لا يمكن إنشاء واجب. '
+        'راجع إدارة المعهد لإسناد مجموعة إليك.')
+
+
+def _notify_homework_parents(hw: Homework, school_id: int) -> None:
+    """Create in-app Notification rows (+ FCM push for school homework) for the
+    parents of the students this homework ACTUALLY targets.
+
+    School homework  → the active students of hw.section_id. Unchanged.
+    Institute homework → ONLY the students holding an ACTIVE enrollment in
+    hw.institute_group_id. Never a grade, a section, the whole institute or
+    another instructor's students: the audience comes from
+    active_student_ids_in_group(), the same query the group roster uses, and is
+    additionally re-filtered by school_id and status='active'.
 
     Commits Notification rows first; FCM fires after so in-app rows are saved even
     if FCM fails.  One push per parent even if the parent has multiple children in
     the same section (deduplication via parent_to_student dict).
     """
-    if not hw.section_id:
-        return
-
     import logging
     _hw_log = logging.getLogger('mecha.homework')
 
     from app.models import Student, parent_students
     from sqlalchemy import select as _sel
 
+    is_institute_hw = bool(hw.institute_group_id)
+
     subject_name = hw.subject.name if hw.subject else 'غير محدد'
     title = 'واجب جديد'
     body  = f'تم إضافة واجب جديد في مادة {subject_name}: {hw.title}'
 
-    _hw_log.info('[homework-notify] homework_id=%s section_id=%s title=%r',
-                 hw.id, hw.section_id, hw.title)
+    _hw_log.info('[homework-notify] homework_id=%s section_id=%s group_id=%s title=%r',
+                 hw.id, hw.section_id, hw.institute_group_id, hw.title)
 
-    student_ids = [
-        s.id for s in
-        Student.query.filter_by(section_id=hw.section_id, status='active').all()
-    ]
-    if not student_ids:
-        _hw_log.info('[homework-notify] no active students in section_id=%s', hw.section_id)
+    if is_institute_hw:
+        enrolled_ids = active_student_ids_in_group(school_id, hw.institute_group_id)
+        student_ids = [
+            s.id for s in Student.query.filter(
+                Student.id.in_(enrolled_ids),
+                Student.school_id == school_id,
+                Student.status == 'active').all()
+        ] if enrolled_ids else []
+        if not student_ids:
+            _hw_log.info('[homework-notify] no active enrolled students in group_id=%s',
+                         hw.institute_group_id)
+            return
+    elif hw.section_id:
+        student_ids = [
+            s.id for s in
+            Student.query.filter_by(section_id=hw.section_id, status='active').all()
+        ]
+        if not student_ids:
+            _hw_log.info('[homework-notify] no active students in section_id=%s', hw.section_id)
+            return
+    else:
+        # No target at all (a legacy row whose section was deleted). Notify
+        # nobody rather than guessing an audience.
         return
 
     # Build parent_user_id → first student_id mapping (deduplicate parents with
@@ -227,7 +334,20 @@ def _notify_section_parents(hw: Homework, school_id: int) -> None:
         db.session.rollback()
         return
 
-    # FCM push — after commit so in-app rows are saved regardless of push outcome
+    # FCM push — after commit so in-app rows are saved regardless of push outcome.
+    #
+    # Institute homework deliberately stops here, with the in-app Notification
+    # rows already committed to exactly the right parents. The push payload
+    # deep-links to the mobile parent homework screen, which resolves homework
+    # by the child's section_id; an institute student has no section, so the
+    # push would open an empty screen. The mobile API is out of scope for this
+    # phase, so the untestable channel fails closed rather than delivering a
+    # dead link. The in-app notification is unaffected.
+    if is_institute_hw:
+        _hw_log.info('[homework-notify] institute homework_id=%s — in-app only, '
+                     'FCM withheld until the mobile API supports study groups', hw.id)
+        return
+
     try:
         from app.services.fcm_service import is_enabled, send_push_to_user
         if not is_enabled():
@@ -262,15 +382,29 @@ def index():
         return render_template('homework/index.html', homework_list=[], emp=None,
                                is_admin=_is_admin(),
                                filter_grades=[], filter_sections=[], filter_subjects=[],
-                               filter_stages=[],
+                               filter_stages=[], filter_groups=[],
+                               is_institute=institute_enabled(school),
                                f_grade_id=None, f_section_id=None,
-                               f_subject_id=None, f_stage='')
+                               f_subject_id=None, f_stage='', f_group_id=None)
 
     emp = _get_employee()
     is_admin = _is_admin()
+    is_institute = institute_enabled(school)
 
     # ── Build filter dropdown data (same scope as teacher/admin access) ───
-    if is_admin:
+    # An institute filters by study group; Section/Grade/Stage do not apply and
+    # are deliberately left empty so the school controls disappear entirely.
+    filter_groups = _eligible_groups(school, year, is_admin) if is_institute else []
+    if is_institute:
+        filter_sections, filter_grades = [], []
+        filter_subjects = []
+        seen_subject_ids = set()
+        for g in filter_groups:
+            if g.subject and g.subject.id not in seen_subject_ids:
+                seen_subject_ids.add(g.subject.id)
+                filter_subjects.append(g.subject)
+        filter_subjects.sort(key=lambda x: x.name or '')
+    elif is_admin:
         filter_sections = Section.query.filter_by(
             school_id=school.id, academic_year_id=year.id).order_by(Section.name).all()
         filter_subjects = Subject.query.filter_by(
@@ -296,6 +430,14 @@ def index():
     f_section_id = request.args.get('f_section_id', type=int)
     f_subject_id = request.args.get('f_subject_id', type=int)
 
+    # An institute never accepts a section/grade filter, so a probe using those
+    # URL params is dropped before it can reach a query.
+    f_group_id = request.args.get('f_group_id', type=int) if is_institute else None
+    if is_institute:
+        f_stage, f_grade_id, f_section_id = '', None, None
+        if f_group_id and f_group_id not in {g.id for g in filter_groups}:
+            f_group_id = None
+
     # Validate that filter values actually belong to this school/year
     # (prevents cross-school probing via URL params)
     if f_section_id and not Section.query.filter_by(
@@ -318,6 +460,35 @@ def index():
         q = q.filter_by(teacher_id=emp.id)
     elif not is_admin and not emp:
         q = q.filter(False)  # no employee record → nothing visible
+
+    # ── Institute: only ever group-targeted homework, only eligible groups ──
+    if is_institute:
+        eligible_ids = [g.id for g in filter_groups]
+        if not is_admin:
+            # An instructor's list is bounded by their own groups as well as by
+            # teacher_id above, so an assignment retargeted to a group they lost
+            # stops being listed immediately.
+            q = (q.filter(Homework.institute_group_id.in_(eligible_ids))
+                 if eligible_ids else q.filter(False))
+        else:
+            q = q.filter(Homework.institute_group_id.isnot(None))
+        if f_group_id:
+            q = q.filter(Homework.institute_group_id == f_group_id)
+        if f_subject_id:
+            q = q.filter(Homework.subject_id == f_subject_id)
+        homework_list = q.all()
+        return render_template('homework/index.html',
+                               homework_list=homework_list,
+                               emp=emp,
+                               is_admin=is_admin,
+                               is_institute=True,
+                               resolve_photo_url=resolve_photo_url,
+                               filter_grades=[], filter_sections=[],
+                               filter_subjects=filter_subjects,
+                               filter_stages=[], filter_groups=filter_groups,
+                               f_grade_id=None, f_section_id=None,
+                               f_subject_id=f_subject_id,
+                               f_stage='', f_group_id=f_group_id)
 
     # ── Apply location filters (section takes precedence over grade) ──────
     if f_section_id:
@@ -342,10 +513,13 @@ def index():
                            filter_sections=filter_sections,
                            filter_subjects=filter_subjects,
                            filter_stages=filter_stages,
+                           filter_groups=[],
+                           is_institute=False,
                            f_grade_id=f_grade_id,
                            f_section_id=f_section_id,
                            f_subject_id=f_subject_id,
-                           f_stage=f_stage)
+                           f_stage=f_stage,
+                           f_group_id=None)
 
 
 @homework_bp.route('/create', methods=['GET', 'POST'])
@@ -358,9 +532,20 @@ def create():
 
     emp = _get_employee()
     is_admin = _is_admin()
+    is_institute = institute_enabled(school)
+
+    # An institute targets a study group. Section / Grade / Subject selectors do
+    # not apply: the subject is derived from the group on the server, so no
+    # independent subject list is offered and none is accepted.
+    groups = _eligible_groups(school, year, is_admin) if is_institute else []
+    if is_institute and not groups:
+        flash(_no_groups_message(is_admin), 'warning')
+        return redirect(url_for('homework.index'))
 
     # Build dropdown data scoped to teacher (or all for admin)
-    if is_admin:
+    if is_institute:
+        sections, subjects = [], []
+    elif is_admin:
         sections = Section.query.filter_by(
             school_id=school.id, academic_year_id=year.id).order_by(Section.name).all()
         subjects = Subject.query.filter_by(
@@ -375,22 +560,30 @@ def create():
     else:
         sections, subjects = [], []
 
-    grades = _teacher_grades(sections) if not is_admin else (
-        Grade.query.filter_by(school_id=school.id, academic_year_id=year.id)
-                   .order_by(Grade.name).all()
-    )
+    if is_institute:
+        grades = []
+    else:
+        grades = _teacher_grades(sections) if not is_admin else (
+            Grade.query.filter_by(school_id=school.id, academic_year_id=year.id)
+                       .order_by(Grade.name).all()
+        )
     stages = sorted({g.stage for g in grades if g.stage})
 
-    if not is_admin and not sections:
+    if not is_institute and not is_admin and not sections:
         flash('لا توجد شعب مرتبطة بحسابك. لا يمكن إنشاء واجب.', 'warning')
         return redirect(url_for('homework.index'))
 
     def _re_render(errors_list):
         for e in errors_list:
             flash(e, 'danger')
+        # request.form is echoed back so a validation failure does not wipe the
+        # selected group; it is redisplay only — the authoritative check runs
+        # again against _eligible_groups() on the next POST.
         return render_template('homework/form.html',
                                sections=sections, subjects=subjects,
                                grades=grades, stages=stages,
+                               groups=groups, is_institute=is_institute,
+                               posted=request.form,
                                hw=None, today=date.today())
 
     if request.method == 'POST':
@@ -405,7 +598,10 @@ def create():
         description  = request.form.get('description', '').strip()
         file         = request.files.get('attachment')
 
-        batch_mode = section_raw == 'all'
+        institute_group_id = request.form.get('institute_group_id', type=int)
+
+        # Batch («جميع الشعب») is a school-only concept.
+        batch_mode = (not is_institute) and section_raw == 'all'
         try:
             section_id = int(section_raw) if not batch_mode and section_raw else None
         except ValueError:
@@ -436,8 +632,24 @@ def create():
         if pub_dt and due_dt and due_dt < pub_dt:
             errors.append('تاريخ التسليم يجب ألا يكون قبل تاريخ النشر.')
 
-        # ── Section / batch validation ───────────────────────────────────────
-        if batch_mode:
+        # ── Target validation ─────────────────────────────────────
+        group = None
+        if is_institute:
+            # ONE check covers: this is an institute, the group belongs to it,
+            # to the right academic year, is active, and is assigned to this
+            # instructor unless they hold the management permission.
+            group, group_err = _resolve_posted_group(school, year, is_admin,
+                                                     institute_group_id)
+            if group_err:
+                errors.append(group_err)
+            else:
+                # The group's stored subject_id is authoritative. Any posted
+                # subject_id / grade_id / section_id / teacher / school /
+                # academic-year value is discarded here, so none of them can be
+                # forged into the saved row.
+                subject_id = group.subject_id
+                section_id = None
+        elif batch_mode:
             if not grade_id:
                 errors.append('الصف مطلوب عند اختيار «جميع الشعب».')
             else:
@@ -477,8 +689,8 @@ def create():
                 elif grade_id and sec_obj.grade_id != grade_id:
                     errors.append('الشعبة المحددة لا تنتمي إلى الصف المحدد.')
 
-        # ── Subject validation ───────────────────────────────────────────────
-        if subject_id:
+        # ── Subject validation (school only — an institute derives it) ───────
+        if subject_id and not is_institute:
             subj_obj = Subject.query.filter_by(
                 id=subject_id, school_id=school.id, academic_year_id=year.id
             ).first()
@@ -550,22 +762,29 @@ def create():
 
                 for hw in created_hws:
                     try:
-                        _notify_section_parents(hw, school.id)
+                        _notify_homework_parents(hw, school.id)
                     except Exception as exc:
                         current_app.logger.warning(
                             '[homework] notify failed hw_id=%s: %s', hw.id, exc)
 
             else:
-                if _hw_exists(school.id, year.id, teacher_id, subject_id, section_id, title, pub_dt):
-                    flash('هذا الواجب موجود بالفعل لهذه الشعبة.', 'warning')
+                target_group_id = group.id if group else None
+                if _hw_exists(school.id, year.id, teacher_id, subject_id,
+                              section_id, title, pub_dt, target_group_id):
+                    flash('هذا الواجب موجود بالفعل لهذه المجموعة الدراسية.'
+                          if is_institute else
+                          'هذا الواجب موجود بالفعل لهذه الشعبة.', 'warning')
                     return redirect(url_for('homework.index'))
 
+                # Exactly one target: an institute row carries the group and no
+                # section, a school row carries the section and no group.
                 hw = Homework(
                     school_id=school.id,
                     academic_year_id=year.id,
                     teacher_id=teacher_id,
                     subject_id=subject_id or None,
-                    section_id=section_id or None,
+                    section_id=None if is_institute else (section_id or None),
+                    institute_group_id=target_group_id,
                     title=title,
                     description=description or None,
                     publish_date=pub_dt,
@@ -578,7 +797,7 @@ def create():
                 db.session.commit()
 
                 try:
-                    _notify_section_parents(hw, school.id)
+                    _notify_homework_parents(hw, school.id)
                 except Exception as exc:
                     current_app.logger.warning(
                         '[homework] notify failed hw_id=%s: %s', hw.id, exc)
@@ -592,13 +811,17 @@ def create():
             return render_template('homework/form.html',
                                    sections=sections, subjects=subjects,
                                    grades=grades, stages=stages,
+                                   groups=groups, is_institute=is_institute,
+                                   posted=request.form,
                                    hw=None, today=date.today())
 
         return redirect(url_for('homework.index'))
 
     return render_template('homework/form.html',
                            sections=sections, subjects=subjects, grades=grades,
-                           stages=stages, hw=None, today=date.today())
+                           stages=stages, groups=groups,
+                           is_institute=is_institute, posted=None,
+                           hw=None, today=date.today())
 
 
 @homework_bp.route('/<int:hw_id>/edit', methods=['GET', 'POST'])
@@ -618,7 +841,24 @@ def edit(hw_id):
     if not is_admin and not emp:
         abort(403)
 
-    if is_admin:
+    is_institute = institute_enabled(school)
+    # Eligibility is resolved against the homework's OWN academic year, not the
+    # currently active one, so a historical assignment stays editable instead of
+    # silently losing every candidate group.
+    hw_year = _hw_year(school, hw) if is_institute else None
+    groups = _eligible_groups(school, hw_year, is_admin) if is_institute else []
+    if is_institute:
+        # An institute row must already point at a group this user may target,
+        # otherwise the record is out of scope. 404, not 403, so an instructor
+        # learns nothing about whose assignment it is.
+        if not hw.institute_group_id:
+            abort(404)
+        if hw.institute_group_id not in {g.id for g in groups}:
+            abort(404)
+
+    if is_institute:
+        sections, subjects = [], []
+    elif is_admin:
         sections = Section.query.filter_by(
             school_id=school.id, academic_year_id=year.id).order_by(Section.name).all()
         subjects = Subject.query.filter_by(
@@ -633,16 +873,20 @@ def edit(hw_id):
     else:
         sections, subjects = [], []
 
-    grades = _teacher_grades(sections) if not is_admin else (
-        Grade.query.filter_by(school_id=school.id, academic_year_id=year.id)
-                   .order_by(Grade.name).all()
-    )
+    if is_institute:
+        grades = []
+    else:
+        grades = _teacher_grades(sections) if not is_admin else (
+            Grade.query.filter_by(school_id=school.id, academic_year_id=year.id)
+                       .order_by(Grade.name).all()
+        )
     stages = sorted({g.stage for g in grades if g.stage})
 
     if request.method == 'POST':
         title        = request.form.get('title', '').strip()
         subject_id   = request.form.get('subject_id', type=int)
         section_id   = request.form.get('section_id', type=int)
+        institute_group_id = request.form.get('institute_group_id', type=int)
         publish_date = request.form.get('publish_date', '')
         due_date_str = request.form.get('due_date', '')
         description  = request.form.get('description', '').strip()
@@ -650,9 +894,20 @@ def edit(hw_id):
         clear_attach = request.form.get('clear_attachment') == '1'
 
         errors = []
+        group = None
         if not title:
             errors.append('عنوان الواجب مطلوب.')
-        if not section_id:
+        if is_institute:
+            # Re-validated from scratch against the eligible set. A forged id
+            # never retargets the stored row: on failure nothing is written.
+            group, group_err = _resolve_posted_group(school, hw_year, is_admin,
+                                                     institute_group_id)
+            if group_err:
+                errors.append(group_err)
+            else:
+                subject_id = group.subject_id   # derived, never posted
+                section_id = None
+        elif not section_id:
             errors.append('الشعبة مطلوبة.')
         if not publish_date:
             errors.append('تاريخ النشر مطلوب.')
@@ -675,7 +930,7 @@ def edit(hw_id):
         if pub_dt and due_dt and due_dt < pub_dt:
             errors.append('تاريخ التسليم يجب ألا يكون قبل تاريخ النشر.')
 
-        if not is_admin and emp:
+        if not is_institute and not is_admin and emp:
             if section_id and section_id not in _teacher_section_ids(emp):
                 errors.append('لا يمكنك تعيين واجب لشعبة غير مرتبطة بك.')
             if subject_id and subject_id not in _teacher_subject_ids(emp):
@@ -695,15 +950,22 @@ def edit(hw_id):
             return render_template('homework/form.html',
                                    sections=sections, subjects=subjects,
                                    grades=grades, stages=stages,
+                                   groups=groups, is_institute=is_institute,
+                                   posted=request.form,
                                    hw=hw, today=date.today())
 
         if file and file.filename:
             new_attach_path = save_uploaded_file(file, subfolder='homework',
                                                  allowed_exts=_ATTACH_ALL)
 
+        # school_id, academic_year_id and teacher_id are never reassigned here,
+        # so an edit cannot move an assignment to another institution, year or
+        # owner. Exactly one target survives the write.
         hw.title       = title
         hw.subject_id  = subject_id or None
-        hw.section_id  = section_id or None
+        hw.section_id  = None if is_institute else (section_id or None)
+        if is_institute:
+            hw.institute_group_id = group.id
         hw.publish_date = pub_dt
         hw.due_date    = due_dt
         hw.description = description or None
@@ -720,7 +982,9 @@ def edit(hw_id):
 
     return render_template('homework/form.html',
                            sections=sections, subjects=subjects, grades=grades,
-                           stages=stages, hw=hw, today=date.today())
+                           stages=stages, groups=groups,
+                           is_institute=is_institute, posted=None,
+                           hw=hw, today=date.today())
 
 
 @homework_bp.route('/<int:hw_id>/delete', methods=['POST'])
@@ -738,6 +1002,14 @@ def delete(hw_id):
         abort(403)
     if not is_admin and not emp:
         abort(403)
+
+    # An institute assignment can only be deleted from inside its own group
+    # scope, resolved against the homework's own academic year.
+    if institute_enabled(school) and hw.institute_group_id:
+        if hw.institute_group_id not in {
+                g.id for g in _eligible_groups(school, _hw_year(school, hw),
+                                               is_admin)}:
+            abort(404)
 
     db.session.delete(hw)
     db.session.commit()
