@@ -740,5 +740,216 @@ class InstituteAttendanceTest(unittest.TestCase):
                 'one student, one day, two groups — both must record')
 
 
+    # ═══════════════════════════════════════════════════════════════════
+    #  TIMEZONE — stored UTC, displayed Asia/Baghdad (UTC+03:00)
+    # ═══════════════════════════════════════════════════════════════════
+    #
+    # The production symptom: a session recorded at 11:44 Baghdad time showed
+    # 08:44, because recorded_at is stored as naive UTC and was rendered raw.
+    # Storage is unchanged; only presentation converts.
+
+    # The exact values from the production report.
+    UTC_RECORDED = datetime(2026, 9, 23, 8, 44, 0)
+    LOCAL_EXPECTED = '2026-09-23 11:44'
+    ISO_EXPECTED = '2026-09-23T11:44:00+03:00'
+
+    def _recorded_session(self):
+        """A recorded session whose recorded_at is pinned to a known UTC value."""
+        with self.app.app_context():
+            school = self._obj(School, 'inst')
+            group = self._obj(InstituteStudyGroup, 'ga')
+            sunday = self._next_dow(0, date(2025, 9, 1))
+            occ = att.find_occurrence(school, group, sunday, time(16, 0))
+            session = att.get_or_create_session(school, group, occ)
+            att.submit_attendance(school, session,
+                                  {self.ids['s_in']: 'present'},
+                                  source='manual_admin',
+                                  actor_user_id=self.ids['uadmin'], notify=False)
+            # Pin both timestamps to the reported UTC instant.
+            session.recorded_at = self.UTC_RECORDED
+            for rec in (InstituteAttendanceRecord.query.execution_options(**OPTS)
+                        .filter_by(session_id=session.id).all()):
+                rec.recorded_at = self.UTC_RECORDED
+            db.session.commit()
+            return session.id, sunday
+
+    # ── 1. Web display ─────────────────────────────────────────────────────
+
+    def test_stored_utc_displays_as_baghdad_local_in_web(self):
+        from app.blueprints.institute_groups import attendance_take
+        _session_id, sunday = self._recorded_session()
+        date_str = sunday.strftime('%Y-%m-%d')
+
+        with self.app.test_request_context(
+                f'/institute-groups/{self.ids["ga"]}/attendance/{date_str}'
+                '?start=16:00'):
+            self._login('uadmin')
+            html = attendance_take(self.ids['ga'], date_str)
+            logout_user()
+
+        self.assertIn(self.LOCAL_EXPECTED, html,
+                      'a UTC 08:44 must render as Baghdad 11:44')
+        self.assertNotIn('2026-09-23 08:44', html,
+                         'the raw UTC value must never be shown')
+
+    # ── 2. API response ────────────────────────────────────────────────────
+
+    def test_api_returns_local_time_with_offset(self):
+        """A real HTTP call with a real signed token."""
+        from app.blueprints.mobile_api.utils import encode_token
+        _session_id, sunday = self._recorded_session()
+
+        with self.app.app_context():
+            user = db.session.get(User, self.ids['ua'], execution_options=OPTS)
+            token = encode_token(user)
+
+        client = self.app.test_client()
+        resp = client.get(
+            '/api/mobile/v1/teacher/institute/sessions/open'
+            f'?group_id={self.ids["ga"]}&date={sunday.strftime("%Y-%m-%d")}'
+            '&start=16:00',
+            headers={'Authorization': f'Bearer {token}'})
+        self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+        body = resp.get_json()
+
+        self.assertEqual(body['session']['recorded_at'], self.ISO_EXPECTED,
+                         'the API must return Baghdad local time with +03:00')
+        marked = [s for s in body['students'] if s['recorded_at']]
+        self.assertTrue(marked, 'the recorded student must be present')
+        for stu in marked:
+            self.assertEqual(stu['recorded_at'], self.ISO_EXPECTED)
+            self.assertTrue(stu['recorded_at'].endswith('+03:00'),
+                            'the offset must be explicit and unambiguous')
+
+    # ── 3. No double conversion ────────────────────────────────────────────
+
+    def test_timezone_aware_value_is_not_converted_twice(self):
+        import pytz
+        with self.app.app_context():
+            school = self._obj(School, 'inst')
+            naive_utc = self.UTC_RECORDED
+            aware_utc = pytz.utc.localize(naive_utc)
+            aware_local = pytz.timezone('Asia/Baghdad').localize(
+                datetime(2026, 9, 23, 11, 44, 0))
+
+            # All three describe the SAME instant and must render identically.
+            for label, value in (('naive UTC', naive_utc),
+                                 ('aware UTC', aware_utc),
+                                 ('aware local', aware_local)):
+                self.assertEqual(
+                    att.to_local(value, school).strftime('%Y-%m-%d %H:%M'),
+                    self.LOCAL_EXPECTED, f'{label} converted incorrectly')
+                self.assertEqual(att.to_local_iso(value, school),
+                                 self.ISO_EXPECTED, f'{label} ISO incorrect')
+
+            # Explicitly: converting an already-converted value does not add
+            # another three hours.
+            once = att.to_local_iso(naive_utc, school)
+            twice = att.to_local_iso(
+                datetime.fromisoformat(once), school)
+            self.assertEqual(once, twice, 'a second pass must be a no-op')
+
+    def test_none_timestamp_stays_none(self):
+        with self.app.app_context():
+            school = self._obj(School, 'inst')
+            self.assertIsNone(att.to_local(None, school))
+            self.assertIsNone(att.to_local_iso(None, school))
+
+    # ── 4. Schedule wall-clock times are untouched ─────────────────────────
+
+    def test_schedule_wall_clock_times_are_unchanged(self):
+        """12:00-14:00 is local wall clock typed by administration.
+
+        It carries no date and no timezone and must never be shifted.
+        """
+        from app.blueprints.institute_groups import schedule as schedule_view
+        with self.app.app_context():
+            school = self._obj(School, 'inst')
+            group = self._obj(InstituteStudyGroup, 'ga')
+            slot = att.add_slot(school, group, 2, '12:00', '14:00')
+            slot_id = slot.id
+
+            stored = db.session.get(InstituteGroupSchedule, slot_id,
+                                    execution_options=OPTS)
+            self.assertEqual(stored.start_time, time(12, 0))
+            self.assertEqual(stored.end_time, time(14, 0))
+
+            # And the occurrence computed from it keeps the same wall clock.
+            wednesday = self._next_dow(2, date(2025, 9, 1))
+            occ = att.find_occurrence(school, group, wednesday, time(12, 0))
+            self.assertIsNotNone(occ, 'the 12:00 slot must resolve')
+            self.assertEqual(occ.start_time, time(12, 0))
+            self.assertEqual(occ.end_time, time(14, 0))
+
+        with self.app.test_request_context(
+                f'/institute-groups/{self.ids["ga"]}/schedule'):
+            self._login('uadmin')
+            html = schedule_view(self.ids['ga'])
+            logout_user()
+        self.assertIn('12:00', html, 'the entered start time must render as-is')
+        self.assertIn('14:00', html, 'the entered end time must render as-is')
+        self.assertNotIn('09:00', html, 'a schedule time must not be shifted')
+        self.assertNotIn('15:00', html)
+
+    # ── 5. Storage is untouched — no migration, no rewrite ─────────────────
+
+    def test_storage_stays_utc_and_is_never_rewritten(self):
+        session_id, sunday = self._recorded_session()
+        date_str = sunday.strftime('%Y-%m-%d')
+
+        with self.app.app_context():
+            before = db.session.get(InstituteAttendanceSession, session_id,
+                                    execution_options=OPTS).recorded_at
+            self.assertEqual(before, self.UTC_RECORDED)
+            self.assertIsNone(before.tzinfo,
+                              'storage stays naive UTC, no offset baked in')
+
+        # Render both surfaces, which is where conversion happens.
+        from app.blueprints.institute_groups import attendance_take
+        with self.app.test_request_context(
+                f'/institute-groups/{self.ids["ga"]}/attendance/{date_str}'
+                '?start=16:00'):
+            self._login('uadmin')
+            attendance_take(self.ids['ga'], date_str)
+            logout_user()
+
+        with self.app.app_context():
+            after = db.session.get(InstituteAttendanceSession, session_id,
+                                   execution_options=OPTS).recorded_at
+            self.assertEqual(after, self.UTC_RECORDED,
+                             'displaying must never rewrite the stored value')
+            rec = (InstituteAttendanceRecord.query.execution_options(**OPTS)
+                   .filter_by(session_id=session_id).first())
+            self.assertEqual(rec.recorded_at, self.UTC_RECORDED)
+
+    def test_no_new_migration_is_required(self):
+        """The fix is presentation-only: the schema is unchanged."""
+        import os
+        import re
+        revs = set()
+        downs = set()
+        d = 'migrations/versions'
+        for fn in os.listdir(d):
+            if not fn.endswith('.py'):
+                continue
+            txt = io_open_utf8(os.path.join(d, fn))
+            m = re.search(r"^revision\s*=\s*['\"]([^'\"]+)", txt, re.M)
+            dn = re.search(r"^down_revision\s*=\s*(.+)$", txt, re.M)
+            if m:
+                revs.add(m.group(1))
+                if dn:
+                    downs.update(re.findall(r"['\"]([^'\"]+)['\"]", dn.group(1)))
+        # a9t8n9d0s1c2 (the attendance feature) is still the newest institute
+        # revision — this timezone fix added none.
+        self.assertIn('a9t8n9d0s1c2', revs)
+        self.assertNotIn('a9t8n9d0s1c2', downs,
+                         'no migration may have been chained after it')
+
+
+def io_open_utf8(path):
+    with open(path, encoding='utf-8') as fh:
+        return fh.read()
+
+
 if __name__ == '__main__':
     unittest.main()

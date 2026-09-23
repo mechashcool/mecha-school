@@ -2612,7 +2612,11 @@ def teacher_institute_session_open():
         'full_name':    stu.full_name,
         # An unmarked student is null, NEVER 'absent'.
         'status':       rec.status if rec else None,
-        'recorded_at':  rec.recorded_at.isoformat() if rec else None,
+        # Stored as naive UTC; returned as ISO-8601 WITH the school's
+        # offset (e.g. 2026-09-23T11:44:00+03:00) so the client needs no
+        # conversion of its own.
+        'recorded_at':  inst_att.to_local_iso(rec.recorded_at, school)
+                        if rec else None,
         # False for a student who has left the group but already holds a
         # record — the app shows them read-only instead of hiding history.
         'editable':     stu.id in eligible,
@@ -2628,7 +2632,7 @@ def teacher_institute_session_open():
         'end_time':     session.end_time.strftime('%H:%M'),
         'status':       session.status,
         'is_recorded':  session.is_recorded,
-        'recorded_at':  session.recorded_at.isoformat() if session.recorded_at else None,
+        'recorded_at':  inst_att.to_local_iso(session.recorded_at, school),
     }, count=len(students), students=students,
         statuses=list(InstituteAttendanceRecord.STATUSES))
 

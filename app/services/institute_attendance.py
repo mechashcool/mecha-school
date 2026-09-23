@@ -37,7 +37,7 @@ from sqlalchemy.exc import IntegrityError
 from app.models import (db, Employee, InstituteAttendanceRecord,
                         InstituteAttendanceSession, InstituteGroupEnrollment,
                         InstituteGroupSchedule, InstituteStudyGroup, Student)
-from app.utils.attendance_helpers import get_local_date
+from app.utils.attendance_helpers import _get_tz, get_local_date, utc_to_local
 from app.utils.institute_groups import institute_enabled
 
 OPTS = {'bypass_tenant_scope': True}
@@ -80,6 +80,60 @@ def _app_to_py_dow(dow: int) -> int:
 
 def day_name(dow: int) -> str:
     return DAY_NAMES_AR[dow] if 0 <= dow <= 6 else '—'
+
+
+# ── Presentation-time timezone conversion ────────────────────────────────────
+#
+# recorded_at is STORED as naive UTC (datetime.utcnow()), which is the existing
+# application convention and is deliberately left unchanged — nothing is
+# rewritten in the database and no offset is ever baked into a stored value.
+#
+# The conversion happens ONLY here, at the moment of display, reusing the
+# school's configured timezone (School.timezone, default Asia/Baghdad) through
+# the helpers the school attendance module already uses.
+#
+# Both helpers are safe on an already timezone-aware value: utc_to_local() and
+# the localize() below only attach UTC when tzinfo is None, so a value that
+# already carries an offset is converted exactly once, never twice.
+#
+# Schedule slot times (start_time / end_time) are LOCAL WALL-CLOCK values typed
+# by administration — 12:00-14:00 means 12:00-14:00 in Baghdad. They are plain
+# Time columns with no date and no timezone, and NOTHING here touches them.
+
+
+def to_local(dt, school=None):
+    """A stored UTC timestamp as naive LOCAL wall-clock, for templates.
+
+    Returns None for None so a never-recorded value stays empty.
+    """
+    if dt is None:
+        return None
+    return utc_to_local(dt, school)
+
+
+def to_local_iso(dt, school=None):
+    """A stored UTC timestamp as an ISO-8601 string carrying the local offset.
+
+    e.g. '2026-09-23T11:44:00+03:00' — unambiguous for a mobile client, which
+    therefore must NOT apply any further conversion of its own.
+    """
+    if dt is None:
+        return None
+    import pytz
+    tz = _get_tz(school)
+    aware = pytz.utc.localize(dt) if dt.tzinfo is None else dt
+    return aware.astimezone(tz).isoformat()
+
+
+def local_formatter(school):
+    """A `dt -> naive local datetime` callable bound to one school.
+
+    Handed to the attendance templates so each call site stays a plain
+    `local_dt(x).strftime(...)` instead of repeating the school argument.
+    """
+    def _to_local(dt):
+        return to_local(dt, school)
+    return _to_local
 
 
 def local_today(school=None) -> date_type:

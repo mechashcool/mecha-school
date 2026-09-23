@@ -1003,4 +1003,7 @@ def attendance_take(group_id, date_str):
                            statuses=att.InstituteAttendanceRecord.STATUSES,
                            status_labels=att.STATUS_LABELS_AR,
                            day_names=att.DAY_NAMES_AR,
+                           # recorded_at is stored as naive UTC; convert to the
+                           # school's local wall-clock only for display.
+                           local_dt=att.local_formatter(school),
                            is_manager=_is_group_manager())

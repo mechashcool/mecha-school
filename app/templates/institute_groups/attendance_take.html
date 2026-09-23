@@ -31,7 +31,7 @@
   <i class="bi bi-check-circle-fill flex-shrink-0 mt-1"></i>
   <div style="font-size:13px">
     تم تسجيل حضور هذه الجلسة
-    {% if session.recorded_at %}بتاريخ {{ session.recorded_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}
+    {% if session.recorded_at %}بتاريخ {{ local_dt(session.recorded_at).strftime('%Y-%m-%d %H:%M') }}{% endif %}
     {% if session.recorder %}بواسطة {{ session.recorder.full_name or session.recorder.username }}{% endif %}.
     يمكنك تصحيح الحالات أدناه؛ سيتم حفظ التعديل مع بيانات المُعدِّل.
   </div>
@@ -106,7 +106,7 @@
             </td>
             <td style="font-size:12px;color:#6b7a8d">
               {% if rec %}
-                {{ rec.recorded_at.strftime('%Y-%m-%d %H:%M') }}
+                {{ local_dt(rec.recorded_at).strftime('%Y-%m-%d %H:%M') }}
                 {% if rec.recorder %}<br>{{ rec.recorder.full_name or rec.recorder.username }}{% endif %}
               {% else %}—{% endif %}
             </td>
