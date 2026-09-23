@@ -213,7 +213,15 @@ def run_once(worker_id: str, *, batch_size: int, lease_seconds: int,
     """
     from app.services import notification_outbox as outbox
 
-    stats = {'reclaimed': 0, 'claimed': 0, 'sent': 0, 'retry': 0, 'dead': 0}
+    stats = {'reclaimed': 0, 'claimed': 0, 'sent': 0, 'retry': 0, 'dead': 0,
+             'disabled': False}
+
+    # Feature disabled: touch NOTHING. Not a claim, not a lease reclaim, not a
+    # status change. A worker left running while the flag is off must be inert,
+    # so installing the unit before enabling the feature is safe.
+    if not outbox.enabled():
+        stats['disabled'] = True
+        return stats
 
     stats['reclaimed'] = outbox.reclaim_stale(
         worker_id, lease_seconds=lease_seconds)
@@ -263,6 +271,8 @@ def run(app=None, *, batch_size=None, poll_seconds=None, lease_seconds=None,
                                  max_attempts=max_attempts)
                 for key in ('reclaimed', 'claimed', 'sent', 'retry', 'dead'):
                     totals[key] += stats.get(key, 0)
+                totals['disabled_ticks'] = totals.get('disabled_ticks', 0) + (
+                    1 if stats.get('disabled') else 0)
 
                 if stats['claimed'] or stats['reclaimed']:
                     log.info('[outbox] claimed=%d sent=%d retry=%d dead=%d '
@@ -300,6 +310,26 @@ def run(app=None, *, batch_size=None, poll_seconds=None, lease_seconds=None,
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _build_app():
+    """Construct the application for THIS process only.
+
+    The role is declared before create_app() is imported or called, so the
+    background-service gate in app/lifecycle.py refuses to start the
+    attendance scheduler, the AI Face WebSocket receiver (port 7788), the
+    Hikvision sync loop, the fee-reminder scheduler and the durable-push
+    consumer in this process.
+
+    This is the exact defect that was observed in production: started
+    temporarily, the worker initialised the full application, the old
+    argv-based check saw argv[1] == 'run', and the worker immediately ran an
+    attendance scheduler tick across schools.
+
+    The worker still needs the application context for its own database work
+    and for FCM delivery — it just must not inherit the web server's
+    background services.
+    """
+    from app.lifecycle import ROLE_OUTBOX_WORKER, set_role
+    set_role(ROLE_OUTBOX_WORKER)
+
     from app import create_app
     return create_app(os.environ.get('FLASK_ENV', 'production'))
 
@@ -331,6 +361,14 @@ def _cmd_cleanup(days: int, limit: int, app=None) -> int:
 
 
 def main(argv=None) -> int:
+    # Declared at the very top of the entry point, before any command parsing
+    # or application construction, so every subcommand (run/status/cleanup)
+    # runs under the outbox-worker role. _build_app() re-declares it, which is
+    # an idempotent no-op — belt and braces for callers that import this
+    # module and build the app themselves.
+    from app.lifecycle import ROLE_OUTBOX_WORKER, set_role
+    set_role(ROLE_OUTBOX_WORKER)
+
     logging.basicConfig(
         level=os.environ.get('OUTBOX_LOG_LEVEL', 'INFO'),
         format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')

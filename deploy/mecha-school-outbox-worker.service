@@ -5,21 +5,14 @@
 # request, a Gunicorn thread, or the AI Face WebSocket on port 7788.
 #
 # This file is tracked for review only. Installing it is a separate, deliberate
-# operator action:
+# operator action — see the deployment commands in the phase report.
 #
-#   sudo cp deploy/mecha-school-outbox-worker.service \
-#           /etc/systemd/system/mecha-school-outbox-worker.service
-#   sudo systemctl daemon-reload
-#   sudo systemctl enable --now mecha-school-outbox-worker.service
-#
-# Order of operations when activating (each step verified before the next):
-#   1. apply migration n0tb0x1a2b3c
-#   2. install and start THIS worker, confirm it idles cleanly
+# Order of operations when activating (verify each step before the next):
+#   1. deploy the code (GitHub Actions) and confirm migration n0tb0x1a2b3c
+#   2. install and start THIS worker with the feature still DISABLED, and
+#      confirm its journal contains NO "[attendance] auto-attendance scheduler
+#      started" line and no port 7788 bind
 #   3. only then set INSTITUTE_ATTENDANCE_OUTBOX_ENABLED=true and restart
-#      mecha-school.service
-#
-# NOTE: it reads the SAME EnvironmentFile as the main service, so DATABASE_URL
-# and the Firebase credentials are inherited. No secret is written here.
 
 [Unit]
 Description=Mecha School durable notification outbox worker
@@ -32,40 +25,61 @@ After=mecha-school.service
 
 [Service]
 Type=simple
-User=www-data
+
+# Matches the confirmed production layout. /var/www/mecha-school/.env is owned
+# by root with mode 600 and is NOT loosened by this unit — running as root is
+# what allows it to be read while those permissions are preserved. Group is
+# www-data so any file the worker touches stays consistent with the web tier.
+User=root
 Group=www-data
 WorkingDirectory=/var/www/mecha-school
 
-# Same environment source as the main application. Adjust the path to match the
-# EnvironmentFile that mecha-school.service already uses; do not duplicate
-# credentials into this unit.
-EnvironmentFile=/etc/mecha-school/mecha-school.env
+# The SAME environment file the main application already uses. No credential is
+# duplicated into this unit.
+#
+# systemd parses this file as plain KEY=VALUE lines. If mecha-school.service
+# loads /var/www/mecha-school/.env the same way, nothing more is needed; if it
+# sources it through a shell wrapper instead, mirror that here rather than
+# rewriting the file.
+EnvironmentFile=/var/www/mecha-school/.env
 
-# The flag is read from the environment file above. The worker idles safely
-# when it is false, so the unit may be started before the feature is enabled.
+# Defence in depth: even if a future entry point forgets to declare its role,
+# this process can never start the attendance scheduler, the AI Face WebSocket
+# receiver, the Hikvision sync loop, the fee-reminder scheduler or the
+# durable-push consumer. See app/lifecycle.py.
+Environment=MECHA_PROCESS_ROLE=outbox-worker
+
 Environment=FLASK_ENV=production
+
+# Safe default. The worker idles harmlessly while this is false, so the unit
+# may be installed and started before the feature is switched on. An
+# INSTITUTE_ATTENDANCE_OUTBOX_ENABLED line in the EnvironmentFile above
+# overrides this, because EnvironmentFile= is applied before Environment=.
+Environment=INSTITUTE_ATTENDANCE_OUTBOX_ENABLED=false
+
 Environment=OUTBOX_BATCH_SIZE=20
 Environment=OUTBOX_POLL_SECONDS=5
 Environment=OUTBOX_LEASE_SECONDS=300
 Environment=OUTBOX_MAX_ATTEMPTS=5
 
-ExecStart=/var/www/mecha-school/venv/bin/python -m app.services.outbox_worker run
+ExecStart=/var/www/mecha-school/.venv/bin/python -m app.services.outbox_worker run
 
-# SIGTERM makes the loop finish its current batch and settle in-flight rows.
+# SIGTERM makes the loop finish its current batch and settle in-flight rows
+# rather than abandoning them on an expired lease.
 KillSignal=SIGTERM
 TimeoutStopSec=60
 Restart=on-failure
 RestartSec=10
 
 # One worker is the default. Two are safe — FOR UPDATE SKIP LOCKED prevents
-# double-claiming — but one is enough for the current volume and keeps the
-# delivery ordering easy to reason about.
+# double-claiming — but one is enough for current volume.
 
 # Hardening. The worker needs outbound HTTPS to Firebase and PostgreSQL only.
+# ProtectHome is deliberately NOT set: it is unnecessary here and would risk
+# hiding a credential path from a root-run process.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ProtectHome=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true

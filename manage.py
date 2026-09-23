@@ -13,8 +13,19 @@ Common usage:
 """
 import os
 
-from app import create_app
-from app.utils.seeder import register_commands
+# Declared BEFORE create_app(). This module is what `flask --app manage ...`
+# imports, so every migration and management command constructs the
+# application under the CLI role and starts NO background services.
+#
+# The previous argv heuristic missed `python -m flask --app manage db current`
+# entirely — argv[1] is '--app', not 'db' — so a read-only migration query
+# started the auto-attendance scheduler. Declaring the role removes the guess.
+from app.lifecycle import ROLE_CLI, set_role
+
+set_role(ROLE_CLI)
+
+from app import create_app  # noqa: E402  — must follow set_role()
+from app.utils.seeder import register_commands  # noqa: E402
 
 app = create_app(os.environ.get('FLASK_ENV', 'development'))
 register_commands(app)

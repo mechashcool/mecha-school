@@ -680,7 +680,24 @@ def create_app(config_name=None):
         _skip_schedulers,
     )
 
-    if not _skip_schedulers:
+    # Authoritative gate: only a process that has declared itself the WEB role
+    # may start the shared background services. The argv heuristic above stays
+    # as a legacy fallback, but it is not trusted on its own — it matched only
+    # when the subcommand happened to land in argv[1], so
+    # `python -m app.services.outbox_worker run` and
+    # `python -m flask --app manage db current` both slipped through and
+    # started the attendance scheduler. See app/lifecycle.py.
+    #
+    # This can only ever make startup MORE restrictive: the role defaults to
+    # 'web', so any entry point that does not declare one (run.py, the dev
+    # server) behaves exactly as before.
+    from app import lifecycle as _lifecycle
+    _start_background = (not _skip_schedulers
+                         and _lifecycle.background_services_allowed(app))
+    _startup_log.info('[startup] lifecycle %s  start_background=%s',
+                      _lifecycle.describe(), _start_background)
+
+    if _start_background:
         from app.services.hikvision import start_auto_sync
         start_auto_sync(app)
 
