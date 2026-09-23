@@ -29,12 +29,81 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 
 log = logging.getLogger('mecha.fcm')
 
 _fcm_enabled: bool = False
 _messaging = None   # firebase_admin.messaging module, assigned after successful init
+
+# Documented safe default for FCM_HTTP_TIMEOUT_SECONDS. Firebase Admin's own
+# default is _http_client.DEFAULT_TIMEOUT_SECONDS = 120 s, which is exactly
+# GUNICORN_TIMEOUT: one hung FCM call could occupy a worker thread right up to
+# the point the master kills it. Pushes are display-only, so a much shorter
+# bound is correct.
+_DEFAULT_HTTP_TIMEOUT = 10.0
+_http_timeout_applied = None    # the value actually handed to Firebase, or None
+
+
+def _resolve_http_timeout() -> float:
+    """FCM_HTTP_TIMEOUT_SECONDS as a positive finite float.
+
+    Deliberate safe fallback rather than a hard failure: this module is
+    imported at application start-up, and refusing to boot the whole web
+    service over a malformed optional tuning value would turn a typo into an
+    outage. The bad value is reported at ERROR level and the documented
+    default is used, so the mistake is visible without being fatal.
+
+    Rejected: non-numeric, zero, negative, NaN and infinity.
+    """
+    raw = os.environ.get('FCM_HTTP_TIMEOUT_SECONDS')
+    if raw is None or not str(raw).strip():
+        return _DEFAULT_HTTP_TIMEOUT
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        log.error('[FCM] FCM_HTTP_TIMEOUT_SECONDS=%r is not a number — '
+                  'using the default %ss', raw, _DEFAULT_HTTP_TIMEOUT)
+        return _DEFAULT_HTTP_TIMEOUT
+    # math.isfinite rejects both NaN and ±inf; NaN also fails every comparison,
+    # so the finiteness check must come first.
+    if not math.isfinite(value) or value <= 0:
+        log.error('[FCM] FCM_HTTP_TIMEOUT_SECONDS=%r must be a positive finite '
+                  'number — using the default %ss', raw, _DEFAULT_HTTP_TIMEOUT)
+        return _DEFAULT_HTTP_TIMEOUT
+    return value
+
+
+def _http_timeout_supported(firebase_admin_module) -> bool:
+    """True when this Firebase Admin build should be given the option.
+
+    ``httpTimeout`` is a documented application option that
+    firebase_admin.messaging reads when it builds its HTTP client. Support is
+    probed from the SDK's own list of valid configuration keys rather than
+    assumed from a version number, and we never reach into private internals
+    or patch the SDK.
+
+    Deliberately fails OPEN. requirements.txt pins firebase-admin==6.5.0 while
+    a developer machine may hold a newer build, so the probe must not be the
+    single point of failure:
+
+      * the key list exists and contains httpTimeout  -> supported;
+      * the key list exists and does NOT contain it   -> the option was
+        genuinely dropped, so pass nothing;
+      * the key list is missing/unreadable            -> unknown SDK shape.
+        Pass the documented option anyway: explicit options are stored
+        verbatim on the App and an unrecognised one is ignored, so this cannot
+        break initialisation — whereas skipping it would silently lose the
+        timeout in production while tests pass locally.
+    """
+    try:
+        valid_keys = getattr(firebase_admin_module, '_CONFIG_VALID_KEYS', None)
+        if valid_keys is None:
+            return True
+        return 'httpTimeout' in valid_keys
+    except Exception:
+        return True
 
 
 def _init_firebase() -> None:
@@ -128,10 +197,26 @@ def _init_firebase() -> None:
             cred   = credentials.Certificate(resolved_path)
             source = f'GOOGLE_APPLICATION_CREDENTIALS ({resolved_path})'
 
-        firebase_admin.initialize_app(cred)
+        global _http_timeout_applied
+        timeout = _resolve_http_timeout()
+        if _http_timeout_supported(firebase_admin):
+            firebase_admin.initialize_app(cred, options={'httpTimeout': timeout})
+            _http_timeout_applied = timeout
+        else:
+            # Never fabricate the option or patch SDK internals: initialise
+            # exactly as before and make the gap explicit in the logs.
+            firebase_admin.initialize_app(cred)
+            _http_timeout_applied = None
+            log.warning(
+                '[FCM] this firebase-admin build does not list httpTimeout as a '
+                'valid application option — requests keep the SDK default '
+                '(120s). FCM_HTTP_TIMEOUT_SECONDS has no effect here.')
         _messaging   = fb_messaging
         _fcm_enabled = True
-        log.warning('[FCM] ENABLED — initialized from %s', source)
+        log.warning('[FCM] ENABLED — initialized from %s (http_timeout=%s)',
+                    source,
+                    f'{_http_timeout_applied}s' if _http_timeout_applied
+                    else 'SDK default')
     except Exception as exc:
         log.error('[FCM] initialization failed (%s): %s — push notifications disabled',
                   type(exc).__name__, exc)
@@ -147,15 +232,22 @@ def is_enabled() -> bool:
 
 
 def _send_one(token: str, title: str, body: str,
-              data: dict | None = None) -> tuple[bool, str | None, str | None]:
+              data: dict | None = None) -> tuple[bool, str | None, str | None, bool]:
     """
-    Send to one FCM token. Returns (success, msg_id, error_str).
+    Send to one FCM token.
+    Returns (success, msg_id, error_str, permanent_token_failure).
+
+    The fourth element is decided from the STRUCTURED exception before it is
+    flattened to text, so classification never depends on how Firebase happens
+    to word a message. It is False for every success and for every transient
+    failure; only a failure that identifies this exact registration token as
+    dead sets it True.
 
     AndroidConfig priority=high ensures the notification appears in the status
     bar even when the app is in background or completely closed.
     """
     if not _fcm_enabled or not token:
-        return False, None, 'fcm-disabled-or-missing-token'
+        return False, None, 'fcm-disabled-or-missing-token', False
     try:
         from app.utils.observability import observe_external
         str_data = {k: str(v) for k, v in (data or {}).items()}
@@ -184,10 +276,88 @@ def _send_one(token: str, title: str, body: str,
         # the notification title (private school/student content) does not
         # belong in production logs. Failures below stay at ERROR.
         log.debug('[FCM] ✓ sent  token=%.16s…  msg_id=%s', token, msg_id)
-        return True, msg_id, None
+        return True, msg_id, None, False
     except Exception as exc:
-        log.error('[FCM] ✗ send failed  token=%.16s…  error=%s', token, exc)
-        return False, None, str(exc)
+        permanent = _is_permanent_token_failure(exc)
+        log.error('[FCM] ✗ send failed  token=%.16s…  permanent=%s  error=%s',
+                  token, permanent, exc)
+        return False, None, str(exc), permanent
+
+
+def _normalise_error(text: str) -> str:
+    """Lower-case and drop separators so wording variants compare equal.
+
+    'NotRegistered', 'NOT_REGISTERED', 'not-registered' and 'Not Registered'
+    all become 'notregistered'. Applied to the markers as well as the message,
+    so the two sides can never drift apart.
+    """
+    return ''.join(ch for ch in str(text).lower() if ch.isalnum())
+
+
+# Exceptions that identify THIS registration token as permanently dead. Named
+# explicitly rather than by their parent classes: UnregisteredError is a
+# NotFoundError and SenderIdMismatchError is a PermissionDeniedError, and
+# neither parent means "bad token" on its own.
+_PERMANENT_TOKEN_EXC_NAMES = frozenset({
+    'UnregisteredError',        # NotRegistered / UNREGISTERED
+    'SenderIdMismatchError',    # token belongs to a different sender/project
+})
+
+# Error codes that are ALWAYS transient — retry later, never touch the token.
+# ThirdPartyAuthError/UNAUTHENTICATED is a project-credential problem, and
+# INVALID_ARGUMENT usually describes the message payload, not the token.
+_TRANSIENT_CODES = frozenset({
+    'UNAVAILABLE', 'INTERNAL', 'DEADLINE_EXCEEDED', 'RESOURCE_EXHAUSTED',
+    'ABORTED', 'CANCELLED', 'UNKNOWN', 'UNAUTHENTICATED',
+})
+
+
+def _is_permanent_token_failure(exc) -> bool:
+    """True only when `exc` proves this one registration token is dead.
+
+    Structured first: firebase-admin raises typed errors
+    (messaging.UnregisteredError, messaging.SenderIdMismatchError) whose class
+    is unambiguous. Codes known to be transient short-circuit to False so a
+    Firebase outage, a quota rejection or a timeout can never cost a valid
+    device its token. Only when neither applies do we fall back to the
+    normalised text.
+
+    Never raises: a classifier that throws inside an exception handler would
+    turn a delivery failure into a request failure.
+    """
+    if exc is None:
+        return False
+    try:
+        if isinstance(exc, _transient_network_exc_types()):
+            return False                    # timeouts / connection resets
+
+        if type(exc).__name__ in _PERMANENT_TOKEN_EXC_NAMES:
+            return True
+
+        code = getattr(exc, 'code', None)
+        if isinstance(code, str) and code.upper() in _TRANSIENT_CODES:
+            return False
+
+        return _is_stale_token(str(exc))
+    except Exception:       # pragma: no cover — classification must never throw
+        log.warning('[FCM] could not classify send failure — '
+                    'treating it as transient and keeping the token')
+        return False
+
+
+def _transient_network_exc_types() -> tuple:
+    """Socket/HTTP exception types that are always transient.
+
+    Resolved lazily and defensively: requests is present in this project, but a
+    classifier must not depend on an import succeeding.
+    """
+    types = [TimeoutError, ConnectionError, OSError]
+    try:
+        import requests.exceptions as _rexc
+        types.extend([_rexc.Timeout, _rexc.ConnectionError])
+    except Exception:
+        pass
+    return tuple(types)
 
 
 def _is_stale_token(error: str) -> bool:
@@ -202,6 +372,14 @@ def _is_stale_token(error: str) -> bool:
     silent. INVALID_ARGUMENT now deactivates only when the error text also
     names the token as the problem (firebase-admin: "The registration token
     is not a valid FCM registration token").
+
+    Token-health fix (production, 48 failures/24 h): FCM also reports a dead
+    token as the bare string 'NotRegistered'. Lower-casing alone did not match
+    it — 'notregistered' does not contain the marker 'unregistered', because
+    that needs a leading "un" — so those tokens were never deactivated and were
+    retried on every subsequent notification, forever. Comparison now strips
+    separators from BOTH sides, so NotRegistered / NOT_REGISTERED /
+    not-registered / 'Not Registered' all normalise to the same token and match.
     """
     if not error:
         return False
@@ -209,11 +387,13 @@ def _is_stale_token(error: str) -> bool:
         'registration-token-not-registered',
         'invalid-registration-token',
         'unregistered',
+        'notregistered',                    # FCM's own bare spelling
         'requested entity was not found',
         'not a valid fcm registration token',
+        'senderidmismatch',                 # wrong project owns this token
     )
-    el = error.lower()
-    return any(m in el for m in markers)
+    el = _normalise_error(error)
+    return any(_normalise_error(m) in el for m in markers)
 
 
 def send_push_to_user(user_id: int, title: str, body: str,
@@ -261,23 +441,40 @@ def send_push_to_user(user_id: int, title: str, body: str,
     success_count = fail_count = deactivated = 0
 
     for dt in tokens:
-        ok_flag, msg_id, error = _send_one(dt.fcm_token, title, body, data)
+        ok_flag, msg_id, error, permanent = _send_one(
+            dt.fcm_token, title, body, data)
         if ok_flag:
             success_count += 1
         else:
             fail_count += 1
-            if _is_stale_token(error or ''):
+            # Only THIS row is touched. Every other token of the same user is
+            # left active, the user is untouched, and no notification history
+            # is removed. Assigning False to an already-False row is a no-op,
+            # so reprocessing the same failure is idempotent.
+            if permanent and dt.is_active:
                 dt.is_active = False
                 deactivated += 1
+                # Wording kept verbatim from before this fix so existing log
+                # monitoring and dashboards keep matching.
                 log.warning('[FCM] deactivated stale token  user_id=%s  token=%.16s…',
                             user_id, dt.fcm_token)
 
     if deactivated:
+        # A persistence failure here must never reach the caller: the push has
+        # already been attempted and attendance/notification work upstream is
+        # committed. Worst case the token stays active and is re-classified on
+        # the next send.
         try:
             db.session.commit()
         except Exception as exc:
-            log.error('[FCM] failed to persist token deactivations: %s', exc)
-            db.session.rollback()
+            log.error('[FCM] failed to persist token deactivations (%s) — '
+                      'tokens stay active and will be re-checked next send',
+                      type(exc).__name__)
+            try:
+                db.session.rollback()
+            except Exception:
+                log.exception('[FCM] rollback after failed deactivation '
+                              'commit also failed')
 
     # P3: per-user RESULT stays at WARNING only when something went wrong
     # (failure/deactivation visibility is a hard requirement); clean sends log
