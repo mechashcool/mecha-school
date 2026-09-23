@@ -1224,19 +1224,93 @@ async def _ws_handler(websocket):
 
 # ── Server entry point ─────────────────────────────────────────────────────────
 
+_inherited_sock = False        # False = not looked up yet; None = none available
+
+
+def _inherited_listen_socket():
+    """Return the master-owned WS listening socket, if Gunicorn passed one.
+
+    Looked up once per process and cached: wrapping the same fd in a second
+    socket object would close it when the first object is garbage-collected.
+
+    gunicorn.conf.py `when_ready` binds the AI Face port in the ARBITER and
+    exports its fd as AIFACE_WS_FD. Workers inherit the fd across fork, so the
+    listening socket outlives worker recycling exactly like Gunicorn's own HTTP
+    listener: while no worker is accepting, device reconnects queue in the
+    backlog instead of being refused with ConnectionRefusedError.
+
+    The fd is validated before use (a re-exec can leave a stale value in the
+    environment); on any mismatch we detach — never close — and fall back to
+    binding the port in this process.
+    """
+    global _inherited_sock
+    if _inherited_sock is not False:
+        return _inherited_sock
+    _inherited_sock = None
+    fd_raw = os.environ.get("AIFACE_WS_FD")
+    if not fd_raw:
+        return None
+    try:
+        fd = int(fd_raw)
+    except (TypeError, ValueError):
+        log.warning("[aiface] AIFACE_WS_FD is not an integer — binding the port directly")
+        return None
+    if fd < 0:
+        # socket(fileno=-1) raises ValueError, not OSError; reject before constructing.
+        log.warning("[aiface] AIFACE_WS_FD is negative — binding the port directly")
+        return None
+    try:
+        sock = _socket.socket(fileno=fd)
+    except (OSError, ValueError, OverflowError) as exc:
+        # OSError  : closed / invalid descriptor
+        # ValueError: rejected descriptor value
+        # OverflowError: value outside the C int range
+        # Nothing was constructed, so there is no descriptor of ours to close.
+        log.warning("[aiface] AIFACE_WS_FD=%s is not usable (%s: %s) — binding the port directly",
+                    fd_raw, type(exc).__name__, exc)
+        return None
+    try:
+        ok = (sock.family == _socket.AF_INET
+              and sock.type == _socket.SOCK_STREAM
+              and sock.getsockopt(_socket.SOL_SOCKET, _socket.SO_ACCEPTCONN) == 1
+              and sock.getsockname()[1] == _WS_PORT)
+    except OSError:
+        ok = False
+    if not ok:
+        sock.detach()          # never close an fd we did not prove is ours
+        log.warning("[aiface] AIFACE_WS_FD=%s does not describe a listening socket on port %d "
+                    "— binding the port directly", fd_raw, _WS_PORT)
+        return None
+    sock.setblocking(False)
+    _inherited_sock = sock
+    return sock
+
+
 async def _serve():
     global _ws_loop
     import websockets
     _ws_loop = asyncio.get_running_loop()
     # ping_interval / ping_timeout control how quickly stale TCP connections are
     # detected.  20 s interval + 10 s timeout = stale detected within 30 s.
-    async with websockets.serve(
-        _ws_handler, "0.0.0.0", _WS_PORT,
-        ping_interval=20,
-        ping_timeout=10,
-    ):
-        log.info("AI Face WS server listening on 0.0.0.0:%d "
-                 "(ping_interval=20s ping_timeout=10s)", _WS_PORT)
+    inherited = _inherited_listen_socket()
+    if inherited is not None:
+        server_cm = websockets.serve(
+            _ws_handler, sock=inherited,
+            ping_interval=20,
+            ping_timeout=10,
+        )
+        where = (f"inherited master socket fd={inherited.fileno()} on "
+                 f"0.0.0.0:{_WS_PORT} (survives worker recycling)")
+    else:
+        server_cm = websockets.serve(
+            _ws_handler, "0.0.0.0", _WS_PORT,
+            ping_interval=20,
+            ping_timeout=10,
+        )
+        where = f"0.0.0.0:{_WS_PORT} (bound by this process)"
+    async with server_cm:
+        log.info("AI Face WS server listening on %s "
+                 "(ping_interval=20s ping_timeout=10s)", where)
         await asyncio.Future()   # run until cancelled
 
 
@@ -1308,6 +1382,17 @@ def start_ai_face_ws_server(app) -> None:
             "or set it explicitly to a port that differs from PORT.",
             _WS_PORT, _web_port,
         )
+        return
+
+    # Gunicorn master already bound the port and handed us the fd: skip the
+    # pre-bind probe (it would always report EADDRINUSE against our own master
+    # and refuse to start the receiver).
+    if _inherited_listen_socket() is not None:
+        _flask_app = app
+        t = threading.Thread(target=_run_server_thread, name="aiface-ws", daemon=True)
+        t.start()
+        log.info("[aiface] AI Face WS server thread started on the master-owned socket "
+                 "for port %d (recycle-safe)", _WS_PORT)
         return
 
     # Pre-bind probe: detect port conflict immediately (e.g., Flask running on wrong port)
