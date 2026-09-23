@@ -163,6 +163,24 @@ class Config:
     # fail closed, never open.
     OPS_METRICS_TOKEN = os.environ.get('OPS_METRICS_TOKEN', '')
 
+    # ── Institute attendance notification outbox ──────────────────────────────
+    # DEFAULT FALSE. While false, institute attendance behaves exactly as it
+    # does today (in-app rows committed separately, Firebase called inline) and
+    # nothing reads or writes the notification_outbox table — so this code is
+    # safe to deploy before the migration is applied and before any worker
+    # exists.
+    #
+    # While true, the parent in-app rows and the push-delivery jobs are written
+    # inside the SAME transaction as the attendance rows, and the request never
+    # contacts Firebase. Delivery is handled by the separate worker in
+    # app/services/outbox_worker.py. There is no inline fallback: enabling this
+    # flag without running the worker queues notifications durably rather than
+    # sending them, which is a visible backlog, not silent loss.
+    INSTITUTE_ATTENDANCE_OUTBOX_ENABLED = (
+        os.environ.get('INSTITUTE_ATTENDANCE_OUTBOX_ENABLED', 'false')
+        .strip().lower() == 'true'
+    )
+
     # ── Redis coordination (P3) — OPTIONAL ────────────────────────────────────
     # When REDIS_URL is unset (the default) every Redis-backed feature silently
     # degrades to the existing in-process behaviour: pushes use the P0 thread

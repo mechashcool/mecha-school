@@ -2709,6 +2709,137 @@ class MobileDeviceToken(db.Model):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  15b. NOTIFICATION OUTBOX  (durable push delivery — transactional)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# One row = one push to ONE device token for ONE notification event.
+#
+# Why a dedicated table rather than reusing push_notifications: that table is
+# the delivery LOG (one row written after an attempt, status 'sent'/'failed')
+# and carries no attempt counter, no lease and no due time. Adding those to a
+# large, actively written production table would mean ALTERs and new indexes on
+# populated data. This table is new and empty, so its migration creates only
+# the table and its indexes — no lock on anything that already holds rows.
+#
+# Why per DEVICE TOKEN and not per user: a parent with two phones must not have
+# a successful delivery repeated because the other phone timed out. Each token
+# carries its own status, attempts and backoff.
+#
+# The full token string is deliberately NOT stored here — only the FK to
+# mobile_device_tokens. The worker resolves it at send time, so a dead token
+# that is later deactivated cannot leave a copy of itself behind in this table.
+#
+# Every FK is ON DELETE CASCADE so school cleanup can never be blocked by an
+# outbox row: deleting the users (or the school) removes the pending jobs with
+# them. See app/utils/school_cleanup.py — it needs no entry for this table.
+
+class NotificationOutbox(db.Model):
+    """A durable, transactional push-delivery job.
+
+    Written inside the SAME transaction as the business change that caused it,
+    so attendance and its notifications commit together or not at all. Redis is
+    not involved: PostgreSQL is the source of truth and a worker sweeps it.
+
+    Guarantee: durable at-least-once delivery with deduplicated enqueueing.
+    NOT exactly-once — a crash after FCM accepts a message but before this row
+    is marked sent will re-deliver it. Push notifications are display-only, so
+    a rare duplicate is the correct trade against silently losing one.
+    """
+    __tablename__ = 'notification_outbox'
+    __school_scoped__ = True
+
+    # ── Status lifecycle ────────────────────────────────────────────────────
+    #   pending ──claim──► processing ──┬──► sent       (terminal, success)
+    #      ▲                            ├──► retry ──► pending (via due time)
+    #      └────────────────────────────┴──► dead       (terminal, failure)
+    #   cancelled is terminal and set only by an operator/cleanup decision.
+    STATUS_PENDING    = 'pending'
+    STATUS_PROCESSING = 'processing'
+    STATUS_RETRY      = 'retry'
+    STATUS_SENT       = 'sent'
+    STATUS_DEAD       = 'dead'
+    STATUS_CANCELLED  = 'cancelled'
+    STATUSES = (STATUS_PENDING, STATUS_PROCESSING, STATUS_RETRY,
+                STATUS_SENT, STATUS_DEAD, STATUS_CANCELLED)
+    # Statuses the worker may pick up.
+    DUE_STATUSES = (STATUS_PENDING, STATUS_RETRY)
+    TERMINAL_STATUSES = (STATUS_SENT, STATUS_DEAD, STATUS_CANCELLED)
+
+    # Semantic event type. Only institute absence is wired in this phase; the
+    # column exists so later phases reuse the same table without a migration.
+    EVENT_INSTITUTE_ABSENCE = 'institute_attendance_absent'
+
+    id = db.Column(db.BigInteger, primary_key=True)
+
+    school_id = db.Column(db.Integer,
+                          db.ForeignKey('schools.id', ondelete='CASCADE'),
+                          nullable=False, index=True)
+    event_type = db.Column(db.String(60), nullable=False)
+
+    # Delivery target. user_id is the recipient; device_token_id is the exact
+    # registration this row delivers to.
+    user_id = db.Column(db.Integer,
+                        db.ForeignKey('users.id', ondelete='CASCADE'),
+                        nullable=False, index=True)
+    device_token_id = db.Column(
+        db.Integer,
+        db.ForeignKey('mobile_device_tokens.id', ondelete='CASCADE'),
+        nullable=False, index=True)
+
+    # Immutable snapshot of what to send. Rendered at enqueue time so a later
+    # edit to the student or group cannot rewrite history.
+    title = db.Column(db.String(200), nullable=False)
+    body = db.Column(db.Text, nullable=False)
+    data_json = db.Column(db.Text, nullable=True)
+    ntype = db.Column(db.String(50), nullable=False, default='attendance')
+
+    # Deduplicated enqueueing. Globally unique; see the service for how the key
+    # is built and why it does NOT suppress a legitimate later transition.
+    dedup_key = db.Column(db.String(190), nullable=False, unique=True)
+
+    status = db.Column(db.String(20), nullable=False,
+                       default=STATUS_PENDING, server_default=STATUS_PENDING)
+    attempts = db.Column(db.SmallInteger, nullable=False,
+                         default=0, server_default=db.text('0'))
+    next_attempt_at = db.Column(db.DateTime, nullable=True)
+
+    # Lease: which worker holds this row and since when. A crashed worker's
+    # lease expires and the row is reclaimed.
+    locked_by = db.Column(db.String(80), nullable=True)
+    locked_at = db.Column(db.DateTime, nullable=True)
+
+    # Short, safe classification — never a token, credential or payload.
+    last_error = db.Column(db.String(200), nullable=True)
+
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    processed_at = db.Column(db.DateTime, nullable=True)   # last attempt
+    completed_at = db.Column(db.DateTime, nullable=True)   # terminal state
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "status IN ('pending','processing','retry','sent','dead','cancelled')",
+            name='ck_notification_outbox_status'),
+        db.CheckConstraint('attempts >= 0', name='ck_notification_outbox_attempts'),
+        # Claiming due work: the worker's hot path.
+        db.Index('ix_notification_outbox_due', 'status', 'next_attempt_at'),
+        # Reclaiming leases abandoned by a dead worker.
+        db.Index('ix_notification_outbox_lease', 'status', 'locked_at'),
+        # Per-tenant operational inspection.
+        db.Index('ix_notification_outbox_school_status', 'school_id', 'status'),
+        # Retention sweeps over terminal rows.
+        db.Index('ix_notification_outbox_completed', 'status', 'completed_at'),
+    )
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in self.TERMINAL_STATUSES
+
+    def __repr__(self):
+        return (f'<NotificationOutbox {self.id} {self.event_type} '
+                f'status={self.status} attempts={self.attempts}>')
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  16. SCHEDULES
 # ═════════════════════════════════════════════════════════════════════════════
 

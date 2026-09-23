@@ -396,6 +396,83 @@ def _is_stale_token(error: str) -> bool:
     return any(_normalise_error(m) in el for m in markers)
 
 
+class TokenSendResult:
+    """Detailed outcome of ONE push to ONE registration token.
+
+    Added for the durable notification outbox, which needs to know *why* a
+    delivery failed — transient errors are retried, permanent token failures
+    are terminal. The aggregate ``(success_count, fail_count)`` contract of
+    send_push_to_user()/send_push_batch() is deliberately untouched, so every
+    existing caller keeps working unchanged.
+    """
+    __slots__ = ('ok', 'message_id', 'error', 'permanent', 'deactivated')
+
+    def __init__(self, ok, message_id=None, error=None, permanent=False,
+                 deactivated=False):
+        self.ok = ok
+        self.message_id = message_id
+        self.error = error              # short text, never a token
+        self.permanent = permanent      # this registration is dead
+        self.deactivated = deactivated  # this exact row was set inactive
+
+    @property
+    def transient(self) -> bool:
+        return (not self.ok) and (not self.permanent)
+
+    def __repr__(self):
+        return (f'<TokenSendResult ok={self.ok} permanent={self.permanent} '
+                f'deactivated={self.deactivated}>')
+
+
+def send_to_device_token(token_row, title: str, body: str,
+                         data: dict | None = None) -> TokenSendResult:
+    """Send ONE notification to ONE MobileDeviceToken row. Never raises.
+
+    The outbox stores a device-token ID, never the token string, so this is the
+    seam where the row becomes an actual send. Deactivation is applied to that
+    exact row only — never to the user's other devices — and is left UNCOMMITTED
+    so the caller can decide the transaction boundary.
+
+    Returns a TokenSendResult; the caller classifies retry vs terminal from
+    .permanent / .transient rather than from error text.
+    """
+    if token_row is None:
+        return TokenSendResult(False, error='missing-device-token',
+                               permanent=True)
+    if not _fcm_enabled:
+        # Not a token problem: the service is off. Stays retryable.
+        return TokenSendResult(False, error='fcm-disabled')
+
+    ok_flag, msg_id, error, permanent = _send_one(
+        token_row.fcm_token, title, body, data)
+
+    deactivated = False
+    if permanent and getattr(token_row, 'is_active', False):
+        # Exactly the failing row. Idempotent: an already-inactive row is
+        # skipped. Not committed here — the caller owns the transaction.
+        token_row.is_active = False
+        deactivated = True
+        log.warning('[FCM] deactivated stale token  user_id=%s  token=%.16s…',
+                    getattr(token_row, 'user_id', None), token_row.fcm_token)
+
+    return TokenSendResult(
+        ok=bool(ok_flag), message_id=msg_id,
+        error=_safe_error_text(error), permanent=permanent,
+        deactivated=deactivated)
+
+
+def _safe_error_text(error, limit: int = 200) -> str | None:
+    """A short error string safe to persist: bounded, no token, no secret.
+
+    Firebase messages never contain the registration token, but the bound is
+    enforced anyway so a pathological message cannot bloat a database column.
+    """
+    if not error:
+        return None
+    text = ' '.join(str(error).split())
+    return text[:limit]
+
+
 def send_push_to_user(user_id: int, title: str, body: str,
                       data: dict | None = None,
                       _role: str | None = None) -> tuple[int, int]:

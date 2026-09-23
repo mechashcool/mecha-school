@@ -1,0 +1,78 @@
+# Durable notification outbox worker — EXAMPLE UNIT, NOT INSTALLED.
+#
+# Delivers institute attendance push notifications from the notification_outbox
+# table. Runs as its own process so Firebase latency can never touch an HTTP
+# request, a Gunicorn thread, or the AI Face WebSocket on port 7788.
+#
+# This file is tracked for review only. Installing it is a separate, deliberate
+# operator action:
+#
+#   sudo cp deploy/mecha-school-outbox-worker.service \
+#           /etc/systemd/system/mecha-school-outbox-worker.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mecha-school-outbox-worker.service
+#
+# Order of operations when activating (each step verified before the next):
+#   1. apply migration n0tb0x1a2b3c
+#   2. install and start THIS worker, confirm it idles cleanly
+#   3. only then set INSTITUTE_ATTENDANCE_OUTBOX_ENABLED=true and restart
+#      mecha-school.service
+#
+# NOTE: it reads the SAME EnvironmentFile as the main service, so DATABASE_URL
+# and the Firebase credentials are inherited. No secret is written here.
+
+[Unit]
+Description=Mecha School durable notification outbox worker
+Documentation=file:///var/www/mecha-school/app/services/notification_outbox.py
+After=network-online.target postgresql.service
+Wants=network-online.target
+# Not Requires= on the web service: delivery is independent of the web tier and
+# must survive a web restart or recycle.
+After=mecha-school.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/mecha-school
+
+# Same environment source as the main application. Adjust the path to match the
+# EnvironmentFile that mecha-school.service already uses; do not duplicate
+# credentials into this unit.
+EnvironmentFile=/etc/mecha-school/mecha-school.env
+
+# The flag is read from the environment file above. The worker idles safely
+# when it is false, so the unit may be started before the feature is enabled.
+Environment=FLASK_ENV=production
+Environment=OUTBOX_BATCH_SIZE=20
+Environment=OUTBOX_POLL_SECONDS=5
+Environment=OUTBOX_LEASE_SECONDS=300
+Environment=OUTBOX_MAX_ATTEMPTS=5
+
+ExecStart=/var/www/mecha-school/venv/bin/python -m app.services.outbox_worker run
+
+# SIGTERM makes the loop finish its current batch and settle in-flight rows.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=10
+
+# One worker is the default. Two are safe — FOR UPDATE SKIP LOCKED prevents
+# double-claiming — but one is enough for the current volume and keeps the
+# delivery ordering easy to reason about.
+
+# Hardening. The worker needs outbound HTTPS to Firebase and PostgreSQL only.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mecha-outbox
+
+[Install]
+WantedBy=multi-user.target

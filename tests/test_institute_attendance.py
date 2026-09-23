@@ -939,11 +939,30 @@ class InstituteAttendanceTest(unittest.TestCase):
                 revs.add(m.group(1))
                 if dn:
                     downs.update(re.findall(r"['\"]([^'\"]+)['\"]", dn.group(1)))
-        # a9t8n9d0s1c2 (the attendance feature) is still the newest institute
-        # revision — this timezone fix added none.
+        # The real intent: the TIMEZONE fix is presentation-only and added no
+        # revision of its own. a9t8n9d0s1c2 (the attendance feature) remains
+        # the newest revision that touches institute attendance TABLES.
+        #
+        # Later phases may legitimately chain onto it — the notification outbox
+        # does — so "nothing may follow it" is no longer the right assertion.
+        # What must stay true is that no revision alters the institute
+        # attendance tables for display purposes.
         self.assertIn('a9t8n9d0s1c2', revs)
-        self.assertNotIn('a9t8n9d0s1c2', downs,
-                         'no migration may have been chained after it')
+
+        touching_attendance_tables = []
+        for fn in os.listdir(d):
+            if not fn.endswith('.py'):
+                continue
+            txt = io_open_utf8(os.path.join(d, fn))
+            rev = re.search(r"^revision\s*=\s*['\"]([^'\"]+)", txt, re.M)
+            if not rev or rev.group(1) == 'a9t8n9d0s1c2':
+                continue
+            if re.search(r"(alter_column|add_column|drop_column)\b[^\n]*"
+                         r"institute_attendance", txt):
+                touching_attendance_tables.append(rev.group(1))
+        self.assertEqual(
+            touching_attendance_tables, [],
+            'no later revision may alter the institute attendance tables')
 
 
 def io_open_utf8(path):

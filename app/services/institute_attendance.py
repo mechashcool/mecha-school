@@ -39,6 +39,13 @@ from app.models import (db, Employee, InstituteAttendanceRecord,
                         InstituteGroupSchedule, InstituteStudyGroup, Student)
 from app.utils.attendance_helpers import _get_tz, get_local_date, utc_to_local
 from app.utils.institute_groups import institute_enabled
+# Importing the module (not its table) is side-effect free: no query runs at
+# import time, so startup is safe even before the outbox migration is applied.
+from app.services import notification_outbox as outbox
+
+import logging
+
+log = logging.getLogger('mecha.institute.attendance')
 
 OPTS = {'bypass_tenant_scope': True}
 
@@ -612,18 +619,51 @@ def submit_attendance(school, session, statuses, *, source, actor_user_id,
     session.recorded_by = actor_user_id
     session.recorded_at = now
 
+    # ── Durable path (INSTITUTE_ATTENDANCE_OUTBOX_ENABLED) ──────────────────
+    # The parent in-app rows AND the push-delivery jobs are staged into THIS
+    # transaction, so attendance and the notifications it promised commit
+    # together or not at all. Nothing is sent to Firebase from this request.
+    #
+    # With the flag off, not a single statement below changes: the legacy
+    # inline path runs exactly as it does in production today.
+    outbox_path = bool(notify and newly_absent and outbox.enabled())
+    if outbox_path:
+        try:
+            staged = outbox.stage_absence_deliveries(
+                school, session, newly_absent, now=now)
+        except Exception:
+            # Attendance must never commit without the notification work it
+            # promised. Roll the whole thing back and say so.
+            db.session.rollback()
+            log.exception('[institute-attendance] outbox staging failed '
+                          'session_id=%s — attendance NOT saved',
+                          getattr(session, 'id', None))
+            raise AttendanceError(
+                'تعذّر تجهيز إشعارات الغياب، ولم يتم حفظ الحضور. '
+                'يرجى المحاولة مرة أخرى.')
+
     try:
         db.session.commit()
     except IntegrityError:
-        # Lost a race on uq_institute_attendance_session_student. Nothing of
-        # ours committed; the winner already stored an equivalent row.
+        # Lost a race on uq_institute_attendance_session_student, or on the
+        # outbox dedup key when an identical submission committed first.
+        # Nothing of ours committed; the winner already stored an equivalent row.
         db.session.rollback()
         raise AttendanceError(
             'تم حفظ حضور هذه الجلسة من جهة أخرى في الوقت نفسه. '
             'يرجى إعادة فتح الصفحة لعرض السجل المحدّث.')
 
     if notify and newly_absent:
-        _notify_absent(school, session, newly_absent)
+        if outbox_path:
+            # Committed and durable. A separate worker delivers it; this
+            # request returns now. There is deliberately NO inline fallback —
+            # falling back to Firebase here would reintroduce exactly the
+            # blocking call this path exists to remove.
+            log.info('[institute-attendance] session=%s staged %d push job(s) '
+                     'for %d newly-absent student(s)',
+                     session.id, staged, len(newly_absent))
+        else:
+            _notify_absent(school, session, newly_absent)
 
     return {'created': len(created), 'updated': len(updated),
             'unchanged': len(unchanged), 'notified': len(newly_absent)}
