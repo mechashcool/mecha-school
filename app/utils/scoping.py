@@ -23,7 +23,9 @@ def _models():
         EmployeeAttendance, EmployeeDocument, EmployeeEvaluation,
         EmployeeLeaveRequest, Exam,
         ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord,
-        FeeType, Grade, InstituteGroupEnrollment, InstituteStudyGroup,
+        FeeType, Grade, InstituteAttendanceRecord,
+        InstituteAttendanceSession, InstituteGroupEnrollment,
+        InstituteGroupSchedule, InstituteStudyGroup,
         InventoryCategory, InventoryCount, InventoryItem,
         InventoryItemStock, InventoryMovement, InventoryWarehouse,
         LeaveRequest, Notification, PayrollItem,
@@ -43,7 +45,9 @@ def _models():
         EmployeeAttendance, EmployeeDocument, EmployeeEvaluation,
         EmployeeLeaveRequest, Exam,
         ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord,
-        FeeType, Grade, InstituteGroupEnrollment, InstituteStudyGroup,
+        FeeType, Grade, InstituteAttendanceRecord,
+        InstituteAttendanceSession, InstituteGroupEnrollment,
+        InstituteGroupSchedule, InstituteStudyGroup,
         InventoryCategory, InventoryCount, InventoryItem,
         InventoryItemStock, InventoryMovement, InventoryWarehouse,
         LeaveRequest, Notification, PayrollItem,
@@ -73,6 +77,11 @@ def _models():
         # InstituteStudyGroup is school+year scoped. InstituteGroupEnrollment is
         # school-scoped ONLY: its year comes from the group, and Student (which
         # it links) deliberately persists across years.
+        # InstituteGroupSchedule and InstituteAttendanceSession are school+year
+        # scoped like the group itself. InstituteAttendanceRecord is
+        # school-scoped ONLY: its year comes from the session, and Student
+        # deliberately persists across years.
+        InstituteAttendanceSession, InstituteGroupSchedule,
         InstituteStudyGroup, InventoryCategory,
         InventoryCount, InventoryItem, InventoryItemStock, InventoryMovement,
         PayrollItem, Revenue,

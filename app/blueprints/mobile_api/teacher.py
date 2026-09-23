@@ -19,6 +19,9 @@ POST /teacher/exams                    create an exam — accepts title + max_sc
 GET  /teacher/exams/<id>               exam detail + entered results (subject_id, section_id, title)
 POST /teacher/exams/<id>/results       bulk-upsert grade entries (accepts score/note or marks/notes)
 GET  /teacher/notifications            notifications feed (paginated)
+GET  /teacher/institute/sessions       my institute group sessions for a date range
+GET  /teacher/institute/sessions/open  open ONE occurrence (group_id + date + start)
+POST /teacher/institute/sessions/<id>/attendance   submit/correct attendance
 GET    /teacher/homework                 homework list (subject_id, section_id, grade_name)
 POST   /teacher/homework                 create homework — subject_id required
 PUT    /teacher/homework/<id>            update homework — all core fields required
@@ -51,9 +54,13 @@ from app.models import (
     Exam,
     ExamResult,
     Homework,
+    InstituteAttendanceRecord,
+    InstituteAttendanceSession,
+    InstituteStudyGroup,
     Notification,
     NotificationRead,
     Schedule,
+    School,
     Section,
     Student,
     StudentAttendance,
@@ -67,6 +74,7 @@ from app.utils.notification_visibility import notification_visible_to
 
 from . import mobile_api_bp
 from .utils import jwt_required, role_required, ok, ok_etag, err, photo_url, page_args
+from app.services import institute_attendance as inst_att
 
 
 # ─── Shared helpers ───────────────────────────────────────────────────────────
@@ -2402,3 +2410,284 @@ def teacher_homework_update(homework_id):
             'attachment_type': hw.attachment_type,
         }
     )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  INSTITUTE GROUP SESSIONS AND MANUAL ATTENDANCE
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Authorization is decided ENTIRELY on the server and never trusted from the
+# client:
+#
+#   * the institution must be an institute (School.is_institute);
+#   * the Employee is resolved from the JWT subject via the existing
+#     Employee.user_id link, exactly like every other teacher endpoint;
+#   * a group is reachable only when InstituteStudyGroup.instructor_id is that
+#     Employee, inside the same school AND the school's current academic year;
+#   * a posted student_id must be currently enrolled in THAT group, or already
+#     hold a record for that session (a correction);
+#   * school_id is taken from the Employee, never from the request, and a NULL
+#     school_id is treated as no access at all — never as global access.
+#
+# Every write goes through app/services/institute_attendance.py, the same
+# domain service the web blueprint uses. Nothing here re-implements the rules,
+# and a future card/device source plugs into that one path.
+#
+# NO AUTOMATIC ABSENCE: opening a session materializes a 'not_recorded' row and
+# nothing else. A status exists only because this endpoint received one.
+
+
+def _institute_school_or_none(emp):
+    """The Employee's school, but only when it is an institute.
+
+    Fail-closed on every degenerate case: no employee, no school_id (a NULL
+    school_id is NOT global access), a missing school row, or a school-type
+    institution.
+    """
+    if emp is None or not getattr(emp, 'school_id', None):
+        return None
+    school = School.query.execution_options(bypass_tenant_scope=True).get(
+        emp.school_id)
+    if school is None or not getattr(school, 'is_institute', False):
+        return None
+    return school
+
+
+def _institute_context():
+    """(employee, school, year) or (None, None, None) when out of scope."""
+    emp = _get_employee()
+    school = _institute_school_or_none(emp)
+    if school is None:
+        return None, None, None
+    year = (AcademicYear.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(school_id=school.id, is_current=True)
+            .first())
+    if year is None:
+        return None, None, None
+    return emp, school, year
+
+
+def _my_institute_groups(school, year, emp):
+    """Active groups assigned to THIS instructor. Never a wider fallback."""
+    if emp is None:
+        return []
+    return (InstituteStudyGroup.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter_by(school_id=school.id, academic_year_id=year.id,
+                       instructor_id=emp.id, is_active=True)
+            .order_by(InstituteStudyGroup.name)
+            .all())
+
+
+def _session_dict(occ, counts=None):
+    counts = counts or {}
+    return {
+        'group_id':     occ.group.id,
+        'group_name':   occ.group.name,
+        'subject_name': occ.group.subject.name if occ.group.subject else None,
+        'date':         occ.date.strftime('%Y-%m-%d'),
+        'day_of_week':  occ.day_of_week,
+        'day_label':    inst_att.day_name(occ.day_of_week),
+        'start_time':   occ.start_time.strftime('%H:%M'),
+        'end_time':     occ.end_time.strftime('%H:%M'),
+        'session_id':   occ.session.id if occ.session else None,
+        # 'not_recorded' is a first-class value, never rendered as absence.
+        'status':       occ.status,
+        'is_recorded':  occ.is_recorded,
+        'summary': {
+            'present': counts.get('present', 0),
+            'absent':  counts.get('absent', 0),
+            'late':    counts.get('late', 0),
+            'excused': counts.get('excused', 0),
+        },
+    }
+
+
+@mobile_api_bp.route('/teacher/institute/sessions', methods=['GET'])
+@jwt_required()
+@role_required('teacher')
+def teacher_institute_sessions():
+    """My institute group sessions between ?start and ?end (default: today).
+
+    Read-only and side-effect free: listing a date NEVER materializes a session
+    and never creates an attendance row.
+    """
+    emp, school, year = _institute_context()
+    if school is None:
+        return err('institute_not_available', 404)
+
+    groups = _my_institute_groups(school, year, emp)
+    if not groups:
+        return ok(count=0, sessions=[], statuses=list(
+            InstituteAttendanceRecord.STATUSES))
+
+    today = inst_att.local_today(school)
+
+    def _parse(raw, fallback):
+        if not raw:
+            return fallback
+        try:
+            return _dt.strptime(str(raw).strip(), '%Y-%m-%d').date()
+        except (TypeError, ValueError):
+            return fallback
+
+    start = _parse(request.args.get('start'), today)
+    end = _parse(request.args.get('end'), start)
+    if end < start:
+        end = start
+
+    group_id = request.args.get('group_id', type=int)
+    if group_id:
+        groups = [g for g in groups if g.id == group_id]
+        if not groups:
+            # A forged or unassigned id yields an empty scope, not an error
+            # that would confirm the group exists elsewhere.
+            return ok(count=0, sessions=[], statuses=list(
+                InstituteAttendanceRecord.STATUSES))
+
+    try:
+        occurrences = inst_att.occurrences_for_range(school, groups, start, end)
+    except inst_att.AttendanceError as exc:
+        return err(str(exc), 400)
+
+    summary = inst_att.attendance_summary(
+        school, [o.session.id for o in occurrences if o.session])
+    payload = [_session_dict(o, summary.get(o.session.id) if o.session else None)
+               for o in occurrences]
+    return ok(count=len(payload), start=start.strftime('%Y-%m-%d'),
+              end=end.strftime('%Y-%m-%d'), sessions=payload,
+              statuses=list(InstituteAttendanceRecord.STATUSES))
+
+
+@mobile_api_bp.route('/teacher/institute/sessions/open', methods=['GET'])
+@jwt_required()
+@role_required('teacher')
+def teacher_institute_session_open():
+    """Open ONE occurrence and return its roster.
+
+    Requires group_id + date + start, which must match a REAL occurrence of an
+    active weekly rule (or an already materialized session). An arbitrary date
+    cannot be invented through this endpoint.
+
+    Materializing the session does not record anything: it is created as
+    'not_recorded' with no statuses at all.
+    """
+    emp, school, year = _institute_context()
+    if school is None:
+        return err('institute_not_available', 404)
+
+    group_id = request.args.get('group_id', type=int)
+    groups = {g.id: g for g in _my_institute_groups(school, year, emp)}
+    group = groups.get(group_id)
+    if group is None:
+        return err('session_not_found', 404)
+
+    try:
+        on_date = _dt.strptime(request.args.get('date', ''), '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        return err('invalid_date — use YYYY-MM-DD', 400)
+    start_raw = (request.args.get('start') or '').strip()
+    start_time = None
+    for fmt in ('%H:%M', '%H:%M:%S'):
+        try:
+            start_time = _dt.strptime(start_raw, fmt).time()
+            break
+        except ValueError:
+            continue
+    if start_time is None:
+        return err('invalid_start — use HH:MM', 400)
+
+    occ = inst_att.find_occurrence(school, group, on_date, start_time)
+    if occ is None:
+        return err('session_not_found', 404)
+
+    session = inst_att.get_or_create_session(school, group, occ)
+    roster = inst_att.session_roster(school, session)
+    eligible = inst_att.eligible_student_ids(school, group.id)
+
+    students = [{
+        'student_id':   stu.id,
+        'student_code': stu.student_id,
+        'full_name':    stu.full_name,
+        # An unmarked student is null, NEVER 'absent'.
+        'status':       rec.status if rec else None,
+        'recorded_at':  rec.recorded_at.isoformat() if rec else None,
+        # False for a student who has left the group but already holds a
+        # record — the app shows them read-only instead of hiding history.
+        'editable':     stu.id in eligible,
+    } for stu, rec in roster]
+
+    return ok(session={
+        'session_id':   session.id,
+        'group_id':     group.id,
+        'group_name':   group.name,
+        'subject_name': group.subject.name if group.subject else None,
+        'date':         session.session_date.strftime('%Y-%m-%d'),
+        'start_time':   session.start_time.strftime('%H:%M'),
+        'end_time':     session.end_time.strftime('%H:%M'),
+        'status':       session.status,
+        'is_recorded':  session.is_recorded,
+        'recorded_at':  session.recorded_at.isoformat() if session.recorded_at else None,
+    }, count=len(students), students=students,
+        statuses=list(InstituteAttendanceRecord.STATUSES))
+
+
+@mobile_api_bp.route('/teacher/institute/sessions/<int:session_id>/attendance',
+                     methods=['POST'])
+@jwt_required()
+@role_required('teacher')
+def teacher_institute_submit_attendance(session_id):
+    """Submit or correct attendance for one session. Atomic and idempotent.
+
+    Body: {"records": [{"student_id": 1, "status": "present"}, …]}
+
+    Re-sending the same body changes nothing and notifies nobody, so a retry
+    after a network failure is safe. A student omitted from the body keeps
+    whatever they had — omission is NOT absence.
+    """
+    emp, school, year = _institute_context()
+    if school is None:
+        return err('institute_not_available', 404)
+
+    session = (InstituteAttendanceSession.query
+               .execution_options(bypass_tenant_scope=True)
+               .filter_by(id=session_id, school_id=school.id)
+               .first())
+    if session is None:
+        return err('session_not_found', 404)
+
+    # The session's group must be assigned to THIS instructor right now.
+    # Resolved server side; the client cannot widen it with any id it sends.
+    if session.group_id not in {g.id for g in
+                                _my_institute_groups(school, year, emp)}:
+        return err('session_not_found', 404)
+
+    body = request.get_json(silent=True) or {}
+    raw_records = body.get('records')
+    if not isinstance(raw_records, list) or not raw_records:
+        return err('records[] is required', 400)
+    if len(raw_records) > 500:
+        return err('too_many_records', 400)
+
+    statuses = {}
+    for item in raw_records:
+        if not isinstance(item, dict):
+            return err('invalid record entry', 400)
+        sid = item.get('student_id')
+        status = item.get('status')
+        if sid is None or status is None:
+            return err('student_id and status are required', 400)
+        statuses[sid] = status
+
+    try:
+        result = inst_att.submit_attendance(
+            school, session, statuses,
+            source=InstituteAttendanceSession.SOURCE_MANUAL_INSTRUCTOR,
+            actor_user_id=g.mobile_user.id)
+    except inst_att.AttendanceError as exc:
+        return err(str(exc), 400)
+
+    return ok(session_id=session.id, status=session.status,
+              created=result['created'], updated=result['updated'],
+              unchanged=result['unchanged'], notified=result['notified'])

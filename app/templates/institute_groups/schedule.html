@@ -1,0 +1,184 @@
+{% extends "shared/base.html" %}
+{% block title %}الجدول الأسبوعي — {{ group.name }}{% endblock %}
+{% block page_title %}الجدول الأسبوعي{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">
+      <i class="bi bi-calendar-week me-2 text-primary-custom"></i>الجدول الأسبوعي
+    </h1>
+    <p class="page-subtitle">
+      {{ group.name }}
+      &nbsp;•&nbsp;{{ group.subject.name if group.subject else '—' }}
+      &nbsp;•&nbsp;المدرّس: {{ group.instructor.full_name if group.instructor else 'غير معيّن' }}
+    </p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('institute_groups.attendance_sessions', group_id=group.id) }}"
+       class="btn btn-outline-primary">
+      <i class="bi bi-clipboard-check me-2"></i>جلسات الحضور
+    </a>
+    <a href="{{ url_for('institute_groups.detail', group_id=group.id) }}"
+       class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-2"></i>رجوع
+    </a>
+  </div>
+</div>
+
+<div class="alert alert-info d-flex gap-2 align-items-start">
+  <i class="bi bi-info-circle-fill flex-shrink-0 mt-1"></i>
+  <div>
+    المواعيد أدناه <strong>تتكرر أسبوعياً تلقائياً</strong> ولا تحتاج إلى إعادة
+    إدخال كل أسبوع. تنتهي بانتهاء فترة المجموعة أو عند تعطيلها.
+    <br>
+    <strong>مرور وقت الحصة لا يسجّل أي غياب.</strong> لا تُسجَّل أي حالة إلا
+    باختيار صريح من الإدارة أو المدرّس.
+  </div>
+</div>
+
+{# ── Add a weekly slot ───────────────────────────────────────────────────── #}
+<div class="card mb-4">
+  <div class="card-header"><i class="bi bi-plus-circle text-accent"></i>إضافة موعد أسبوعي</div>
+  <div class="card-body">
+    <form method="POST" action="{{ url_for('institute_groups.schedule_add', group_id=group.id) }}"
+          class="row g-3 align-items-end">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="col-md-4">
+        <label class="form-label">اليوم <span class="text-danger">*</span></label>
+        <select name="day_of_week" class="form-select" required>
+          <option value="">— اختر اليوم —</option>
+          {% for d in day_names %}
+          <option value="{{ loop.index0 }}">{{ d }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">من الساعة <span class="text-danger">*</span></label>
+        <input type="time" name="start_time" class="form-control" required>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">إلى الساعة <span class="text-danger">*</span></label>
+        <input type="time" name="end_time" class="form-control" required>
+      </div>
+      <div class="col-md-2">
+        <button type="submit" class="btn btn-primary w-100">
+          <i class="bi bi-plus-lg me-1"></i>إضافة
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ── Current weekly rules ────────────────────────────────────────────────── #}
+<div class="card mb-4">
+  <div class="card-header">
+    <i class="bi bi-calendar-week text-accent"></i>المواعيد الأسبوعية
+    <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">{{ slots|length }}</span>
+  </div>
+  <div class="table-wrapper">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>اليوم</th><th>من</th><th>إلى</th><th>الحالة</th><th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for slot in slots %}
+        <tr>
+          <form method="POST"
+                action="{{ url_for('institute_groups.schedule_edit', group_id=group.id, slot_id=slot.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <td>
+              <select name="day_of_week" class="form-select form-select-sm" style="min-width:110px">
+                {% for d in day_names %}
+                <option value="{{ loop.index0 }}" {{ 'selected' if slot.day_of_week == loop.index0 }}>{{ d }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td>
+              <input type="time" name="start_time" class="form-control form-control-sm"
+                     value="{{ slot.start_time.strftime('%H:%M') }}" style="min-width:110px">
+            </td>
+            <td>
+              <input type="time" name="end_time" class="form-control form-control-sm"
+                     value="{{ slot.end_time.strftime('%H:%M') }}" style="min-width:110px">
+            </td>
+            <td>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="is_active" value="1"
+                       id="act{{ slot.id }}" {{ 'checked' if slot.is_active }}>
+                <label class="form-check-label small" for="act{{ slot.id }}">مفعّل</label>
+              </div>
+            </td>
+            <td>
+              <button type="submit" class="btn btn-sm btn-outline-primary" title="حفظ">
+                <i class="bi bi-check-lg"></i>
+              </button>
+          </form>
+              <form method="POST" class="d-inline"
+                    action="{{ url_for('institute_groups.schedule_delete', group_id=group.id, slot_id=slot.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-sm btn-outline-danger" title="حذف"
+                        data-confirm="حذف موعد {{ day_names[slot.day_of_week] }} {{ slot.start_time.strftime('%H:%M') }}؟ لن يتم حذف أي سجل حضور مسجّل سابقاً.">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </form>
+            </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="5" class="text-center text-muted py-4">
+            لا توجد مواعيد أسبوعية لهذه المجموعة بعد. أضف موعداً ليبدأ التكرار الأسبوعي.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ── Computed preview — nothing is created by viewing this ──────────────── #}
+<div class="card">
+  <div class="card-header">
+    <i class="bi bi-calendar3 text-accent"></i>الحصص المتوقعة خلال أسبوعين
+    <span class="text-muted" style="font-size:12px">(محسوبة من المواعيد — لا تُنشأ أي سجلات)</span>
+  </div>
+  <div class="table-wrapper">
+    <table class="table mb-0">
+      <thead>
+        <tr><th>التاريخ</th><th>اليوم</th><th>التوقيت</th><th>حالة التسجيل</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for occ in preview %}
+        <tr>
+          <td class="fw-600">{{ occ.date.strftime('%Y-%m-%d') }}</td>
+          <td>{{ day_names[occ.day_of_week] }}</td>
+          <td style="font-size:13px;color:#6b7a8d">
+            {{ occ.start_time.strftime('%H:%M') }} — {{ occ.end_time.strftime('%H:%M') }}
+          </td>
+          <td>
+            {% if occ.is_recorded %}
+            <span class="badge-status badge-active">مُسجَّل</span>
+            {% else %}
+            <span class="badge-status badge-inactive">غير مُسجَّل</span>
+            {% endif %}
+          </td>
+          <td>
+            <a class="btn btn-sm btn-outline-primary"
+               href="{{ url_for('institute_groups.attendance_take',
+                                group_id=group.id,
+                                date_str=occ.date.strftime('%Y-%m-%d'),
+                                start=occ.start_time.strftime('%H:%M')) }}">
+              <i class="bi bi-clipboard-check me-1"></i>الحضور
+            </a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="text-center text-muted py-4">لا توجد حصص متوقعة في هذه الفترة.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

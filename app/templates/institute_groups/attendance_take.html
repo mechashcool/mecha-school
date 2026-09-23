@@ -1,0 +1,168 @@
+{% extends "shared/base.html" %}
+{% block title %}تسجيل الحضور — {{ group.name }}{% endblock %}
+{% block page_title %}تسجيل الحضور{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">
+      <i class="bi bi-clipboard-check me-2 text-primary-custom"></i>{{ group.name }}
+      {% if session.is_recorded %}
+      <span class="badge-status badge-active">مُسجَّل</span>
+      {% else %}
+      <span class="badge-status badge-inactive">غير مُسجَّل</span>
+      {% endif %}
+    </h1>
+    <p class="page-subtitle">
+      {{ session.session_date.strftime('%Y-%m-%d') }}
+      &nbsp;•&nbsp;{{ day_names[(session.session_date.weekday() + 1) % 7] }}
+      &nbsp;•&nbsp;{{ session.start_time.strftime('%H:%M') }} — {{ session.end_time.strftime('%H:%M') }}
+      &nbsp;•&nbsp;{{ group.subject.name if group.subject else '—' }}
+      &nbsp;•&nbsp;المدرّس: {{ session.instructor.full_name if session.instructor else 'غير معيّن' }}
+    </p>
+  </div>
+  <a href="{{ url_for('institute_groups.attendance_sessions') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-2"></i>رجوع
+  </a>
+</div>
+
+{% if session.is_recorded %}
+<div class="alert alert-success d-flex gap-2 align-items-start py-2">
+  <i class="bi bi-check-circle-fill flex-shrink-0 mt-1"></i>
+  <div style="font-size:13px">
+    تم تسجيل حضور هذه الجلسة
+    {% if session.recorded_at %}بتاريخ {{ session.recorded_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}
+    {% if session.recorder %}بواسطة {{ session.recorder.full_name or session.recorder.username }}{% endif %}.
+    يمكنك تصحيح الحالات أدناه؛ سيتم حفظ التعديل مع بيانات المُعدِّل.
+  </div>
+</div>
+{% else %}
+<div class="alert alert-secondary d-flex gap-2 align-items-start py-2">
+  <i class="bi bi-info-circle flex-shrink-0 mt-1"></i>
+  <div style="font-size:13px">
+    لم يُسجَّل حضور هذه الجلسة بعد. الطلاب غير محدّدين، و<strong>لا يُحتسب أي
+    منهم غائباً تلقائياً</strong>. اختر حالة كل طالب ثم احفظ.
+  </div>
+</div>
+{% endif %}
+
+<form method="POST">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="start" value="{{ session.start_time.strftime('%H:%M') }}">
+
+  <div class="card">
+    <div class="card-header d-flex align-items-center flex-wrap gap-2">
+      <i class="bi bi-people-fill text-accent me-1"></i>
+      طلاب المجموعة
+      <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">{{ roster|length }}</span>
+      <div class="ms-auto d-flex gap-1">
+        {% for st in statuses %}
+        <button type="button" class="btn btn-sm btn-outline-secondary js-mark-all"
+                data-status="{{ st }}">
+          تعليم الكل: {{ status_labels[st] }}
+        </button>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="table-wrapper">
+      <table class="table mb-0">
+        <thead>
+          <tr>
+            <th style="width:50px">#</th>
+            <th>رقم الطالب</th>
+            <th>الاسم</th>
+            <th style="min-width:320px">الحالة</th>
+            <th>آخر تسجيل</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for student, rec in roster %}
+          <tr>
+            <td class="text-muted">{{ loop.index }}</td>
+            <td><code>{{ student.student_id }}</code></td>
+            <td class="fw-600">
+              {{ student.full_name }}
+              {% if student.status != 'active' %}
+              <span class="badge bg-secondary" style="font-size:11px">طالب غير فعّال</span>
+              {% endif %}
+            </td>
+            <td>
+              <div class="btn-group btn-group-sm" role="group">
+                {% for st in statuses %}
+                <input type="radio" class="btn-check" name="status_{{ student.id }}"
+                       id="s{{ student.id }}_{{ st }}" value="{{ st }}"
+                       {{ 'checked' if rec and rec.status == st }}>
+                <label class="btn btn-outline-{{ 'success' if st == 'present'
+                                                 else 'danger' if st == 'absent'
+                                                 else 'warning' if st == 'late'
+                                                 else 'secondary' }}"
+                       for="s{{ student.id }}_{{ st }}">{{ status_labels[st] }}</label>
+                {% endfor %}
+              </div>
+              {% if not rec %}
+              <span class="text-muted ms-2" style="font-size:12px">غير محدّد</span>
+              {% endif %}
+            </td>
+            <td style="font-size:12px;color:#6b7a8d">
+              {% if rec %}
+                {{ rec.recorded_at.strftime('%Y-%m-%d %H:%M') }}
+                {% if rec.recorder %}<br>{{ rec.recorder.full_name or rec.recorder.username }}{% endif %}
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="5" class="text-center text-muted py-4">
+              لا يوجد طلاب مسجّلون حالياً في هذه المجموعة الدراسية.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if roster %}
+    <div class="card-footer d-flex justify-content-between align-items-center">
+      <span class="text-muted" style="font-size:12px">
+        <i class="bi bi-shield-lock me-1"></i>
+        الطلاب غير المحدّدين يبقون بلا حالة ولا يُسجَّلون غائبين.
+      </span>
+      <button type="submit" class="btn btn-primary px-5" id="saveBtn">
+        <i class="bi bi-save-fill me-2"></i>حفظ الحضور
+      </button>
+    </div>
+    {% endif %}
+  </div>
+</form>
+
+<script>
+(function () {
+  /* Bulk-mark helper — a convenience only; every value is re-validated server
+     side and an unchecked student still submits nothing. */
+  document.querySelectorAll('.js-mark-all').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var status = btn.dataset.status;
+      document.querySelectorAll('input.btn-check[value="' + status + '"]')
+        .forEach(function (input) { input.checked = true; });
+    });
+  });
+
+  /* Prevent a duplicate submission from repeated taps, while still allowing a
+     retry if the request fails: the button is re-enabled shortly after, and
+     the backend is idempotent regardless. */
+  var form = document.querySelector('form');
+  var save = document.getElementById('saveBtn');
+  if (form && save) {
+    form.addEventListener('submit', function () {
+      save.disabled = true;
+      save.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>جارٍ الحفظ…';
+      setTimeout(function () {
+        save.disabled = false;
+        save.innerHTML = '<i class="bi bi-save-fill me-2"></i>حفظ الحضور';
+      }, 8000);
+    });
+  }
+})();
+</script>
+{% endblock %}

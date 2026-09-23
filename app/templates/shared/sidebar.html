@@ -178,8 +178,16 @@
     <li class="nav-section-label">المجموعات</li>
     <li class="nav-item">
       <a href="{{ url_for('institute_groups.index') }}"
-         class="{{ 'active' if request.blueprint == 'institute_groups' }}">
+         class="{{ 'active' if request.endpoint == 'institute_groups.index' }}">
         <i class="bi bi-collection"></i> مجموعاتي الدراسية
+      </a>
+    </li>
+    <li class="nav-item">
+      <a href="{{ url_for('institute_groups.attendance_sessions') }}"
+         class="{{ 'active' if request.endpoint in
+                   ('institute_groups.attendance_sessions',
+                    'institute_groups.attendance_take') }}">
+        <i class="bi bi-clipboard-check"></i> حضور المجموعات
       </a>
     </li>
     {% endif %}
@@ -491,8 +499,19 @@
         {% if _can_inst_groups %}
         <li class="nav-item">
           <a href="{{ url_for('institute_groups.index') }}"
-             class="{{ 'active' if request.blueprint == 'institute_groups' }}">
+             class="{{ 'active' if request.blueprint == 'institute_groups'
+                       and request.endpoint not in
+                       ('institute_groups.attendance_sessions',
+                        'institute_groups.attendance_take') }}">
             <i class="bi bi-collection"></i> المجموعات الدراسية
+          </a>
+        </li>
+        <li class="nav-item">
+          <a href="{{ url_for('institute_groups.attendance_sessions') }}"
+             class="{{ 'active' if request.endpoint in
+                       ('institute_groups.attendance_sessions',
+                        'institute_groups.attendance_take') }}">
+            <i class="bi bi-clipboard-check"></i> حضور المجموعات
           </a>
         </li>
         {% endif %}

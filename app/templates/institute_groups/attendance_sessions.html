@@ -1,0 +1,135 @@
+{% extends "shared/base.html" %}
+{% block title %}جلسات الحضور{% endblock %}
+{% block page_title %}جلسات الحضور{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">
+      <i class="bi bi-clipboard-check me-2 text-primary-custom"></i>جلسات الحضور
+    </h1>
+    <p class="page-subtitle">
+      {% if is_manager %}
+        جميع المجموعات الدراسية في هذه المؤسسة
+      {% else %}
+        المجموعات الدراسية المسندة إلى حسابك فقط
+      {% endif %}
+    </p>
+  </div>
+  <a href="{{ url_for('institute_groups.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-2"></i>رجوع
+  </a>
+</div>
+
+<div class="alert alert-secondary d-flex gap-2 align-items-start py-2">
+  <i class="bi bi-info-circle flex-shrink-0 mt-1"></i>
+  <div style="font-size:13px">
+    الحصص أدناه <strong>محسوبة</strong> من الجدول الأسبوعي لكل مجموعة.
+    الحصة التي لم يسجّلها أحد تبقى <strong>«غير مُسجَّلة»</strong> —
+    ولا يُحتسب أي طالب غائباً لمجرد مرور وقت الحصة.
+  </div>
+</div>
+
+{# ── Filters ─────────────────────────────────────────────────────────────── #}
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-6 col-md-3">
+        <label class="form-label small fw-600">المجموعة الدراسية</label>
+        <select name="group_id" class="form-select">
+          <option value="">كل المجموعات</option>
+          {% for g in groups %}
+          <option value="{{ g.id }}" {% if group_filter == g.id %}selected{% endif %}>
+            {{ g.name }}{% if g.subject %} — {{ g.subject.name }}{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label small fw-600">من تاريخ</label>
+        <input type="date" name="start" class="form-control" value="{{ start.strftime('%Y-%m-%d') }}">
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label small fw-600">إلى تاريخ</label>
+        <input type="date" name="end" class="form-control" value="{{ end.strftime('%Y-%m-%d') }}">
+      </div>
+      <div class="col-6 col-md-3 d-flex gap-2">
+        <button class="btn btn-primary flex-grow-1"><i class="bi bi-funnel-fill me-1"></i>عرض</button>
+        <a href="{{ url_for('institute_groups.attendance_sessions') }}"
+           class="btn btn-outline-secondary" title="إعادة تعيين"><i class="bi bi-x-lg"></i></a>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ── Occurrences ─────────────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>التاريخ</th><th>اليوم</th><th>المجموعة</th><th>التوقيت</th>
+          <th>حالة التسجيل</th><th>الملخّص</th><th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for occ in occurrences %}
+        {% set counts = summary.get(occ.session.id, {}) if occ.session else {} %}
+        <tr {% if occ.date == today %}style="background:#f6fbff"{% endif %}>
+          <td class="fw-600">{{ occ.date.strftime('%Y-%m-%d') }}</td>
+          <td style="font-size:13px">{{ day_names[occ.day_of_week] }}</td>
+          <td>
+            <i class="bi bi-collection me-1 text-primary-custom"></i>{{ occ.group.name }}
+            {% if occ.group.subject %}
+            <span class="text-muted" style="font-size:12px">— {{ occ.group.subject.name }}</span>
+            {% endif %}
+          </td>
+          <td style="font-size:13px;color:#6b7a8d">
+            {{ occ.start_time.strftime('%H:%M') }} — {{ occ.end_time.strftime('%H:%M') }}
+          </td>
+          <td>
+            {% if occ.is_recorded %}
+            <span class="badge-status badge-active">مُسجَّل</span>
+            {% else %}
+            <span class="badge-status badge-inactive">غير مُسجَّل</span>
+            {% endif %}
+          </td>
+          <td style="font-size:12px">
+            {% if counts %}
+              <span class="badge bg-success">حاضر {{ counts.get('present', 0) }}</span>
+              <span class="badge bg-danger">غائب {{ counts.get('absent', 0) }}</span>
+              {% if counts.get('late') %}<span class="badge bg-warning text-dark">متأخر {{ counts['late'] }}</span>{% endif %}
+              {% if counts.get('excused') %}<span class="badge bg-secondary">بعذر {{ counts['excused'] }}</span>{% endif %}
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            <a class="btn btn-sm {{ 'btn-outline-secondary' if occ.is_recorded else 'btn-outline-primary' }}"
+               href="{{ url_for('institute_groups.attendance_take',
+                                group_id=occ.group.id,
+                                date_str=occ.date.strftime('%Y-%m-%d'),
+                                start=occ.start_time.strftime('%H:%M')) }}">
+              <i class="bi bi-{{ 'pencil-square' if occ.is_recorded else 'clipboard-check' }} me-1"></i>
+              {{ 'مراجعة وتعديل' if occ.is_recorded else 'تسجيل الحضور' }}
+            </a>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7" class="text-center text-muted py-5">
+            <i class="bi bi-calendar-x" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+            {% if not groups %}
+              لا توجد مجموعات دراسية متاحة لحسابك في هذا العام الدراسي.
+            {% else %}
+              لا توجد حصص مجدولة في هذه الفترة.
+              {% if is_manager %}أضف جدولاً أسبوعياً للمجموعة أولاً.{% endif %}
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -27,7 +27,7 @@ with an explicit school_id equality filter before it is used. On top of that,
 the database itself rejects a cross-school link through the composite foreign
 keys on both tables, so a route bug cannot produce mixed-school data.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import (Blueprint, render_template, redirect, url_for,
@@ -42,6 +42,7 @@ from app.utils.decorators import (permission_required, get_current_school,
                                   get_active_year, historical_guard)
 from app.utils.institute_groups import (active_enrollment_count_map,
                                         active_roster, instructor_groups)
+from app.services import institute_attendance as att
 from app.utils.school_stages import ALL_STAGES, STAGE_LABELS
 
 institute_groups_bp = Blueprint('institute_groups', __name__,
@@ -741,3 +742,265 @@ def end_enrollment(group_id, enrollment_id):
                        f'in study group "{group.name}"')
     flash('تم إنهاء اشتراك الطالب مع الاحتفاظ بالسجل التاريخي.', 'success')
     return redirect(url_for('institute_groups.detail', group_id=group.id))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  WEEKLY SCHEDULES AND MANUAL ATTENDANCE
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Every read below is bounded by _require_institute() + _get_group_or_404(),
+# i.e. the institution must be an institute and the group must belong to THIS
+# school — a group id from another institute 404s before any query touches it.
+#
+# Instructors reach these surfaces through _scoped_group(), which additionally
+# requires the group to be assigned to their own Employee row. Managers keep
+# the existing manage_institute_groups permission. No new permission or role is
+# introduced anywhere in this feature.
+#
+# All writes go through app/services/institute_attendance.py — the one domain
+# service the mobile API also calls — so neither surface re-implements the
+# rules, and a future card/device source plugs into the same path.
+
+
+def _scoped_group(group_id, school, year):
+    """A group this account may act on, or 404.
+
+    Manager -> any group of this institute. Instructor -> only groups assigned
+    to their own Employee row, resolved through the existing Employee.user_id
+    link. 404 rather than 403 so another instructor's group is indistinguishable
+    from a nonexistent one.
+    """
+    group = _get_group_or_404(group_id, school)
+    if _is_group_manager():
+        return group
+    allowed = {g.id for g in instructor_groups(school, current_user, year,
+                                               active_only=False)}
+    if group.id not in allowed:
+        abort(404)
+    return group
+
+
+def _parse_date_arg(raw, fallback):
+    if not raw:
+        return fallback
+    try:
+        return datetime.strptime(str(raw).strip(), '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _parse_time_arg(raw):
+    if not raw:
+        return None
+    for fmt in ('%H:%M', '%H:%M:%S'):
+        try:
+            return datetime.strptime(str(raw).strip(), fmt).time()
+        except ValueError:
+            continue
+    return None
+
+
+# ── Weekly schedule management (managers only) ──────────────────────────────
+
+@institute_groups_bp.route('/<int:group_id>/schedule', methods=['GET'])
+@permission_required('manage_institute_groups')
+def schedule(group_id):
+    school, year = _require_institute()
+    if not school or not year:
+        return redirect(url_for('institute_groups.index'))
+    group = _get_group_or_404(group_id, school)
+    slots = att.group_slots(school.id, group.id, active_only=False)
+    today = att.local_today(school)
+    # A two-week preview so the manager can see the rules actually resolving
+    # into dates. Computed only — nothing is created by viewing this page.
+    preview = att.occurrences_for_range(school, [group], today,
+                                        today + timedelta(days=13))
+    return render_template('institute_groups/schedule.html',
+                           group=group, slots=slots, preview=preview,
+                           day_names=att.DAY_NAMES_AR, today=today)
+
+
+@institute_groups_bp.route('/<int:group_id>/schedule/add', methods=['POST'])
+@historical_guard
+@permission_required('manage_institute_groups')
+def schedule_add(group_id):
+    school, year = _require_institute()
+    if not school or not year:
+        return redirect(url_for('institute_groups.index'))
+    group = _get_group_or_404(group_id, school)
+    try:
+        slot = att.add_slot(school, group,
+                            request.form.get('day_of_week'),
+                            request.form.get('start_time'),
+                            request.form.get('end_time'))
+    except att.AttendanceError as exc:
+        flash(str(exc), 'danger')
+    else:
+        log_action('institute_schedule_add',
+                   f'مجموعة {group.name}: إضافة موعد '
+                   f'{att.day_name(slot.day_of_week)} '
+                   f'{slot.start_time.strftime("%H:%M")}')
+        flash('تمت إضافة الموعد الأسبوعي.', 'success')
+    return redirect(url_for('institute_groups.schedule', group_id=group.id))
+
+
+@institute_groups_bp.route('/<int:group_id>/schedule/<int:slot_id>/edit',
+                           methods=['POST'])
+@historical_guard
+@permission_required('manage_institute_groups')
+def schedule_edit(group_id, slot_id):
+    school, year = _require_institute()
+    if not school or not year:
+        return redirect(url_for('institute_groups.index'))
+    group = _get_group_or_404(group_id, school)
+    slot = next((x for x in att.group_slots(school.id, group.id,
+                                            active_only=False)
+                 if x.id == slot_id), None)
+    if slot is None:
+        abort(404)
+    try:
+        # Editing a rule changes FUTURE computed occurrences only; a stored
+        # session keeps its own date/time snapshot and is never touched.
+        att.update_slot(slot, request.form.get('day_of_week'),
+                        request.form.get('start_time'),
+                        request.form.get('end_time'),
+                        is_active=request.form.get('is_active') == '1')
+    except att.AttendanceError as exc:
+        flash(str(exc), 'danger')
+    else:
+        log_action('institute_schedule_edit',
+                   f'مجموعة {group.name}: تعديل موعد #{slot.id}')
+        flash('تم تحديث الموعد. لا يؤثر التعديل على الجلسات المسجّلة سابقاً.',
+              'success')
+    return redirect(url_for('institute_groups.schedule', group_id=group.id))
+
+
+@institute_groups_bp.route('/<int:group_id>/schedule/<int:slot_id>/delete',
+                           methods=['POST'])
+@historical_guard
+@permission_required('manage_institute_groups')
+def schedule_delete(group_id, slot_id):
+    school, year = _require_institute()
+    if not school or not year:
+        return redirect(url_for('institute_groups.index'))
+    group = _get_group_or_404(group_id, school)
+    slot = next((x for x in att.group_slots(school.id, group.id,
+                                            active_only=False)
+                 if x.id == slot_id), None)
+    if slot is None:
+        abort(404)
+    att.delete_slot(slot)
+    log_action('institute_schedule_delete',
+               f'مجموعة {group.name}: حذف موعد #{slot_id}')
+    flash('تم حذف الموعد. السجلات التاريخية للحضور محفوظة ولم تتأثر.',
+          'success')
+    return redirect(url_for('institute_groups.schedule', group_id=group.id))
+
+
+# ── Scheduled sessions by date (managers + assigned instructors) ────────────
+
+@institute_groups_bp.route('/attendance', methods=['GET'])
+@group_read_access_required
+def attendance_sessions():
+    school, year = _require_institute()
+    if not school or not year:
+        return redirect(url_for('institute_groups.index'))
+
+    if _is_group_manager():
+        groups = (InstituteStudyGroup.query
+                  .execution_options(bypass_tenant_scope=True)
+                  .filter_by(school_id=school.id, academic_year_id=year.id)
+                  .order_by(InstituteStudyGroup.name).all())
+    else:
+        groups = instructor_groups(school, current_user, year)
+
+    today = att.local_today(school)
+    start = _parse_date_arg(request.args.get('start'), today)
+    end = _parse_date_arg(request.args.get('end'), start + timedelta(days=6))
+    if end < start:
+        end = start
+
+    group_filter = request.args.get('group_id', type=int)
+    if group_filter and group_filter not in {g.id for g in groups}:
+        group_filter = None          # a forged id simply drops out of scope
+    shown = [g for g in groups if not group_filter or g.id == group_filter]
+
+    try:
+        occurrences = att.occurrences_for_range(school, shown, start, end)
+    except att.AttendanceError as exc:
+        flash(str(exc), 'danger')
+        occurrences = []
+
+    summary = att.attendance_summary(
+        school, [o.session.id for o in occurrences if o.session])
+
+    return render_template('institute_groups/attendance_sessions.html',
+                           groups=groups, occurrences=occurrences,
+                           summary=summary, start=start, end=end,
+                           group_filter=group_filter, today=today,
+                           is_manager=_is_group_manager(),
+                           day_names=att.DAY_NAMES_AR)
+
+
+# ── Take / correct attendance for one occurrence ────────────────────────────
+
+@institute_groups_bp.route('/<int:group_id>/attendance/<date_str>',
+                           methods=['GET', 'POST'])
+@historical_guard
+@group_read_access_required
+def attendance_take(group_id, date_str):
+    school, year = _require_institute()
+    if not school or not year:
+        return redirect(url_for('institute_groups.index'))
+    group = _scoped_group(group_id, school, year)
+
+    on_date = _parse_date_arg(date_str, None)
+    start_time = _parse_time_arg(request.values.get('start'))
+    if on_date is None or start_time is None:
+        abort(404)
+
+    # The (date, start) tuple must correspond to a REAL occurrence — an active
+    # weekly rule or an already materialized session. An arbitrary date cannot
+    # be invented through the URL.
+    occ = att.find_occurrence(school, group, on_date, start_time)
+    if occ is None:
+        abort(404)
+
+    # Materializing does NOT record anything: the row is 'not_recorded' until
+    # somebody submits. Opening the page can never create an absence.
+    session = att.get_or_create_session(school, group, occ)
+    roster = att.session_roster(school, session)
+
+    if request.method == 'POST':
+        statuses = {}
+        for stu, _rec in roster:
+            chosen = request.form.get(f'status_{stu.id}', '').strip()
+            if chosen:
+                statuses[stu.id] = chosen
+        source = (att.InstituteAttendanceSession.SOURCE_MANUAL_ADMIN
+                  if _is_group_manager()
+                  else att.InstituteAttendanceSession.SOURCE_MANUAL_INSTRUCTOR)
+        try:
+            result = att.submit_attendance(
+                school, session, statuses,
+                source=source, actor_user_id=current_user.id)
+        except att.AttendanceError as exc:
+            flash(str(exc), 'danger')
+        else:
+            log_action('institute_attendance_submit',
+                       f'مجموعة {group.name} — {session.session_date}: '
+                       f'{result["created"]} جديد، {result["updated"]} تعديل')
+            flash(f'تم حفظ الحضور. سجلات جديدة: {result["created"]}، '
+                  f'تعديلات: {result["updated"]}.', 'success')
+            return redirect(url_for('institute_groups.attendance_take',
+                                    group_id=group.id,
+                                    date_str=on_date.strftime('%Y-%m-%d'),
+                                    start=start_time.strftime('%H:%M')))
+        roster = att.session_roster(school, session)
+
+    return render_template('institute_groups/attendance_take.html',
+                           group=group, session=session, roster=roster,
+                           statuses=att.InstituteAttendanceRecord.STATUSES,
+                           status_labels=att.STATUS_LABELS_AR,
+                           day_names=att.DAY_NAMES_AR,
+                           is_manager=_is_group_manager())

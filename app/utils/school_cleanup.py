@@ -12,7 +12,8 @@ from app.models import (
     EmployeeEvaluation, EmployeeLeaveRequest, Exam, ExamResult, Expense,
     ExpenseCategory,
     FeeInstallment, FeeRecord, FeeRefundEvent, FeeReminderLog, FeeType, Grade,
-    InstituteGroupEnrollment, InstituteStudyGroup,
+    InstituteAttendanceRecord, InstituteAttendanceSession,
+    InstituteGroupEnrollment, InstituteGroupSchedule, InstituteStudyGroup,
     InventoryCategory, InventoryCount, InventoryItem, InventoryItemStock,
     InventoryMovement, InventoryWarehouse,
     LeaveRequest, Notification, NotificationRead, PayrollItem, PayrollSettings,
@@ -97,6 +98,9 @@ LINKED_SCHOOL_MODELS = (
     # Institute-only; always 0 for a school-type institution.
     (InstituteStudyGroup, 'المجموعات الدراسية'),
     (InstituteGroupEnrollment, 'اشتراكات المجموعات الدراسية'),
+    (InstituteGroupSchedule, 'جداول المجموعات الدراسية'),
+    (InstituteAttendanceSession, 'جلسات حضور المجموعات'),
+    (InstituteAttendanceRecord, 'سجلات حضور المجموعات'),
 )
 
 
@@ -194,6 +198,13 @@ SCHOOL_DELETE_ORDER = (
     # must precede Subject and Employee. Nothing cascades here by design:
     # institute membership history is never removed implicitly, only as part
     # of an explicit full-school teardown.
+    # Attendance first: records RESTRICT-reference sessions AND students,
+    # sessions RESTRICT-reference the group, schedules RESTRICT-reference the
+    # group. Nothing here cascades by design — institute history is only ever
+    # removed as part of an explicit full-school teardown.
+    (InstituteAttendanceRecord, 'سجلات حضور المجموعات'),
+    (InstituteAttendanceSession, 'جلسات حضور المجموعات'),
+    (InstituteGroupSchedule, 'جداول المجموعات الدراسية'),
     (InstituteGroupEnrollment, 'اشتراكات المجموعات الدراسية'),
     (InstituteStudyGroup, 'المجموعات الدراسية'),
     (Student, 'الطلاب'),

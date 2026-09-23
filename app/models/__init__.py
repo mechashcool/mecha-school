@@ -1013,6 +1013,297 @@ class InstituteGroupEnrollment(db.Model):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  3c. INSTITUTE WEEKLY SCHEDULES AND MANUAL ATTENDANCE (institutes only)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# An institute group meets on a RECURRING weekly pattern, e.g.
+#     Sunday 16:00-18:00, Monday 17:00-19:00, Thursday 16:00-18:00.
+#
+# Those patterns are stored as RULES (InstituteGroupSchedule), never as
+# pre-generated rows. Concrete occurrences are computed on demand for display
+# and MATERIALIZED as an InstituteAttendanceSession only when somebody actually
+# opens or records attendance. There is no cron job, no pre-creation and no
+# background sweep, which is what makes the next rule enforceable:
+#
+#   PASSING THE SCHEDULED TIME NEVER MARKS ANYONE ABSENT.
+#
+# A session that nobody recorded simply does not exist as a row, or exists with
+# status 'not_recorded'. Absence is only ever an explicit human choice.
+#
+# Attendance is NOT stored in student_attendance: that table carries
+# UNIQUE (student_id, date), i.e. one record per student per DAY, while an
+# institute student may legitimately attend two different groups on the same
+# day. A separate per-session table is therefore required, not a preference.
+
+
+class InstituteGroupSchedule(db.Model):
+    """One recurring weekly slot of an institute study group.
+
+    The rule repeats every week for as long as the group runs; the group's own
+    start_date / end_date and is_active flag bound it, so no extra date fields
+    are duplicated here.
+
+    Editing or deleting a slot only changes FUTURE computed occurrences. It can
+    never touch a stored InstituteAttendanceSession, which keeps its own
+    date/time snapshot — that is why schedule_id is nullable ON DELETE SET NULL
+    on the session side.
+    """
+    __tablename__ = 'institute_group_schedules'
+    __school_scoped__ = True
+    __year_scoped__ = True
+
+    # 0 = Sunday … 6 = Saturday, identical to Schedule.day_of_week and to the
+    # DAYS list in the schedules blueprint. Not re-invented.
+    DAY_MIN, DAY_MAX = 0, 6
+
+    id               = db.Column(db.Integer, primary_key=True)
+    school_id        = db.Column(db.Integer, nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'),
+                                 nullable=False, index=True)
+    group_id         = db.Column(db.Integer, nullable=False, index=True)
+    day_of_week      = db.Column(db.Integer, nullable=False)
+    start_time       = db.Column(db.Time, nullable=False)
+    end_time         = db.Column(db.Time, nullable=False)
+    is_active        = db.Column(db.Boolean, nullable=False, default=True,
+                                 server_default=db.true())
+    created_at       = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at       = db.Column(db.DateTime, default=datetime.utcnow,
+                                 onupdate=datetime.utcnow)
+
+    school = db.relationship(
+        'School', viewonly=True,
+        primaryjoin='foreign(InstituteGroupSchedule.school_id) == School.id')
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    group  = db.relationship(
+        'InstituteStudyGroup', viewonly=True,
+        primaryjoin=('foreign(InstituteGroupSchedule.group_id) '
+                     '== InstituteStudyGroup.id'),
+        backref=db.backref('schedule_slots', viewonly=True, lazy='dynamic'))
+
+    __table_args__ = (
+        db.ForeignKeyConstraint(['school_id'], ['schools.id'],
+                                name='fk_institute_schedule_school'),
+        # Same-school ownership enforced by PostgreSQL, not only by routes.
+        # RESTRICT: a group carrying schedule rules cannot be silently removed.
+        db.ForeignKeyConstraint(
+            ['group_id', 'school_id'],
+            ['institute_study_groups.id', 'institute_study_groups.school_id'],
+            name='fk_institute_schedule_group_school', ondelete='RESTRICT'),
+        # One slot per group per weekday per start time. Matches the existing
+        # uq_schedule_section_subject_day_start convention and makes
+        # (group, date, start_time) a sound session key further down.
+        db.UniqueConstraint('group_id', 'day_of_week', 'start_time',
+                            name='uq_institute_schedule_group_day_start'),
+        db.CheckConstraint('start_time < end_time',
+                           name='ck_institute_schedule_time_order'),
+        db.CheckConstraint('day_of_week >= 0 AND day_of_week <= 6',
+                           name='ck_institute_schedule_day_range'),
+        db.Index('ix_institute_schedule_group_active', 'group_id', 'is_active'),
+    )
+
+    def __repr__(self):
+        return (f'<InstituteGroupSchedule {self.id} g={self.group_id} '
+                f'd={self.day_of_week} {self.start_time}-{self.end_time}>')
+
+
+class InstituteAttendanceSession(db.Model):
+    """One materialized occurrence of a group meeting.
+
+    Created ONLY when a human opens or records attendance for it — never by a
+    scheduler. Until then the occurrence exists purely as a computed value.
+
+    start_time / end_time / instructor_id are HISTORICAL SNAPSHOTS taken when
+    the session is materialized. Editing the weekly rule afterwards, or
+    reassigning the group's instructor, never rewrites a stored session.
+    """
+    __tablename__ = 'institute_attendance_sessions'
+    __school_scoped__ = True
+    __year_scoped__ = True
+
+    STATUS_NOT_RECORDED = 'not_recorded'
+    STATUS_RECORDED     = 'recorded'
+    STATUSES = (STATUS_NOT_RECORDED, STATUS_RECORDED)
+
+    # Attendance source. Only the two manual values are produced in this phase;
+    # 'card' and 'device' are declared so a future hardware integration can
+    # target an existing session without a schema change or a data migration.
+    SOURCE_MANUAL_ADMIN      = 'manual_admin'
+    SOURCE_MANUAL_INSTRUCTOR = 'manual_instructor'
+    SOURCE_CARD              = 'card'
+    SOURCE_DEVICE            = 'device'
+    SOURCES = (SOURCE_MANUAL_ADMIN, SOURCE_MANUAL_INSTRUCTOR,
+               SOURCE_CARD, SOURCE_DEVICE)
+
+    id               = db.Column(db.Integer, primary_key=True)
+    school_id        = db.Column(db.Integer, nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'),
+                                 nullable=False, index=True)
+    group_id         = db.Column(db.Integer, nullable=False, index=True)
+    # Nullable so deleting a weekly rule never deletes recorded history, and so
+    # an ad-hoc (unscheduled) session can exist.
+    schedule_id      = db.Column(db.Integer,
+                                 db.ForeignKey('institute_group_schedules.id',
+                                               ondelete='SET NULL'),
+                                 nullable=True, index=True)
+    session_date     = db.Column(db.Date, nullable=False)
+    start_time       = db.Column(db.Time, nullable=False)
+    end_time         = db.Column(db.Time, nullable=False)
+    instructor_id    = db.Column(db.Integer, nullable=True, index=True)
+    status           = db.Column(db.String(20), nullable=False,
+                                 default=STATUS_NOT_RECORDED,
+                                 server_default=STATUS_NOT_RECORDED)
+    source           = db.Column(db.String(20), nullable=True)
+    recorded_by      = db.Column(db.Integer, db.ForeignKey('users.id'),
+                                 nullable=True)
+    recorded_at      = db.Column(db.DateTime, nullable=True)
+    created_at       = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at       = db.Column(db.DateTime, default=datetime.utcnow,
+                                 onupdate=datetime.utcnow)
+
+    school = db.relationship(
+        'School', viewonly=True,
+        primaryjoin='foreign(InstituteAttendanceSession.school_id) == School.id')
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    group  = db.relationship(
+        'InstituteStudyGroup', viewonly=True,
+        primaryjoin=('foreign(InstituteAttendanceSession.group_id) '
+                     '== InstituteStudyGroup.id'),
+        backref=db.backref('attendance_sessions', viewonly=True, lazy='dynamic'))
+    schedule   = db.relationship('InstituteGroupSchedule',
+                                 foreign_keys=[schedule_id])
+    instructor = db.relationship(
+        'Employee', viewonly=True,
+        primaryjoin=('foreign(InstituteAttendanceSession.instructor_id) '
+                     '== Employee.id'))
+    recorder   = db.relationship('User', foreign_keys=[recorded_by])
+
+    @property
+    def is_recorded(self) -> bool:
+        return self.status == self.STATUS_RECORDED
+
+    __table_args__ = (
+        db.ForeignKeyConstraint(['school_id'], ['schools.id'],
+                                name='fk_institute_session_school'),
+        db.ForeignKeyConstraint(
+            ['group_id', 'school_id'],
+            ['institute_study_groups.id', 'institute_study_groups.school_id'],
+            name='fk_institute_session_group_school', ondelete='RESTRICT'),
+        # ONE session per group occurrence. This is the concurrency guarantee:
+        # two simultaneous "open attendance" requests race to INSERT and the
+        # loser gets an IntegrityError it can recover from by re-selecting,
+        # rather than both succeeding.
+        db.UniqueConstraint('group_id', 'session_date', 'start_time',
+                            name='uq_institute_session_group_date_start'),
+        db.CheckConstraint('start_time < end_time',
+                           name='ck_institute_session_time_order'),
+        db.CheckConstraint(
+            "status IN ('not_recorded', 'recorded')",
+            name='ck_institute_session_status'),
+        db.CheckConstraint(
+            "source IS NULL OR source IN "
+            "('manual_admin', 'manual_instructor', 'card', 'device')",
+            name='ck_institute_session_source'),
+        # A recorded session must say who recorded it and how.
+        db.CheckConstraint(
+            "status = 'not_recorded' OR "
+            "(source IS NOT NULL AND recorded_at IS NOT NULL)",
+            name='ck_institute_session_recorded_fields'),
+        db.Index('ix_institute_session_school_date',
+                 'school_id', 'session_date'),
+        db.Index('ix_institute_session_group_date', 'group_id', 'session_date'),
+        # Parent key for the per-student attendance rows' composite FK.
+        db.UniqueConstraint('id', 'school_id',
+                            name='uq_institute_session_id_school'),
+    )
+
+    def __repr__(self):
+        return (f'<InstituteAttendanceSession {self.id} g={self.group_id} '
+                f'{self.session_date} {self.start_time} {self.status}>')
+
+
+class InstituteAttendanceRecord(db.Model):
+    """One student's explicit attendance status in one session.
+
+    A row exists ONLY because a human chose a status. There is no "implicitly
+    absent" state: an unmarked student simply has no row, which is what keeps
+    "not recorded" and "recorded absent" permanently distinguishable.
+
+    Rows are never deleted when a membership ends or a student is deactivated;
+    the history survives exactly as the exam results do.
+    """
+    __tablename__ = 'institute_attendance_records'
+    __school_scoped__ = True
+
+    # Reuses the vocabulary Core School already stores in
+    # student_attendance.status. 'on_leave' is deliberately NOT offered here:
+    # it is produced by the school-day leave-request integration, not by a
+    # per-session choice, and inventing it here would fork that semantics.
+    STATUS_PRESENT = 'present'
+    STATUS_ABSENT  = 'absent'
+    STATUS_LATE    = 'late'
+    STATUS_EXCUSED = 'excused'
+    STATUSES = (STATUS_PRESENT, STATUS_ABSENT, STATUS_LATE, STATUS_EXCUSED)
+
+    id          = db.Column(db.Integer, primary_key=True)
+    school_id   = db.Column(db.Integer, nullable=False, index=True)
+    session_id  = db.Column(db.Integer, nullable=False, index=True)
+    student_id  = db.Column(db.Integer, nullable=False, index=True)
+    status      = db.Column(db.String(20), nullable=False)
+    source      = db.Column(db.String(20), nullable=False)
+    recorded_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    recorded_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    notes       = db.Column(db.Text, nullable=True)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at  = db.Column(db.DateTime, default=datetime.utcnow,
+                            onupdate=datetime.utcnow)
+
+    school  = db.relationship(
+        'School', viewonly=True,
+        primaryjoin='foreign(InstituteAttendanceRecord.school_id) == School.id')
+    session = db.relationship(
+        'InstituteAttendanceSession', viewonly=True,
+        primaryjoin=('foreign(InstituteAttendanceRecord.session_id) '
+                     '== InstituteAttendanceSession.id'),
+        backref=db.backref('records', viewonly=True, lazy='dynamic'))
+    student = db.relationship(
+        'Student', viewonly=True,
+        primaryjoin=('foreign(InstituteAttendanceRecord.student_id) '
+                     '== Student.id'),
+        backref=db.backref('institute_attendance', viewonly=True,
+                           lazy='dynamic'))
+    recorder = db.relationship('User', foreign_keys=[recorded_by])
+
+    __table_args__ = (
+        db.ForeignKeyConstraint(['school_id'], ['schools.id'],
+                                name='fk_institute_attendance_school'),
+        db.ForeignKeyConstraint(
+            ['session_id', 'school_id'],
+            ['institute_attendance_sessions.id',
+             'institute_attendance_sessions.school_id'],
+            name='fk_institute_attendance_session_school', ondelete='RESTRICT'),
+        db.ForeignKeyConstraint(
+            ['student_id', 'school_id'], ['students.id', 'students.school_id'],
+            name='fk_institute_attendance_student_school', ondelete='RESTRICT'),
+        # ONE result per (session, student). Makes a retried or concurrent
+        # submission idempotent at the database level rather than by hope.
+        db.UniqueConstraint('session_id', 'student_id',
+                            name='uq_institute_attendance_session_student'),
+        db.CheckConstraint(
+            "status IN ('present', 'absent', 'late', 'excused')",
+            name='ck_institute_attendance_status'),
+        db.CheckConstraint(
+            "source IN ('manual_admin', 'manual_instructor', 'card', 'device')",
+            name='ck_institute_attendance_source'),
+        db.Index('ix_institute_attendance_student_status',
+                 'school_id', 'student_id', 'status'),
+    )
+
+    def __repr__(self):
+        return (f'<InstituteAttendanceRecord {self.id} s={self.session_id} '
+                f'stu={self.student_id} {self.status}>')
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  4. STUDENTS  (with RFID + school + year)
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -2092,7 +2383,7 @@ class Exam(db.Model):
     # a school exam without a section impossible at the database level.
     section_id       = db.Column(db.Integer, db.ForeignKey('sections.id'),       nullable=True)
     academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'), nullable=False)
-    # ΓöÇΓöÇ Institute target (School.is_institute only) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    # ── Institute target (School.is_institute only) ───────────────────────────
     # An institute organises teaching as subject -> study group -> instructor and
     # its students carry no section, so an institute exam cannot use section_id.
     institute_group_id = db.Column(db.Integer, nullable=True, index=True)
@@ -2125,7 +2416,7 @@ class Exam(db.Model):
         # ON DELETE RESTRICT, deliberately NOT a cascade and NOT SET NULL: an
         # exam (and therefore its results) must never be deleted or silently
         # detached because a group was removed. A group that carries exams
-        # cannot be deleted at all ΓÇö the same dependency-guard posture the
+        # cannot be deleted at all — the same dependency-guard posture the
         # enrollment table already uses.
         db.ForeignKeyConstraint(
             ['institute_group_id', 'school_id'],
@@ -2133,7 +2424,7 @@ class Exam(db.Model):
             name='fk_exam_institute_group_school', ondelete='RESTRICT'),
         # Exactly one target, never both and never neither. Safe to enforce in
         # the database because section_id was NOT NULL until this revision, so
-        # every pre-existing row has a section and a NULL group ΓÇö the predicate
+        # every pre-existing row has a section and a NULL group — the predicate
         # holds for 100% of legacy rows by construction. Verified by validating
         # the constraint against the isolated local instance.
         db.CheckConstraint(
