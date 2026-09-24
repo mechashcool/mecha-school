@@ -262,6 +262,57 @@ def send_command_to_device(sn: str, payload: dict, timeout: float = 10) -> dict:
 
 # ── Shared attendance record processing ───────────────────────────────────────
 
+def _scan_notification(student, row, action: str, punch_dt, sn: str) -> tuple:
+    """Title, body and FCM data for one check-in / check-out parent message.
+
+    Extracted verbatim from the inline path so the legacy and outbox paths can
+    never drift apart: both call this, so the wording, the keys and the values
+    the Flutter app routes on are produced in exactly one place.
+
+    Returns (title, body, base_data). `base_data` is what the inline path hands
+    to NotificationService; _scan_push_payload() below expands it into the full
+    dict that actually reaches the device.
+    """
+    scan_time = punch_dt.time().replace(microsecond=0)
+    if action == 'check_in':
+        if row.status == 'present':
+            title = 'حضور الطالب في الوقت المحدد'
+            body  = (f'طالبك {student.full_name} وصل في الوقت المحدد '
+                     f'الساعة {scan_time.strftime("%H:%M")}.')
+        else:
+            title = 'تأخر الطالب عن موعد الحضور'
+            body  = (f'طالبك {student.full_name} وصل متأخراً '
+                     f'الساعة {scan_time.strftime("%H:%M")}.')
+    else:
+        title = 'خروج الطالب من المدرسة'
+        body  = (f'طالبك {student.full_name} غادر المدرسة '
+                 f'الساعة {scan_time.strftime("%H:%M")}.')
+    data = {'action': action, 'status': row.status,
+            'at': scan_time.strftime('%H:%M'),
+            'date': punch_dt.date().isoformat(),
+            'source': 'aiface', 'device_sn': sn,
+            'screen': 'attendance'}
+    return title, body, data
+
+
+def _scan_push_payload(base_data: dict, student) -> dict:
+    """The COMPLETE data dict that reaches the device, built once at enqueue.
+
+    The inline path never builds this itself: NotificationService adds
+    student_id / student_name / type / route, and the FCM layer adds ntype. The
+    outbox stores an immutable payload instead, so those keys are applied here
+    - identical names, identical values, identical precedence (setdefault) - or
+    the mobile router would receive a different message shape under the flag.
+    """
+    payload = dict(base_data or {})
+    payload.setdefault('student_id', str(student.id))
+    payload.setdefault('student_name', student.full_name)
+    payload.setdefault('type', 'notification')
+    payload.setdefault('route', '/parent/notifications')
+    payload.setdefault('ntype', 'attendance')
+    return payload
+
+
 def _process_record_list(sn: str, device, school, records: list,
                          source_cmd: str = "sendlog") -> tuple:
     """
@@ -275,6 +326,11 @@ def _process_record_list(sn: str, device, school, records: list,
     from app.models import DeviceStudentMapping, Student
     from app.services.attendance_service import process_attendance_punch
     from app.services.notifications import NotificationService
+    from app.services import notification_outbox as outbox
+
+    # Read the flag ONCE per batch, not per record: a flip mid-batch would
+    # otherwise send some records inline and enqueue others.
+    use_outbox = outbox.aiface_enabled()
 
     scope = getattr(device, 'device_scope', 'students')
     processed = skipped = unmatched = errors = 0
@@ -408,12 +464,33 @@ def _process_record_list(sn: str, device, school, records: list,
             _departure, dedup_tag,
         )
 
+        # Durable path (AIFACE_ATTENDANCE_OUTBOX_ENABLED). The hook runs inside
+        # the attendance transaction, immediately before its commit, so the
+        # StudentAttendance change and the push jobs it promised commit
+        # together or not at all. Nothing is sent to Firebase from this thread,
+        # so device ACK latency no longer includes a network call to Google.
+        #
+        # With the flag off, stage_hook is None and not one statement below
+        # behaves differently from production today.
+        staged_box = {'jobs': 0}
+
+        def _stage_push(act, att_row, _student=student, _punch=punch_dt):
+            title, body, base = _scan_notification(_student, att_row, act, _punch, sn)
+            staged_box['jobs'] = outbox.stage_scan_deliveries(
+                school, _student, action=act, on_date=_punch.date(),
+                title=title, body=body,
+                data=_scan_push_payload(base, _student))
+
         try:
             action, row = process_attendance_punch(
                 student=student, school=school, punch_dt=punch_dt,
                 source='aiface', dedup_tag=dedup_tag,
+                stage_hook=_stage_push if use_outbox else None,
             )
         except Exception:
+            # Includes a failure to stage the outbox jobs. The attendance
+            # transaction was rolled back, so nothing half-committed: the
+            # record stays unprocessed and the device will resend it.
             log.exception("  [aiface] Attendance engine error for student_id=%d", student.id)
             errors += 1
             continue
@@ -449,42 +526,34 @@ def _process_record_list(sn: str, device, school, records: list,
 
         if action in ('check_in', 'check_out'):
             processed += 1
-            scan_time = punch_dt.time().replace(microsecond=0)
 
-            if action == 'check_in':
-                if row.status == 'present':
-                    title = 'حضور الطالب في الوقت المحدد'
-                    body  = (f'طالبك {student.full_name} وصل في الوقت المحدد '
-                             f'الساعة {scan_time.strftime("%H:%M")}.')
-                else:
-                    title = 'تأخر الطالب عن موعد الحضور'
-                    body  = (f'طالبك {student.full_name} وصل متأخراً '
-                             f'الساعة {scan_time.strftime("%H:%M")}.')
-            else:
-                title = 'خروج الطالب من المدرسة'
-                body  = (f'طالبك {student.full_name} غادر المدرسة '
-                         f'الساعة {scan_time.strftime("%H:%M")}.')
-                if source_cmd == 'getnewlog':
-                    log.info(
-                        "  [aiface] CHECKOUT via getnewlog (not realtime) "
-                        "student_id=%d — device did not send sendlog for this scan",
-                        student.id,
-                    )
-
-            try:
-                from app.services.notifications import NotificationService
-                NotificationService.send_to_parents_of_student(
-                    student.id, title, body, ntype='attendance',
-                    data={'action': action, 'status': row.status,
-                          'at': scan_time.strftime('%H:%M'),
-                          'date': punch_dt.date().isoformat(),
-                          'source': 'aiface', 'device_sn': sn,
-                          'screen': 'attendance'},
+            if action == 'check_out' and source_cmd == 'getnewlog':
+                log.info(
+                    "  [aiface] CHECKOUT via getnewlog (not realtime) "
+                    "student_id=%d - device did not send sendlog for this scan",
+                    student.id,
                 )
-                log.info("  [aiface] parent notification sent: student_id=%d action=%s",
-                         student.id, action)
-            except Exception:
-                log.exception("  [aiface] Notification error for student_id=%d", student.id)
+
+            if use_outbox:
+                # Committed and durable. The shared worker delivers it; this
+                # thread returns now. There is deliberately NO inline fallback -
+                # enqueueing and sending would double-deliver, and falling back
+                # to Firebase here would reintroduce exactly the blocking call
+                # this path exists to remove.
+                log.info("  [aiface] outbox: %d push job(s) committed with the "
+                         "attendance row student_id=%d action=%s",
+                         staged_box['jobs'], student.id, action)
+            else:
+                title, body, data = _scan_notification(
+                    student, row, action, punch_dt, sn)
+                try:
+                    from app.services.notifications import NotificationService
+                    NotificationService.send_to_parents_of_student(
+                        student.id, title, body, ntype='attendance', data=data)
+                    log.info("  [aiface] parent notification sent: student_id=%d action=%s",
+                             student.id, action)
+                except Exception:
+                    log.exception("  [aiface] Notification error for student_id=%d", student.id)
         else:
             skipped += 1
 

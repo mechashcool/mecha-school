@@ -7,7 +7,8 @@ from app.models import db, Device, Student, StudentAttendance, StudentSuspension
 from app.utils.attendance_helpers import get_local_now, determine_check_in_status, get_student_shift
 
 
-def process_attendance_punch(student, school, punch_dt, source='api', dedup_tag=None):
+def process_attendance_punch(student, school, punch_dt, source='api', dedup_tag=None,
+                             stage_hook=None):
     """
     Process a raw attendance punch using the school's configured attendance rules.
 
@@ -18,6 +19,16 @@ def process_attendance_punch(student, school, punch_dt, source='api', dedup_tag=
     source    — value written to StudentAttendance.source ('aiface', 'rfid', …)
     dedup_tag — optional string embedded in notes; if already present the punch
                 is treated as a duplicate and skipped
+    stage_hook — optional callable(action, row) invoked INSIDE this function's
+                transaction, immediately before the commit that records a
+                'check_in' or 'check_out'. It exists so a caller can stage work
+                that must be atomic with the attendance change — the durable
+                notification outbox. It is never called for a duplicate,
+                an 'already_checked_in', or the lost-race path, because none of
+                those is a transition. If it raises, the transaction is rolled
+                back and the exception propagates: the attendance row must
+                never commit without the work the hook promised. Default None
+                keeps the pre-existing behaviour byte for byte.
 
     Returns (action, row) where action is one of:
         'check_in'           — new record created
@@ -25,6 +36,16 @@ def process_attendance_punch(student, school, punch_dt, source='api', dedup_tag=
         'already_checked_in' — record exists but departure window not yet open
         'duplicate'          — dedup_tag already found in existing notes
     """
+    def _commit_transition(action, row):
+        """Stage the caller's atomic work, then commit both together."""
+        if stage_hook is not None:
+            try:
+                stage_hook(action, row)
+            except Exception:
+                db.session.rollback()
+                raise
+        db.session.commit()
+        return action, row
     today    = punch_dt.date()
     now_time = punch_dt.time().replace(microsecond=0)
 
@@ -56,8 +77,7 @@ def process_attendance_punch(student, school, punch_dt, source='api', dedup_tag=
                 existing.notes = (
                     (existing.notes or '').rstrip() + ' ' + dedup_tag
                 ).strip()
-            db.session.commit()
-            return 'check_in', existing
+            return _commit_transition('check_in', existing)
 
         # Checkout cutoff: prefer the student's shift dismissal_time when shift
         # mode is on and a shift resolves; otherwise fall back to the school
@@ -70,8 +90,7 @@ def process_attendance_punch(student, school, punch_dt, source='api', dedup_tag=
             existing.check_out = now_time
             if dedup_tag:
                 existing.notes = ((existing.notes or '') + ' ' + dedup_tag).strip()
-            db.session.commit()
-            return 'check_out', existing
+            return _commit_transition('check_out', existing)
         return 'already_checked_in', existing
 
     # New check-in — academic_year_id auto-derived from punch date by scoping system
@@ -90,15 +109,19 @@ def process_attendance_punch(student, school, punch_dt, source='api', dedup_tag=
     )
     db.session.add(row)
     try:
-        db.session.commit()
+        # flush() before the hook so a brand-new row already has its primary
+        # key and is visible to anything the hook queries in this transaction.
+        db.session.flush()
+        return _commit_transition('check_in', row)
     except IntegrityError:
+        # Lost the race on uq_student_date: another writer created today's row
+        # first. Nothing of ours committed — including anything the hook staged.
         db.session.rollback()
         existing = (StudentAttendance.query
                     .execution_options(bypass_tenant_scope=True)
                     .filter_by(student_id=student.id, date=today)
                     .first())
         return 'already_checked_in', existing
-    return 'check_in', row
 
 
 def process_student_scan(student_id_str, device_sn_str=None,

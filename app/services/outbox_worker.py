@@ -217,9 +217,15 @@ def run_once(worker_id: str, *, batch_size: int, lease_seconds: int,
              'disabled': False}
 
     # Feature disabled: touch NOTHING. Not a claim, not a lease reclaim, not a
-    # status change. A worker left running while the flag is off must be inert,
-    # so installing the unit before enabling the feature is safe.
-    if not outbox.enabled():
+    # status change. A worker left running while the flags are off must be
+    # inert, so installing the unit before enabling a feature is safe.
+    #
+    # any_enabled() is the gate, not enabled(): the worker is generic over
+    # notification_outbox rows and must run when EITHER producer (institute
+    # attendance or AI Face school attendance) is switched on. With the
+    # institute flag on the result is identical to before; with both off the
+    # worker is inert exactly as before.
+    if not outbox.any_enabled():
         stats['disabled'] = True
         return stats
 
@@ -252,11 +258,12 @@ def run(app=None, *, batch_size=None, poll_seconds=None, lease_seconds=None,
               'sent': 0, 'retry': 0, 'dead': 0}
 
     with app.app_context():
-        if not outbox.enabled():
-            # Not fatal: the worker may legitimately be started before the flag
+        if not outbox.any_enabled():
+            # Not fatal: the worker may legitimately be started before a flag
             # is switched on. It idles instead of exiting so systemd does not
             # flap it in a restart loop.
-            log.warning('[outbox] INSTITUTE_ATTENDANCE_OUTBOX_ENABLED is false '
+            log.warning('[outbox] INSTITUTE_ATTENDANCE_OUTBOX_ENABLED and '
+                        'AIFACE_ATTENDANCE_OUTBOX_ENABLED are both false '
                         '— worker will idle and deliver nothing')
 
         log.warning('[outbox] worker %s started  batch=%d poll=%ss lease=%ss '

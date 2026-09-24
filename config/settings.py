@@ -181,6 +181,24 @@ class Config:
         .strip().lower() == 'true'
     )
 
+    # ── Durable notification outbox for NORMAL SCHOOL / AI Face attendance ────
+    # Separate flag, separate rollout. Default FALSE, so deploying this code
+    # changes nothing: the AI Face WebSocket path keeps its existing inline
+    # notification behaviour exactly.
+    #
+    # While true, the check-in / check-out push jobs are written inside the SAME
+    # transaction as the StudentAttendance change, and the device request never
+    # contacts Firebase. The SAME worker that already serves institute
+    # attendance (app/services/outbox_worker.py) delivers them. There is no
+    # inline fallback: enqueue and inline-send together would double-deliver.
+    #
+    # This flag has no effect on institute attendance, and
+    # INSTITUTE_ATTENDANCE_OUTBOX_ENABLED has no effect on AI Face.
+    AIFACE_ATTENDANCE_OUTBOX_ENABLED = (
+        os.environ.get('AIFACE_ATTENDANCE_OUTBOX_ENABLED', 'false')
+        .strip().lower() == 'true'
+    )
+
     # ── Redis coordination (P3) — OPTIONAL ────────────────────────────────────
     # When REDIS_URL is unset (the default) every Redis-backed feature silently
     # degrades to the existing in-process behaviour: pushes use the P0 thread

@@ -2765,9 +2765,12 @@ class NotificationOutbox(db.Model):
     DUE_STATUSES = (STATUS_PENDING, STATUS_RETRY)
     TERMINAL_STATUSES = (STATUS_SENT, STATUS_DEAD, STATUS_CANCELLED)
 
-    # Semantic event type. Only institute absence is wired in this phase; the
-    # column exists so later phases reuse the same table without a migration.
+    # Semantic event type. A plain String(60), so a new producer needs no
+    # migration — only a new constant here.
     EVENT_INSTITUTE_ABSENCE = 'institute_attendance_absent'
+    # Normal school / AI Face device scan (check-in or check-out). Same table,
+    # same state machine, same worker; only the producer differs.
+    EVENT_SCHOOL_ATTENDANCE_SCAN = 'school_attendance_scan'
 
     id = db.Column(db.BigInteger, primary_key=True)
 

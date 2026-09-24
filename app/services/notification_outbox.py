@@ -60,27 +60,53 @@ _MAX_DEDUP_KEY = 190
 #  Feature flag
 # ═════════════════════════════════════════════════════════════════════════════
 
+def _flag(name: str) -> bool:
+    """Read one boolean feature flag, config first then raw environment.
+
+    Flask config is authoritative so tests and per-environment config work; the
+    environment is the fallback for non-request contexts such as the worker
+    process, which has an app context but may be started before config exists.
+    Defaults to FALSE — an unset flag is never "on".
+    """
+    try:
+        from flask import current_app
+        if current_app:
+            return bool(current_app.config.get(name, False))
+    except Exception:
+        pass
+    import os
+    return os.environ.get(name, 'false').strip().lower() == 'true'
+
+
 def enabled() -> bool:
-    """True only when the outbox path is explicitly switched on.
+    """INSTITUTE attendance outbox. True only when explicitly switched on.
 
     Defaults to FALSE so deploying this code changes nothing: institute
     attendance keeps its existing inline behaviour, startup never touches the
     new table, and the deployment is safe even if the migration has not been
     applied yet.
-
-    Reads Flask config first (so tests and per-environment config work), then
-    the raw environment for non-request contexts such as the worker process.
     """
-    try:
-        from flask import current_app
-        if current_app:
-            return bool(current_app.config.get(
-                'INSTITUTE_ATTENDANCE_OUTBOX_ENABLED', False))
-    except Exception:
-        pass
-    import os
-    return os.environ.get(
-        'INSTITUTE_ATTENDANCE_OUTBOX_ENABLED', 'false').strip().lower() == 'true'
+    return _flag('INSTITUTE_ATTENDANCE_OUTBOX_ENABLED')
+
+
+def aiface_enabled() -> bool:
+    """NORMAL SCHOOL / AI Face attendance outbox. Independent of enabled().
+
+    Deliberately a separate flag with its own default of FALSE: institute and
+    school attendance roll out separately, and neither flag may switch the
+    other on. They share only the table and the worker.
+    """
+    return _flag('AIFACE_ATTENDANCE_OUTBOX_ENABLED')
+
+
+def any_enabled() -> bool:
+    """True when ANY producer is switched on — the worker's gate.
+
+    The worker is generic over notification_outbox rows and does not care which
+    feature produced one. It must run whenever work can exist, and stay
+    completely inert when neither flag is set.
+    """
+    return enabled() or aiface_enabled()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -202,6 +228,106 @@ def stage_absence_deliveries(school, session, student_ids, *, now=None) -> int:
                     created_at=now,
                 ))
                 staged += 1
+
+    return staged
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Normal school / AI Face device scan
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _scan_dedup_key(student_id: int, on_date, action: str,
+                    user_id: int, token_id: int) -> str:
+    """A key that is stable for a replayed device record and distinct per
+    genuine transition.
+
+    Unlike the institute key this carries NO timestamp, and it does not need
+    one. `student_attendance` is unique on (student_id, date) — `uq_student_date`
+    — and the engine allows at most one check_in and one check_out per row, so
+    (student, date, action) identifies exactly one logical transition. A device
+    that replays the same record, or the same record arriving through both
+    sendlog and getnewlog, produces the same key and collides on the UNIQUE
+    index instead of enqueueing twice.
+
+    That is defence in depth, not the primary defence: the attendance engine
+    already classifies a replay as `duplicate`/`already_checked_in`, so this
+    function is normally not reached a second time at all.
+    """
+    key = (f'{NotificationOutbox.EVENT_SCHOOL_ATTENDANCE_SCAN}:'
+           f'{student_id}:{on_date.strftime("%Y%m%d")}:{action}:'
+           f'{user_id}:{token_id}')
+    return key[:_MAX_DEDUP_KEY]
+
+
+def stage_scan_deliveries(school, student, *, action, on_date,
+                          title: str, body: str, data: dict,
+                          now=None) -> int:
+    """Stage push jobs for ONE attendance scan transition. Does NOT commit.
+
+    Adds to the CURRENT session so the caller commits the jobs together with
+    the StudentAttendance change: either both exist or neither does. Any
+    exception propagates so the caller can roll back — attendance must never
+    commit without the notification work it promised.
+
+    Returns the number of jobs staged. 0 is legitimate and is NOT an error: a
+    parent with no registered device, or a student with no linked parent, has
+    nothing to deliver to. That mirrors the inline path, which also sends
+    nothing in those cases.
+
+    Deliberately creates no in-app `Notification` row, because the inline AI
+    Face path never created one either — a scan is push-only and has never
+    appeared in the parent feed. Adding one here would silently change the feed
+    and the unread badge the moment the flag is switched on.
+    """
+    if school is None or student is None:
+        raise ValueError('outbox: school and student are required')
+    if action not in ('check_in', 'check_out'):
+        raise ValueError(f'outbox: unsupported scan action {action!r}')
+
+    # Fail closed on tenant mismatch. The device→student mapping is resolved by
+    # device_id alone upstream, so this is the point at which the job's school
+    # and the student's school are proven to agree. A mismatch means the
+    # mapping data is wrong; refusing here rolls the attendance back rather
+    # than delivering one school's scan to another school's parent.
+    if student.school_id != school.id:
+        raise ValueError(
+            f'outbox: student {student.id} does not belong to school '
+            f'{school.id} — refusing to stage a cross-school delivery')
+
+    now = now or datetime.utcnow()
+    payload = json.dumps(data or {}, ensure_ascii=False)
+
+    parent_ids = [row[0] for row in
+                  db.session.query(parent_students.c.user_id)
+                  .filter(parent_students.c.student_id == student.id).all()]
+    if not parent_ids:
+        return 0
+
+    staged = 0
+    for parent_id in parent_ids:
+        # One job per ACTIVE registration of this parent, restricted to this
+        # school so a token reassigned elsewhere is never targeted.
+        tokens = (MobileDeviceToken.query.execution_options(**OPTS)
+                  .filter(MobileDeviceToken.user_id == parent_id,
+                          MobileDeviceToken.school_id == school.id,
+                          MobileDeviceToken.is_active.is_(True))
+                  .all())
+        for tok in tokens:
+            db.session.add(NotificationOutbox(
+                school_id=school.id,
+                event_type=NotificationOutbox.EVENT_SCHOOL_ATTENDANCE_SCAN,
+                user_id=parent_id,
+                device_token_id=tok.id,
+                title=title, body=body, data_json=payload,
+                ntype='attendance',
+                dedup_key=_scan_dedup_key(student.id, on_date, action,
+                                          parent_id, tok.id),
+                status=NotificationOutbox.STATUS_PENDING,
+                attempts=0,
+                next_attempt_at=now,
+                created_at=now,
+            ))
+            staged += 1
 
     return staged
 
