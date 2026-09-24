@@ -238,10 +238,17 @@ def _school_students(fx: dict, cfg: dict, s: int) -> dict:
 
 def _instructor_password_hash(root: str) -> str:
     """Reuse the experiment's generated parent password. Never a real one, and
-    never used: the generator authenticates with a pre-issued JWT."""
-    from werkzeug.security import generate_password_hash
+    never used: the generator authenticates with a pre-issued JWT.
+
+    Uses flask_bcrypt, the same hasher seed.py uses, so the instructor row is
+    indistinguishable from the parent rows beside it. flask_bcrypt returns
+    bytes; werkzeug's returns str — tolerate both rather than depending on
+    which one a future image pulls in.
+    """
+    from flask_bcrypt import generate_password_hash
     sec = common.load_secrets(root)
-    return generate_password_hash(sec['parent_password']).decode('utf-8')
+    h = generate_password_hash(sec['parent_password'])
+    return h.decode('utf-8') if isinstance(h, bytes) else h
 
 
 def _verify_ownership(db, text, cfg: dict, tag: str, owned_school_ids: set):

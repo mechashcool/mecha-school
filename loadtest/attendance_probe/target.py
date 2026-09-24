@@ -42,7 +42,8 @@ def venv_bin(root, name):
                         name + ('.exe' if IS_WINDOWS else ''))
 
 
-def build_env(cfg: dict, sec: dict, *, ws_enabled=True) -> dict:
+def build_env(cfg: dict, sec: dict, *, ws_enabled=True,
+              outbox_enabled=False) -> dict:
     root = cfg['root']
     env = {k: os.environ[k] for k in PASSTHROUGH if k in os.environ}
     env['PATH'] = os.pathsep.join([os.path.dirname(venv_bin(root, 'python')),
@@ -83,6 +84,12 @@ def build_env(cfg: dict, sec: dict, *, ws_enabled=True) -> dict:
         'OPS_METRICS_TOKEN': sec['ops_metrics_token'],
         'SYNC_JOURNAL_ENABLED': 'false',
         'SYNC_SIGNAL_ENABLED': 'false',
+        # OFF by default, so the AI Face round keeps the exact production
+        # default and the legacy inline notification path it has always
+        # exercised. The institute/outbox round opts in explicitly: the rows
+        # are staged by submit_attendance() inside THIS process, so the flag
+        # has to be here and not only in the worker.
+        'INSTITUTE_ATTENDANCE_OUTBOX_ENABLED': 'true' if outbox_enabled else 'false',
     })
     env.update(cfg['gunicorn_env'])
     return env
@@ -117,14 +124,18 @@ def http_ok(cfg, path='/ops/health', timeout=3):
         return False
 
 
-def start(cfg, sec):
+def start(cfg, sec, *, ws_enabled=True, outbox_enabled=False):
+    # ws_enabled defaults to True so every existing caller keeps its behaviour.
+    # The institute/outbox smoke test passes False: that round never speaks the
+    # AI Face protocol, so nothing should bind a WebSocket port at all.
     assert_no_dotenv_in_ancestors(cfg)
     if os.path.exists(_pid_file(cfg)):
         info = json.load(open(_pid_file(cfg)))
         if _alive(info):
             print('target already running', info['pid'])
             return info
-    env = build_env(cfg, sec)
+    env = build_env(cfg, sec, ws_enabled=ws_enabled,
+                    outbox_enabled=outbox_enabled)
     app_src = os.path.join(cfg['root'], 'app_src')
     if IS_WINDOWS:
         cmd = [venv_bin(cfg['root'], 'python'), os.path.join(common.TOOL_DIR, 'serve_waitress.py')]
@@ -138,7 +149,9 @@ def start(cfg, sec):
                             stdin=subprocess.DEVNULL, creationflags=flags,
                             start_new_session=not IS_WINDOWS)
     ident = proc_identity(proc.pid)
-    ident.update({'log': log_path, 'http_port': cfg['http_port'], 'ws_port': cfg['ws_port'],
+    ident.update({'log': log_path, 'http_port': cfg['http_port'],
+                  'ws_port': cfg['ws_port'] if ws_enabled else None,
+                  'ws_enabled': ws_enabled, 'outbox_enabled': outbox_enabled,
                   'started_at': manifest.utcnow_iso()})
     json.dump(ident, open(_pid_file(cfg), 'w'), indent=2)
     manifest.add_resource(cfg['root'], 'process', role='target-app', **ident)

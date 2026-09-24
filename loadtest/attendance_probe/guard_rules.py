@@ -99,8 +99,22 @@ def outbox_breaches(sample: dict, th: dict, *, draining: bool,
     Pure: `sample` is a plain dict of observed counters and `sustained` is the
     caller's SustainedBreach instance (or None to skip the time-based rule).
     Returns the list of stop reasons; empty means healthy.
+
+    FAIL CLOSED: a sample that was not taken, or was taken and failed, is a
+    stop reason in itself. An absent `collector_ok` key means no collector ran,
+    which is treated exactly like a failed one — a round must never read as
+    healthy because nothing was watching.
     """
     reasons = []
+    if not sample.get('collector_ok', False):
+        err = sample.get('collector_error') or 'no outbox sample was taken'
+        reasons.append(f'outbox collector unavailable — {err}')
+        n = int(sample.get('consecutive_collector_failures', 0) or 0)
+        if n > 1:
+            reasons.append(f'outbox collector has failed {n} times in a row')
+        # Every rule below reads a counter this sample does not have. Returning
+        # now prevents a missing key from being read as a healthy zero.
+        return reasons
     backlog = int(sample.get('outbox_backlog', 0))
     if backlog > th['outbox_backlog_ceiling']:
         reasons.append(f"outbox backlog {backlog} > ceiling "

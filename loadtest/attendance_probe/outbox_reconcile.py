@@ -250,7 +250,9 @@ def collect(cur, *, school_ids, session_ids, test_date) -> dict:
                       WHERE school_id = ANY(%s) AND session_id = ANY(%s)
                       GROUP BY session_id, student_id HAVING count(*) > 1) d""",
                 (ids, sess))
-    obs['attendance_duplicate_logical'] = cur.fetchone()[0]
+    # coalesce(sum(...)) returns numeric; int() keeps the report clean and the
+    # comparison in invariants() an integer one.
+    obs['attendance_duplicate_logical'] = int(cur.fetchone()[0] or 0)
 
     cur.execute("""SELECT count(*) FROM institute_attendance_records r
                      JOIN students s ON s.id = r.student_id

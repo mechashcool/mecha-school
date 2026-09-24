@@ -45,6 +45,7 @@ import environment_identity as ident   # noqa: E402
 import guard_rules                 # noqa: E402
 import institute_common as ic      # noqa: E402
 import institute_generator as igen  # noqa: E402
+import outbox_monitor as omon      # noqa: E402
 import outbox_reconcile as orec    # noqa: E402
 import safety_gates                # noqa: E402
 
@@ -999,12 +1000,28 @@ def test_outbox_thresholds_are_additive():
     assert th['outbox_backlog_ceiling'] > 0
 
 
+def _ok(**over):
+    """A sample as the collector produces it: healthy unless told otherwise."""
+    s = {'collector_ok': True, 'outbox_backlog': 0, 'outbox_dead': 0,
+         'outbox_cancelled': 0, 'outbox_backlog_falling': True,
+         'unplanned_worker_restarts': 0}
+    s.update(over)
+    return s
+
+
 def test_a_healthy_sample_produces_no_outbox_stop_reason():
     th = guard_rules.build_thresholds()
-    sample = {'outbox_backlog': 120, 'outbox_dead': 0, 'outbox_cancelled': 0,
-              'outbox_backlog_falling': True}
-    assert guard_rules.outbox_breaches(sample, th, draining=True,
-                                       sustained=None) == []
+    assert guard_rules.outbox_breaches(_ok(outbox_backlog=120), th,
+                                       draining=True, sustained=None) == []
+
+
+def test_zero_backlog_never_fires():
+    th = guard_rules.build_thresholds()
+    for draining in (True, False):
+        assert guard_rules.outbox_breaches(
+            _ok(outbox_backlog=0, outbox_backlog_falling=False), th,
+            draining=draining,
+            sustained=guard_rules.SustainedBreach(lambda: 1e9)) == []
 
 
 def test_outbox_guardrails_fire():
@@ -1019,28 +1036,278 @@ def test_outbox_guardrails_fire():
         ({'worker_tracebacks': 1}, 'traceback'),
         ({'isolation_violations': 1}, 'ISOLATION VIOLATION'),
     )
-    for sample, needle in cases:
-        reasons = guard_rules.outbox_breaches(sample, th, draining=False,
+    for over, needle in cases:
+        reasons = guard_rules.outbox_breaches(_ok(**over), th, draining=False,
                                               sustained=None)
-        assert any(needle in r for r in reasons), (sample, reasons)
+        assert any(needle in r for r in reasons), (over, reasons)
 
 
 def test_a_stuck_backlog_halts_only_after_the_window():
     th = guard_rules.build_thresholds()
     now = [0.0]
     sustained = guard_rules.SustainedBreach(lambda: now[0])
-    sample = {'outbox_backlog': 500, 'outbox_backlog_falling': False}
-    assert guard_rules.outbox_breaches(sample, th, draining=True,
+    stuck = _ok(outbox_backlog=500, outbox_backlog_falling=False)
+    assert guard_rules.outbox_breaches(stuck, th, draining=True,
                                        sustained=sustained) == []
     now[0] = th['outbox_no_drain_window_s'] + 1
-    reasons = guard_rules.outbox_breaches(sample, th, draining=True,
+    reasons = guard_rules.outbox_breaches(stuck, th, draining=True,
                                           sustained=sustained)
     assert any('stuck' in r for r in reasons)
     # Once it starts falling again the breach resets.
     now[0] += 1
     assert guard_rules.outbox_breaches(
-        {'outbox_backlog': 400, 'outbox_backlog_falling': True}, th,
+        _ok(outbox_backlog=400, outbox_backlog_falling=True), th,
         draining=True, sustained=sustained) == []
+
+
+def test_a_falling_backlog_never_fires_however_long_it_takes():
+    th = guard_rules.build_thresholds()
+    now = [0.0]
+    sustained = guard_rules.SustainedBreach(lambda: now[0])
+    for _ in range(10):
+        now[0] += th['outbox_no_drain_window_s']
+        assert guard_rules.outbox_breaches(
+            _ok(outbox_backlog=900, outbox_backlog_falling=True), th,
+            draining=True, sustained=sustained) == []
+
+
+# ── Fail closed: a sample that was not taken is never healthy ────────────────
+
+def test_a_failed_collector_is_a_stop_reason_not_a_healthy_zero():
+    th = guard_rules.build_thresholds()
+    reasons = guard_rules.outbox_breaches(
+        {'collector_ok': False, 'collector_error': 'OperationalError: gone'},
+        th, draining=True, sustained=None)
+    assert reasons and 'collector unavailable' in reasons[0]
+    assert 'OperationalError: gone' in reasons[0]
+
+
+def test_a_sample_with_no_collector_flag_is_treated_as_unwatched():
+    """An empty dict must never pass: it would read as backlog 0, dead 0."""
+    th = guard_rules.build_thresholds()
+    reasons = guard_rules.outbox_breaches({}, th, draining=True,
+                                          sustained=None)
+    assert any('no outbox sample was taken' in r for r in reasons)
+
+
+def test_repeated_collector_failures_are_reported():
+    th = guard_rules.build_thresholds()
+    reasons = guard_rules.outbox_breaches(
+        {'collector_ok': False, 'collector_error': 'x',
+         'consecutive_collector_failures': 3}, th, draining=False,
+        sustained=None)
+    assert any('failed 3 times in a row' in r for r in reasons)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Outbox collector — what finally feeds the guard rules
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _sampler(counts_seq, *, worker=None, clock=None):
+    """A sampler whose database is a list of canned results.
+
+    An entry that is an Exception instance is raised instead of returned, which
+    is how the fail-closed path is driven without breaking a real database.
+    """
+    box = {'i': 0}
+
+    def fetch(school_ids):
+        i = min(box['i'], len(counts_seq) - 1)
+        box['i'] += 1
+        value = counts_seq[i]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    t = {'now': 0.0}
+    if clock is None:
+        def clock_fn():
+            t['now'] += 1.0
+            return t['now']
+    else:
+        clock_fn = clock
+    return omon.OutboxSampler(fetch, school_ids=[1, 2],
+                              worker_state=worker or (lambda: {}),
+                              clock=clock_fn)
+
+
+def test_collector_derives_totals_and_backlog():
+    d = omon.derive({'pending': 3, 'processing': 1, 'retry': 2, 'sent': 10})
+    assert d['outbox_backlog'] == 6
+    assert d['total_jobs'] == 16
+    assert d['outbox_dead'] == 0 and d['outbox_cancelled'] == 0
+    for st in omon.STATUSES:
+        assert 'outbox_' + st in d, st
+
+
+def test_collector_reports_every_required_metric():
+    s = _sampler([{'pending': 2, 'sent': 1, 'dead': 0}],
+                 worker=lambda: {'pid': 42, 'create_time': 1.0, 'alive': True,
+                                 'planned_starts': 1})
+    sample = s.sample(window_s=60)
+    for key in ('outbox_pending', 'outbox_processing', 'outbox_retry',
+                'outbox_sent', 'outbox_dead', 'outbox_cancelled',
+                'total_jobs', 'outbox_backlog', 'outbox_backlog_falling',
+                'worker_pid', 'worker_alive', 'unplanned_worker_restarts',
+                'collector_ok'):
+        assert key in sample, key
+    assert sample['outbox_backlog'] == 2
+    assert sample['worker_alive'] is True and sample['worker_pid'] == 42
+
+
+def test_collector_never_reads_a_payload_column():
+    """The query selects status and school_id, and nothing else."""
+    sql = omon.COUNTS_SQL.lower()
+    for forbidden in ('title', 'body', 'data_json', 'dedup_key', 'fcm_token',
+                      'device_token_id', 'select *'):
+        assert forbidden not in sql, forbidden
+    assert 'school_id = any' in sql, 'the query is not tenant-bounded'
+
+
+def test_backlog_falling_is_strict():
+    assert omon.backlog_is_falling([(0, 10), (10, 5)], window_s=5) is True
+    assert omon.backlog_is_falling([(0, 10), (10, 10)], window_s=5) is False
+    assert omon.backlog_is_falling([(0, 10), (10, 12)], window_s=5) is False
+    assert omon.backlog_is_falling([(0, 10)], window_s=5) is False
+    assert omon.backlog_is_falling([], window_s=5) is False
+
+
+def test_collector_sees_a_backlog_then_sees_it_drain():
+    s = _sampler([{'pending': 4}, {'pending': 4}, {'pending': 2},
+                  {'sent': 4}])
+    first = s.sample(window_s=2)
+    assert first['outbox_backlog'] == 4
+    s.sample(window_s=2)
+    third = s.sample(window_s=2)
+    assert third['outbox_backlog'] == 2
+    assert third['outbox_backlog_falling'] is True
+    last = s.sample(window_s=2)
+    assert last['outbox_backlog'] == 0
+    assert last['outbox_sent'] == 4
+
+
+def test_a_small_backlog_does_not_trip_the_hard_ceiling():
+    """The smoke test's handful of rows must not look like an incident."""
+    th = guard_rules.build_thresholds()
+    s = _sampler([{'pending': 2}])
+    sample = s.sample(window_s=60)
+    assert 0 < sample['outbox_backlog'] < th['outbox_backlog_ceiling']
+    assert guard_rules.outbox_breaches(sample, th, draining=False,
+                                       sustained=None) == []
+
+
+def test_collector_and_guards_agree_on_a_stuck_backlog():
+    """End to end: collector output fed straight into the guard layer."""
+    th = guard_rules.build_thresholds()
+    now = {'t': 0.0}
+    s = _sampler([{'pending': 50}] * 10, clock=lambda: now['t'])
+    sustained = guard_rules.SustainedBreach(lambda: now['t'])
+    reasons = []
+    for _ in range(4):
+        sample = s.sample(window_s=th['outbox_no_drain_window_s'])
+        reasons = guard_rules.outbox_breaches(sample, th, draining=True,
+                                              sustained=sustained)
+        now['t'] += th['outbox_no_drain_window_s'] / 2
+    assert any('stuck' in r for r in reasons), reasons
+
+
+def test_a_failing_database_makes_the_collector_fail_closed():
+    import psycopg2  # noqa: F401  (only to mirror a realistic error type)
+    s = _sampler([RuntimeError('connection refused')])
+    sample = s.sample(window_s=60)
+    assert sample['collector_ok'] is False
+    assert 'connection refused' in sample['collector_error']
+    # Crucially: it must NOT have invented healthy counters.
+    assert 'outbox_backlog' not in sample
+    assert 'outbox_dead' not in sample
+    th = guard_rules.build_thresholds()
+    assert guard_rules.outbox_breaches(sample, th, draining=True,
+                                       sustained=None)
+
+
+def test_a_nonsense_result_also_fails_closed():
+    s = _sampler([['not', 'a', 'dict']])
+    sample = s.sample(window_s=60)
+    assert sample['collector_ok'] is False
+    assert 'TypeError' in sample['collector_error']
+
+
+def test_consecutive_failures_are_counted_then_reset():
+    s = _sampler([RuntimeError('a'), RuntimeError('b'), {'pending': 1}])
+    assert s.sample(window_s=60)['consecutive_collector_failures'] == 1
+    assert s.sample(window_s=60)['consecutive_collector_failures'] == 2
+    good = s.sample(window_s=60)
+    assert good['collector_ok'] is True
+    assert s.consecutive_failures == 0
+
+
+def test_an_unreadable_worker_state_fails_closed():
+    def boom():
+        raise OSError('worker.json is corrupt')
+    s = _sampler([{'pending': 1}], worker=boom)
+    sample = s.sample(window_s=60)
+    assert sample['collector_ok'] is False
+    assert 'worker state unavailable' in sample['collector_error']
+
+
+def test_a_planned_restart_is_not_an_unplanned_restart():
+    # One planned start, one identity: nothing unplanned.
+    assert omon.unplanned_restarts([(1, 1.0)], planned_starts=1) == 0
+    # Stop + start (Mode C): two identities, two planned starts.
+    assert omon.unplanned_restarts([(1, 1.0), (2, 2.0)], planned_starts=2) == 0
+    # The worker died and came back on its own: two identities, one start.
+    assert omon.unplanned_restarts([(1, 1.0), (2, 2.0)], planned_starts=1) == 1
+    # Repeated samples of the same process are not restarts.
+    assert omon.unplanned_restarts([(1, 1.0), (1, 1.0), (1, 1.0)],
+                                   planned_starts=1) == 0
+
+
+def test_the_collector_reports_a_planned_restart_as_clean(tmp_path):
+    ident_a = {'pid': 11, 'create_time': 1.0, 'alive': True}
+    ident_b = {'pid': 12, 'create_time': 2.0, 'alive': True}
+    state = {'cur': dict(ident_a, planned_starts=1)}
+    s = _sampler([{'pending': 1}] * 4, worker=lambda: state['cur'])
+    assert s.sample(window_s=60)['unplanned_worker_restarts'] == 0
+    state['cur'] = dict(ident_b, planned_starts=2)      # harness restarted it
+    sample = s.sample(window_s=60)
+    assert sample['worker_restarts_observed'] == 1
+    assert sample['unplanned_worker_restarts'] == 0
+    th = guard_rules.build_thresholds()
+    assert guard_rules.outbox_breaches(sample, th, draining=True,
+                                       sustained=None) == []
+
+
+def test_the_collector_reports_a_crash_restart_as_unplanned():
+    state = {'cur': {'pid': 11, 'create_time': 1.0, 'alive': True,
+                     'planned_starts': 1}}
+    s = _sampler([{'pending': 1}] * 4, worker=lambda: state['cur'])
+    s.sample(window_s=60)
+    state['cur'] = {'pid': 12, 'create_time': 2.0, 'alive': True,
+                    'planned_starts': 1}          # nobody asked for this
+    sample = s.sample(window_s=60)
+    assert sample['unplanned_worker_restarts'] == 1
+    th = guard_rules.build_thresholds()
+    assert any('restarted' in r for r in
+               guard_rules.outbox_breaches(sample, th, draining=True,
+                                           sustained=None))
+
+
+def test_lifecycle_events_are_recorded_for_the_monitor(tmp_path):
+    root = str(tmp_path)
+    os.makedirs(os.path.join(root, 'run'), exist_ok=True)
+    omon.record_lifecycle_event(root, 'start')
+    omon.record_lifecycle_event(root, 'stop')
+    omon.record_lifecycle_event(root, 'start')
+    state = omon.read_worker_state(root)
+    assert state['planned_starts'] == 2
+    assert state['alive'] is False and state['pid'] is None
+
+
+def test_worker_control_records_every_lifecycle_transition():
+    src = open(os.path.join(TOOL_DIR, 'worker_control.py'),
+               encoding='utf-8').read()
+    for action in ("'start'", "'stop'", "'kill'"):
+        assert f'record_lifecycle_event(cfg[\'root\'], {action})' in src, action
 
 
 # ═════════════════════════════════════════════════════════════════════════════

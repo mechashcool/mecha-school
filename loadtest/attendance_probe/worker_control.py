@@ -31,6 +31,7 @@ import common  # noqa: E402
 import environment_identity as ident  # noqa: E402
 import institute_common as ic  # noqa: E402
 import manifest  # noqa: E402
+import outbox_monitor  # noqa: E402
 import safety_gates  # noqa: E402
 import target  # noqa: E402
 
@@ -157,7 +158,10 @@ def start(cfg, sec, **kw):
                  'fake_firebase_mode': env['ATTLT_FAKE_FIREBASE_MODE'],
                  'started_at': manifest.utcnow_iso()})
     json.dump(info, open(_pid_file(cfg), 'w'), indent=2)
-    manifest.add_resource(cfg['root'], 'process', role='outbox-worker', **info)
+    # `info` already carries role=ROLE; passing it again would collide.
+    manifest.add_resource(cfg['root'], 'process', **info)
+    # Tell the monitor this restart was ours, so it is not counted as a crash.
+    outbox_monitor.record_lifecycle_event(cfg['root'], 'start')
     time.sleep(1.0)
     if proc.poll() is not None:
         raise SystemExit(f'worker exited immediately (code {proc.returncode}); '
@@ -187,6 +191,7 @@ def stop(cfg, *, timeout: int = 60):
         a.kill()
     manifest.update_resource(cfg['root'], 'process', {'pid': info['pid']},
                              stopped_at=manifest.utcnow_iso())
+    outbox_monitor.record_lifecycle_event(cfg['root'], 'stop')
     print('worker stopped', info['pid'])
     return info
 
@@ -208,6 +213,7 @@ def kill(cfg):
         q.kill()
     manifest.update_resource(cfg['root'], 'process', {'pid': info['pid']},
                              killed_at=manifest.utcnow_iso())
+    outbox_monitor.record_lifecycle_event(cfg['root'], 'kill')
     print('worker killed (lease left held)', info['pid'])
     return info
 
