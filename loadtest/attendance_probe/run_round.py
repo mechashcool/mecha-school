@@ -57,6 +57,9 @@ def main():
     ap.add_argument('--allow-degraded-host', action='store_true',
                     help='LOCAL VALIDATION ONLY: run despite baseline below the memory floor; '
                          'resource-guard compliance is recorded OVERRIDDEN, never passed')
+    ap.add_argument('--outbox-monitor', action='store_true',
+                    help='institute/outbox rounds only: sample notification_outbox '
+                         'every watchdog cycle and enforce the outbox guard rules')
     ap.add_argument('--validation', action='store_true', help='label output as local tooling validation')
     a = ap.parse_args()
     root = os.path.abspath(a.root)
@@ -103,6 +106,10 @@ def main():
     tool = common.TOOL_DIR
     logs = os.path.join(root, 'logs')
     guard_args = ['--min-mem-pct', str(a.min_mem_pct)] + (['--allow-degraded-host'] if a.allow_degraded_host else [])
+    # Outbox monitoring is opt-in and applies to the GUARD pass only: the
+    # baseline and the startup gate never query the outbox, so an AI Face round
+    # issues no outbox query at any point.
+    watch_args = guard_args + (['--outbox-monitor'] if a.outbox_monitor else [])
     # 3. baseline
     print(f'baseline {a.baseline_seconds}s ...', flush=True)
     subprocess.run([py, os.path.join(tool, 'watchdog.py'), '--root', root, '--out', out,
@@ -139,7 +146,7 @@ def main():
     # 5. watchdog
     wlog = open(os.path.join(logs, f'watchdog_{a.round_name}.log'), 'ab')
     wd = subprocess.Popen([py, os.path.join(tool, 'watchdog.py'), '--root', root, '--out', out, '--generator-pid', str(gen.pid),
-                           '--post-seconds', str(a.post_seconds)] + guard_args
+                           '--post-seconds', str(a.post_seconds)] + watch_args
                           + (['--live-health-url', a.live_health_url] if a.live_health_url else []),
                           cwd=tool, stdout=wlog, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
     manifest.add_resource(root, 'process', role='watchdog', round=a.round_name, **target_mod.proc_identity(wd.pid))

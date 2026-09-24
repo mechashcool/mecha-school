@@ -1311,6 +1311,552 @@ def test_worker_control_records_every_lifecycle_transition():
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  The watchdog loop itself — not just the pure rules
+# ═════════════════════════════════════════════════════════════════════════════
+# Watchdog.__init__ needs live processes, a database and a target.json, none of
+# which belong in a unit test. These tests build the object without running its
+# constructor and populate only what the outbox path touches, so the code under
+# test is the REAL _sample_outbox() and _evaluate_outbox() from watchdog.py.
+
+
+def _import_watchdog():
+    """Import watchdog.py for the outbox seams only.
+
+    watchdog.py imports psutil at module level for host sampling. psutil is a
+    harness-venv dependency and is not installed in the repository venv, and
+    the code under test here — _sample_outbox / _evaluate_outbox — never calls
+    it. So a minimal stub is registered for the IMPORT only; if anything in the
+    outbox path actually reached psutil, every attribute access below would
+    raise rather than quietly succeed.
+    """
+    import types
+    if 'psutil' not in sys.modules:
+        try:
+            import psutil  # noqa: F401
+        except ImportError:
+            stub = types.ModuleType('psutil')
+
+            def _unavailable(*a, **k):
+                raise AssertionError(
+                    'the outbox watchdog path must not call psutil')
+
+            for name in ('Process', 'cpu_percent', 'virtual_memory',
+                         'swap_memory', 'disk_io_counters', 'disk_usage',
+                         'net_connections', 'wait_procs', 'process_iter'):
+                setattr(stub, name, _unavailable)
+            stub.NoSuchProcess = type('NoSuchProcess', (Exception,), {})
+            stub.AccessDenied = type('AccessDenied', (Exception,), {})
+            sys.modules['psutil'] = stub
+    import watchdog as wd_mod
+    return wd_mod
+
+
+def _watchdog(sampler, *, clock=None, cross_school_rows=0, log_counts=None):
+    wd_mod = _import_watchdog()
+    w = object.__new__(wd_mod.Watchdog)
+    w.outbox = sampler
+    w._outbox_sample = None
+    w.th = guard_rules.build_thresholds()
+    w.breach = guard_rules.SustainedBreach(clock or (lambda: 0.0))
+    w.log_counts = log_counts if log_counts is not None else {}
+    w.cross_school_rows = cross_school_rows
+    return w
+
+
+class _FakeSampler:
+    """Returns canned samples, in order, exactly as OutboxSampler would."""
+
+    def __init__(self, samples):
+        self.samples = list(samples)
+        self.calls = 0
+        self.windows = []
+
+    def sample(self, *, window_s):
+        self.windows.append(window_s)
+        self.calls += 1
+        value = self.samples[min(self.calls - 1, len(self.samples) - 1)]
+        if isinstance(value, Exception):
+            raise value
+        return dict(value)
+
+
+def _good(**over):
+    s = {'collector_ok': True, 'outbox_pending': 0, 'outbox_processing': 0,
+         'outbox_retry': 0, 'outbox_sent': 0, 'outbox_dead': 0,
+         'outbox_cancelled': 0, 'total_jobs': 0, 'outbox_backlog': 0,
+         'outbox_backlog_falling': True, 'worker_alive': True,
+         'worker_pid': 99, 'unplanned_worker_restarts': 0}
+    s.update(over)
+    return s
+
+
+# ── 1. disabled: legacy behaviour, byte for byte ────────────────────────────
+
+def test_outbox_monitoring_disabled_adds_nothing_and_queries_nothing():
+    w = _watchdog(None)
+    s = {'host_cpu_pct': 1.0}
+    w._sample_outbox(s)
+    assert s == {'host_cpu_pct': 1.0}, 'a disabled monitor touched the sample'
+    assert w._evaluate_outbox() == ([], [])
+    assert w._outbox_sample is None
+
+
+def test_disabled_monitor_needs_no_worker_and_no_fixtures():
+    """Nothing in the disabled path reads worker state or institute fixtures."""
+    w = _watchdog(None)
+    for _ in range(5):
+        s = {}
+        w._sample_outbox(s)
+        assert w._evaluate_outbox() == ([], [])
+        assert s == {}
+
+
+def test_ai_face_rounds_do_not_pass_the_flag():
+    """run_round only adds --outbox-monitor when asked, and never to the
+    baseline or startup-gate passes."""
+    src = open(os.path.join(TOOL_DIR, 'run_round.py'), encoding='utf-8').read()
+    assert "['--outbox-monitor'] if a.outbox_monitor else []" in src
+    # The baseline and gate invocations use guard_args, never watch_args.
+    assert "'--baseline', str(a.baseline_seconds)]" in src
+    assert "'--check-gate'] + guard_args" in src
+    assert "'--post-seconds', str(a.post_seconds)] + watch_args" in src
+
+
+def test_the_flag_defaults_to_off_in_both_entry_points():
+    for name, flag in (('watchdog.py', '--outbox-monitor'),
+                       ('run_round.py', '--outbox-monitor')):
+        src = open(os.path.join(TOOL_DIR, name), encoding='utf-8').read()
+        idx = src.index(f"add_argument('{flag}'")
+        decl = src[idx:idx + 200]
+        assert "action='store_true'" in decl, name
+        assert 'default=True' not in decl, name
+
+
+# ── 2 & 3. healthy states ───────────────────────────────────────────────────
+
+def test_zero_backlog_is_healthy():
+    w = _watchdog(_FakeSampler([_good()]))
+    s = {}
+    w._sample_outbox(s)
+    assert s['outbox_backlog'] == 0
+    assert s['outbox_collector_ok'] is True
+    assert w._evaluate_outbox() == ([], [])
+
+
+def test_a_backlog_below_the_ceiling_is_healthy():
+    th = guard_rules.build_thresholds()
+    below = th['outbox_backlog_ceiling'] - 1
+    w = _watchdog(_FakeSampler([_good(outbox_pending=below,
+                                      outbox_backlog=below,
+                                      total_jobs=below)]))
+    s = {}
+    w._sample_outbox(s)
+    assert s['outbox_backlog'] == below
+    assert w._evaluate_outbox() == ([], [])
+
+
+def test_the_sample_carries_every_required_metric():
+    w = _watchdog(_FakeSampler([_good(outbox_pending=3, outbox_sent=7,
+                                      outbox_backlog=3, total_jobs=10)]))
+    s = {}
+    w._sample_outbox(s)
+    for key in ('outbox_pending', 'outbox_processing', 'outbox_retry',
+                'outbox_sent', 'outbox_dead', 'outbox_cancelled',
+                'outbox_backlog', 'outbox_backlog_falling',
+                'outbox_worker_alive'):
+        assert key in s, key
+    assert s['outbox_total_jobs'] == 10
+    assert s['outbox_unplanned_worker_restarts'] == 0
+    # Nothing that could carry a payload or a credential.
+    for key in s:
+        assert not any(bad in key for bad in
+                       ('token', 'title', 'body', 'data_json', 'dedup',
+                        'password', 'secret')), key
+
+
+def test_the_sampler_is_driven_at_the_configured_window():
+    sampler = _FakeSampler([_good()])
+    w = _watchdog(sampler)
+    w._sample_outbox({})
+    assert sampler.windows == [w.th['outbox_no_drain_window_s']]
+
+
+# ── 4, 5, 6. hard triggers ──────────────────────────────────────────────────
+
+def test_backlog_over_the_ceiling_triggers_recovery():
+    th = guard_rules.build_thresholds()
+    over = th['outbox_backlog_ceiling'] + 1
+    w = _watchdog(_FakeSampler([_good(outbox_backlog=over, outbox_pending=over,
+                                      total_jobs=over)]))
+    w._sample_outbox({})
+    halt, rec = w._evaluate_outbox()
+    assert halt == []
+    assert any('ceiling' in r for r in rec), rec
+
+
+def test_a_dead_job_halts():
+    w = _watchdog(_FakeSampler([_good(outbox_dead=1, total_jobs=1)]))
+    w._sample_outbox({})
+    halt, rec = w._evaluate_outbox()
+    assert any('dead' in h for h in halt), (halt, rec)
+
+
+def test_an_unexpected_cancelled_job_halts():
+    w = _watchdog(_FakeSampler([_good(outbox_cancelled=1, total_jobs=1)]))
+    w._sample_outbox({})
+    halt, _ = w._evaluate_outbox()
+    assert any('cancelled' in h for h in halt), halt
+
+
+def test_a_cross_school_row_reaches_the_outbox_rules_as_an_isolation_violation():
+    w = _watchdog(_FakeSampler([_good()]), cross_school_rows=2)
+    w._sample_outbox({})
+    halt, _ = w._evaluate_outbox()
+    assert any('ISOLATION VIOLATION' in h for h in halt), halt
+
+
+def test_target_log_symptoms_reach_the_outbox_rules():
+    for counter, needle in (('operational_error', 'OperationalError'),
+                            ('pool_timeout', 'pool timeout'),
+                            ('traceback', 'traceback')):
+        w = _watchdog(_FakeSampler([_good()]), log_counts={counter: 1})
+        w._sample_outbox({})
+        halt, rec = w._evaluate_outbox()
+        assert any(needle in r for r in halt + rec), (counter, halt, rec)
+
+
+# ── 7, 8, 9. the stuck-backlog window ───────────────────────────────────────
+
+def test_a_stuck_backlog_does_not_trigger_before_the_window():
+    th = guard_rules.build_thresholds()
+    now = {'t': 0.0}
+    stuck = _good(outbox_backlog=500, outbox_pending=500, total_jobs=500,
+                  outbox_backlog_falling=False)
+    w = _watchdog(_FakeSampler([stuck]), clock=lambda: now['t'])
+    # Four samples at quarter-window spacing: the last is at 3/4 of the window,
+    # still strictly inside it. A fifth would land exactly ON the window, which
+    # is when the rule is supposed to fire — that is the next test.
+    for _ in range(4):
+        w._sample_outbox({})
+        halt, rec = w._evaluate_outbox()
+        assert (halt, rec) == ([], []), (now['t'], halt, rec)
+        now['t'] += th['outbox_no_drain_window_s'] / 4
+    assert now['t'] == th['outbox_no_drain_window_s']
+
+
+def test_a_stuck_backlog_triggers_once_the_window_passes():
+    th = guard_rules.build_thresholds()
+    now = {'t': 0.0}
+    stuck = _good(outbox_backlog=500, outbox_pending=500, total_jobs=500,
+                  outbox_backlog_falling=False)
+    w = _watchdog(_FakeSampler([stuck]), clock=lambda: now['t'])
+    w._sample_outbox({})
+    w._evaluate_outbox()
+    now['t'] = th['outbox_no_drain_window_s'] + 1
+    w._sample_outbox({})
+    halt, rec = w._evaluate_outbox()
+    assert any('stuck' in r for r in rec), rec
+
+
+def test_a_falling_backlog_resets_the_stuck_condition():
+    th = guard_rules.build_thresholds()
+    now = {'t': 0.0}
+    stuck = _good(outbox_backlog=500, outbox_pending=500, total_jobs=500,
+                  outbox_backlog_falling=False)
+    falling = _good(outbox_backlog=400, outbox_pending=400, total_jobs=400,
+                    outbox_backlog_falling=True)
+    w = _watchdog(_FakeSampler([stuck, stuck, falling, stuck]),
+                  clock=lambda: now['t'])
+    w._sample_outbox({}); w._evaluate_outbox()
+    now['t'] = th['outbox_no_drain_window_s'] - 1
+    w._sample_outbox({}); w._evaluate_outbox()
+    now['t'] += 2                                   # would have fired
+    w._sample_outbox({})
+    halt, rec = w._evaluate_outbox()                # falling: resets
+    assert (halt, rec) == ([], []), rec
+    now['t'] += th['outbox_no_drain_window_s'] - 1  # stuck again, not yet long
+    w._sample_outbox({})
+    halt, rec = w._evaluate_outbox()
+    assert (halt, rec) == ([], []), rec
+
+
+def test_a_growing_backlog_with_the_worker_stopped_is_not_stuck():
+    """Mode A: the worker is deliberately down, so the queue SHOULD grow."""
+    th = guard_rules.build_thresholds()
+    now = {'t': 0.0}
+    down = _good(outbox_backlog=300, outbox_pending=300, total_jobs=300,
+                 outbox_backlog_falling=False, worker_alive=False)
+    w = _watchdog(_FakeSampler([down]), clock=lambda: now['t'])
+    for _ in range(4):
+        w._sample_outbox({})
+        assert w._evaluate_outbox() == ([], [])
+        now['t'] += th['outbox_no_drain_window_s']
+
+
+# ── 10 & 11. fail closed ────────────────────────────────────────────────────
+
+def test_a_collector_exception_fails_closed():
+    w = _watchdog(_FakeSampler([RuntimeError('psycopg2 died')]))
+    s = {}
+    with pytest.raises(RuntimeError):
+        w._sample_outbox(s)
+
+
+def test_a_failed_collector_sample_halts_and_writes_no_fake_zero():
+    w = _watchdog(_FakeSampler([{'collector_ok': False,
+                                 'collector_error': 'OperationalError: gone',
+                                 'consecutive_collector_failures': 1}]))
+    s = {}
+    w._sample_outbox(s)
+    assert s['outbox_collector_ok'] is False
+    assert 'OperationalError: gone' in s['outbox_collector_error']
+    # The critical property: no metric was invented.
+    for key in ('outbox_backlog', 'outbox_pending', 'outbox_dead',
+                'outbox_sent', 'outbox_total_jobs'):
+        assert key not in s, f'{key} was fabricated for a failed sample'
+    halt, rec = w._evaluate_outbox()
+    assert any('collector unavailable' in h for h in halt), (halt, rec)
+
+
+def test_a_malformed_collector_result_fails_closed():
+    """A sample missing collector_ok must never read as healthy."""
+    w = _watchdog(_FakeSampler([{'outbox_backlog': 0, 'outbox_dead': 0}]))
+    s = {}
+    w._sample_outbox(s)
+    assert s['outbox_collector_ok'] is False
+    assert 'outbox_backlog' not in s
+    halt, _ = w._evaluate_outbox()
+    assert halt, 'a malformed sample passed silently'
+
+
+def test_repeated_collector_failures_are_surfaced():
+    w = _watchdog(_FakeSampler([{'collector_ok': False, 'collector_error': 'x',
+                                 'consecutive_collector_failures': 4}]))
+    s = {}
+    w._sample_outbox(s)
+    assert s['outbox_collector_failures'] == 4
+    halt, _ = w._evaluate_outbox()
+    assert any('failed 4 times in a row' in h for h in halt), halt
+
+
+# ── 12 & 13. worker restarts ────────────────────────────────────────────────
+
+def test_a_planned_worker_restart_does_not_trip_the_guard():
+    w = _watchdog(_FakeSampler([_good(worker_pid=11),
+                                _good(worker_pid=12,
+                                      unplanned_worker_restarts=0)]))
+    w._sample_outbox({}); assert w._evaluate_outbox() == ([], [])
+    s = {}
+    w._sample_outbox(s)
+    assert s['outbox_worker_pid'] == 12
+    assert s['outbox_unplanned_worker_restarts'] == 0
+    assert w._evaluate_outbox() == ([], [])
+
+
+def test_an_unexpected_worker_restart_halts():
+    w = _watchdog(_FakeSampler([_good(unplanned_worker_restarts=1)]))
+    s = {}
+    w._sample_outbox(s)
+    assert s['outbox_unplanned_worker_restarts'] == 1
+    halt, _ = w._evaluate_outbox()
+    assert any('restarted without the harness asking' in h for h in halt), halt
+
+
+# ── Reason classification cannot silently drift ─────────────────────────────
+
+def test_every_outbox_reason_is_classified():
+    """Each reason outbox_breaches can emit lands in exactly one bucket.
+
+    Without this, rewording a message would quietly turn an enforced rule into
+    an unenforced one.
+    """
+    th = guard_rules.build_thresholds()
+    now = {'t': 0.0}
+    sustained = guard_rules.SustainedBreach(lambda: now['t'])
+    samples = [
+        {'collector_ok': False, 'collector_error': 'boom',
+         'consecutive_collector_failures': 2},
+        {},                                                   # unwatched
+        _good(outbox_backlog=th['outbox_backlog_ceiling'] + 1),
+        _good(outbox_dead=1),
+        _good(outbox_cancelled=1),
+        _good(unplanned_worker_restarts=1),
+        _good(db_operational_errors=1),
+        _good(db_pool_timeouts=1),
+        _good(worker_tracebacks=1),
+        _good(isolation_violations=1),
+    ]
+    seen = 0
+    for s in samples:
+        reasons = guard_rules.outbox_breaches(s, th, draining=False,
+                                              sustained=sustained)
+        assert reasons, s
+        seen += len(reasons)
+        halt, rec = guard_rules.classify_outbox_reasons(reasons)
+        assert len(halt) + len(rec) == len(reasons)
+        for r in halt + rec:
+            assert 'unclassified' not in r, r
+    # the stuck-backlog reason, which needs the clock
+    stuck = _good(outbox_backlog=500, outbox_backlog_falling=False)
+    guard_rules.outbox_breaches(stuck, th, draining=True, sustained=sustained)
+    now['t'] = th['outbox_no_drain_window_s'] + 1
+    reasons = guard_rules.outbox_breaches(stuck, th, draining=True,
+                                          sustained=sustained)
+    halt, rec = guard_rules.classify_outbox_reasons(reasons)
+    assert any('stuck' in r for r in rec), reasons
+    assert seen >= 10
+
+
+def test_an_unknown_reason_is_treated_as_halt():
+    halt, rec = guard_rules.classify_outbox_reasons(['something new happened'])
+    assert rec == []
+    assert halt and 'unclassified' in halt[0]
+
+
+def test_existing_watchdog_thresholds_are_untouched_by_the_wiring():
+    th = guard_rules.build_thresholds(min_mem_pct=20.0)
+    assert th['host_cpu_pct'] == 85.0
+    assert th['mem_available_floor_pct'] == 20.0
+    assert th['db_connections_frac_of_max'] == 0.9
+    assert th['error_rate'] == 0.01
+    assert th['ack_p95_ms'] == 5000
+    assert th['parent_read_p95_ms'] == 2000
+    assert th['outbox_backlog_ceiling'] == 2000
+    assert th['outbox_no_drain_window_s'] == 60
+    assert th['outbox_dead_jobs_allowed'] == 0
+    assert th['outbox_cancelled_jobs_allowed'] == 0
+    assert th['outbox_unplanned_worker_restarts_allowed'] == 0
+    assert th['db_operational_errors_allowed'] == 0
+    assert th['db_pool_timeouts_allowed'] == 0
+    assert th['worker_tracebacks_allowed'] == 0
+    assert th['isolation_violations_allowed'] == 0
+
+
+def _code_only(text):
+    """Drop docstrings and comments, keeping the lines that execute.
+
+    The sampler's own documentation names the columns it deliberately does NOT
+    read, and a raw substring scan would read that as the opposite of what it
+    says — a mistake this suite has now made twice, so it gets a helper.
+    """
+    out, in_doc = [], False
+    for line in text.splitlines():
+        if line.count('"""') == 1:
+            in_doc = not in_doc
+            continue
+        if in_doc or not line.strip() or line.strip().startswith('#'):
+            continue
+        out.append(line)
+    return '\n'.join(out)
+
+
+class _FakeCursor:
+    """Stands in for a psycopg2 cursor: records the SQL, returns canned rows."""
+
+    def __init__(self, rows, executed):
+        self._rows = rows
+        self._executed = executed
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, sql, params=None):
+        self._executed.append((sql, params))
+        if isinstance(self._rows, Exception):
+            raise self._rows
+
+    def fetchall(self):
+        return self._rows
+
+
+class _FakeDB:
+    def __init__(self, rows):
+        self.rows = rows
+        self.executed = []
+
+    def cursor(self):
+        return _FakeCursor(self.rows, self.executed)
+
+
+def _real_wired_watchdog(tmp_path, rows, *, school_ids=(101, 102)):
+    """A Watchdog using the REAL _build_outbox_sampler and OutboxSampler."""
+    wd_mod = _import_watchdog()
+    root = str(tmp_path)
+    os.makedirs(os.path.join(root, 'run'), exist_ok=True)
+    with open(os.path.join(root, 'run', 'institute_fixtures.json'), 'w',
+              encoding='utf-8') as fh:
+        json.dump({'schools': {str(i): {'school_id': sid}
+                               for i, sid in enumerate(school_ids)}}, fh)
+    w = object.__new__(wd_mod.Watchdog)
+    w.root = root
+    w.a = type('A', (), {'outbox_monitor': True})()
+    w.db = _FakeDB(rows)
+    w.th = guard_rules.build_thresholds()
+    w.breach = guard_rules.SustainedBreach(lambda: 0.0)
+    w.log_counts = {}
+    w.cross_school_rows = 0
+    w._outbox_sample = None
+    w.outbox = w._build_outbox_sampler()
+    return w
+
+
+def test_the_real_builder_queries_only_experiment_schools(tmp_path):
+    w = _real_wired_watchdog(tmp_path, [('pending', 2), ('sent', 5)])
+    s = {}
+    w._sample_outbox(s)
+    assert s['outbox_collector_ok'] is True
+    assert s['outbox_pending'] == 2 and s['outbox_sent'] == 5
+    assert s['outbox_backlog'] == 2 and s['outbox_total_jobs'] == 7
+    sql, params = w.db.executed[-1]
+    assert sql == omon.COUNTS_SQL
+    assert params == ([101, 102],), 'the query was not bounded to the experiment'
+    assert w._evaluate_outbox() == ([], [])
+
+
+def test_the_real_builder_fails_closed_on_a_database_error(tmp_path):
+    import psycopg2
+    w = _real_wired_watchdog(
+        tmp_path, psycopg2.OperationalError('server closed the connection'))
+    s = {}
+    w._sample_outbox(s)
+    assert s['outbox_collector_ok'] is False
+    assert 'OperationalError' in s['outbox_collector_error']
+    assert 'outbox_backlog' not in s
+    halt, _ = w._evaluate_outbox()
+    assert any('collector unavailable' in h for h in halt), halt
+
+
+def test_enabling_outbox_monitoring_without_fixtures_refuses(tmp_path):
+    wd_mod = _import_watchdog()
+    w = object.__new__(wd_mod.Watchdog)
+    w.root = str(tmp_path)
+    w.db = _FakeDB([])
+    with pytest.raises(SystemExit) as exc:
+        w._build_outbox_sampler()
+    assert 'institute_fixtures.json' in str(exc.value)
+    assert 'Omit the flag for an AI Face round' in str(exc.value)
+
+
+def test_the_watchdog_outbox_query_reads_no_payload():
+    src = open(os.path.join(TOOL_DIR, 'watchdog.py'), encoding='utf-8').read()
+    idx = src.index('def _build_outbox_sampler')
+    body = src[idx:src.index('def _sample_outbox')]
+    assert 'outbox_monitor.COUNTS_SQL' in body, \
+        'the watchdog must reuse the audited query, not write its own'
+    code = _code_only(body)
+    assert code.strip(), 'no executable lines parsed — the scan would be vacuous'
+    for forbidden in ('title', 'data_json', 'dedup_key', 'fcm_token',
+                      'SELECT *'):
+        assert forbidden not in code, forbidden
+    # And the audited query itself still reads only status + school_id.
+    sql = omon.COUNTS_SQL.lower()
+    assert 'select status, count(*)' in sql and 'school_id = any' in sql
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  Repository hygiene: nothing generated or secret may become trackable
 # ═════════════════════════════════════════════════════════════════════════════
 

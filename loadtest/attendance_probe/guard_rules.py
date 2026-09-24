@@ -92,6 +92,48 @@ OUTBOX_THRESHOLDS = {
 }
 
 
+# Every stop reason outbox_breaches() can emit, keyed by a stable marker, with
+# the severity the watchdog must apply. HALT is for a broken premise or a
+# correctness failure — the round cannot mean anything if it continues.
+# RECOVERY is for pressure the round is allowed to back off from.
+#
+# The markers live beside the messages that produce them, and
+# test_every_outbox_reason_is_classified asserts that every reachable reason
+# matches exactly one, so a reworded message cannot silently become unclassified
+# and therefore unenforced.
+OUTBOX_HALT_MARKERS = (
+    'collector unavailable',        # fail closed: nothing is watching
+    'failed',                       # repeated collector failures
+    'dead jobs',                    # terminal failure in a success-mode round
+    'cancelled jobs',
+    'restarted without the harness asking',
+    'ISOLATION VIOLATION',
+)
+OUTBOX_RECOVERY_MARKERS = (
+    'backlog',                      # over the ceiling, or stuck
+    'OperationalError',
+    'pool timeout',
+    'traceback in the worker log',
+)
+
+
+def classify_outbox_reasons(reasons) -> tuple:
+    """Split stop reasons into (halt, recovery). Pure.
+
+    An unrecognised reason is treated as HALT: an unclassifiable safety signal
+    is not a reason to keep going.
+    """
+    halt, recovery = [], []
+    for reason in reasons:
+        if any(m in reason for m in OUTBOX_HALT_MARKERS):
+            halt.append(reason)
+        elif any(m in reason for m in OUTBOX_RECOVERY_MARKERS):
+            recovery.append(reason)
+        else:
+            halt.append(reason + '  [unclassified outbox reason — halting]')
+    return halt, recovery
+
+
 def outbox_breaches(sample: dict, th: dict, *, draining: bool,
                     sustained=None) -> list:
     """Evaluate the outbox guardrails against one monitoring sample.

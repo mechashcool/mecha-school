@@ -32,6 +32,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common  # noqa: E402
 import guard_rules  # noqa: E402
+import outbox_monitor  # noqa: E402
 
 import psutil  # noqa: E402
 import psycopg2  # noqa: E402
@@ -93,6 +94,13 @@ class Watchdog:
             self.baseline = json.load(open(bp))
         self.breach = guard_rules.SustainedBreach(time.monotonic)
         self.th = self._thresholds()
+        # Durable-outbox monitoring is OPT-IN. Without --outbox-monitor this is
+        # None, no outbox query is ever issued, no worker is required, and every
+        # existing AI Face round behaves exactly as it always has.
+        self.outbox = None
+        self._outbox_sample = None
+        if getattr(self.a, 'outbox_monitor', False):
+            self.outbox = self._build_outbox_sampler()
 
     # ── helpers ───────────────────────────────────────────────────────────────
     @staticmethod
@@ -121,6 +129,90 @@ class Watchdog:
         with self.db.cursor() as c:
             c.execute(sql, args)
             return c.fetchone()[0]
+
+    def _build_outbox_sampler(self):
+        """Reuse the watchdog's existing database connection and cadence.
+
+        No second connection, no second loop, no second watchdog: the sampler
+        is driven from sample() like every other metric. The school ids come
+        from the experiment's own institute fixtures, so the query can only see
+        rows this experiment created.
+        """
+        fx_path = os.path.join(self.root, 'run', 'institute_fixtures.json')
+        if not os.path.exists(fx_path):
+            raise SystemExit(
+                '--outbox-monitor requires run/institute_fixtures.json; this '
+                'round has no institute fixtures. Omit the flag for an AI Face '
+                'round.')
+        with open(fx_path, encoding='utf-8') as fh:
+            fx = json.load(fh)
+        school_ids = sorted({sch['school_id'] for sch in fx['schools'].values()})
+        if not school_ids:
+            raise SystemExit('--outbox-monitor: institute fixtures name no schools')
+
+        def fetch(ids):
+            # Selects `status` and `school_id` only — never a title, body,
+            # data_json, dedup key or device token.
+            with self.db.cursor() as c:
+                c.execute(outbox_monitor.COUNTS_SQL, (list(ids),))
+                return {row[0]: row[1] for row in c.fetchall()}
+
+        print(f'[watchdog] outbox monitoring ENABLED for schools {school_ids}',
+              flush=True)
+        return outbox_monitor.OutboxSampler(
+            fetch, school_ids=school_ids,
+            worker_state=lambda: outbox_monitor.read_worker_state(self.root),
+            clock=time.monotonic)
+
+    def _sample_outbox(self, s):
+        """Add the outbox metrics to one monitoring sample. No-op when off.
+
+        On a failed sample NOTHING numeric is written: a missing key is what
+        makes the guard layer fail closed, so substituting a zero here would
+        defeat the whole mechanism.
+        """
+        if self.outbox is None:
+            return
+        o = self.outbox.sample(window_s=self.th['outbox_no_drain_window_s'])
+        self._outbox_sample = o
+        s['outbox_collector_ok'] = bool(o.get('collector_ok'))
+        if not o.get('collector_ok'):
+            s['outbox_collector_error'] = o.get('collector_error')
+            s['outbox_collector_failures'] = o.get(
+                'consecutive_collector_failures')
+            return
+        for name in outbox_monitor.STATUSES:
+            s['outbox_' + name] = o['outbox_' + name]
+        s['outbox_total_jobs'] = o['total_jobs']
+        s['outbox_backlog'] = o['outbox_backlog']
+        s['outbox_backlog_falling'] = o['outbox_backlog_falling']
+        s['outbox_worker_alive'] = o.get('worker_alive')
+        s['outbox_worker_pid'] = o.get('worker_pid')
+        s['outbox_unplanned_worker_restarts'] = o.get(
+            'unplanned_worker_restarts')
+
+    def _evaluate_outbox(self):
+        """(halt, recovery) from the outbox guard rules. ([], []) when off.
+
+        The sample handed to the rules carries the watchdog's own database and
+        log symptom counters, so an OperationalError, a pool timeout or a
+        traceback in the target log stops the round through the outbox rules as
+        well as the existing ones.
+
+        `draining` is the worker being alive: with the worker deliberately
+        stopped a growing backlog is the expected result, not a stuck queue.
+        """
+        if self.outbox is None:
+            return [], []
+        o = dict(self._outbox_sample or {})
+        o.setdefault('db_operational_errors', self.log_counts.get('operational_error', 0))
+        o.setdefault('db_pool_timeouts', self.log_counts.get('pool_timeout', 0))
+        o.setdefault('worker_tracebacks', self.log_counts.get('traceback', 0))
+        o.setdefault('isolation_violations', self.cross_school_rows)
+        reasons = guard_rules.outbox_breaches(
+            o, self.th, draining=bool(o.get('worker_alive')),
+            sustained=self.breach)
+        return guard_rules.classify_outbox_reasons(reasons)
 
     def _thresholds(self):
         # No baseline auto-lowering. Fixed floor (default 20%) unless an explicit
@@ -263,6 +355,7 @@ class Watchdog:
             except Exception as exc:
                 s['live_health_status'] = type(exc).__name__
             s['live_health_ms'] = round((time.perf_counter() - t1) * 1000, 1)
+        self._sample_outbox(s)
         return s
 
     # ── rules ─────────────────────────────────────────────────────────────────
@@ -363,6 +456,10 @@ class Watchdog:
                 halt.append('LIVE SERVICE health degraded')
         else:
             self.breach.reset('live')
+        # Durable outbox. ([], []) unless --outbox-monitor is on.
+        o_halt, o_rec = self._evaluate_outbox()
+        halt += o_halt
+        rec += o_rec
         return halt, rec
 
     def check_attribution(self):
@@ -514,6 +611,11 @@ def main():
     ap.add_argument('--allow-degraded-host', action='store_true',
                     help='LOCAL VALIDATION ONLY: proceed on a host below the floor; '
                          'stamps resource-guard compliance OVERRIDDEN (safety not certified)')
+    ap.add_argument('--outbox-monitor', action='store_true',
+                    help='sample the durable notification outbox every cycle and '
+                         'enforce the outbox guard rules. Requires '
+                         'run/institute_fixtures.json. OFF by default, so AI '
+                         'Face rounds are unaffected.')
     ap.add_argument('--check-gate', action='store_true',
                     help='evaluate the startup safety gate against baseline.json and exit '
                          '(0 = safe to start, 3 = unsafe/rejected)')
