@@ -294,9 +294,14 @@ def collect(cur, *, school_ids, session_ids, test_date) -> dict:
 
     # An absent record whose parent has an active token but that produced no
     # job — the silent-loss case the whole exercise exists to detect.
+    #
+    # Compared on (user_id, device_token_id): notification_outbox stores no
+    # student_id, so the student is reached through parent_students on the
+    # expected side only. Both sides are DISTINCT, so a parent with two
+    # absences in the round is one expected pair, not two.
     cur.execute("""
         SELECT count(*) FROM (
-          SELECT r.student_id, ps.user_id, t.id AS token_id
+          SELECT DISTINCT ps.user_id AS user_id, t.id AS token_id
             FROM institute_attendance_records r
             JOIN parent_students ps ON ps.student_id = r.student_id
             JOIN mobile_device_tokens t
@@ -304,7 +309,7 @@ def collect(cur, *, school_ids, session_ids, test_date) -> dict:
              AND t.is_active
            WHERE r.session_id = ANY(%s) AND r.status = 'absent'
           EXCEPT
-          SELECT o.user_id, o.user_id, o.device_token_id
+          SELECT DISTINCT o.user_id, o.device_token_id
             FROM notification_outbox o WHERE o.school_id = ANY(%s)
         ) missing""", (sess, ids))
     obs['transitions_missing_job'] = cur.fetchone()[0]
