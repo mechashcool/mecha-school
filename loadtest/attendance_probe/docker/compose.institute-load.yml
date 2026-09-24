@@ -50,6 +50,9 @@ services:
       ATTLT_PG_PORT: "5432"
       ATTLT_TARGET_HOST: 127.0.0.1
       ATTLT_EXPERIMENT_TAG: ${ATTLT_EXPERIMENT_TAG:?set ATTLT_EXPERIMENT_TAG}
+      # Which ladder to run: 'full' or 'final'. The runner rejects any other
+      # value rather than falling back to a ladder nobody asked for.
+      ATTLT_LADDER: ${ATTLT_LADDER:-full}
       # The production host this experiment must be unable to reach. Used only
       # as a negative connectivity probe; no request is ever sent to it.
       ATTLT_FORBIDDEN_HOST: ${ATTLT_FORBIDDEN_HOST:-example.invalid}
