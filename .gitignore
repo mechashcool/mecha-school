@@ -104,3 +104,33 @@ tools/captures_ws/
 
 github_actions_mecha
 github_actions_mecha.pub
+
+# ── Load-test harness ────────────────────────────────────────────────────────
+# The harness SOURCE under loadtest/attendance_probe/ is tracked so the safety
+# rules are reviewable and survive a git clean. Everything an experiment
+# GENERATES is not: it contains experiment secrets, pre-issued JWTs, a full
+# snapshot of the application source, and result artifacts.
+loadtest/attendance_probe/docker/out/
+loadtest/attendance_probe/round2/
+loadtest/**/secrets/
+loadtest/**/app_src/
+loadtest/**/results/
+loadtest/**/run/
+loadtest/**/pgdata/
+loadtest/**/venv-target/
+loadtest/**/venv-gen/
+loadtest/**/.attlt_owner
+loadtest/**/manifest.json
+loadtest/**/experiment.json
+loadtest/**/environment_identity.json
+loadtest/**/fixtures.json
+loadtest/**/institute_fixtures.json
+loadtest/**/fake_fcm_sends.json
+loadtest/**/fake-firebase-credential.json
+loadtest/**/*.jsonl
+loadtest/**/*.bundle
+loadtest/**/*.tgz
+loadtest/**/*.tgz.sha256
+# Experiment roots default to ../../_loadtest, outside the repository; this
+# catches an operator who points --root inside it instead.
+_loadtest/

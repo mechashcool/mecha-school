@@ -1,0 +1,10 @@
+# Linux image for the isolated Locust driver check.
+# Runs the REAL app (gunicorn) and Locust together on container loopback.
+FROM python:3.11-slim
+RUN apt-get update && apt-get install -y --no-install-recommends libpq-dev gcc && rm -rf /var/lib/apt/lists/*
+WORKDIR /work
+# app runtime deps (pinned, as the VPS uses) + gunicorn + generator deps
+COPY app_requirements.txt /tmp/app_requirements.txt
+RUN pip install --no-cache-dir -r /tmp/app_requirements.txt gunicorn \
+    && pip install --no-cache-dir locust websocket-client psutil
+CMD ["python", "/tooling/docker/container_check.py"]

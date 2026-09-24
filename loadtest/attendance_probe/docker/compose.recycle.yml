@@ -1,0 +1,58 @@
+# Worker-recycling mechanism check — NO published ports (private internal network).
+# Same isolation model as compose.driver.yml, plus a read-only mount of the two
+# patched files so the check can run the archived revision with and without them.
+name: attlt-recycle-check
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: core_school_attendance_load_test
+      POSTGRES_USER: attlt_driver
+      POSTGRES_PASSWORD: attlt_driver_local
+    networks: [attlt_net]
+    tmpfs: ["/var/lib/postgresql/data"]      # ephemeral; nothing persisted
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U attlt_driver -d core_school_attendance_load_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  runner:
+    image: attlt-driver-check-runner:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.driver
+    depends_on:
+      db: {condition: service_healthy}
+    command: ["python", "/tooling/docker/recycle_check.py"]
+    environment:
+      ATTLT_PG_HOST: db
+      ATTLT_PG_PORT: "5432"
+      ATTLT_PG_USER: attlt_driver
+      ATTLT_PG_PASSWORD: attlt_driver_local
+      ATTLT_TARGET_HOST: 127.0.0.1
+      RECYCLE_VARIANTS: ${RECYCLE_VARIANTS:-unpatched,patched}
+      RECYCLE_MAX_REQUESTS: ${RECYCLE_MAX_REQUESTS:-60}
+      RECYCLE_DURATION: ${RECYCLE_DURATION:-150}
+      RECYCLE_READ_RATE: ${RECYCLE_READ_RATE:-4}
+      RECYCLE_DEVICES: ${RECYCLE_DEVICES:-4}
+      RECYCLE_REVISION: ${RECYCLE_REVISION:-unknown}
+    volumes:
+      - type: bind
+        source: ${ATTLT_TOOLING_DIR:?set ATTLT_TOOLING_DIR to the attendance_probe dir}
+        target: /tooling
+        read_only: true
+      - type: bind
+        source: ${ATTLT_APP_SRC_DIR:?set ATTLT_APP_SRC_DIR to an archive of the tested revision}
+        target: /app_src_ro
+        read_only: true
+      - type: bind
+        source: ${ATTLT_PATCH_DIR:?set ATTLT_PATCH_DIR to the dir holding the two patched files}
+        target: /patch
+        read_only: true
+      - type: bind
+        source: ./out
+        target: /out
+    networks: [attlt_net]
+networks:
+  attlt_net:
+    internal: true          # no external connectivity; endpoints are private
