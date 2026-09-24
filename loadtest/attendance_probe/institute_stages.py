@@ -163,6 +163,29 @@ def ladder_for(name: str) -> list:
         raise ValueError(f'unknown ladder {name!r}; known: {sorted(LADDERS)}')
 
 
+# ── Retry-probe readiness (pure) ─────────────────────────────────────────────
+# Outbox status counts are CUMULATIVE across a round. A probe that waits on an
+# absolute `sent` count is satisfied instantly by whatever an earlier stage
+# already delivered, so it reconciles before the retry it is meant to observe
+# has fired. Both predicates below are therefore DELTAS against a baseline
+# captured immediately before the probe's worker starts.
+
+
+def more_in_retry(base: dict, now: dict, expected_jobs: int) -> bool:
+    """The probe's jobs have failed their first attempt and parked in retry."""
+    return int(now.get('retry', 0)) >= int(base.get('retry', 0)) + expected_jobs
+
+
+def retry_completed(base: dict, now: dict, expected_jobs: int) -> bool:
+    """The probe's jobs reached `sent` AND nothing is left waiting to retry.
+
+    Both halves matter: `sent` alone can be reached by other jobs, and an
+    empty `retry` alone could mean the rows went dead instead.
+    """
+    return (int(now.get('sent', 0)) >= int(base.get('sent', 0)) + expected_jobs
+            and int(now.get('retry', 0)) <= int(base.get('retry', 0)))
+
+
 def stage_transitions(stage: dict) -> int:
     return stage['slots'] * stage['transitions_per_session']
 

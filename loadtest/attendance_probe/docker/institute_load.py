@@ -997,6 +997,12 @@ class Round:
                 f'retry probe expected {expected_jobs} queued job(s), '
                 f'found {pre["outbox_backlog"]}')
 
+        # Counts are CUMULATIVE across the round, so every wait below is a
+        # DELTA against this baseline. Waiting on an absolute `sent` count
+        # would be satisfied instantly by the jobs an earlier stage delivered,
+        # and the probe would reconcile before the retry had even fired.
+        base = job_states(self.cfg, self.sec, self.school_ids)
+        out['baseline_job_states'] = base
         self.start_worker(batch_size=RETRY_BATCH, poll_seconds=RETRY_POLL,
                           fake_mode='transient_once')
         started = wc.status(self.cfg)
@@ -1005,16 +1011,26 @@ class Round:
 
         # 1. the first attempt must FAIL and park the job in `retry`
         out['retry_observed'] = self._await_states(
-            lambda s: s['retry'] >= expected_jobs, timeout=90,
-            what=f'{expected_jobs} job(s) in retry')
+            lambda s: stages.more_in_retry(base, s, expected_jobs),
+            timeout=120,
+            what=f'{expected_jobs} more job(s) in retry than the {base["retry"]} '
+                 f'already there')
         out['after_first_attempt'] = out['retry_observed']
-        if out['retry_observed']['dead']:
+        if out['retry_observed']['dead'] > base['dead']:
             raise RoundFailed('a transient failure produced a dead job')
+        if out['retry_observed']['max_attempts'] < 1:
+            raise RoundFailed('the job reached retry without recording an '
+                              'attempt')
 
-        # 2. the SAME worker must carry it to `sent` once the backoff elapses
+        # 2. the SAME worker must carry it to `sent` once the backoff elapses,
+        #    and the retry rows must be GONE, not merely outnumbered.
         out['sent_observed'] = self._await_states(
-            lambda s: s['sent'] >= expected_jobs, timeout=240,
-            what=f'{expected_jobs} job(s) sent')
+            lambda s: stages.retry_completed(base, s, expected_jobs),
+            timeout=300,
+            what=f'{expected_jobs} more job(s) sent and none left in retry')
+        out['delivered_after_retry'] = (out['sent_observed']['sent']
+                                        - base['sent'])
+        out['retry_backoff_wait_s'] = out['sent_observed']['waited_s']
         finished = wc.status(self.cfg)
         out['worker_pid_after'] = finished.get('pid')
         out['worker_restart_required'] = (

@@ -2372,3 +2372,52 @@ def test_final_ladder_arithmetic_matches_the_generator():
         assert (exp['newly_absent_transitions']
                 == stages.stage_transitions(stage)), stage['name']
         assert exp['expected_jobs'] == stages.stage_jobs(stage), stage['name']
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Retry-probe readiness must be a DELTA, not an absolute count
+#
+#  The first final-validation round reconciled the retry probe 0.03 s after
+#  starting its worker: it waited for `sent >= 2` while 200 jobs from the
+#  previous stage were already sent, so the condition was true before the
+#  retry had fired. The jobs were still legitimately in `retry`, and the stage
+#  failed on a queue state the probe had simply not waited for.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _states(**kw):
+    base = {s: 0 for s in omon.STATUSES}
+    base.update(kw)
+    return base
+
+
+def test_an_earlier_stages_sends_do_not_satisfy_the_retry_probe():
+    base = _states(sent=200)
+    during = _states(sent=200, retry=2)
+    # The naive absolute test would already pass here; the delta test must not.
+    assert during['sent'] >= 2, 'precondition: the naive check is satisfied'
+    assert not stages.retry_completed(base, during, 2)
+
+
+def test_retry_is_detected_only_once_the_probes_own_jobs_park_there():
+    base = _states(sent=200, retry=1)
+    assert not stages.more_in_retry(base, _states(sent=200, retry=1), 2)
+    assert not stages.more_in_retry(base, _states(sent=200, retry=2), 2)
+    assert stages.more_in_retry(base, _states(sent=200, retry=3), 2)
+
+
+def test_retry_completes_only_when_sent_grows_and_retry_empties():
+    base = _states(sent=200, retry=0)
+    assert not stages.retry_completed(base, _states(sent=202, retry=2), 2)
+    assert not stages.retry_completed(base, _states(sent=200, retry=0), 2)
+    assert stages.retry_completed(base, _states(sent=202, retry=0), 2)
+
+
+def test_a_retry_that_went_dead_does_not_read_as_completed():
+    """retry empties when a job dies too, so `sent` must grow by itself."""
+    base = _states(sent=200, retry=0)
+    assert not stages.retry_completed(base, _states(sent=200, dead=2), 2)
+
+
+def test_readiness_predicates_tolerate_a_missing_status_key():
+    assert stages.more_in_retry({}, {'retry': 2}, 2)
+    assert stages.retry_completed({}, {'sent': 2}, 2)
