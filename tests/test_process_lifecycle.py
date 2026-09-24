@@ -27,6 +27,7 @@ place that needs the scheduler visible patches the starter functions instead
 of letting real threads run.
 """
 import importlib
+import os as _os
 import threading
 import unittest
 from unittest.mock import patch
@@ -409,6 +410,118 @@ def app_ctx():
         yield app, ctx
     finally:
         ctx.pop()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The tracked systemd unit template
+# ─────────────────────────────────────────────────────────────────────────────
+# Second production incident, same class of defect: the worker inherited
+# GOOGLE_APPLICATION_CREDENTIALS=firebase-key.json from the shared .env. A
+# relative path resolves against WorkingDirectory=/var/www/mecha-school, so the
+# worker loaded a stale service-account key sitting in the deploy checkout while
+# the web tier used the protected /etc/mecha-school one. Firebase answered
+# "invalid_grant: Invalid JWT Signature" and five outbox attempts died.
+#
+# The unit now pins the absolute path. These assertions run against the tracked
+# file itself so a future edit cannot quietly reintroduce a relative credential.
+
+UNIT_PATH = _os.path.join(
+    _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+    'deploy', 'mecha-school-outbox-worker.service')
+
+FIREBASE_CREDENTIAL_PATH = '/etc/mecha-school/firebase-key.json'
+DEPLOY_DIR = '/var/www/mecha-school'
+
+
+def _unit_text():
+    with open(UNIT_PATH, encoding='utf-8') as fh:
+        return fh.read()
+
+
+def _unit_directives():
+    """Non-comment, non-blank lines only — the part systemd actually acts on."""
+    out = []
+    for raw in _unit_text().splitlines():
+        line = raw.strip()
+        if line and not line.startswith('#'):
+            out.append(line)
+    return out
+
+
+def _unit_environment():
+    """Every Environment= assignment as a dict (last assignment wins)."""
+    env = {}
+    for line in _unit_directives():
+        if line.startswith('Environment='):
+            key, _, value = line[len('Environment='):].partition('=')
+            env[key.strip()] = value.strip()
+    return env
+
+
+def test_unit_pins_the_absolute_firebase_credential_path():
+    assert _unit_environment().get('GOOGLE_APPLICATION_CREDENTIALS') == \
+        FIREBASE_CREDENTIAL_PATH
+
+
+def test_unit_never_uses_a_relative_firebase_credential():
+    """The exact production defect. A relative value resolves against CWD."""
+    text = _unit_text()
+    assert 'Environment=GOOGLE_APPLICATION_CREDENTIALS=firebase-key.json' not in text
+    value = _unit_environment().get('GOOGLE_APPLICATION_CREDENTIALS', '')
+    assert value.startswith('/'), f'credential path must be absolute, got {value!r}'
+
+
+def test_unit_loads_no_credential_from_the_deploy_checkout():
+    """/var/www/mecha-school is the git checkout, never a credential store."""
+    value = _unit_environment().get('GOOGLE_APPLICATION_CREDENTIALS', '')
+    assert not value.startswith(DEPLOY_DIR), \
+        f'credential must not live in the deploy checkout: {value!r}'
+    for line in _unit_directives():
+        for token in line.replace('=', ' ').split():
+            if DEPLOY_DIR in token:
+                assert not token.endswith('.json'), \
+                    f'JSON credential referenced inside the checkout: {token!r}'
+                assert 'firebase' not in token.lower(), \
+                    f'Firebase credential referenced inside the checkout: {token!r}'
+
+
+def test_unit_embeds_no_credential_material():
+    """The key is referenced by path only — never inlined into the unit."""
+    text = _unit_text()
+    assert 'FIREBASE_SERVICE_ACCOUNT_JSON' not in text
+    assert 'PRIVATE KEY' not in text
+    assert '"private_key"' not in text
+
+
+def test_unit_uses_the_dotvenv_interpreter():
+    exec_start = [l for l in _unit_directives() if l.startswith('ExecStart=')]
+    assert len(exec_start) == 1, exec_start
+    assert f'{DEPLOY_DIR}/.venv/bin/python' in exec_start[0]
+    assert f'{DEPLOY_DIR}/venv/bin/python' not in exec_start[0]
+
+
+def test_unit_keeps_the_outbox_feature_disabled_by_default():
+    assert _unit_environment().get('INSTITUTE_ATTENDANCE_OUTBOX_ENABLED') == 'false'
+
+
+def test_unit_declares_the_outbox_worker_role():
+    assert _unit_environment().get(lifecycle.ROLE_ENV_VAR) == \
+        lifecycle.ROLE_OUTBOX_WORKER
+    assert lifecycle.ROLE_OUTBOX_WORKER not in lifecycle._BACKGROUND_SERVICE_ROLES
+
+
+def test_unit_starts_only_the_outbox_loop():
+    """No web server, no scheduler, no AI Face socket in what systemd runs."""
+    exec_lines = [l for l in _unit_directives()
+                  if l.startswith(('ExecStart', 'ExecStartPre', 'ExecStartPost',
+                                   'ExecReload'))]
+    assert len(exec_lines) == 1, exec_lines
+    assert exec_lines[0].endswith('-m app.services.outbox_worker run')
+    directives = '\n'.join(_unit_directives()).lower()
+    for forbidden in ('gunicorn', 'wsgi', 'flask run', 'hikvision',
+                      'ai_face', '7788', 'celery'):
+        assert forbidden not in directives, \
+            f'{forbidden!r} must not appear in the worker unit directives'
 
 
 if __name__ == '__main__':
