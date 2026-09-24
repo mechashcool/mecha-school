@@ -911,6 +911,10 @@ class Round:
             rec.update(self._retry_probe(stage, entries))
             drain_complete = True
 
+        elif mode == stages.WORKER_IDLE:
+            rec.update(self._idle_baseline(stage))
+            drain_complete = True
+
         else:
             raise RoundFailed(f'{name}: unknown worker mode {mode!r}')
 
@@ -957,6 +961,126 @@ class Round:
             'achieved_transitions_per_s': round(transitions / max(elapsed, 1e-6), 2),
             'achieved_requests_per_s': round(len(rows) / max(elapsed, 1e-6), 2),
             'latency': latency_stats(rows),
+        }
+
+    def _idle_baseline(self, stage) -> dict:
+        """Hold a provably empty queue for longer than the no-drain window.
+
+        The rule under scrutiny asks whether the backlog is lower than it was
+        `outbox_no_drain_window_s` ago. That question is only meaningful if the
+        comparison point is a settled queue, so this stage establishes one and
+        PROVES it two independent ways: from the collector's own samples, and
+        from monitor.csv, which the watchdog writes on its own timer without
+        any involvement from this code.
+
+        Nothing is submitted, nothing is enqueued and nothing is restarted.
+        """
+        seconds = float(stage.get('idle_seconds', 75))
+        window = self.th['outbox_no_drain_window_s']
+        if seconds <= window:
+            raise RoundFailed(f'idle baseline {seconds}s does not exceed the '
+                              f'{window}s no-drain window')
+        if not self.worker_running():
+            raise RoundFailed('idle baseline requires the worker to be running')
+
+        opening = job_states(self.cfg, self.sec, self.school_ids)
+        must_be_zero = ('pending', 'processing', 'retry', 'dead', 'cancelled',
+                        'sent', 'total')
+        nonzero = {k: opening[k] for k in must_be_zero if opening[k]}
+        if nonzero:
+            raise RoundFailed(f'the queue is not empty at the start of the '
+                              f'idle baseline: {nonzero}')
+
+        started = dt.datetime.now(dt.timezone.utc)
+        t0 = time.time()
+        samples, worst = [], 0
+        while time.time() - t0 < seconds:
+            s = sample_backlog(self.sampler, self.th)
+            worst = max(worst, s['outbox_backlog'])
+            samples.append({'t': round(time.time() - t0, 2),
+                            'backlog': s['outbox_backlog'],
+                            'pending': s['outbox_pending'],
+                            'processing': s['outbox_processing'],
+                            'retry': s['outbox_retry'],
+                            'dead': s['outbox_dead'],
+                            'cancelled': s['outbox_cancelled'],
+                            'worker_alive': bool(s['worker_alive'])})
+            if s['outbox_backlog'] != 0:
+                raise RoundFailed(f'backlog became {s["outbox_backlog"]} during '
+                                  f'the idle baseline — it must stay exactly 0')
+            if not s['worker_alive']:
+                raise RoundFailed('the worker died during the idle baseline')
+            time.sleep(1.0)
+        elapsed = time.time() - t0
+        finished = dt.datetime.now(dt.timezone.utc)
+
+        proof = self._monitor_idle_proof(started, finished)
+        out = {
+            'idle_seconds_requested': seconds,
+            'idle_seconds_actual': round(elapsed, 2),
+            'no_drain_window_s': window,
+            'exceeds_window_by_s': round(elapsed - window, 2),
+            'started_utc': started.isoformat(),
+            'finished_utc': finished.isoformat(),
+            'collector_samples': len(samples),
+            'collector_max_backlog': worst,
+            'opening_job_states': opening,
+            'closing_job_states': job_states(self.cfg, self.sec,
+                                             self.school_ids),
+            'monitor_csv_proof': proof,
+            'submitted_anything': False,
+            'restarted_anything': False,
+        }
+        if not proof['all_zero']:
+            raise RoundFailed(f'monitor.csv does not show a clean idle '
+                              f'baseline: {proof}')
+        if proof['rows_in_window'] < 10:
+            raise RoundFailed(f'only {proof["rows_in_window"]} watchdog samples '
+                              f'fall inside the idle window — not enough to '
+                              f'call the baseline proven')
+        return out
+
+    def _monitor_idle_proof(self, started, finished) -> dict:
+        """Independent proof, from the file the WATCHDOG writes on its own timer.
+
+        monitor.csv is flushed every few cycles, so this re-reads it after the
+        idle period and checks every row whose timestamp falls inside the
+        window.
+        """
+        rows = read_monitor()
+        inside, bad = [], []
+        for r in rows:
+            stamp = r.get('wall_utc')
+            if not stamp:
+                continue
+            try:
+                when = dt.datetime.fromisoformat(stamp.replace('Z', '+00:00'))
+            except ValueError:
+                continue
+            if not (started <= when <= finished):
+                continue
+            inside.append(r)
+            backlog = r.get('outbox_backlog')
+            ok = (str(r.get('outbox_collector_ok')).lower() in ('true', '1')
+                  and backlog not in (None, '') and int(backlog) == 0)
+            if not ok:
+                bad.append({'wall_utc': stamp, 'outbox_backlog': backlog,
+                            'collector_ok': r.get('outbox_collector_ok')})
+        span = 0.0
+        if inside:
+            first = dt.datetime.fromisoformat(
+                inside[0]['wall_utc'].replace('Z', '+00:00'))
+            last = dt.datetime.fromisoformat(
+                inside[-1]['wall_utc'].replace('Z', '+00:00'))
+            span = round((last - first).total_seconds(), 2)
+        return {
+            'rows_in_window': len(inside),
+            'first_row_utc': inside[0]['wall_utc'] if inside else None,
+            'last_row_utc': inside[-1]['wall_utc'] if inside else None,
+            'covered_seconds': span,
+            'rows_with_nonzero_backlog_or_failed_collector': bad,
+            'all_zero': not bad and bool(inside),
+            'source': 'monitor.csv, written by watchdog.py on its own 2 s timer',
         }
 
     def _retry_probe(self, stage, entries) -> dict:

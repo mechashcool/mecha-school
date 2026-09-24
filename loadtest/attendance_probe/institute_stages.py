@@ -42,6 +42,7 @@ WORKER_STOPPED = 'stopped'        # Mode A: SIGTERM'd before the stage
 WORKER_DRAINING = 'draining'      # Mode B: throttled worker, backlog falling
 WORKER_KILL_CYCLE = 'kill-cycle'  # Mode C: claim, SIGKILL, restart, reclaim
 WORKER_RETRY_PROBE = 'retry-probe'  # transient Firebase failure, then success
+WORKER_IDLE = 'idle-baseline'     # hold a proven-empty queue, submit nothing
 
 
 def slot_order(num_schools: int) -> list:
@@ -152,7 +153,31 @@ FINAL_LADDER = [
          purpose='progressive throughput: ~22 transitions/s'),
 ]
 
-LADDERS = {'full': LADDER, 'final': FINAL_LADDER}
+# P2 in isolation, behind a verified idle baseline.
+#
+# The previous P2 tripped the no-drain rule, which asks whether the backlog is
+# lower than it was `outbox_no_drain_window_s` ago. P1's ramp had left the
+# comparison point at zero and P2's burst began about two seconds after P1's
+# drain bottomed out, so "not falling" held for a full window even while the
+# worker delivered 1020 jobs inside it. Nothing about the rule is changed here.
+# The stage is simply given what the rule assumes: a queue that has been
+# provably empty for longer than the window before the burst starts.
+
+IDLE_BASELINE_SECONDS = 75          # > the 60 s no-drain window, with margin
+
+P2_ONLY_LADDER = [
+    dict(name='IDLE_baseline', slots=0, transitions_per_session=1,
+         worker=WORKER_IDLE, target_tps=1.0, concurrency=1,
+         idle_seconds=IDLE_BASELINE_SECONDS,
+         purpose='hold a provably empty queue for longer than the no-drain '
+                 'window before the stage under test'),
+
+    dict(name='P2_22_tps', slots=30, transitions_per_session=20,
+         worker=WORKER_RUNNING, target_tps=22.0, concurrency=6,
+         purpose='progressive throughput: ~22 transitions/s'),
+]
+
+LADDERS = {'full': LADDER, 'final': FINAL_LADDER, 'p2only': P2_ONLY_LADDER}
 
 
 def ladder_for(name: str) -> list:

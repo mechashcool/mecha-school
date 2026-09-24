@@ -2421,3 +2421,75 @@ def test_a_retry_that_went_dead_does_not_read_as_completed():
 def test_readiness_predicates_tolerate_a_missing_status_key():
     assert stages.more_in_retry({}, {'retry': 2}, 2)
     assert stages.retry_completed({}, {'sent': 2}, 2)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  The P2-only ladder and its idle baseline
+#
+#  The previous P2 tripped the no-drain rule because the rule's 60 s comparison
+#  point sat at zero from before P1's ramp, and P2's burst began ~2 s after P1's
+#  drain bottomed out. Nothing about the rule changes here; the stage is given
+#  the settled queue the rule assumes.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_the_idle_baseline_outlasts_the_no_drain_window():
+    th = guard_rules.build_thresholds()
+    idle = stages.P2_ONLY_LADDER[0]
+    assert idle['worker'] == stages.WORKER_IDLE
+    assert idle['idle_seconds'] > th['outbox_no_drain_window_s']
+    assert idle['idle_seconds'] >= 70, 'the requested baseline is at least 70 s'
+
+
+def test_the_idle_baseline_submits_nothing():
+    idle = stages.P2_ONLY_LADDER[0]
+    assert idle['slots'] == 0
+    assert stages.stage_transitions(idle) == 0
+    assert stages.stage_jobs(idle) == 0
+    assert stages.allocate(12, stages.P2_ONLY_LADDER)['IDLE_baseline'] == []
+
+
+def test_the_p2_only_ladder_runs_p2_and_nothing_else():
+    names = [s['name'] for s in stages.P2_ONLY_LADDER]
+    assert names == ['IDLE_baseline', 'P2_22_tps']
+    load = [s for s in stages.P2_ONLY_LADDER if s['slots']]
+    assert len(load) == 1 and load[0]['target_tps'] == 22.0
+
+
+def test_the_p2_only_stage_is_identical_to_the_one_that_stopped():
+    """Same stage definition, only the run order around it differs."""
+    before = [s for s in stages.FINAL_LADDER if s['name'] == 'P2_22_tps'][0]
+    after = [s for s in stages.P2_ONLY_LADDER if s['name'] == 'P2_22_tps'][0]
+    for key in ('slots', 'transitions_per_session', 'target_tps',
+                'concurrency', 'worker'):
+        assert before[key] == after[key], key
+
+
+def test_the_p2_only_ladder_is_selectable_and_in_budget():
+    assert stages.ladder_for('p2only') is stages.P2_ONLY_LADDER
+    b = stages.budget(12, stages.P2_ONLY_LADDER)
+    assert b['sessions_used'] == 30 and b['sessions_spare'] >= 0
+    assert b['transitions_planned'] == 600 and b['jobs_planned'] == 1200
+    assert stages.peak_stopped_backlog(stages.P2_ONLY_LADDER) == 0
+
+
+def test_the_idle_stage_declares_a_known_worker_mode():
+    known = {stages.WORKER_RUNNING, stages.WORKER_STOPPED,
+             stages.WORKER_DRAINING, stages.WORKER_KILL_CYCLE,
+             stages.WORKER_RETRY_PROBE, stages.WORKER_IDLE}
+    for ladder in stages.LADDERS.values():
+        for stage in ladder:
+            assert stage['worker'] in known, stage['name']
+
+
+def test_no_watchdog_threshold_was_touched_by_this_work():
+    """The rule under scrutiny keeps the exact limits it already had."""
+    th = guard_rules.build_thresholds()
+    assert th['outbox_no_drain_window_s'] == 60
+    assert th['outbox_backlog_ceiling'] == 2000
+    assert th['outbox_dead_jobs_allowed'] == 0
+    assert th['outbox_cancelled_jobs_allowed'] == 0
+    assert th['host_cpu_pct'] == 85.0
+    assert th['mem_available_floor_pct'] == 20.0
+    assert th['db_connections_frac_of_max'] == 0.9
+    assert th['error_rate'] == 0.01
+    assert th['compliance_mode'] == guard_rules.COMPLIANCE_ENFORCED
