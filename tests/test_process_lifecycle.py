@@ -444,8 +444,9 @@ SHARED_ENV_PATH = DEPLOY_DIR + '/.env'
 WORKER_ENV_INSTALLED_PATH = \
     DEPLOY_DIR + '/deploy/mecha-school-outbox-worker-environment'
 
-# The stale value that actually shipped in the shared .env.
+# The stale values that actually shipped in the shared .env.
 STALE_RELATIVE_VALUE = 'firebase-key.json'
+STALE_FLASK_ENV = 'development'
 
 
 def _read(path):
@@ -508,14 +509,21 @@ def test_worker_environment_file_is_the_tracked_one():
     assert _os.path.isfile(WORKER_ENV_PATH)
 
 
-def test_worker_environment_file_holds_exactly_one_assignment():
-    assert list(_worker_env_assignments()) == ['GOOGLE_APPLICATION_CREDENTIALS']
+def test_worker_environment_file_holds_exactly_the_two_pinned_variables():
+    """Two, and only two. This file is a precedence override, not a config dump."""
+    assert sorted(_worker_env_assignments()) == \
+        ['FLASK_ENV', 'GOOGLE_APPLICATION_CREDENTIALS']
 
 
 def test_worker_environment_file_pins_the_absolute_credential_path():
     value = _worker_env_assignments()['GOOGLE_APPLICATION_CREDENTIALS']
     assert value == FIREBASE_CREDENTIAL_PATH
     assert value.startswith('/'), 'must be absolute, got %r' % (value,)
+
+
+def test_worker_environment_file_pins_the_production_environment():
+    """The worker logged env=development because the shared .env said so."""
+    assert _worker_env_assignments()['FLASK_ENV'] == 'production'
 
 
 def test_unit_has_no_ineffective_environment_credential_directive():
@@ -551,25 +559,35 @@ def _resolve_documented_precedence(shared_env, files=None):
 
 
 def test_worker_file_wins_over_a_conflicting_shared_env():
-    """The exact production conflict: stale relative value in the shared .env."""
+    """Both production conflicts at once, as the shared .env actually had them."""
     shared = {
         'GOOGLE_APPLICATION_CREDENTIALS': STALE_RELATIVE_VALUE,
+        'FLASK_ENV': STALE_FLASK_ENV,
         'DATABASE_URL': 'postgresql://user:pass@127.0.0.1:5432/example',
     }
     resolved = _resolve_documented_precedence(shared)
     assert resolved['GOOGLE_APPLICATION_CREDENTIALS'] == FIREBASE_CREDENTIAL_PATH
+    assert resolved['FLASK_ENV'] == 'production'
     # Unrelated shared values must still come through untouched.
     assert resolved['DATABASE_URL'] == shared['DATABASE_URL']
 
 
+def test_a_conflicting_shared_flask_env_resolves_to_production():
+    """The observed defect: web logged env=production, the worker env=development."""
+    resolved = _resolve_documented_precedence({'FLASK_ENV': STALE_FLASK_ENV})
+    assert resolved['FLASK_ENV'] == 'production'
+
+
 def test_the_file_order_is_what_makes_the_override_work():
-    """Negative control: reversed order and the stale value would win again."""
-    shared = {'GOOGLE_APPLICATION_CREDENTIALS': STALE_RELATIVE_VALUE}
+    """Negative control: reversed order and the stale values would win again."""
+    shared = {'GOOGLE_APPLICATION_CREDENTIALS': STALE_RELATIVE_VALUE,
+              'FLASK_ENV': STALE_FLASK_ENV}
     reversed_order = list(reversed(_unit_environment_files()))
     resolved = _resolve_documented_precedence(shared, files=reversed_order)
     assert resolved['GOOGLE_APPLICATION_CREDENTIALS'] == STALE_RELATIVE_VALUE, (
         'the model is vacuous if order does not matter — check the model, '
         'not the unit')
+    assert resolved['FLASK_ENV'] == STALE_FLASK_ENV
 
 
 def test_an_environment_directive_would_not_have_survived_the_shared_env():
@@ -579,6 +597,19 @@ def test_an_environment_directive_would_not_have_survived_the_shared_env():
     resolved['GOOGLE_APPLICATION_CREDENTIALS'] = FIREBASE_CREDENTIAL_PATH
     resolved.update(shared)          # EnvironmentFile= overrides Environment=
     assert resolved['GOOGLE_APPLICATION_CREDENTIALS'] == STALE_RELATIVE_VALUE
+
+
+def test_the_units_flask_env_directive_alone_would_not_have_survived():
+    """The unit still carries Environment=FLASK_ENV=production, and it loses.
+
+    The directive is left in place deliberately — it is a correct default for
+    an installation whose .env says nothing — but it is NOT what makes the
+    worker run in production. Only the worker-specific file does.
+    """
+    assert _unit_environment().get('FLASK_ENV') == 'production'
+    unit_only = dict(_unit_environment())
+    unit_only.update({'FLASK_ENV': STALE_FLASK_ENV})
+    assert unit_only['FLASK_ENV'] == STALE_FLASK_ENV
 
 
 # ── Nothing resolves into the deploy checkout, nothing secret is tracked ─────

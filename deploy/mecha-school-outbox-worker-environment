@@ -28,3 +28,16 @@
 # If the key ever moves, change it here and in the shared .env.
 
 GOOGLE_APPLICATION_CREDENTIALS=/etc/mecha-school/firebase-key.json
+
+# Same defect, second variable. The shared .env carries FLASK_ENV=development,
+# which overrode the unit's Environment=FLASK_ENV=production and left the
+# worker logging env=development while the web tier logged env=production.
+# app/services/outbox_worker.py:_build_app() reads FLASK_ENV straight from the
+# environment, so the worker was building DevelopmentConfig: DEBUG=True, no
+# SQLALCHEMY_ENGINE_OPTIONS (so no pool_pre_ping, no pool_recycle, no connect
+# timeout or keepalives) and no SECRET_KEY fail-fast check. A long-lived
+# polling worker is exactly the process that needs pool_pre_ping.
+#
+# Pinned here rather than with Environment= for the reason above: only a later
+# EnvironmentFile= beats the shared .env.
+FLASK_ENV=production
