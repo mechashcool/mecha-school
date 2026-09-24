@@ -411,7 +411,6 @@ def app_ctx():
     finally:
         ctx.pop()
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # The tracked systemd unit template
 # ─────────────────────────────────────────────────────────────────────────────
@@ -422,30 +421,50 @@ def app_ctx():
 # the web tier used the protected /etc/mecha-school one. Firebase answered
 # "invalid_grant: Invalid JWT Signature" and five outbox attempts died.
 #
-# The unit now pins the absolute path. These assertions run against the tracked
-# file itself so a future edit cannot quietly reintroduce a relative credential.
+# The first attempt at a fix pinned the path with Environment=, which does not
+# work: systemd.exec(5) states that settings from EnvironmentFile= override
+# settings made with Environment=. The shared .env would still have won. The
+# credential is now pinned in a worker-specific EnvironmentFile= listed AFTER
+# the shared one, because when several such files set the same variable they
+# are read in the order listed and the last one wins.
+#
+# These assertions run against the tracked files themselves so a future edit
+# cannot quietly reintroduce a relative credential or reorder the files.
+
+_REPO_ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
 
 UNIT_PATH = _os.path.join(
-    _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
-    'deploy', 'mecha-school-outbox-worker.service')
+    _REPO_ROOT, 'deploy', 'mecha-school-outbox-worker.service')
+WORKER_ENV_PATH = _os.path.join(
+    _REPO_ROOT, 'deploy', 'mecha-school-outbox-worker-environment')
 
 FIREBASE_CREDENTIAL_PATH = '/etc/mecha-school/firebase-key.json'
 DEPLOY_DIR = '/var/www/mecha-school'
+SHARED_ENV_PATH = DEPLOY_DIR + '/.env'
+WORKER_ENV_INSTALLED_PATH = \
+    DEPLOY_DIR + '/deploy/mecha-school-outbox-worker-environment'
+
+# The stale value that actually shipped in the shared .env.
+STALE_RELATIVE_VALUE = 'firebase-key.json'
 
 
-def _unit_text():
-    with open(UNIT_PATH, encoding='utf-8') as fh:
+def _read(path):
+    with open(path, encoding='utf-8') as fh:
         return fh.read()
 
 
+def _unit_text():
+    return _read(UNIT_PATH)
+
+
+def _directives(text):
+    """Non-comment, non-blank lines only — the part systemd acts on."""
+    return [line for line in (raw.strip() for raw in text.splitlines())
+            if line and not line.startswith('#')]
+
+
 def _unit_directives():
-    """Non-comment, non-blank lines only — the part systemd actually acts on."""
-    out = []
-    for raw in _unit_text().splitlines():
-        line = raw.strip()
-        if line and not line.startswith('#'):
-            out.append(line)
-    return out
+    return _directives(_unit_text())
 
 
 def _unit_environment():
@@ -458,56 +477,180 @@ def _unit_environment():
     return env
 
 
-def test_unit_pins_the_absolute_firebase_credential_path():
-    assert _unit_environment().get('GOOGLE_APPLICATION_CREDENTIALS') == \
-        FIREBASE_CREDENTIAL_PATH
+def _unit_environment_files():
+    """EnvironmentFile= paths, in the order the unit lists them."""
+    return [line[len('EnvironmentFile='):].strip()
+            for line in _unit_directives()
+            if line.startswith('EnvironmentFile=')]
 
 
-def test_unit_never_uses_a_relative_firebase_credential():
-    """The exact production defect. A relative value resolves against CWD."""
-    text = _unit_text()
-    assert 'Environment=GOOGLE_APPLICATION_CREDENTIALS=firebase-key.json' not in text
-    value = _unit_environment().get('GOOGLE_APPLICATION_CREDENTIALS', '')
-    assert value.startswith('/'), f'credential path must be absolute, got {value!r}'
+def _worker_env_assignments():
+    """KEY=VALUE pairs in the tracked worker-specific environment file."""
+    env = {}
+    for line in _directives(_read(WORKER_ENV_PATH)):
+        key, sep, value = line.partition('=')
+        assert sep, 'not a KEY=VALUE assignment: %r' % (line,)
+        env[key.strip()] = value.strip()
+    return env
 
 
-def test_unit_loads_no_credential_from_the_deploy_checkout():
-    """/var/www/mecha-school is the git checkout, never a credential store."""
-    value = _unit_environment().get('GOOGLE_APPLICATION_CREDENTIALS', '')
-    assert not value.startswith(DEPLOY_DIR), \
-        f'credential must not live in the deploy checkout: {value!r}'
+# ── Environment files and their order ────────────────────────────────────────
+
+def test_unit_lists_both_environment_files_in_the_required_order():
+    files = _unit_environment_files()
+    assert files == [SHARED_ENV_PATH, WORKER_ENV_INSTALLED_PATH], files
+
+
+def test_worker_environment_file_is_the_tracked_one():
+    """The installed path must be where the checkout actually puts the file."""
+    assert WORKER_ENV_INSTALLED_PATH == \
+        DEPLOY_DIR + '/deploy/' + _os.path.basename(WORKER_ENV_PATH)
+    assert _os.path.isfile(WORKER_ENV_PATH)
+
+
+def test_worker_environment_file_holds_exactly_one_assignment():
+    assert list(_worker_env_assignments()) == ['GOOGLE_APPLICATION_CREDENTIALS']
+
+
+def test_worker_environment_file_pins_the_absolute_credential_path():
+    value = _worker_env_assignments()['GOOGLE_APPLICATION_CREDENTIALS']
+    assert value == FIREBASE_CREDENTIAL_PATH
+    assert value.startswith('/'), 'must be absolute, got %r' % (value,)
+
+
+def test_unit_has_no_ineffective_environment_credential_directive():
+    """Environment= loses to EnvironmentFile=. The old fix must stay removed."""
+    assert 'GOOGLE_APPLICATION_CREDENTIALS' not in _unit_environment()
     for line in _unit_directives():
-        for token in line.replace('=', ' ').split():
-            if DEPLOY_DIR in token:
-                assert not token.endswith('.json'), \
-                    f'JSON credential referenced inside the checkout: {token!r}'
-                assert 'firebase' not in token.lower(), \
-                    f'Firebase credential referenced inside the checkout: {token!r}'
+        assert not line.startswith('Environment=GOOGLE_APPLICATION_CREDENTIALS'), \
+            'ineffective Environment= credential directive: %r' % (line,)
 
 
-def test_unit_embeds_no_credential_material():
-    """The key is referenced by path only — never inlined into the unit."""
-    text = _unit_text()
-    assert 'FIREBASE_SERVICE_ACCOUNT_JSON' not in text
-    assert 'PRIVATE KEY' not in text
-    assert '"private_key"' not in text
+# ── Documented precedence, with a conflicting shared value ───────────────────
 
+def _resolve_documented_precedence(shared_env, files=None):
+    """Model of systemd's DOCUMENTED environment precedence.
+
+    systemd.exec(5): settings from EnvironmentFile= override settings made with
+    Environment=; when several EnvironmentFile= entries set the same variable,
+    the files are read in the order listed and the later setting wins.
+
+    This is a parser-level model of the documented rules, NOT an execution of
+    systemd. The development host is Windows, so real runtime precedence is not
+    exercised anywhere in this suite.
+    """
+    resolved = dict(_unit_environment())
+    for path in (files if files is not None else _unit_environment_files()):
+        if path == SHARED_ENV_PATH:
+            resolved.update(shared_env)
+        elif path == WORKER_ENV_INSTALLED_PATH:
+            resolved.update(_worker_env_assignments())
+        else:
+            raise AssertionError('unexpected EnvironmentFile: %r' % (path,))
+    return resolved
+
+
+def test_worker_file_wins_over_a_conflicting_shared_env():
+    """The exact production conflict: stale relative value in the shared .env."""
+    shared = {
+        'GOOGLE_APPLICATION_CREDENTIALS': STALE_RELATIVE_VALUE,
+        'DATABASE_URL': 'postgresql://user:pass@127.0.0.1:5432/example',
+    }
+    resolved = _resolve_documented_precedence(shared)
+    assert resolved['GOOGLE_APPLICATION_CREDENTIALS'] == FIREBASE_CREDENTIAL_PATH
+    # Unrelated shared values must still come through untouched.
+    assert resolved['DATABASE_URL'] == shared['DATABASE_URL']
+
+
+def test_the_file_order_is_what_makes_the_override_work():
+    """Negative control: reversed order and the stale value would win again."""
+    shared = {'GOOGLE_APPLICATION_CREDENTIALS': STALE_RELATIVE_VALUE}
+    reversed_order = list(reversed(_unit_environment_files()))
+    resolved = _resolve_documented_precedence(shared, files=reversed_order)
+    assert resolved['GOOGLE_APPLICATION_CREDENTIALS'] == STALE_RELATIVE_VALUE, (
+        'the model is vacuous if order does not matter — check the model, '
+        'not the unit')
+
+
+def test_an_environment_directive_would_not_have_survived_the_shared_env():
+    """Why 965f9cc was ineffective, asserted rather than asserted-in-prose."""
+    shared = {'GOOGLE_APPLICATION_CREDENTIALS': STALE_RELATIVE_VALUE}
+    resolved = dict(_unit_environment())
+    resolved['GOOGLE_APPLICATION_CREDENTIALS'] = FIREBASE_CREDENTIAL_PATH
+    resolved.update(shared)          # EnvironmentFile= overrides Environment=
+    assert resolved['GOOGLE_APPLICATION_CREDENTIALS'] == STALE_RELATIVE_VALUE
+
+
+# ── Nothing resolves into the deploy checkout, nothing secret is tracked ─────
+
+def test_no_credential_resolves_into_the_deploy_checkout():
+    """/var/www/mecha-school is the git checkout, never a credential store."""
+    shared = {'GOOGLE_APPLICATION_CREDENTIALS': STALE_RELATIVE_VALUE}
+    value = _resolve_documented_precedence(shared)['GOOGLE_APPLICATION_CREDENTIALS']
+    assert not value.startswith(DEPLOY_DIR), value
+    for text in (_unit_text(), _read(WORKER_ENV_PATH)):
+        for line in _directives(text):
+            for token in line.replace('=', ' ').split():
+                if DEPLOY_DIR in token and 'worker-environment' not in token:
+                    assert not token.endswith('.json'), \
+                        'JSON credential inside the checkout: %r' % (token,)
+                    assert 'firebase' not in token.lower(), \
+                        'Firebase credential inside the checkout: %r' % (token,)
+
+
+def test_no_credential_material_is_tracked():
+    """Both deploy files reference a path only — never key content."""
+    for path in (UNIT_PATH, WORKER_ENV_PATH):
+        text = _read(path)
+        for marker in ('PRIVATE KEY', 'private_key', 'client_email',
+                       'FIREBASE_SERVICE_ACCOUNT_JSON', 'BEGIN RSA',
+                       'serviceAccount'):
+            assert marker not in text, \
+                '%r in %s' % (marker, _os.path.basename(path))
+
+
+def test_no_json_key_file_is_tracked_under_deploy():
+    deploy_dir = _os.path.join(_REPO_ROOT, 'deploy')
+    stray = [n for n in _os.listdir(deploy_dir) if n.lower().endswith('.json')]
+    assert stray == [], 'JSON files under deploy/: %s' % (stray,)
+
+
+# ── Lifecycle isolation guarantees, unchanged by the credential fix ──────────
 
 def test_unit_uses_the_dotvenv_interpreter():
     exec_start = [l for l in _unit_directives() if l.startswith('ExecStart=')]
     assert len(exec_start) == 1, exec_start
-    assert f'{DEPLOY_DIR}/.venv/bin/python' in exec_start[0]
-    assert f'{DEPLOY_DIR}/venv/bin/python' not in exec_start[0]
+    assert DEPLOY_DIR + '/.venv/bin/python' in exec_start[0]
+    assert DEPLOY_DIR + '/venv/bin/python' not in exec_start[0]
 
 
 def test_unit_keeps_the_outbox_feature_disabled_by_default():
     assert _unit_environment().get('INSTITUTE_ATTENDANCE_OUTBOX_ENABLED') == 'false'
+    assert 'INSTITUTE_ATTENDANCE_OUTBOX_ENABLED' not in _worker_env_assignments()
 
 
 def test_unit_declares_the_outbox_worker_role():
     assert _unit_environment().get(lifecycle.ROLE_ENV_VAR) == \
         lifecycle.ROLE_OUTBOX_WORKER
     assert lifecycle.ROLE_OUTBOX_WORKER not in lifecycle._BACKGROUND_SERVICE_ROLES
+    assert lifecycle.ROLE_ENV_VAR not in _worker_env_assignments()
+
+
+def test_unit_keeps_its_service_identity_and_restart_policy():
+    """Guarantees the credential fix must not have disturbed."""
+    directives = _unit_directives()
+    for required in ('User=root', 'Group=www-data',
+                     'WorkingDirectory=' + DEPLOY_DIR,
+                     'KillSignal=SIGTERM', 'TimeoutStopSec=60',
+                     'Restart=on-failure', 'RestartSec=10',
+                     'NoNewPrivileges=true', 'PrivateTmp=true',
+                     'ProtectSystem=full', 'Environment=FLASK_ENV=production'):
+        assert required in directives, 'missing directive: %r' % (required,)
+    env = _unit_environment()
+    assert env['OUTBOX_BATCH_SIZE'] == '20'
+    assert env['OUTBOX_POLL_SECONDS'] == '5'
+    assert env['OUTBOX_LEASE_SECONDS'] == '300'
+    assert env['OUTBOX_MAX_ATTEMPTS'] == '5'
 
 
 def test_unit_starts_only_the_outbox_loop():
@@ -521,7 +664,7 @@ def test_unit_starts_only_the_outbox_loop():
     for forbidden in ('gunicorn', 'wsgi', 'flask run', 'hikvision',
                       'ai_face', '7788', 'celery'):
         assert forbidden not in directives, \
-            f'{forbidden!r} must not appear in the worker unit directives'
+            '%r must not appear in the worker unit directives' % (forbidden,)
 
 
 if __name__ == '__main__':

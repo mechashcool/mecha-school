@@ -1,0 +1,30 @@
+# Worker-specific environment for mecha-school-outbox-worker.service.
+#
+# NOT A SECRET. This file holds a credential PATH and nothing else. Never add a
+# service-account JSON, a private key, a database URL, a token or any other
+# secret value here — it is tracked in git.
+#
+# Why this file exists
+# ────────────────────
+# systemd.exec(5), EnvironmentFile=: "Settings from these files override
+# settings made with Environment=." An Environment= line in the unit therefore
+# cannot win against the shared /var/www/mecha-school/.env, which the web tier
+# and this worker both load. When several EnvironmentFile= entries set the same
+# variable, they are read in the order listed and the last one wins, so the
+# unit lists this file AFTER the shared .env.
+#
+# The defect this closes
+# ──────────────────────
+# The shared .env carried GOOGLE_APPLICATION_CREDENTIALS=firebase-key.json.
+# A relative path resolves against WorkingDirectory=/var/www/mecha-school, i.e.
+# the deploy checkout, where a stale service-account key sat untracked. The
+# worker loaded it, Firebase answered "invalid_grant: Invalid JWT Signature",
+# and five delivery attempts died — while the web tier, pointed at the
+# protected key, kept working.
+#
+# Installed path: /var/www/mecha-school/deploy/mecha-school-outbox-worker-environment
+# Deployed by the normal checkout; no separate operator copy step is required.
+#
+# If the key ever moves, change it here and in the shared .env.
+
+GOOGLE_APPLICATION_CREDENTIALS=/etc/mecha-school/firebase-key.json

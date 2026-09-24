@@ -43,6 +43,21 @@ WorkingDirectory=/var/www/mecha-school
 # rewriting the file.
 EnvironmentFile=/var/www/mecha-school/.env
 
+# Worker-specific overrides — MUST stay listed AFTER the shared .env above.
+#
+# systemd.exec(5), EnvironmentFile=: "Settings from these files override
+# settings made with Environment=." So an Environment= line in this unit can
+# NOT be relied on to beat the shared .env; only a later EnvironmentFile= can.
+# When the same variable is set by several EnvironmentFile= entries, the files
+# are read in the order listed and the LAST one wins — which is the whole
+# reason this line sits here rather than above.
+#
+# The file is tracked in the repository and contains no secret: a credential
+# PATH only. If it is missing the unit fails to start, which is the intended
+# fail-closed behaviour — a worker with no pinned credential path would fall
+# back to whatever the shared .env says, and that is the defect being fixed.
+EnvironmentFile=/var/www/mecha-school/deploy/mecha-school-outbox-worker-environment
+
 # Defence in depth: even if a future entry point forgets to declare its role,
 # this process can never start the attendance scheduler, the AI Face WebSocket
 # receiver, the Hikvision sync loop, the fee-reminder scheduler or the
@@ -51,25 +66,14 @@ Environment=MECHA_PROCESS_ROLE=outbox-worker
 
 Environment=FLASK_ENV=production
 
-# Firebase credential — ABSOLUTE path, deliberately pinned here.
-#
-# A relative value such as GOOGLE_APPLICATION_CREDENTIALS=firebase-key.json
-# resolves against WorkingDirectory= above, i.e. to
-# /var/www/mecha-school/firebase-key.json — the deploy checkout, where a stale
-# service-account key can sit untracked and produce
-# "invalid_grant: Invalid JWT Signature" at send time rather than a clear
-# missing-credential error. That is exactly what happened to this worker in
-# production while the web tier used the protected key and kept working.
-#
-# Environment= is applied AFTER EnvironmentFile=, so this line also overrides a
-# stale relative GOOGLE_APPLICATION_CREDENTIALS still present in the .env. If
-# the key ever moves, change it HERE as well as in the .env.
-Environment=GOOGLE_APPLICATION_CREDENTIALS=/etc/mecha-school/firebase-key.json
+# GOOGLE_APPLICATION_CREDENTIALS is deliberately NOT set here with Environment=.
+# The shared .env would override it. It is pinned in the worker-specific
+# EnvironmentFile= listed after the .env above.
 
 # Safe default. The worker idles harmlessly while this is false, so the unit
 # may be installed and started before the feature is switched on. An
-# INSTITUTE_ATTENDANCE_OUTBOX_ENABLED line in the EnvironmentFile above
-# overrides this, because EnvironmentFile= is applied before Environment=.
+# INSTITUTE_ATTENDANCE_OUTBOX_ENABLED line in either EnvironmentFile= above
+# overrides this, because EnvironmentFile= settings override Environment=.
 Environment=INSTITUTE_ATTENDANCE_OUTBOX_ENABLED=false
 
 Environment=OUTBOX_BATCH_SIZE=20
