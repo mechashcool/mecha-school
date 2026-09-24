@@ -11,6 +11,16 @@ that can perform I/O beyond the local ledger file.
 The error classes carry the same NAMES the production classifier keys on
 (UnregisteredError, SenderIdMismatchError, QuotaExceededError), so the opt-in
 failure modes exercise the real classification code rather than a stub of it.
+
+Modes:
+  success         every send succeeds (default)
+  unregistered    permanent failure — the token is dead
+  senderid        permanent failure — wrong sender
+  transient       EVERY send fails transiently; jobs retry until they die
+  transient_once  the FIRST send to each token fails transiently and every
+                  send after it succeeds. This is the only mode that can prove
+                  the full pending -> processing -> retry -> processing -> sent
+                  lifecycle, because `transient` never lets a job finish.
 """
 from __future__ import annotations
 
@@ -109,6 +119,12 @@ def send(message, dry_run=False, app=None):
         raise SenderIdMismatchError('SenderId mismatch',
                                     code='SENDER_ID_MISMATCH')
     if m == 'transient':
+        ledger().record(token, ok=False)
+        raise UnavailableError('The service is currently unavailable.',
+                               code='UNAVAILABLE')
+    if m == 'transient_once' and ledger().attempts_for(token) == 0:
+        # Fail the first attempt for this token only. The worker is
+        # single-threaded, so read-then-record needs no lock of its own.
         ledger().record(token, ok=False)
         raise UnavailableError('The service is currently unavailable.',
                                code='UNAVAILABLE')

@@ -62,9 +62,14 @@ REPORT = {'started_utc': dt.datetime.now(dt.timezone.utc).isoformat(),
 
 # Worker throughput controls used per mode. Every one of these is an existing
 # production environment variable; no application sleep is introduced.
+# Which ladder to run: 'full' (every stage) or 'final' (only what has never
+# completed end to end). Unknown names raise rather than silently defaulting.
+LADDER_NAME = (os.environ.get('ATTLT_LADDER') or 'full').strip()
+
 NORMAL_BATCH, NORMAL_POLL = 20, 1.0
 THROTTLED_BATCH, THROTTLED_POLL = 5, 2.0
 KILL_BATCH, KILL_POLL = 200, 1.0      # one big claim, so a SIGKILL strands rows
+RETRY_BATCH, RETRY_POLL = 20, 2.0     # retry probe: poll often enough to see it
 
 
 class RoundFailed(SystemExit):
@@ -281,17 +286,18 @@ def row_counts(cfg, sec) -> dict:
 
 def step_plan(cfg, inst):
     section('4  preflight — ladder arithmetic and determinism')
-    budget = stages.budget(cfg['num_schools'])
-    alloc = stages.allocate(cfg['num_schools'])
+    ladder = stages.ladder_for(LADDER_NAME)
+    budget = stages.budget(cfg['num_schools'], ladder)
+    alloc = stages.allocate(cfg['num_schools'], ladder)
 
-    peak = stages.peak_stopped_backlog()
+    peak = stages.peak_stopped_backlog(ladder)
     ceiling = guard_rules.OUTBOX_THRESHOLDS['outbox_backlog_ceiling']
     if peak >= ceiling:
         raise RoundFailed(f'planned stopped-worker backlog {peak} would reach '
                           f'the watchdog ceiling {ceiling}')
 
     plans, predicted = {}, {}
-    for stage in stages.LADDER:
+    for stage in ladder:
         af = stages.absent_fraction_for(stage['transitions_per_session'])
         a = igen.build_plan(cfg, inst, waves=1, rate=1.0, absent_fraction=af)
         b = igen.build_plan(cfg, inst, waves=1, rate=1.0, absent_fraction=af)
@@ -323,6 +329,7 @@ def step_plan(cfg, inst):
                           'second use would create no transitions')
 
     payload = {
+        'ladder': LADDER_NAME,
         'budget': budget,
         'peak_planned_stopped_backlog_jobs': peak,
         'watchdog_backlog_ceiling': ceiling,
@@ -330,12 +337,12 @@ def step_plan(cfg, inst):
         'sessions_used_by_ladder': len(all_sessions),
         'sessions_disjoint_across_stages': True,
         'deterministic': True,
-        'tokens_per_parent_active': predicted[stages.LADDER[0]['name']][
+        'tokens_per_parent_active': predicted[ladder[0]['name']][
             'active_tokens_per_parent'],
     }
     REPORT['preflight']['ladder'] = payload
     say(json.dumps(payload, indent=2))
-    return plans, predicted, alloc
+    return plans, predicted, ladder
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -641,6 +648,40 @@ def count_reclaims(root) -> int:
     return total
 
 
+def job_states(cfg, sec, school_ids) -> dict:
+    """Per-status counts plus attempt depth. Reads status and attempts only."""
+    conn = psycopg2.connect(**common.pg_dsn(cfg, sec))
+    conn.set_session(readonly=True, autocommit=True)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT status, count(*), COALESCE(max(attempts), 0) "
+                    "FROM notification_outbox WHERE school_id = ANY(%s) "
+                    "GROUP BY status", (list(school_ids),))
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    out = {s: 0 for s in omon.STATUSES}
+    out['max_attempts'] = 0
+    for status, n, mx in rows:
+        out[status] = int(n)
+        out['max_attempts'] = max(out['max_attempts'], int(mx))
+    out['total'] = sum(out[s] for s in omon.STATUSES)
+    return out
+
+
+def retry_log_lines(root, limit=6) -> list:
+    """The worker's own account of the retry. Counts only; no payload."""
+    path = os.path.join(root, 'logs', 'worker.log')
+    if not os.path.exists(path):
+        return []
+    keep = []
+    with open(path, encoding='utf-8', errors='replace') as fh:
+        for line in fh:
+            if 'retry=' in line and 'claimed=' in line:
+                keep.append(line.rstrip()[-200:])
+    return keep[-limit:]
+
+
 def db_activity(cfg, sec) -> dict:
     conn = psycopg2.connect(**common.pg_dsn(cfg, sec))
     conn.set_session(readonly=True, autocommit=True)
@@ -754,14 +795,17 @@ class Round:
         self.ledger_path = os.path.join(OUT, 'institute_events.jsonl')
         self.rows = []
         self.worker_mode = None
+        self.worker_fake_mode = 'success'
 
     # ── worker lifecycle ──────────────────────────────────────────────────
     def worker_running(self) -> bool:
         return bool(wc.status(self.cfg).get('running'))
 
-    def start_worker(self, *, batch_size, poll_seconds):
+    def start_worker(self, *, batch_size, poll_seconds, fake_mode='success'):
         wc.start(self.cfg, self.sec, netns_proof_ok=True,
-                 batch_size=batch_size, poll_seconds=poll_seconds)
+                 batch_size=batch_size, poll_seconds=poll_seconds,
+                 fake_mode=fake_mode)
+        self.worker_fake_mode = fake_mode
 
     def stop_worker(self):
         # Seal AFTER the process is gone. The fake's counters live in the
@@ -816,6 +860,10 @@ class Round:
         mode = stage['worker']
 
         if mode == stages.WORKER_RUNNING:
+            if self.worker_running() and self.worker_fake_mode != 'success':
+                # The retry probe leaves a failure-injecting worker behind. A
+                # throughput stage must not inherit it.
+                self.stop_worker()
             if not self.worker_running():
                 self.start_worker(batch_size=NORMAL_BATCH,
                                   poll_seconds=NORMAL_POLL)
@@ -857,6 +905,10 @@ class Round:
 
         elif mode == stages.WORKER_KILL_CYCLE:
             rec.update(self._kill_cycle(stage, entries))
+            drain_complete = True
+
+        elif mode == stages.WORKER_RETRY_PROBE:
+            rec.update(self._retry_probe(stage, entries))
             drain_complete = True
 
         else:
@@ -906,6 +958,112 @@ class Round:
             'achieved_requests_per_s': round(len(rows) / max(elapsed, 1e-6), 2),
             'latency': latency_stats(rows),
         }
+
+    def _retry_probe(self, stage, entries) -> dict:
+        """A transient Firebase failure must delay delivery and nothing else.
+
+        The smallest deterministic configuration that shows the whole
+        lifecycle: one absence, one parent, two device tokens, two jobs. The
+        fake fails the FIRST attempt on each token and succeeds on every
+        attempt after it, so the job has to travel
+        pending -> processing -> retry -> processing -> sent under its own
+        backoff, with no worker restart anywhere in the path.
+
+        What this stage is really asserting is a separation: attendance and its
+        in-app Notification are committed by the web request, before any
+        delivery is attempted, so a Firebase failure can move a queue row and
+        must not touch either of them.
+        """
+        out = {}
+        self.stop_worker()
+        out.update(self._drive(stage, entries))
+
+        # The state the delivery layer is forbidden to change, captured after
+        # the request completed and before any send is attempted.
+        before = self.observe()
+        out['before_delivery'] = {
+            'attendance_records': before['attendance_records_total'],
+            'absent_records': before['attendance_absent_records'],
+            'notification_rows': before['notification_rows'],
+            'outbox_jobs': sum(before['outbox_status_counts'].values()),
+            'distinct_dedup_keys': before['outbox_distinct_dedup_keys'],
+            'fake_attempts': before['fake_attempts'],
+        }
+        expected_jobs = stages.stage_jobs(stage)
+        pre = sample_backlog(self.sampler, self.th)
+        out['pending_before_worker'] = pre['outbox_pending']
+        if pre['outbox_backlog'] != expected_jobs:
+            raise RoundFailed(
+                f'retry probe expected {expected_jobs} queued job(s), '
+                f'found {pre["outbox_backlog"]}')
+
+        self.start_worker(batch_size=RETRY_BATCH, poll_seconds=RETRY_POLL,
+                          fake_mode='transient_once')
+        started = wc.status(self.cfg)
+        out['worker_pid'] = started.get('pid')
+        out['fake_firebase_mode'] = 'transient_once'
+
+        # 1. the first attempt must FAIL and park the job in `retry`
+        out['retry_observed'] = self._await_states(
+            lambda s: s['retry'] >= expected_jobs, timeout=90,
+            what=f'{expected_jobs} job(s) in retry')
+        out['after_first_attempt'] = out['retry_observed']
+        if out['retry_observed']['dead']:
+            raise RoundFailed('a transient failure produced a dead job')
+
+        # 2. the SAME worker must carry it to `sent` once the backoff elapses
+        out['sent_observed'] = self._await_states(
+            lambda s: s['sent'] >= expected_jobs, timeout=240,
+            what=f'{expected_jobs} job(s) sent')
+        finished = wc.status(self.cfg)
+        out['worker_pid_after'] = finished.get('pid')
+        out['worker_restart_required'] = (
+            out['worker_pid'] != out['worker_pid_after'])
+        if out['worker_restart_required']:
+            raise RoundFailed('the worker changed identity during the retry — '
+                              'a normal retry must not need a restart')
+        final = sample_backlog(self.sampler, self.th)
+        out['unplanned_worker_restarts'] = final.get(
+            'unplanned_worker_restarts')
+
+        after = self.observe()
+        out['after_delivery'] = {
+            'attendance_records': after['attendance_records_total'],
+            'absent_records': after['attendance_absent_records'],
+            'notification_rows': after['notification_rows'],
+            'outbox_jobs': sum(after['outbox_status_counts'].values()),
+            'distinct_dedup_keys': after['outbox_distinct_dedup_keys'],
+            'fake_attempts': after['fake_attempts'],
+            'fake_failures': after['fake_failures'],
+            'fake_successes': after['fake_successes'],
+        }
+        unchanged = {k: out['before_delivery'][k] == out['after_delivery'][k]
+                     for k in ('attendance_records', 'absent_records',
+                               'notification_rows', 'outbox_jobs',
+                               'distinct_dedup_keys')}
+        out['attendance_untouched_by_firebase_failure'] = unchanged
+        if not all(unchanged.values()):
+            raise RoundFailed(
+                f'a Firebase failure changed committed state: {unchanged}')
+        out['max_attempts_reached'] = out['sent_observed']['max_attempts']
+        out['worker_log_retry_lines'] = retry_log_lines(ROOT)
+        return out
+
+    def _await_states(self, ready, *, timeout, what, interval=1.0) -> dict:
+        """Poll the job state table until `ready`, or fail with what was seen.
+
+        Reads `status` and `attempts` only — no title, body, data_json, dedup
+        key or device token is ever selected.
+        """
+        deadline, last = time.time() + timeout, None
+        while time.time() < deadline:
+            last = job_states(self.cfg, self.sec, self.school_ids)
+            if ready(last):
+                last['waited_s'] = round(timeout - (deadline - time.time()), 2)
+                return last
+            time.sleep(interval)
+        raise RoundFailed(f'timed out after {timeout}s waiting for {what}; '
+                          f'last observed {last}')
 
     def _kill_cycle(self, stage, entries) -> dict:
         """Mode C: build a backlog, let one big batch be claimed, SIGKILL it."""
@@ -975,7 +1133,7 @@ def main():
     sec = common.load_secrets(ROOT)
     step_gates(cfg, sec)
     inst = step_seed(cfg, sec)
-    plans, predicted, alloc = step_plan(cfg, inst)
+    plans, predicted, ladder = step_plan(cfg, inst)
     tokens = step_target(cfg, sec, inst)
     wd_proc, sentinel = step_watchdog()
     REPORT['watchdog'] = {'pid': wd_proc.pid, 'outbox_monitor': True}
@@ -983,7 +1141,7 @@ def main():
         step_live_outbox_proof()
         rnd = Round(cfg, sec, inst, plans, tokens)
         rnd.start_worker(batch_size=NORMAL_BATCH, poll_seconds=NORMAL_POLL)
-        for stage in stages.LADDER:
+        for stage in ladder:
             if wd_proc.poll() is not None:
                 raise RoundFailed('the watchdog exited — refusing to run a '
                                   'stage unguarded')

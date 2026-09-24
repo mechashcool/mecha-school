@@ -252,7 +252,8 @@ def main():
     ap.add_argument('--lease-seconds', type=int, default=EXPERIMENT_LEASE_SECONDS)
     ap.add_argument('--max-attempts', type=int, default=5)
     ap.add_argument('--fake-mode', default='success',
-                    choices=['success', 'unregistered', 'transient', 'senderid'])
+                    choices=['success', 'unregistered', 'transient', 'senderid',
+                             'transient_once'])
     ap.add_argument('--netns-proof-ok', action='store_true')
     a = ap.parse_args()
     root = os.path.abspath(a.root)

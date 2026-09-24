@@ -41,6 +41,7 @@ WORKER_RUNNING = 'running'        # normal worker, default batch
 WORKER_STOPPED = 'stopped'        # Mode A: SIGTERM'd before the stage
 WORKER_DRAINING = 'draining'      # Mode B: throttled worker, backlog falling
 WORKER_KILL_CYCLE = 'kill-cycle'  # Mode C: claim, SIGKILL, restart, reclaim
+WORKER_RETRY_PROBE = 'retry-probe'  # transient Firebase failure, then success
 
 
 def slot_order(num_schools: int) -> list:
@@ -121,6 +122,45 @@ LADDER = [
          worker=WORKER_RUNNING, target_tps=50.0, concurrency=8,
          purpose='short burst: ~50 transitions/s'),
 ]
+
+
+# The FINAL validation ladder. Deliberately NOT the full ladder: the stages it
+# leaves out (low load, modest concurrency, the stopped-worker burst, the
+# throttled drain and the three latency probes) have already passed in an
+# earlier isolated round, and repeating them proves nothing new. What is left
+# is what has never completed end to end.
+#
+# Mode C is sized DOWN on purpose. The question is whether a killed worker's
+# claimed rows come back, which one real claimed batch answers; a large backlog
+# would only make the stage slower and the reclaim window harder to observe.
+
+FINAL_LADDER = [
+    dict(name='MC_kill_reclaim', slots=5, transitions_per_session=20,
+         worker=WORKER_KILL_CYCLE, target_tps=20.0, concurrency=4,
+         purpose='Mode C: SIGKILL mid-batch, lease reclaim, eventual delivery'),
+
+    dict(name='R_transient_retry', slots=1, transitions_per_session=1,
+         worker=WORKER_RETRY_PROBE, target_tps=1.0, concurrency=1,
+         purpose='transient Firebase failure -> retry -> sent, same worker'),
+
+    dict(name='P1_11_tps', slots=20, transitions_per_session=20,
+         worker=WORKER_RUNNING, target_tps=11.0, concurrency=4,
+         purpose='progressive throughput: ~11 transitions/s'),
+
+    dict(name='P2_22_tps', slots=30, transitions_per_session=20,
+         worker=WORKER_RUNNING, target_tps=22.0, concurrency=6,
+         purpose='progressive throughput: ~22 transitions/s'),
+]
+
+LADDERS = {'full': LADDER, 'final': FINAL_LADDER}
+
+
+def ladder_for(name: str) -> list:
+    """Pick a named ladder. Unknown names fail rather than silently defaulting."""
+    try:
+        return LADDERS[name]
+    except KeyError:
+        raise ValueError(f'unknown ladder {name!r}; known: {sorted(LADDERS)}')
 
 
 def stage_transitions(stage: dict) -> int:

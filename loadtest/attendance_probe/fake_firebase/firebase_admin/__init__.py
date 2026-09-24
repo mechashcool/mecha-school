@@ -125,6 +125,10 @@ class _Ledger:
         return hashlib.sha256(
             (self._salt + '|' + (token or '')).encode('utf-8')).hexdigest()[:16]
 
+    def attempts_for(self, token: str) -> int:
+        """How many times this token has already been sent to. No token stored."""
+        return self.fingerprints.get(self.fingerprint(token), 0)
+
     def note_init(self, options: dict) -> None:
         self.init_options = {k: v for k, v in options.items() if k != 'credential'}
         self.flush()
@@ -186,10 +190,12 @@ def ledger() -> _Ledger:
 
 
 def mode() -> str:
-    """'success' (default), 'unregistered', 'transient' or 'senderid'.
+    """'success' (default), 'unregistered', 'senderid', 'transient' or
+    'transient_once'.
 
-    Failure modes exist for a later retry/dead-state test. They are opt-in via
-    ATTLT_FAKE_FIREBASE_MODE and default to success.
+    Failure modes are opt-in via ATTLT_FAKE_FIREBASE_MODE and default to
+    success. 'transient_once' fails only the first attempt per token, which is
+    what makes a retry observable end to end.
     """
     return (os.environ.get('ATTLT_FAKE_FIREBASE_MODE') or 'success').strip().lower()
 

@@ -139,9 +139,19 @@ def compute(expected: dict, observed: dict) -> dict:
             'duplicate_sends': observed.get('fake_duplicate_sends', 0),
         },
     }
+    # A repeated send to the same token is only a defect when nothing explains
+    # it. Two things legitimately do, and both are counted rather than assumed:
+    #   * a lease reclaim after an interrupted batch re-delivers a claimed job;
+    #   * a FAILED delivery attempt is itself a send to that token, so a job
+    #     that fails once and succeeds on retry necessarily touches it twice.
+    # In a success-mode round both are zero, so the invariant is unchanged.
+    explained_reclaim = int(observed.get('worker_reclaims', 0) or 0)
+    explained_retry = int(observed.get('fake_failures', 0) or 0)
+    report['fake_firebase']['explained_by_reclaim'] = explained_reclaim
+    report['fake_firebase']['explained_by_failed_attempt'] = explained_retry
     report['fake_firebase']['unexplained_duplicate_sends'] = max(
         0, report['fake_firebase']['duplicate_sends']
-        - observed.get('worker_reclaims', 0))
+        - explained_reclaim - explained_retry)
     return report
 
 

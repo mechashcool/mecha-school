@@ -1983,8 +1983,9 @@ def test_every_stage_declares_a_known_worker_mode():
              stages.WORKER_DRAINING, stages.WORKER_KILL_CYCLE}
     for stage in stages.LADDER:
         assert stage['worker'] in known, stage['name']
-    # Every mode is exercised at least once, or the round proves less than it
-    # claims to.
+    # Every mode the FULL ladder declares is exercised at least once, or the
+    # round proves less than it claims to. The retry probe belongs to the final
+    # ladder, so it is not expected here.
     assert {s['worker'] for s in stages.LADDER} == known
 
 
@@ -2154,3 +2155,220 @@ def test_alive_checks_status_and_not_only_the_timestamp():
     code = _code_only(inspect.getsource(target_mod._alive))
     assert 'STATUS_ZOMBIE' in code
     assert 'create_time' in code
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  transient_once: the only fake mode that can show a retry finishing
+# ═════════════════════════════════════════════════════════════════════════════
+
+TRANSIENT_ONCE_CODE = '''
+import json, socket
+
+
+class NoNetwork(Exception):
+    pass
+
+
+def _blocked(*a, **k):
+    raise NoNetwork('the fake firebase attempted network I/O')
+
+
+socket.socket = _blocked
+socket.create_connection = _blocked
+socket.getaddrinfo = _blocked
+
+import firebase_admin
+from firebase_admin import messaging
+
+out = {'sequence': []}
+for token in ('LTabc123-TOK-00001-0', 'LTabc123-TOK-00001-1'):
+    for attempt in range(3):
+        try:
+            messaging.send(messaging.Message(token=token))
+            out['sequence'].append([token[-1], attempt, 'sent'])
+        except messaging.UnavailableError as exc:
+            out['sequence'].append([token[-1], attempt, type(exc).__name__])
+led = firebase_admin.ledger()
+out.update({'attempts': led.attempts, 'successes': led.successes,
+            'failures': led.failures, 'distinct': len(led.fingerprints)})
+print(json.dumps(out))
+'''
+
+
+def _fake_json(result):
+    line = [ln for ln in result.stdout.splitlines() if ln.startswith('{')]
+    assert line, result.stdout + result.stderr
+    return json.loads(line[-1])
+
+
+def test_transient_once_fails_the_first_attempt_per_token_then_succeeds(
+        experiment):
+    r = _run_fake(TRANSIENT_ONCE_CODE,
+                  {'ATTLT_FAKE_FIREBASE': '1',
+                   'ATTLT_FAKE_FIREBASE_MODE': 'transient_once',
+                   'ATTLT_EXPERIMENT_ID': EXPERIMENT_ID},
+                  root=experiment['root'])
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = _fake_json(r)
+    # Each token: first attempt transient, the two after it succeed.
+    assert out['sequence'] == [['0', 0, 'UnavailableError'],
+                               ['0', 1, 'sent'], ['0', 2, 'sent'],
+                               ['1', 0, 'UnavailableError'],
+                               ['1', 1, 'sent'], ['1', 2, 'sent']]
+    assert out['failures'] == 2 and out['successes'] == 4
+    assert out['attempts'] == 6 and out['distinct'] == 2
+
+
+def test_transient_mode_still_never_succeeds(experiment):
+    """The pre-existing mode is unchanged: it is the 'outage' mode, not a retry."""
+    r = _run_fake(TRANSIENT_ONCE_CODE,
+                  {'ATTLT_FAKE_FIREBASE': '1',
+                   'ATTLT_FAKE_FIREBASE_MODE': 'transient',
+                   'ATTLT_EXPERIMENT_ID': EXPERIMENT_ID},
+                  root=experiment['root'])
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = _fake_json(r)
+    assert all(step[2] == 'UnavailableError' for step in out['sequence'])
+    assert out['successes'] == 0 and out['failures'] == 6
+
+
+def test_default_mode_is_unaffected_by_the_new_branch(experiment):
+    r = _run_fake(TRANSIENT_ONCE_CODE,
+                  {'ATTLT_FAKE_FIREBASE': '1',
+                   'ATTLT_EXPERIMENT_ID': EXPERIMENT_ID},
+                  root=experiment['root'])
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = _fake_json(r)
+    assert all(step[2] == 'sent' for step in out['sequence'])
+    assert out['failures'] == 0 and out['successes'] == 6
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  A failed delivery attempt explains a repeated send
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _retry_observed(**over):
+    obs = {
+        'attendance_records_total': 1, 'attendance_absent_records': 1,
+        'attendance_unexpected': 0, 'attendance_duplicate_logical': 0,
+        'attendance_cross_school': 0, 'sessions_recorded': 1,
+        'notification_rows': 1, 'notification_cross_school': 0,
+        'outbox_status_counts': {'sent': 2}, 'outbox_distinct_dedup_keys': 2,
+        'outbox_cross_school': 0, 'transitions_missing_job': 0,
+        'jobs_without_transition': 0,
+        'fake_attempts': 4, 'fake_successes': 2, 'fake_failures': 2,
+        'fake_distinct': 2, 'fake_duplicate_sends': 2, 'worker_reclaims': 0,
+    }
+    obs.update(over)
+    return obs
+
+
+def _retry_expected():
+    return orec.expected_from_ledger(
+        [{'seq': 0, 'wave': 0, 'session_id': 1, 'absent_student_ids': [7],
+          'response_status': 200, 'error': None}], tokens_per_parent=2)
+
+
+def test_a_failed_attempt_explains_its_own_repeat_send():
+    r = orec.verdict(orec.compute(_retry_expected(), _retry_observed()),
+                     drain_complete=True)
+    f = r['fake_firebase']
+    assert f['duplicate_sends'] == 2
+    assert f['explained_by_failed_attempt'] == 2
+    assert f['explained_by_reclaim'] == 0
+    assert f['unexplained_duplicate_sends'] == 0
+    assert r['correct'], r['violations']
+
+
+def test_a_repeat_send_with_no_failure_and_no_reclaim_is_still_a_violation():
+    obs = _retry_observed(fake_failures=0, fake_successes=4, fake_attempts=4)
+    r = orec.verdict(orec.compute(_retry_expected(), obs),
+                     drain_complete=True)
+    assert r['fake_firebase']['unexplained_duplicate_sends'] == 2
+    assert not r['correct']
+    assert any('unexplained_duplicate_sends' in v for v in r['violations'])
+
+
+def test_success_mode_accounting_is_unchanged_by_the_new_explanation():
+    obs = _retry_observed(fake_attempts=2, fake_successes=2, fake_failures=0,
+                          fake_duplicate_sends=0)
+    r = orec.verdict(orec.compute(_retry_expected(), obs),
+                     drain_complete=True)
+    assert r['fake_firebase']['unexplained_duplicate_sends'] == 0
+    assert r['correct'], r['violations']
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  The final validation ladder
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_final_ladder_stages_use_disjoint_slots():
+    alloc = stages.allocate(24, stages.FINAL_LADDER)
+    seen = set()
+    for name, slots in alloc.items():
+        for slot in slots:
+            assert slot not in seen, f'{name} reuses slot {slot}'
+            seen.add(slot)
+    assert len(seen) == sum(s['slots'] for s in stages.FINAL_LADDER)
+
+
+def test_final_ladder_skips_only_stages_already_proven():
+    names = [s['name'] for s in stages.FINAL_LADDER]
+    assert names == ['MC_kill_reclaim', 'R_transient_retry',
+                     'P1_11_tps', 'P2_22_tps']
+    # P3 is deliberately absent: this task must not run it.
+    assert not any(n.startswith('P3') for n in names)
+
+
+def test_final_ladder_throughput_stages_are_ordered():
+    rates = [s['target_tps'] for s in stages.FINAL_LADDER
+             if s['name'].startswith('P')]
+    assert rates == sorted(rates) and rates == [11.0, 22.0]
+
+
+def test_final_ladder_mode_c_is_small_enough_to_observe():
+    mc = stages.FINAL_LADDER[0]
+    jobs = stages.stage_jobs(mc)
+    assert mc['worker'] == stages.WORKER_KILL_CYCLE
+    assert 100 <= jobs <= 300, jobs
+
+
+def test_the_retry_probe_is_the_smallest_configuration_that_proves_it():
+    probe = [s for s in stages.FINAL_LADDER
+             if s['worker'] == stages.WORKER_RETRY_PROBE]
+    assert len(probe) == 1
+    assert stages.stage_transitions(probe[0]) == 1
+    assert stages.stage_jobs(probe[0]) == ic.TOKENS_PER_PARENT
+
+
+def test_final_ladder_needs_no_stopped_worker_backlog():
+    assert stages.peak_stopped_backlog(stages.FINAL_LADDER) == 0
+
+
+def test_ladder_for_rejects_an_unknown_name():
+    assert stages.ladder_for('full') is stages.LADDER
+    assert stages.ladder_for('final') is stages.FINAL_LADDER
+    with pytest.raises(ValueError) as exc:
+        stages.ladder_for('p3-please')
+    assert 'unknown ladder' in str(exc.value)
+
+
+def test_every_final_ladder_stage_declares_a_known_worker_mode():
+    known = {stages.WORKER_RUNNING, stages.WORKER_STOPPED,
+             stages.WORKER_DRAINING, stages.WORKER_KILL_CYCLE,
+             stages.WORKER_RETRY_PROBE}
+    for stage in stages.FINAL_LADDER + stages.LADDER:
+        assert stage['worker'] in known, stage['name']
+
+
+def test_final_ladder_arithmetic_matches_the_generator():
+    cfg, inst = _ladder_fixtures(schools=24)
+    alloc = stages.allocate(24, stages.FINAL_LADDER)
+    for stage in stages.FINAL_LADDER:
+        af = stages.absent_fraction_for(stage['transitions_per_session'])
+        plan = igen.build_plan(cfg, inst, waves=1, rate=1.0,
+                               absent_fraction=af)
+        entries = stages.entries_for(plan, inst, alloc[stage['name']])
+        exp = igen.expected_outbox_jobs(entries, inst, cfg)
+        assert (exp['newly_absent_transitions']
+                == stages.stage_transitions(stage)), stage['name']
+        assert exp['expected_jobs'] == stages.stage_jobs(stage), stage['name']
