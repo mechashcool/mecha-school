@@ -209,8 +209,14 @@ def kill(cfg):
     if p.cmdline() != info['cmdline']:
         print('worker pid identity mismatch — refusing to kill')
         return None
-    for q in [p] + p.children(recursive=True):
+    procs = [p] + p.children(recursive=True)
+    for q in procs:
         q.kill()
+    # Reap. Without this the killed child stays a zombie holding its pid, and
+    # start() below would see it and refuse to launch a replacement — the
+    # reclaim can then never happen because no worker is running. stop() has
+    # always reaped via wait_procs; kill() did not.
+    psutil.wait_procs(procs, timeout=10)
     manifest.update_resource(cfg['root'], 'process', {'pid': info['pid']},
                              killed_at=manifest.utcnow_iso())
     outbox_monitor.record_lifecycle_event(cfg['root'], 'kill')

@@ -166,10 +166,20 @@ def start(cfg, sec, *, ws_enabled=True, outbox_enabled=False):
 
 
 def _alive(info):
+    """True only if the recorded process is still RUNNING.
+
+    A SIGKILLed child lingers as a zombie until its parent reaps it, keeping
+    its pid and create_time. Reading that as "alive" made worker_control.start()
+    refuse to replace a killed worker, which stalled the Mode C lease-reclaim
+    stage with rows held in `processing` and no worker to reclaim them. A
+    zombie has exited; it is not alive.
+    """
     try:
         import psutil
         p = psutil.Process(info['pid'])
-        return abs(p.create_time() - info['create_time']) < 1.0
+        if abs(p.create_time() - info['create_time']) >= 1.0:
+            return False
+        return p.status() != psutil.STATUS_ZOMBIE
     except Exception:
         return False
 

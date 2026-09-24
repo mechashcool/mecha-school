@@ -45,6 +45,7 @@ import environment_identity as ident   # noqa: E402
 import guard_rules                 # noqa: E402
 import institute_common as ic      # noqa: E402
 import institute_generator as igen  # noqa: E402
+import institute_stages as stages   # noqa: E402
 import outbox_monitor as omon      # noqa: E402
 import outbox_reconcile as orec    # noqa: E402
 import safety_gates                # noqa: E402
@@ -1872,3 +1873,284 @@ def test_no_secret_or_result_artifact_is_tracked():
         assert base not in forbidden, f'{path} must never be tracked'
         assert not path.endswith(('.log', '.jsonl', '.bundle', '.tgz')), path
         assert '/out/' not in path and '/round2/' not in path, path
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  The staged ladder: slot allocation and budget arithmetic
+#
+#  These protect the one property the whole staged round depends on: a stage
+#  may only submit sessions no other stage has touched. A session submitted
+#  twice would classify as `unchanged`, create no transition and no job, and
+#  the reconciler would report it as the application losing work.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_slots_are_group_major_so_a_small_stage_spans_many_schools():
+    slots = stages.slot_order(10)
+    assert len(slots) == 10 * ic.GROUPS_PER_SCHOOL
+    first_ten = slots[:10]
+    assert {s for s, _ in first_ten} == set(range(10)), 'not one per school'
+    assert {g for _, g in first_ten} == {0}
+
+
+def test_every_slot_appears_exactly_once():
+    slots = stages.slot_order(7)
+    assert len(set(slots)) == len(slots)
+
+
+def test_no_two_stages_share_a_session_slot():
+    alloc = stages.allocate(60)
+    seen = set()
+    for name, slots in alloc.items():
+        for slot in slots:
+            assert slot not in seen, f'{name} reuses slot {slot}'
+            seen.add(slot)
+    assert len(seen) == sum(s['slots'] for s in stages.LADDER)
+
+
+def test_allocate_refuses_a_ladder_larger_than_the_fixtures():
+    with pytest.raises(ValueError) as exc:
+        stages.allocate(2)
+    assert 'session slots' in str(exc.value)
+    assert '--schools' in str(exc.value)
+
+
+def test_each_stage_gets_exactly_the_slots_it_declared():
+    alloc = stages.allocate(60)
+    for stage in stages.LADDER:
+        assert len(alloc[stage['name']]) == stage['slots'], stage['name']
+
+
+def test_absent_fraction_inverts_exactly_for_every_reachable_count():
+    for n in range(1, ic.STUDENTS_PER_GROUP + 1):
+        f = stages.absent_fraction_for(n)
+        got = ic.absent_local_indices(0, 0, 0, ic.GROUPS_PER_SCHOOL
+                                      * ic.STUDENTS_PER_GROUP, f)
+        assert len(got) == n, (n, f, len(got))
+
+
+def test_absent_fraction_rejects_an_impossible_count():
+    for bad in (0, -1, ic.STUDENTS_PER_GROUP + 1):
+        with pytest.raises(ValueError):
+            stages.absent_fraction_for(bad)
+
+
+def test_the_planned_stopped_backlog_stays_under_the_watchdog_ceiling():
+    peak = stages.peak_stopped_backlog()
+    ceiling = guard_rules.OUTBOX_THRESHOLDS['outbox_backlog_ceiling']
+    assert 0 < peak < ceiling, (peak, ceiling)
+
+
+def test_peak_stopped_backlog_only_counts_consecutive_stopped_stages():
+    ladder = [
+        dict(name='s1', slots=1, transitions_per_session=10,
+             worker=stages.WORKER_STOPPED, target_tps=1.0, concurrency=1,
+             purpose=''),
+        dict(name='s2', slots=1, transitions_per_session=10,
+             worker=stages.WORKER_STOPPED, target_tps=1.0, concurrency=1,
+             purpose=''),
+        dict(name='run', slots=1, transitions_per_session=10,
+             worker=stages.WORKER_RUNNING, target_tps=1.0, concurrency=1,
+             purpose=''),
+        dict(name='s3', slots=1, transitions_per_session=10,
+             worker=stages.WORKER_STOPPED, target_tps=1.0, concurrency=1,
+             purpose=''),
+    ]
+    # 2 consecutive stopped stages accumulate; the third starts a new run.
+    assert stages.peak_stopped_backlog(ladder, tokens_per_parent=2) == 40
+
+
+def test_the_ladder_starts_low_and_never_jumps_to_the_top():
+    """Progressive means the THROUGHPUT stages climb, and nothing precedes
+    them at a higher rate than they finish at.
+
+    The fixed-shape latency probes and the stopped-worker burst are not part
+    of that climb: they exist to compare worker modes, which the user's own
+    sequence puts before the throughput ladder. They are still held below the
+    top rate, so no stage jumps past the ladder's ceiling.
+    """
+    assert stages.LADDER[0]['target_tps'] <= 1.0, 'the round does not start low'
+    progressive = [s for s in stages.LADDER if s['name'].startswith('P')]
+    rates = [s['target_tps'] for s in progressive]
+    assert len(rates) >= 3
+    assert rates == sorted(rates), 'throughput stages are not monotonic'
+    assert rates[0] < rates[-1]
+    top = rates[-1]
+    before = stages.LADDER[:stages.LADDER.index(progressive[0])]
+    assert all(s['target_tps'] < top for s in before),         'a pre-ladder stage runs at or above the highest planned throughput'
+
+
+def test_every_stage_declares_a_known_worker_mode():
+    known = {stages.WORKER_RUNNING, stages.WORKER_STOPPED,
+             stages.WORKER_DRAINING, stages.WORKER_KILL_CYCLE}
+    for stage in stages.LADDER:
+        assert stage['worker'] in known, stage['name']
+    # Every mode is exercised at least once, or the round proves less than it
+    # claims to.
+    assert {s['worker'] for s in stages.LADDER} == known
+
+
+def test_the_three_latency_probes_are_identical_except_for_the_worker():
+    probes = [s for s in stages.LADDER if s['name'].startswith('LP')]
+    assert len(probes) == 3
+    shape = {(s['slots'], s['transitions_per_session'], s['target_tps'],
+              s['concurrency']) for s in probes}
+    assert len(shape) == 1, 'probes differ in shape — latency is not comparable'
+    assert len({s['worker'] for s in probes}) == 3
+
+
+def _ladder_fixtures(schools=6):
+    """cfg + institute fixtures big enough for every group to fill. No disk."""
+    cfg = _cfg('/nonexistent')
+    cfg['num_schools'] = schools
+    cfg['students_per_school'] = ic.GROUPS_PER_SCHOOL * ic.STUDENTS_PER_GROUP
+    return cfg, _institute_fixtures(cfg)
+
+
+def test_stage_arithmetic_matches_the_generator_for_every_stage():
+    """The ladder's declared counts must equal what build_plan actually emits.
+
+    This is the same check the live round runs before it submits anything; it
+    is here too so a drift in either side fails in CI rather than mid-round.
+    """
+    cfg, inst = _ladder_fixtures()
+    ladder = [dict(s, slots=1) for s in stages.LADDER]
+    alloc = stages.allocate(cfg['num_schools'], ladder)
+    for stage in ladder:
+        af = stages.absent_fraction_for(stage['transitions_per_session'])
+        plan = igen.build_plan(cfg, inst, waves=1, rate=1.0,
+                               absent_fraction=af)
+        entries = stages.entries_for(plan, inst, alloc[stage['name']])
+        exp = igen.expected_outbox_jobs(entries, inst, cfg)
+        assert (exp['newly_absent_transitions']
+                == stages.stage_transitions(stage)), stage['name']
+        assert exp['expected_jobs'] == stages.stage_jobs(stage), stage['name']
+
+
+def test_entries_are_matched_by_session_not_by_position():
+    cfg, inst = _ladder_fixtures()
+    plan = igen.build_plan(cfg, inst, waves=1, rate=1.0, absent_fraction=1.0)
+    slots = [(1, 2), (0, 0)]
+    entries = stages.entries_for(list(reversed(plan)), inst, slots)
+    assert [e['session_id'] for e in entries] == [
+        stages.session_id_for(inst, s) for s in slots]
+
+
+def test_entries_for_raises_on_a_slot_with_no_plan_entry():
+    cfg, inst = _ladder_fixtures()
+    plan = igen.build_plan(cfg, inst, waves=1, rate=1.0, absent_fraction=1.0)
+    with pytest.raises((KeyError, IndexError)):
+        stages.entries_for(plan, inst, [(0, ic.GROUPS_PER_SCHOOL + 5)])
+
+
+def test_request_rate_is_the_transition_rate_divided_by_the_fan_out():
+    for stage in stages.LADDER:
+        assert abs(stages.request_rate(stage)
+                   * stage['transitions_per_session']
+                   - stage['target_tps']) < 1e-9
+
+
+def test_a_rotating_multi_wave_plan_is_what_this_module_exists_to_avoid():
+    """The premise of the whole module, asserted rather than assumed.
+
+    With absent_fraction < 1 a second wave rotates the absent set, so the
+    transitions of two waves exceed the final absent records. compute()
+    equates those two, so the ladder must never submit a session twice.
+    """
+    per_school = ic.GROUPS_PER_SCHOOL * ic.STUDENTS_PER_GROUP
+    previous, transitions = set(), 0
+    for wave in range(2):
+        now = set(ic.absent_local_indices(0, 0, wave, per_school, 0.5))
+        transitions += len(now - previous)
+        previous = now
+    assert transitions > len(previous), (
+        'the rotation this module works around no longer happens; the '
+        'one-submission-per-session rule may be relaxed deliberately, not by '
+        'accident')
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Worker liveness after SIGKILL (the Mode C stall)
+#
+#  A SIGKILLed child keeps its pid and create_time until its parent reaps it.
+#  The first staged round read that zombie as "running", so worker_control.start()
+#  declined to launch a replacement, and the 200 rows the killed worker had
+#  claimed sat in `processing` with nobody left to reclaim them. The application
+#  was correct throughout; the harness never brought a worker back.
+# ═════════════════════════════════════════════════════════════════════════════
+
+class _FakeProc:
+    def __init__(self, create_time, status):
+        self._ct, self._st = create_time, status
+
+    def create_time(self):
+        return self._ct
+
+    def status(self):
+        return self._st
+
+
+def _with_stub_psutil(monkeypatch, proc=None, raises=None):
+    import types as _types
+    mod = _types.ModuleType('psutil')
+    mod.STATUS_ZOMBIE = 'zombie'
+    mod.STATUS_RUNNING = 'running'
+    mod.STATUS_SLEEPING = 'sleeping'
+
+    class NoSuchProcess(Exception):
+        pass
+
+    mod.NoSuchProcess = NoSuchProcess
+
+    def _process(pid):
+        if raises is not None:
+            raise raises
+        return proc
+
+    mod.Process = _process
+    monkeypatch.setitem(sys.modules, 'psutil', mod)
+    return mod
+
+
+def test_a_running_process_with_a_matching_identity_is_alive(monkeypatch):
+    import target as target_mod
+    _with_stub_psutil(monkeypatch, _FakeProc(1000.0, 'running'))
+    assert target_mod._alive({'pid': 7, 'create_time': 1000.0}) is True
+
+
+def test_a_zombie_is_not_alive(monkeypatch):
+    """The regression. A killed worker must never block its own replacement."""
+    import target as target_mod
+    _with_stub_psutil(monkeypatch, _FakeProc(1000.0, 'zombie'))
+    assert target_mod._alive({'pid': 7, 'create_time': 1000.0}) is False
+
+
+def test_a_recycled_pid_is_not_alive(monkeypatch):
+    import target as target_mod
+    _with_stub_psutil(monkeypatch, _FakeProc(2000.0, 'running'))
+    assert target_mod._alive({'pid': 7, 'create_time': 1000.0}) is False
+
+
+def test_a_vanished_process_is_not_alive(monkeypatch):
+    import target as target_mod
+    _with_stub_psutil(monkeypatch, raises=RuntimeError('no such process'))
+    assert target_mod._alive({'pid': 7, 'create_time': 1000.0}) is False
+
+
+def test_kill_reaps_the_process_it_killed():
+    """kill() must wait on what it killed, exactly as stop() already does.
+
+    Scanned on executable lines only, so the explanatory comment beside the
+    call cannot satisfy the assertion by itself.
+    """
+    import inspect
+    import worker_control as wc
+    killed = _code_only(inspect.getsource(wc.kill))
+    assert 'wait_procs' in killed, 'kill() does not reap — a zombie can linger'
+    stopped = _code_only(inspect.getsource(wc.stop))
+    assert 'wait_procs' in stopped
+
+
+def test_alive_checks_status_and_not_only_the_timestamp():
+    import inspect
+    import target as target_mod
+    code = _code_only(inspect.getsource(target_mod._alive))
+    assert 'STATUS_ZOMBIE' in code
+    assert 'create_time' in code

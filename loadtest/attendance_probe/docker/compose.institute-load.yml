@@ -1,0 +1,71 @@
+# Institute attendance + durable outbox STAGED LOAD TEST.
+#
+# Identical isolation properties to compose.institute-smoke.yml; the only
+# difference is the command, which runs the staged ladder instead of the single
+# smoke submission:
+#   * attlt_net is `internal: true` — the containers have no route off the
+#     private network. docker/institute_load.py PROVES this from inside before
+#     it writes anything (prove_internal_network).
+#   * no ports are published, so nothing bound inside is reachable from the
+#     host or the outside world.
+#   * the database lives in a NAMED VOLUME belonging to this compose project,
+#     so destroying the project with -v destroys the data with it.
+#
+# The project name is REQUIRED and has no default: `${ATTLT_COMPOSE_PROJECT:?}`
+# fails the command rather than silently falling back to the directory name.
+# That is what makes `docker compose -p attlt_<tag> ... down -v` provably
+# scoped to one experiment. Never run this file without it.
+#
+#   ATTLT_COMPOSE_PROJECT=attlt_<tag> \
+#   ATTLT_TOOLING_DIR=<repo>/loadtest/attendance_probe \
+#   ATTLT_EXP_DIR=<experiment root> \
+#   docker compose -p attlt_<tag> -f compose.institute-load.yml up --build
+name: ${ATTLT_COMPOSE_PROJECT:?set ATTLT_COMPOSE_PROJECT to attlt_<experiment tag>}
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: core_school_attendance_load_test
+      POSTGRES_USER: ${ATTLT_PG_USER:?set ATTLT_PG_USER}
+      POSTGRES_PASSWORD: ${ATTLT_PG_PASSWORD:?set ATTLT_PG_PASSWORD}
+    networks: [attlt_net]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ATTLT_PG_USER} -d core_school_attendance_load_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.driver
+    command: ["python", "/tooling/docker/institute_load.py"]
+    depends_on:
+      db: {condition: service_healthy}
+    environment:
+      ATTLT_PG_HOST: db
+      ATTLT_PG_PORT: "5432"
+      ATTLT_TARGET_HOST: 127.0.0.1
+      ATTLT_EXPERIMENT_TAG: ${ATTLT_EXPERIMENT_TAG:?set ATTLT_EXPERIMENT_TAG}
+      # The production host this experiment must be unable to reach. Used only
+      # as a negative connectivity probe; no request is ever sent to it.
+      ATTLT_FORBIDDEN_HOST: ${ATTLT_FORBIDDEN_HOST:-example.invalid}
+    volumes:
+      - type: bind
+        source: ${ATTLT_TOOLING_DIR:?set ATTLT_TOOLING_DIR to the attendance_probe dir}
+        target: /tooling
+        read_only: true
+      - type: bind
+        source: ${ATTLT_EXP_DIR:?set ATTLT_EXP_DIR to the experiment root}
+        target: /exp
+    networks: [attlt_net]
+
+networks:
+  attlt_net:
+    internal: true            # no external connectivity; endpoints are private
+
+volumes:
+  pgdata:                     # project-scoped: removed by `down -v`, never shared
