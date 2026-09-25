@@ -756,3 +756,158 @@ def attendance_summary(school, session_ids):
     for sid, status, count in rows:
         out.setdefault(sid, {})[status] = count
     return out
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Read-only attendance report
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Display-only bucket for a student-lesson with NO attendance row: either the
+# lesson was never recorded, or it was recorded without a status for this
+# student. Never stored, never an InstituteAttendanceRecord status, and never
+# counted as an absence (invariant 2).
+REPORT_UNRECORDED = 'unrecorded'
+REPORT_UNRECORDED_LABEL_AR = 'غير مسجلة'
+REPORT_MAX_NAME_QUERY = 100
+
+
+def _enrollment_covers(enrollment, occurrence, school) -> bool:
+    """True when the membership overlapped the lesson's local time window.
+
+    enrolled_at / ended_at are stored as naive UTC; the lesson's date and times
+    are local wall-clock values. Both sides are compared in LOCAL time, so a
+    student who joined after a lesson ended, or whose membership ended before a
+    lesson started, is not counted for that lesson.
+    """
+    lesson_start = datetime.combine(occurrence.date, occurrence.start_time)
+    lesson_end = datetime.combine(occurrence.date, occurrence.end_time)
+    joined = to_local(enrollment.enrolled_at, school)
+    if joined is not None and joined >= lesson_end:
+        return False
+    if enrollment.ended_at is not None:
+        left = to_local(enrollment.ended_at, school)
+        if left <= lesson_start:
+            return False
+    return True
+
+
+def attendance_report(school, groups, start: date_type, end: date_type, *,
+                      name_query: str | None = None, today=None) -> dict:
+    """Per-student, per-lesson attendance rows for `groups`. READ-ONLY.
+
+    `groups` must already be the caller's AUTHORIZED scope (manager: the
+    institute's groups; instructor: their own). Anything outside `school` is
+    dropped again here, so a scope bug cannot widen the result.
+
+    Which lessons: the same computed occurrences the sessions page lists
+    (occurrences_for_range), limited to lessons up to `today` — a future lesson
+    is not "unrecorded", it simply has not happened — plus any future lesson
+    that was nevertheless recorded.
+
+    Which students per lesson:
+      * every student whose enrollment in that group overlapped the lesson
+        (joined before it ended, not ended before it started), and
+      * any student holding a record for that lesson, even if the membership
+        has since ended — mirroring session_roster(): recorded history never
+        disappears.
+
+    Status: the stored record status, or REPORT_UNRECORDED when no record
+    exists. Nothing is inferred from the time having passed.
+
+    Queries: two for the occurrences, one for enrollments, one for records.
+    Nothing is written.
+    """
+    totals = {s: 0 for s in InstituteAttendanceRecord.STATUSES}
+    totals[REPORT_UNRECORDED] = 0
+    result = {'rows': [], 'totals': totals, 'lessons': 0,
+              'recorded_lessons': 0, 'unrecorded_lessons': 0,
+              'students': 0, 'student_names': [], 'rate': None}
+
+    groups = [g for g in (groups or []) if school is not None
+              and g.school_id == school.id]
+    if not groups or start > end:
+        return result
+    today = today or local_today(school)
+    name_query = (name_query or '').strip()[:REPORT_MAX_NAME_QUERY]
+
+    occurrences = [o for o in occurrences_for_range(school, groups, start, end)
+                   if o.date <= today or o.is_recorded]
+    if not occurrences:
+        return result
+    group_ids = {o.group.id for o in occurrences}
+    session_ids = [o.session.id for o in occurrences if o.session]
+
+    enr_q = (db.session.query(InstituteGroupEnrollment, Student)
+             .join(Student, Student.id == InstituteGroupEnrollment.student_id)
+             .filter(InstituteGroupEnrollment.school_id == school.id,
+                     InstituteGroupEnrollment.group_id.in_(group_ids),
+                     Student.school_id == school.id))
+    if name_query:
+        enr_q = enr_q.filter(
+            Student.full_name.icontains(name_query, autoescape=True))
+    enrollments_by_group = {}
+    for enr, stu in enr_q.all():
+        enrollments_by_group.setdefault(enr.group_id, []).append((enr, stu))
+
+    records_by_session = {}
+    if session_ids:
+        rec_q = (db.session.query(InstituteAttendanceRecord, Student)
+                 .join(Student,
+                       Student.id == InstituteAttendanceRecord.student_id)
+                 .filter(InstituteAttendanceRecord.school_id == school.id,
+                         InstituteAttendanceRecord.session_id.in_(session_ids),
+                         Student.school_id == school.id))
+        if name_query:
+            rec_q = rec_q.filter(
+                Student.full_name.icontains(name_query, autoescape=True))
+        for rec, stu in rec_q.all():
+            records_by_session.setdefault(rec.session_id, {})[stu.id] = (rec, stu)
+
+    rows = []
+    lessons = recorded_lessons = 0
+    for occ in occurrences:
+        recs = records_by_session.get(occ.session.id, {}) if occ.session else {}
+        lesson_rows = {}
+        for enr, stu in enrollments_by_group.get(occ.group.id, ()):
+            if stu.id in lesson_rows or not _enrollment_covers(enr, occ, school):
+                continue
+            lesson_rows[stu.id] = (stu, recs.get(stu.id, (None, None))[0])
+        for sid, (rec, stu) in recs.items():
+            lesson_rows.setdefault(sid, (stu, rec))
+        if not lesson_rows:
+            continue
+
+        lessons += 1
+        if occ.is_recorded:
+            recorded_lessons += 1
+        for stu, rec in sorted(lesson_rows.values(),
+                               key=lambda pair: pair[0].full_name or ''):
+            status = rec.status if rec is not None else REPORT_UNRECORDED
+            totals[status] = totals.get(status, 0) + 1
+            rows.append({
+                'student': stu, 'group': occ.group, 'date': occ.date,
+                'day_of_week': occ.day_of_week,
+                'start_time': occ.start_time, 'end_time': occ.end_time,
+                'lesson_recorded': occ.is_recorded,
+                'status': status,
+                'recorded_at': rec.recorded_at if rec is not None else None,
+                'notes': rec.notes if rec is not None else None,
+            })
+
+    # Same convention as the school report: late counts as attended, and the
+    # excused bucket (the analogue of "on leave") is outside the denominator.
+    # Unrecorded rows are never part of it.
+    present = totals[InstituteAttendanceRecord.STATUS_PRESENT]
+    late = totals[InstituteAttendanceRecord.STATUS_LATE]
+    absent = totals[InstituteAttendanceRecord.STATUS_ABSENT]
+    counted = present + late + absent
+    names = sorted({r['student'].id: r['student'].full_name or ''
+                    for r in rows}.values())
+    result.update({
+        'rows': rows, 'lessons': lessons,
+        'recorded_lessons': recorded_lessons,
+        'unrecorded_lessons': lessons - recorded_lessons,
+        'students': len(names), 'student_names': names,
+        'rate': round((present + late) / counted * 100, 1) if counted else None,
+    })
+    return result
