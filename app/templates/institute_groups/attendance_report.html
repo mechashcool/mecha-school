@@ -1,0 +1,237 @@
+{% extends "shared/base.html" %}
+{% block title %}تقرير الحضور{% endblock %}
+{% block page_title %}تقرير الحضور{% endblock %}
+
+{% block extra_css %}
+<style>
+  @media print {
+    .no-print, #sidebar, #sidebar-overlay, #topbar { display: none !important; }
+    #main-content { margin: 0 !important; padding: 0 !important; }
+    .card { border: 1px solid #ccc !important; box-shadow: none !important; }
+    body { font-size: 12px; }
+  }
+</style>
+{% endblock %}
+
+{% macro status_badge(status) -%}
+  {% if status == 'present' %}
+  <span class="badge-status badge-active">{{ status_labels[status] }}</span>
+  {% elif status == 'late' %}
+  <span class="badge-status badge-pending">{{ status_labels[status] }}</span>
+  {% elif status == 'absent' %}
+  <span class="badge-status badge-inactive">{{ status_labels[status] }}</span>
+  {% elif status == 'excused' %}
+  <span class="badge-status" style="background:#e8f5e9;color:#2e7d32;font-weight:700">{{ status_labels[status] }}</span>
+  {% else %}
+  <span class="badge-status" style="background:#eef1f5;color:#8b98a8;font-weight:600">{{ unrecorded_label }}</span>
+  {% endif %}
+{%- endmacro %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">
+      <i class="bi bi-bar-chart-line me-2 text-primary-custom"></i>تقرير الحضور
+    </h1>
+    <p class="page-subtitle">
+      {% if is_manager %}
+        جميع المجموعات الدراسية في هذه المؤسسة
+      {% else %}
+        المجموعات الدراسية المسندة إلى حسابك فقط
+      {% endif %}
+    </p>
+  </div>
+  <div class="d-flex gap-2 no-print">
+    {% if report.rows %}
+    <button type="button" class="btn btn-outline-primary" onclick="window.print()">
+      <i class="bi bi-printer me-2"></i>طباعة
+    </button>
+    {% endif %}
+    <a href="{{ url_for('institute_groups.attendance_sessions') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-right me-2"></i>رجوع
+    </a>
+  </div>
+</div>
+
+{# ── Filters ─────────────────────────────────────────────────────────────── #}
+<div class="card mb-4 no-print">
+  <div class="card-header fw-700">
+    <i class="bi bi-funnel-fill text-accent me-1"></i>فلاتر التقرير
+  </div>
+  <div class="card-body py-3">
+    <form method="GET" class="row g-3 align-items-end">
+      <div class="col-md-6 col-lg-3">
+        <label class="form-label mb-1 fw-600">المجموعة الدراسية</label>
+        <select name="group_id" class="form-select">
+          <option value="">كل المجموعات</option>
+          {% for g in groups %}
+          <option value="{{ g.id }}" {% if group_filter == g.id %}selected{% endif %}>
+            {{ g.name }}{% if g.subject %} — {{ g.subject.name }}{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-6 col-lg-3">
+        <label class="form-label mb-1 fw-600">الطالب</label>
+        <input type="text" name="q" class="form-control" value="{{ q }}"
+               placeholder="ابحث باسم الطالب..." maxlength="100" autocomplete="off">
+      </div>
+      <div class="col-md-4 col-lg-2">
+        <label class="form-label mb-1 fw-600">من</label>
+        <input type="date" name="start" class="form-control" value="{{ start.strftime('%Y-%m-%d') }}">
+      </div>
+      <div class="col-md-4 col-lg-2">
+        <label class="form-label mb-1 fw-600">إلى</label>
+        <input type="date" name="end" class="form-control" value="{{ end.strftime('%Y-%m-%d') }}">
+      </div>
+      <div class="col-md-4 col-lg-2 d-flex gap-2">
+        <button class="btn btn-primary flex-grow-1"><i class="bi bi-search me-1"></i>عرض</button>
+        <a href="{{ url_for('institute_groups.attendance_report') }}"
+           class="btn btn-outline-secondary" title="مسح الفلاتر"><i class="bi bi-x-lg"></i></a>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ── Summary ─────────────────────────────────────────────────────────────── #}
+{% set t = report.totals %}
+<div class="card mb-4">
+  <div class="card-header d-flex align-items-center justify-content-between fw-600">
+    <span><i class="bi bi-clipboard-data text-accent me-1"></i>ملخص الحضور</span>
+    <small class="text-muted">{{ start.strftime('%Y-%m-%d') }} إلى {{ end.strftime('%Y-%m-%d') }}</small>
+  </div>
+  <div class="card-body">
+    <div class="row g-3 mb-3">
+      <div class="col-md-4">
+        <div style="font-size:12px;color:#6b7a8d">المجموعة الدراسية</div>
+        <div class="fw-700">
+          {% if selected_group %}{{ selected_group.name }}{% if selected_group.subject %} — {{ selected_group.subject.name }}{% endif %}
+          {% else %}كل المجموعات{% endif %}
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div style="font-size:12px;color:#6b7a8d">الطالب</div>
+        <div class="fw-700">
+          {% if not q %}كل الطلاب
+          {% elif report.students == 1 %}{{ report.student_names[0] }}
+          {% else %}«{{ q }}» <span class="text-muted fw-400" style="font-size:12px">({{ report.students }} طالب)</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div style="font-size:12px;color:#6b7a8d">الفترة</div>
+        <div class="fw-700">{{ start.strftime('%Y-%m-%d') }} — {{ end.strftime('%Y-%m-%d') }}</div>
+      </div>
+    </div>
+
+    <div class="table-wrapper">
+      <table class="table table-sm mb-0">
+        <thead>
+          <tr>
+            <th>الحصص</th>
+            <th>حصص مُسجَّلة</th>
+            <th>حصص غير مُسجَّلة</th>
+            <th class="text-success">{{ status_labels['present'] }}</th>
+            <th class="text-warning">{{ status_labels['late'] }}</th>
+            <th class="text-danger">{{ status_labels['absent'] }}</th>
+            <th style="color:#2e7d32">{{ status_labels['excused'] }}</th>
+            <th style="color:#8b98a8">{{ unrecorded_label }}</th>
+            <th>نسبة الحضور</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="fw-700">{{ report.lessons }}</td>
+            <td>{{ report.recorded_lessons }}</td>
+            <td>{{ report.unrecorded_lessons }}</td>
+            <td class="text-success fw-700">{{ t['present'] }}</td>
+            <td class="text-warning fw-700">{{ t['late'] }}</td>
+            <td class="text-danger fw-700">{{ t['absent'] }}</td>
+            <td style="color:#2e7d32;font-weight:700">{{ t['excused'] }}</td>
+            <td style="color:#8b98a8;font-weight:700">{{ t[unrecorded] }}</td>
+            <td>
+              {% if report.rate is not none %}
+              {% set pct = report.rate %}
+              <span style="font-weight:700;color:{% if pct >= 85 %}#1aab6d{% elif pct >= 70 %}#e8a020{% else %}#e03e3e{% endif %}">{{ pct }}%</span>
+              {% else %}<span class="text-muted">—</span>{% endif %}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="text-muted mt-2 mb-0" style="font-size:12px">
+      <i class="bi bi-info-circle me-1"></i>
+      «{{ unrecorded_label }}» تعني حصة لم يُسجَّل فيها حضور هذا الطالب، ولا تُحتسب غياباً.
+      نسبة الحضور = (حاضر + متأخر) ÷ (حاضر + متأخر + غائب)؛
+      حالتا «{{ status_labels['excused'] }}» و«{{ unrecorded_label }}» غير محتسبتين فيها.
+      تُحتسب حصص الطالب خلال فترة اشتراكه في المجموعة فقط.
+    </p>
+  </div>
+</div>
+
+{# ── Detailed rows ───────────────────────────────────────────────────────── #}
+{% if report.rows %}
+<div class="card mb-4">
+  <div class="card-header d-flex align-items-center justify-content-between fw-600">
+    <span><i class="bi bi-table text-accent me-1"></i>تفاصيل الحضور</span>
+    <small class="text-muted">{{ report.rows|length }} سجل · {{ report.students }} طالب</small>
+  </div>
+  <div class="table-wrapper">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>الطالب</th>
+          <th>المجموعة</th>
+          <th>التاريخ</th>
+          <th>اليوم</th>
+          <th>التوقيت</th>
+          <th>حالة الحصة</th>
+          <th>الحالة</th>
+          <th>وقت التسجيل</th>
+          <th>ملاحظات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in report.rows[:row_limit] %}
+        <tr>
+          <td class="fw-600">{{ r.student.full_name }}</td>
+          <td>
+            {{ r.group.name }}
+            {% if r.group.subject %}<span class="text-muted" style="font-size:12px">— {{ r.group.subject.name }}</span>{% endif %}
+          </td>
+          <td>{{ r.date.strftime('%Y-%m-%d') }}</td>
+          <td style="font-size:13px">{{ day_names[r.day_of_week] }}</td>
+          <td style="font-size:13px;color:#6b7a8d">
+            {{ r.start_time.strftime('%H:%M') if r.start_time else '—' }} — {{ r.end_time.strftime('%H:%M') if r.end_time else '—' }}
+          </td>
+          <td>
+            {% if r.lesson_recorded %}
+            <span class="badge-status badge-active">مُسجَّلة</span>
+            {% else %}
+            <span class="badge-status badge-inactive">غير مُسجَّلة</span>
+            {% endif %}
+          </td>
+          <td>{{ status_badge(r.status) }}</td>
+          <td style="font-size:12px;color:#6b7a8d">
+            {{ local_dt(r.recorded_at).strftime('%Y-%m-%d %H:%M') if r.recorded_at else '—' }}
+          </td>
+          <td style="font-size:12px;color:#6b7a8d">{{ r.notes or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if report.rows|length > row_limit %}
+  <div class="card-body py-2 text-muted" style="font-size:12px">
+    <i class="bi bi-exclamation-circle me-1"></i>
+    تم عرض أول {{ row_limit }} سجل من أصل {{ report.rows|length }}. الملخص أعلاه يشمل جميع السجلات؛ ضيّق الفلاتر لعرض التفاصيل كاملة.
+  </div>
+  {% endif %}
+</div>
+{% else %}
+<div class="alert alert-secondary mb-4 py-3 d-flex align-items-center gap-3">
+  <i class="bi bi-search" style="font-size:22px;opacity:.4;flex-shrink:0"></i>
+  <div><strong>لا توجد سجلات حضور مطابقة للفلاتر المحددة.</strong></div>
+</div>
+{% endif %}
+{% endblock %}

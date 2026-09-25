@@ -19,6 +19,7 @@ POST      /institute-groups/<id>/toggle-active      activate / deactivate
 GET       /institute-groups/<id>                    detail + roster
 POST      /institute-groups/<id>/enroll             bulk-add existing students
 POST      /institute-groups/<id>/enrollments/<eid>/end   end ONE active enrollment
+GET       /institute-groups/attendance/report       read-only attendance report
 
 Isolation
 ---------
@@ -940,6 +941,71 @@ def attendance_sessions():
                            group_filter=group_filter, today=today,
                            is_manager=_is_group_manager(),
                            day_names=att.DAY_NAMES_AR)
+
+
+# ── Attendance report (managers + assigned instructors, read-only) ───────────
+
+@institute_groups_bp.route('/attendance/report', methods=['GET'])
+@group_read_access_required
+def attendance_report():
+    school, year = _require_institute()
+    if not school or not year:
+        return redirect(url_for('institute_groups.index'))
+
+    # The SAME group scope as attendance_sessions: a manager sees every group
+    # of this institute and year, an instructor only their own active groups.
+    is_manager = _is_group_manager()
+    if is_manager:
+        groups = (InstituteStudyGroup.query
+                  .execution_options(bypass_tenant_scope=True)
+                  .filter_by(school_id=school.id, academic_year_id=year.id)
+                  .order_by(InstituteStudyGroup.name).all())
+    else:
+        groups = instructor_groups(school, current_user, year)
+
+    # Date range: the school attendance report's convention (first day of the
+    # month -> today), evaluated in the institute's own timezone.
+    today = att.local_today(school)
+    start = _parse_date_arg(request.args.get('start'), today.replace(day=1))
+    end = _parse_date_arg(request.args.get('end'), today)
+    if end < start:
+        end = start
+
+    # A group outside this account's scope — another institute's, another
+    # instructor's, or a nonexistent id — is a plain 404, never a silent
+    # widening to "all groups".
+    group_filter = request.args.get('group_id', type=int)
+    if group_filter and group_filter not in {g.id for g in groups}:
+        abort(404)
+    shown = [g for g in groups if not group_filter or g.id == group_filter]
+
+    q = (request.args.get('q') or '').strip()[:att.REPORT_MAX_NAME_QUERY]
+
+    try:
+        report = att.attendance_report(school, shown, start, end,
+                                       name_query=q, today=today)
+    except att.AttendanceError as exc:
+        flash(str(exc), 'danger')
+        report = att.attendance_report(school, [], start, end)
+
+    return render_template('institute_groups/attendance_report.html',
+                           groups=groups, group_filter=group_filter,
+                           selected_group=next((g for g in groups
+                                                if g.id == group_filter), None),
+                           q=q, start=start, end=end, report=report,
+                           row_limit=REPORT_ROW_LIMIT,
+                           statuses=att.InstituteAttendanceRecord.STATUSES,
+                           status_labels=att.STATUS_LABELS_AR,
+                           unrecorded=att.REPORT_UNRECORDED,
+                           unrecorded_label=att.REPORT_UNRECORDED_LABEL_AR,
+                           day_names=att.DAY_NAMES_AR,
+                           local_dt=att.local_formatter(school),
+                           is_manager=is_manager)
+
+
+# The detail table renders at most this many rows; the summary always counts
+# every matching row.
+REPORT_ROW_LIMIT = 2000
 
 
 # ── Take / correct attendance for one occurrence ────────────────────────────
