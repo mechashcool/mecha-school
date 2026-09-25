@@ -2771,6 +2771,9 @@ class NotificationOutbox(db.Model):
     # Normal school / AI Face device scan (check-in or check-out). Same table,
     # same state machine, same worker; only the producer differs.
     EVENT_SCHOOL_ATTENDANCE_SCAN = 'school_attendance_scan'
+    # Manual school attendance (POST /attendance/take): check-in, check-out and
+    # absence recorded by staff. Same table, state machine and worker.
+    EVENT_SCHOOL_ATTENDANCE_MANUAL = 'school_attendance_manual'
 
     id = db.Column(db.BigInteger, primary_key=True)
 

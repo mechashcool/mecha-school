@@ -199,6 +199,21 @@ class Config:
         .strip().lower() == 'true'
     )
 
+    # ── Durable notification outbox for MANUAL school student attendance ──────
+    # Third independent flag, default FALSE. Covers ONLY the manual save handler
+    # (POST /attendance/take/<section_id>). Automatic absence, the scheduler, AI
+    # Face and institute attendance are NOT affected by it.
+    #
+    # While true, the parent in-app rows (absence only, as today) and the push
+    # jobs are written inside the SAME transaction as the StudentAttendance
+    # change, and the request never contacts Firebase. The shared worker
+    # (app/services/outbox_worker.py) delivers them; it must receive the same
+    # value, which it does through the shared .env it loads.
+    MANUAL_ATTENDANCE_OUTBOX_ENABLED = (
+        os.environ.get('MANUAL_ATTENDANCE_OUTBOX_ENABLED', 'false')
+        .strip().lower() == 'true'
+    )
+
     # ── Redis coordination (P3) — OPTIONAL ────────────────────────────────────
     # When REDIS_URL is unset (the default) every Redis-backed feature silently
     # degrades to the existing in-process behaviour: pushes use the P0 thread

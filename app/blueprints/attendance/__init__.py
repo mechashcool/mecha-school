@@ -10,6 +10,8 @@ from app.utils.attendance_helpers import (determine_check_in_status,
                                            get_local_now, get_local_date,
                                            is_holiday_date, get_student_shift)
 from app.services.notifications import NotificationService
+from app.services import notification_outbox as outbox
+from sqlalchemy.exc import IntegrityError
 
 import logging
 _log = logging.getLogger(__name__)
@@ -97,6 +99,96 @@ def _notify_absent_parents(student, school_id, today_str, source='manual', shift
             send_push_to_user(parent_id, title, body, data)
     except Exception:
         _log.exception('[attendance-notify] FCM push failed student_id=%s', student.id)
+
+
+# ── Manual attendance durable outbox (MANUAL_ATTENDANCE_OUTBOX_ENABLED) ───────
+# The outbox stores the COMPLETE, immutable message, so the builders below
+# reproduce exactly what the inline path in take() ends up handing to Firebase.
+# The inline code itself is left untouched; tests pin both paths to identical
+# titles, bodies and payloads.
+
+def _manual_push_payload(student, base_data: dict) -> dict:
+    """Data dict the inline check-in / check-out path delivers.
+
+    take() passes `base_data` to NotificationService.send_to_parents_of_student,
+    which adds student_id / student_name / type / route with setdefault, and
+    send_to_users then adds ntype with setdefault before send_push_to_user.
+    Same names, same values, same precedence.
+    """
+    payload = dict(base_data or {})
+    payload.setdefault('student_id', str(student.id))
+    payload.setdefault('student_name', student.full_name)
+    payload.setdefault('type', 'notification')
+    payload.setdefault('route', '/parent/notifications')
+    payload.setdefault('ntype', 'attendance')
+    return payload
+
+
+def _manual_absent_message(student, today_str: str) -> tuple:
+    """Title, body and data exactly as _notify_absent_parents builds them for
+    take() (source='manual', no shift_name). That data dict goes to
+    send_push_to_user unchanged, so no keys are added here."""
+    title = 'تنبيه غياب'
+    body  = f'تم تسجيل الطالب {student.full_name} غائباً بتاريخ {today_str}.'
+    data  = {
+        'type':         'attendance',
+        'ntype':        'attendance',
+        'action':       'absent',
+        'status':       'absent',
+        'student_id':   str(student.id),
+        'student_name': student.full_name,
+        'date':         today_str,
+        'screen':       'attendance',
+    }
+    return title, body, data
+
+
+def _stage_manual_outbox(school, att_date, now_time, rows,
+                         checked_out, checked_in, absent) -> int:
+    """Stage every notification take() would have sent inline. Does NOT commit.
+
+    `rows` maps student.id → the StudentAttendance row of this submission (it
+    must already be flushed so each row has an id). Same order as the inline
+    path: check-outs, check-ins, absences. Returns the number of push jobs.
+    """
+    date_str = att_date.isoformat()
+    hhmm     = now_time.strftime('%H:%M')
+    staged   = 0
+
+    for student in checked_out:
+        staged += outbox.stage_manual_attendance_deliveries(
+            school, student, action='check_out', on_date=att_date,
+            attendance_id=rows[student.id].id,
+            title='انصراف الطالب من المدرسة',
+            body=f'طالبك {student.full_name} انصرف من المدرسة الساعة {hhmm}.',
+            data=_manual_push_payload(student, {
+                'action': 'check_out', 'at': now_time.isoformat(),
+                'source': 'manual', 'date': date_str, 'screen': 'attendance'}))
+
+    for student, status in checked_in:
+        if status == 'present':
+            title = 'حضور الطالب في الوقت المحدد'
+            body  = f'طالبك {student.full_name} وصل في الوقت المحدد الساعة {hhmm}.'
+        else:
+            title = 'تأخر الطالب عن موعد الحضور'
+            body  = f'طالبك {student.full_name} وصل متأخراً الساعة {hhmm}.'
+        staged += outbox.stage_manual_attendance_deliveries(
+            school, student, action='check_in', on_date=att_date,
+            attendance_id=rows[student.id].id,
+            title=title, body=body,
+            data=_manual_push_payload(student, {
+                'action': 'check_in', 'status': status,
+                'at': now_time.isoformat(), 'source': 'manual',
+                'date': date_str, 'screen': 'attendance'}))
+
+    for student in absent:
+        title, body, data = _manual_absent_message(student, date_str)
+        staged += outbox.stage_manual_attendance_deliveries(
+            school, student, action='absent', on_date=att_date,
+            attendance_id=rows[student.id].id,
+            title=title, body=body, data=data)
+
+    return staged
 
 
 def _is_teacher():
@@ -615,7 +707,11 @@ def take(section_id):
         newly_checked_in   = []   # list of (student, status)
         newly_checked_out  = []   # list of student
         newly_absent       = []   # list of student (new absent records only)
+        new_rows           = {}   # student.id → StudentAttendance created below
         already_marked_count = 0
+        # Read ONCE per submission: a flip mid-request must never send some
+        # notifications inline and enqueue others.
+        use_outbox = outbox.manual_enabled()
 
         for student in students:
             # Skip attendance for suspended students
@@ -684,7 +780,7 @@ def take(section_id):
                     actual_status = 'absent'
                     check_in_val  = None
                     _src          = None
-                db.session.add(StudentAttendance(
+                new_rec = StudentAttendance(
                     student_id       = student.id,
                     school_id        = school.id if school else None,
                     academic_year_id = year.id if year else None,
@@ -694,58 +790,110 @@ def take(section_id):
                     recorded_by      = current_user.id,
                     shift_id         = _shift.id if _shift else None,
                     source           = _src,
-                ))
+                )
+                db.session.add(new_rec)
+                new_rows[student.id] = new_rec
                 if actual_status in ('present', 'late'):
                     newly_checked_in.append((student, actual_status))
                 elif actual_status == 'absent':
                     newly_absent.append(student)
                 # on_leave: no notification sent
 
-        db.session.commit()
+        def _back_to_form():
+            if request.form.get('_from') == 'manual':
+                return redirect(url_for('attendance.manual',
+                                        section_id=section_id,
+                                        date=att_date.isoformat()))
+            return redirect(url_for('attendance.index'))
+
+        try:
+            if use_outbox:
+                # Durable path (MANUAL_ATTENDANCE_OUTBOX_ENABLED). The parent
+                # notification work is staged into THIS transaction, so the
+                # attendance change and the jobs it promised commit together
+                # or not at all. Nothing is sent to Firebase from this request.
+                db.session.flush()   # assigns ids to the new attendance rows
+                try:
+                    staged = _stage_manual_outbox(
+                        school, att_date, now_time,
+                        {**existing, **new_rows},
+                        newly_checked_out, newly_checked_in, newly_absent)
+                except IntegrityError:
+                    raise
+                except Exception:
+                    # Attendance must never commit without the notification
+                    # work it promised. Roll the whole submission back.
+                    db.session.rollback()
+                    _log.exception('[attendance-notify] source=manual outbox '
+                                   'staging failed section_id=%s date=%s — '
+                                   'attendance NOT saved', section_id, att_date)
+                    flash('تعذّر تجهيز إشعارات الحضور، ولم يتم حفظ الحضور. '
+                          'يرجى المحاولة مرة أخرى.', 'danger')
+                    return _back_to_form()
+            db.session.commit()
+        except IntegrityError:
+            # Lost a race on uq_student_date (or, on the durable path, on the
+            # outbox dedup key) against an identical submission that committed
+            # first. Nothing of ours committed and nobody was notified by us.
+            db.session.rollback()
+            _log.warning('[attendance] section_id=%s date=%s — concurrent '
+                         'submission conflict, this submission rolled back',
+                         section_id, att_date)
+            flash('تم حفظ حضور هذه الشعبة من جهة أخرى في الوقت نفسه. '
+                  'يرجى إعادة فتح الصفحة لعرض السجل المحدّث.', 'warning')
+            return _back_to_form()
 
         if already_marked_count:
             flash(f'{already_marked_count} طالب لديهم سجل حضور مسبق اليوم ولم يتم تعديله.', 'info')
 
-        # Check-out push notifications
         departure_str = now_time.strftime('%H:%M')
-        for student in newly_checked_out:
-            _log.info('[attendance-notify] source=manual action=check_out student_id=%s name=%s date=%s',
-                      student.id, student.full_name, att_date)
-            NotificationService.send_to_parents_of_student(
-                student.id,
-                'انصراف الطالب من المدرسة',
-                f'طالبك {student.full_name} انصرف من المدرسة الساعة {departure_str}.',
-                ntype='attendance',
-                data={'action': 'check_out', 'at': now_time.isoformat(),
-                      'source': 'manual', 'date': att_date.isoformat(), 'screen': 'attendance'}
-            )
+        if use_outbox:
+            # Committed and durable; the shared worker delivers it. There is
+            # deliberately NO inline fallback — sending here as well would
+            # double-deliver and reintroduce the blocking Firebase call.
+            _log.info('[attendance-notify] source=manual outbox: %d push job(s) '
+                      'committed with the attendance section_id=%s date=%s',
+                      staged, section_id, att_date)
+        else:
+            # Check-out push notifications
+            for student in newly_checked_out:
+                _log.info('[attendance-notify] source=manual action=check_out student_id=%s name=%s date=%s',
+                          student.id, student.full_name, att_date)
+                NotificationService.send_to_parents_of_student(
+                    student.id,
+                    'انصراف الطالب من المدرسة',
+                    f'طالبك {student.full_name} انصرف من المدرسة الساعة {departure_str}.',
+                    ntype='attendance',
+                    data={'action': 'check_out', 'at': now_time.isoformat(),
+                          'source': 'manual', 'date': att_date.isoformat(), 'screen': 'attendance'}
+                )
 
-        # Status-specific push notifications (use local time string)
-        arrival_str = now_time.strftime('%H:%M')
-        for student, status in newly_checked_in:
-            if status == 'present':
-                title = 'حضور الطالب في الوقت المحدد'
-                body  = f'طالبك {student.full_name} وصل في الوقت المحدد الساعة {arrival_str}.'
-            else:
-                title = 'تأخر الطالب عن موعد الحضور'
-                body  = f'طالبك {student.full_name} وصل متأخراً الساعة {arrival_str}.'
-            _log.info('[attendance-notify] source=manual action=check_in status=%s student_id=%s name=%s date=%s',
-                      status, student.id, student.full_name, att_date)
-            NotificationService.send_to_parents_of_student(
-                student.id, title, body, ntype='attendance',
-                data={'action': 'check_in', 'status': status,
-                      'at': now_time.isoformat(), 'source': 'manual',
-                      'date': att_date.isoformat(), 'screen': 'attendance'}
-            )
+            # Status-specific push notifications (use local time string)
+            arrival_str = now_time.strftime('%H:%M')
+            for student, status in newly_checked_in:
+                if status == 'present':
+                    title = 'حضور الطالب في الوقت المحدد'
+                    body  = f'طالبك {student.full_name} وصل في الوقت المحدد الساعة {arrival_str}.'
+                else:
+                    title = 'تأخر الطالب عن موعد الحضور'
+                    body  = f'طالبك {student.full_name} وصل متأخراً الساعة {arrival_str}.'
+                _log.info('[attendance-notify] source=manual action=check_in status=%s student_id=%s name=%s date=%s',
+                          status, student.id, student.full_name, att_date)
+                NotificationService.send_to_parents_of_student(
+                    student.id, title, body, ntype='attendance',
+                    data={'action': 'check_in', 'status': status,
+                          'at': now_time.isoformat(), 'source': 'manual',
+                          'date': att_date.isoformat(), 'screen': 'attendance'}
+                )
 
-        # Absent push notifications (new absent records only)
-        for student in newly_absent:
-            try:
-                _notify_absent_parents(student, school.id if school else None,
-                                       att_date.isoformat(), source='manual')
-            except Exception:
-                _log.exception('[attendance-notify] absent notification failed student_id=%s',
-                               student.id)
+            # Absent push notifications (new absent records only)
+            for student in newly_absent:
+                try:
+                    _notify_absent_parents(student, school.id if school else None,
+                                           att_date.isoformat(), source='manual')
+                except Exception:
+                    _log.exception('[attendance-notify] absent notification failed student_id=%s',
+                                   student.id)
 
         if newly_checked_out:
             flash(f'تم تسجيل انصراف {len(newly_checked_out)} طالب الساعة {departure_str}.', 'success')

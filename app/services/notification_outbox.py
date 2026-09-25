@@ -45,7 +45,7 @@ from datetime import datetime, timedelta
 
 from app.models import (
     db, InstituteStudyGroup, MobileDeviceToken, Notification,
-    NotificationOutbox, Student, parent_students,
+    NotificationOutbox, Student, User, parent_students,
 )
 
 log = logging.getLogger('mecha.outbox')
@@ -99,14 +99,23 @@ def aiface_enabled() -> bool:
     return _flag('AIFACE_ATTENDANCE_OUTBOX_ENABLED')
 
 
+def manual_enabled() -> bool:
+    """MANUAL school attendance (POST /attendance/take) outbox.
+
+    Third independent flag, default FALSE. It never switches the institute or
+    AI Face path on, and neither of those switches this one on.
+    """
+    return _flag('MANUAL_ATTENDANCE_OUTBOX_ENABLED')
+
+
 def any_enabled() -> bool:
     """True when ANY producer is switched on — the worker's gate.
 
     The worker is generic over notification_outbox rows and does not care which
     feature produced one. It must run whenever work can exist, and stay
-    completely inert when neither flag is set.
+    completely inert when no flag is set.
     """
-    return enabled() or aiface_enabled()
+    return enabled() or aiface_enabled() or manual_enabled()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -322,6 +331,136 @@ def stage_scan_deliveries(school, student, *, action, on_date,
                 ntype='attendance',
                 dedup_key=_scan_dedup_key(student.id, on_date, action,
                                           parent_id, tok.id),
+                status=NotificationOutbox.STATUS_PENDING,
+                attempts=0,
+                next_attempt_at=now,
+                created_at=now,
+            ))
+            staged += 1
+
+    return staged
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Manual school attendance (POST /attendance/take)
+# ═════════════════════════════════════════════════════════════════════════════
+
+MANUAL_ACTIONS = ('check_in', 'check_out', 'absent')
+
+
+def _manual_dedup_key(student_id: int, on_date, action: str,
+                      attendance_id: int, user_id: int, token_id: int) -> str:
+    """Stable for a duplicate of one transition, distinct for a real one.
+
+    No timestamp. The manual handler allows each of check_in, check_out and
+    absent at most once per StudentAttendance row (a recorded check-in, a
+    check-out or an absence locks the row against further manual change), so
+    (row, action) identifies exactly one logical transition. Two concurrent
+    submissions of the same transition therefore collide on the UNIQUE index
+    and only one set of jobs can ever commit.
+
+    The attendance row id is part of the key so that a row which is deleted
+    and legitimately recorded again for the same day gets a NEW key. Without
+    it, the stale key from the deleted row would make that attendance
+    impossible to save.
+    """
+    key = (f'{NotificationOutbox.EVENT_SCHOOL_ATTENDANCE_MANUAL}:'
+           f'{student_id}:{on_date.strftime("%Y%m%d")}:{action}:'
+           f'{attendance_id}:{user_id}:{token_id}')
+    return key[:_MAX_DEDUP_KEY]
+
+
+def stage_manual_attendance_deliveries(school, student, *, action, on_date,
+                                       attendance_id, title: str, body: str,
+                                       data: dict, now=None) -> int:
+    """Stage the parent notification work for ONE manual attendance transition.
+
+    Adds to the CURRENT session and does NOT commit: the caller commits once,
+    together with the StudentAttendance change, so both exist or neither does.
+    Any exception propagates so the caller can roll back. Performs no network
+    I/O of any kind.
+
+    What is staged mirrors the inline manual path exactly:
+
+      * absent               — one in-app ``Notification`` row per linked parent
+                               (as _notify_absent_parents creates) plus push jobs;
+      * check_in / check_out — push jobs only; the inline path has never
+                               created a feed row for these.
+
+    `title`, `body` and `data` are stored verbatim: `data` must already be the
+    COMPLETE payload the inline path would hand to Firebase.
+
+    Returns the number of push jobs staged. 0 is legitimate: a parent with no
+    registered device, or a student with no linked parent.
+    """
+    if school is None or student is None:
+        raise ValueError('outbox: school and student are required')
+    if action not in MANUAL_ACTIONS:
+        raise ValueError(f'outbox: unsupported manual action {action!r}')
+    if attendance_id is None:
+        raise ValueError('outbox: attendance_id is required (flush first)')
+
+    # Fail closed on tenant mismatch: never stage one school's attendance for
+    # another school's parents or devices.
+    if student.school_id != school.id:
+        raise ValueError(
+            f'outbox: student {student.id} does not belong to school '
+            f'{school.id} — refusing to stage a cross-school delivery')
+
+    now = now or datetime.utcnow()
+    payload = json.dumps(data or {}, ensure_ascii=False)
+
+    parent_ids = [row[0] for row in
+                  db.session.query(parent_students.c.user_id)
+                  .filter(parent_students.c.student_id == student.id).all()]
+    if not parent_ids:
+        return 0
+
+    # Only parents whose OWN account belongs to this school may be notified.
+    # A parent_students link to another school's user is corrupt data: it gets
+    # no feed row and no job, while this student's valid parents are still
+    # notified and the attendance still saves. Without this, the flush-time
+    # tenant guard (app/utils/scoping.py) would reject the absence feed row and
+    # fail the WHOLE manual submission; and for check-in/check-out a stale
+    # token row carrying this school's id could reach that foreign user. The
+    # guard itself is untouched and still validates every feed row.
+    users = {u.id: u for u in (User.query.execution_options(**OPTS)
+                               .filter(User.id.in_(parent_ids)).all())}
+    foreign = [uid for uid in parent_ids
+               if uid not in users or users[uid].school_id != school.id]
+    if foreign:
+        log.warning('[outbox] manual attendance student_id=%s school_id=%s: '
+                    '%d linked parent(s) outside this school skipped',
+                    student.id, school.id, len(foreign))
+
+    staged = 0
+    for parent_id in parent_ids:
+        if parent_id in foreign:
+            continue
+        if action == 'absent':
+            # The in-app feed row — same shape as _notify_absent_parents.
+            db.session.add(Notification(
+                school_id=school.id, title=title, body=body,
+                ntype='attendance', target_user=users[parent_id],
+                created_by=None))
+
+        # One job per ACTIVE registration of this parent, restricted to this
+        # school so a token reassigned elsewhere is never targeted.
+        tokens = (MobileDeviceToken.query.execution_options(**OPTS)
+                  .filter(MobileDeviceToken.user_id == parent_id,
+                          MobileDeviceToken.school_id == school.id,
+                          MobileDeviceToken.is_active.is_(True))
+                  .all())
+        for tok in tokens:
+            db.session.add(NotificationOutbox(
+                school_id=school.id,
+                event_type=NotificationOutbox.EVENT_SCHOOL_ATTENDANCE_MANUAL,
+                user_id=parent_id,
+                device_token_id=tok.id,
+                title=title, body=body, data_json=payload,
+                ntype='attendance',
+                dedup_key=_manual_dedup_key(student.id, on_date, action,
+                                            attendance_id, parent_id, tok.id),
                 status=NotificationOutbox.STATUS_PENDING,
                 attempts=0,
                 next_attempt_at=now,
