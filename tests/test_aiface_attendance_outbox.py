@@ -539,6 +539,86 @@ class IsolationTest(AiFaceOutboxTest):
         self.assertEqual(self._jobs('a'), [])
         self.assertEqual(self._jobs('b'), [])
 
+    # ── Source-path guard: device school vs mapped student school ────────────
+
+    def _map_device_a_to_student_b(self, enrollid='88'):
+        """A corrupt mapping: device A (school A) → student B (school B).
+
+        The schema only has single-column FKs here, so such a row is
+        representable; the record processor itself must refuse it.
+        """
+        with self.app.app_context():
+            db.session.add(DeviceStudentMapping(
+                school_id=self.ids['school_a'], device_id=self.ids['device_a'],
+                employee_no_string=enrollid, student_id=self.ids['student_b'],
+                is_active=True))
+            db.session.commit()
+
+    def _deliver_mismatch(self, *, times=1):
+        """Drive the cross-school record, counting every downstream effect."""
+        self._map_device_a_to_student_b()
+        results = []
+        with patch('app.services.attendance_service.process_attendance_punch') as engine, \
+             patch.object(outbox, 'stage_scan_deliveries') as stage, \
+             patch('app.services.notifications._NotificationService'
+                   '.send_to_parents_of_student') as inline, \
+             patch('app.services.fcm_service.send_push_to_user') as multi, \
+             patch('app.services.fcm_service.send_to_device_token') as direct:
+            for _ in range(times):
+                results.append(self._deliver('a', self._today_at(7, 0),
+                                             enrollid=88))
+        return results, (engine, stage, inline, multi, direct)
+
+    def _assert_nothing_happened(self, mocks):
+        for m in mocks:
+            self.assertEqual(m.call_count, 0)
+        for tag in ('a', 'b'):
+            self.assertEqual(self._attendance(tag), [])
+            self.assertEqual(self._jobs(tag), [])
+            self.assertEqual(self._feed_rows(tag), [])
+        with self.app.app_context():
+            pushes = (PushNotification.query.execution_options(**OPTS)
+                      .filter(PushNotification.school_id.in_(
+                          [self.ids['school_a'], self.ids['school_b']])).all())
+        self.assertEqual(pushes, [])
+
+    def test_same_school_mapping_still_records_attendance_normally(self):
+        processed, skipped, unmatched, errors = self._deliver(
+            'a', self._today_at(7, 0))
+        self.assertEqual((processed, skipped, unmatched, errors), (1, 0, 0, 0))
+        rows = self._attendance('a')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].status, 'present')
+        self.assertEqual(len(self._jobs('a')), 2)
+
+    def test_cross_school_mapping_is_rejected_at_the_source_flag_on(self):
+        results, mocks = self._deliver_mismatch()
+        self.assertEqual(results, [(0, 0, 1, 0)])
+        self._assert_nothing_happened(mocks)
+
+    def test_cross_school_mapping_is_rejected_at_the_source_flag_off(self):
+        """The legacy inline path must not notify school B's parents either."""
+        self.app.config['AIFACE_ATTENDANCE_OUTBOX_ENABLED'] = False
+        results, mocks = self._deliver_mismatch()
+        self.assertEqual(results, [(0, 0, 1, 0)])
+        self._assert_nothing_happened(mocks)
+
+    def test_repeated_cross_school_records_remain_harmless(self):
+        results, mocks = self._deliver_mismatch(times=3)
+        self.assertEqual(results, [(0, 0, 1, 0)] * 3)
+        self._assert_nothing_happened(mocks)
+
+    def test_a_mismatch_does_not_disturb_the_same_school_mapping(self):
+        """Device A's valid enrollid 77 keeps working next to the bad row."""
+        self._map_device_a_to_student_b()
+        self.assertEqual(self._deliver('a', self._today_at(7, 0), enrollid=88),
+                         (0, 0, 1, 0))
+        self.assertEqual(self._deliver('a', self._today_at(7, 0)),
+                         (1, 0, 0, 0))
+        self.assertEqual(len(self._attendance('a')), 1)
+        self.assertEqual(self._attendance('b'), [])
+        self.assertEqual(self._jobs('b'), [])
+
     def test_a_parents_token_in_another_school_is_never_targeted(self):
         """A token row reassigned to another school must not receive this scan."""
         with self.app.app_context():

@@ -442,6 +442,17 @@ def _process_record_list(sn: str, device, school, records: list,
             unmatched += 1
             continue
 
+        # Cross-school safety: the mapping and student reads above bypass the
+        # tenant scope, so the student is verified against the DEVICE's school
+        # before anything reads its attendance, writes a row or notifies anyone.
+        if student.school_id != device.school_id:
+            log.warning("  [aiface] SCHOOL MISMATCH — student_id=%d school_id=%d != "
+                        "device_id=%d school_id=%d enrollid=%s sn=%s — rejecting punch",
+                        student.id, student.school_id, device.id, device.school_id,
+                        enrollid, sn)
+            unmatched += 1
+            continue
+
         # ── Detailed diagnostic logging ────────────────────────────────────────
         from app.models import StudentAttendance as _SA
         _existing_pre = (_SA.query
