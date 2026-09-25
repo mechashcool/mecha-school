@@ -92,6 +92,13 @@
     <i class="bi bi-people-fill text-accent"></i>الطلاب المسجّلون حالياً
     <span class="badge" style="background:#e8f4fd;color:#1a3a5c;font-weight:600">{{ active_rows|length }}</span>
   </div>
+  {% if active_rows %}
+  <div class="px-3 pt-3">
+    <input type="search" id="rosterFilter" class="form-control form-control-sm"
+           style="max-width:320px" placeholder="ابحث باسم الطالب..."
+           aria-label="ابحث باسم الطالب" autocomplete="off">
+  </div>
+  {% endif %}
   <div class="table-wrapper">
     <table class="table table-hover mb-0">
       <thead>
@@ -102,10 +109,10 @@
           {% if is_manager %}<th>الإجراءات</th>{% endif %}
         </tr>
       </thead>
-      <tbody>
+      <tbody id="rosterBody">
         {% for e in active_rows %}
-        <tr>
-          <td class="fw-600">{{ e.student.full_name if e.student else '—' }}</td>
+        <tr class="roster-row">
+          <td class="fw-600 roster-name">{{ e.student.full_name if e.student else '—' }}</td>
           <td style="font-size:13px;color:#6b7a8d">{{ e.student.student_id if e.student else '—' }}</td>
           <td style="font-size:13px;color:#6b7a8d">
             {{ e.enrolled_at.strftime('%Y-%m-%d') if e.enrolled_at else '—' }}
@@ -128,6 +135,11 @@
         {% else %}
         <tr><td colspan="{{ 4 if is_manager else 3 }}" class="text-center text-muted py-4">لا يوجد طلاب مسجّلون.</td></tr>
         {% endfor %}
+        {% if active_rows %}
+        <tr id="rosterNoMatch" style="display:none">
+          <td colspan="{{ 4 if is_manager else 3 }}" class="text-center text-muted py-4">لا يوجد طالب مطابق للبحث.</td>
+        </tr>
+        {% endif %}
       </tbody>
     </table>
   </div>
@@ -176,6 +188,29 @@
     document.querySelectorAll('#candidateList .candidate-row').forEach(function (row) {
       row.style.display = !q || row.dataset.search.indexOf(q) !== -1 ? '' : 'none';
     });
+  });
+})();
+
+// Live name filter for the currently-enrolled roster. Display only: hides
+// rows in the page, sends nothing to the server.
+(function () {
+  const filter = document.getElementById('rosterFilter');
+  if (!filter) return;
+  const rows = Array.from(document.querySelectorAll('#rosterBody .roster-row'));
+  const noMatch = document.getElementById('rosterNoMatch');
+  const names = rows.map(function (row) {
+    const cell = row.querySelector('.roster-name');
+    return (cell ? cell.textContent : '').trim().toLowerCase();
+  });
+  filter.addEventListener('input', function () {
+    const q = this.value.trim().toLowerCase();
+    let shown = 0;
+    rows.forEach(function (row, i) {
+      const match = !q || names[i].indexOf(q) !== -1;
+      row.style.display = match ? '' : 'none';
+      if (match) shown++;
+    });
+    if (noMatch) noMatch.style.display = shown ? 'none' : '';
   });
 })();
 </script>
