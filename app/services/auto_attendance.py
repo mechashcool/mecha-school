@@ -473,9 +473,13 @@ def _run_auto_absent_for_shift(school, year, shift, target_date) -> dict:
 
     # ── 5. Create absent records ───────────────────────────────────────────────
     from sqlalchemy.exc import IntegrityError
+    from app.services import notification_outbox as outbox
 
+    # Read ONCE per run (see _run_auto_absent).
+    use_outbox = outbox.auto_absence_enabled()
+    pairs = []
     for student in unmarked:
-        db.session.add(StudentAttendance(
+        row = StudentAttendance(
             student_id       = student.id,
             school_id        = school_id,
             academic_year_id = year.id if year else None,
@@ -483,7 +487,26 @@ def _run_auto_absent_for_shift(school, year, shift, target_date) -> dict:
             status           = 'absent',
             source           = 'automatic',
             shift_id         = shift.id,
-        ))
+        )
+        db.session.add(row)
+        pairs.append((student, row))
+
+    if use_outbox:
+        # Durable path: absences + feed rows + push jobs in this run's single
+        # commit; no Firebase call from the scheduler thread or web request.
+        from app.blueprints.attendance import _commit_auto_absences_durably
+        outcome, staged = _commit_auto_absences_durably(
+            school, pairs, target_date, shift_name=shift.name,
+            tag=f'[attendance-shift] shift_id={shift.id}')
+        if outcome != 'committed':
+            return ({'count': 0, 'outbox_failed': True}
+                    if outcome == 'staging_failed' else {'count': 0})
+        _log.info(
+            '[attendance-shift] shift_id=%s "%s" date=%s absent_created=%d '
+            'outbox_jobs=%d (delivered by the outbox worker)',
+            shift.id, shift.name, target_date, len(unmarked), staged,
+        )
+        return {'count': len(unmarked)}
 
     try:
         db.session.commit()
@@ -672,9 +695,13 @@ def _run_auto_absent_shiftless(school, year, settings, target_date,
         return {'count': 0}
 
     from sqlalchemy.exc import IntegrityError
+    from app.services import notification_outbox as outbox
 
+    # Read ONCE per run (see _run_auto_absent).
+    use_outbox = outbox.auto_absence_enabled()
+    pairs = []
     for student in unmarked:
-        db.session.add(StudentAttendance(
+        row = StudentAttendance(
             student_id       = student.id,
             school_id        = school_id,
             academic_year_id = year.id if year else None,
@@ -682,7 +709,25 @@ def _run_auto_absent_shiftless(school, year, settings, target_date,
             status           = 'absent',
             source           = 'automatic',
             shift_id         = None,
-        ))
+        )
+        db.session.add(row)
+        pairs.append((student, row))
+
+    if use_outbox:
+        # Durable path — identical to the per-shift producer, no shift_name
+        # (the legacy call below passes none either).
+        from app.blueprints.attendance import _commit_auto_absences_durably
+        outcome, staged = _commit_auto_absences_durably(
+            school, pairs, target_date, tag='[attendance-shift-fallback]')
+        if outcome != 'committed':
+            return ({'count': 0, 'outbox_failed': True}
+                    if outcome == 'staging_failed' else {'count': 0})
+        _log.info(
+            '[attendance-shift-fallback] school_id=%s date=%s inserted_absences=%d '
+            'outbox_jobs=%d (delivered by the outbox worker)',
+            school_id, target_date, len(unmarked), staged,
+        )
+        return {'count': len(unmarked)}
 
     try:
         db.session.commit()
@@ -771,6 +816,7 @@ def run_school_shift_auto_absent_now(school, year, settings) -> dict:
         active_shifts = []
 
     total = 0
+    outbox_failed = False
     for shift in active_shifts:
         passed = now_time >= cutoff
         _log.info(
@@ -782,13 +828,19 @@ def run_school_shift_auto_absent_now(school, year, settings) -> dict:
         if passed:
             result = _run_auto_absent_for_shift(school, year, shift, local_date)
             total += result.get('count', 0)
+            outbox_failed = outbox_failed or bool(result.get('outbox_failed'))
 
     # Case 4 — students without any shift use the default school settings.
     fallback = _run_auto_absent_shiftless(school, year, school, local_date,
                                           now_time=now_time)
     total += fallback.get('count', 0)
+    outbox_failed = outbox_failed or bool(fallback.get('outbox_failed'))
 
-    return {'holiday': False, 'count': total}
+    summary = {'holiday': False, 'count': total}
+    if outbox_failed:
+        # Only ever present on the durable path (AUTO_ABSENCE_OUTBOX_ENABLED).
+        summary['outbox_failed'] = True
+    return summary
 
 
 def _catchup_previous_day_shifts(school, school_name: str, local_now, local_date) -> None:

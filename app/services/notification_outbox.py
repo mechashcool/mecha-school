@@ -108,6 +108,15 @@ def manual_enabled() -> bool:
     return _flag('MANUAL_ATTENDANCE_OUTBOX_ENABLED')
 
 
+def auto_absence_enabled() -> bool:
+    """AUTOMATIC school absence outbox (all auto-absence producers).
+
+    Fourth independent flag, default FALSE. Never implied by, and never
+    implies, any of the other three.
+    """
+    return _flag('AUTO_ABSENCE_OUTBOX_ENABLED')
+
+
 def any_enabled() -> bool:
     """True when ANY producer is switched on — the worker's gate.
 
@@ -115,7 +124,8 @@ def any_enabled() -> bool:
     feature produced one. It must run whenever work can exist, and stay
     completely inert when no flag is set.
     """
-    return enabled() or aiface_enabled() or manual_enabled()
+    return (enabled() or aiface_enabled() or manual_enabled()
+            or auto_absence_enabled())
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -467,6 +477,137 @@ def stage_manual_attendance_deliveries(school, student, *, action, on_date,
                 created_at=now,
             ))
             staged += 1
+
+    return staged
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Automatic school absence (school-wide, shift and shiftless producers)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _auto_absence_dedup_key(student_id: int, on_date, attendance_id: int,
+                            user_id: int, token_id: int) -> str:
+    """Stable for a re-run of one automatic absence, distinct for a real one.
+
+    No timestamp. Automatic absence only ever INSERTs a row for a student who
+    has none for that date, and `uq_student_date` allows one row per student
+    per date, so an attendance row id is created by exactly one run. Two
+    overlapping triggers therefore cannot both commit the same row, and a
+    re-run finds the row already present and stages nothing. The row id also
+    keeps a deleted-then-recreated day saveable (same reasoning as the manual
+    key).
+    """
+    key = (f'{NotificationOutbox.EVENT_SCHOOL_ATTENDANCE_AUTO_ABSENCE}:'
+           f'{student_id}:{on_date.strftime("%Y%m%d")}:absent:'
+           f'{attendance_id}:{user_id}:{token_id}')
+    return key[:_MAX_DEDUP_KEY]
+
+
+def stage_auto_absence_deliveries(school, items, *, on_date, now=None) -> int:
+    """Stage the parent notification work for a BATCH of automatic absences.
+
+    `items` is an iterable of (student, attendance_id, title, body, data) for
+    rows already flushed in the current session. Adds to the CURRENT session
+    and does NOT commit: the caller commits once, together with the absence
+    rows. Any exception propagates so the caller can roll back. No network I/O.
+
+    Mirrors _notify_absent_parents exactly: one in-app ``Notification`` row per
+    linked parent, plus one push job per ACTIVE token of that parent that
+    belongs to this school. `title`, `body` and `data` are stored verbatim.
+
+    Recipient and token selection use the same filters as the per-student
+    helpers, but in TWO queries for the whole batch instead of one per student
+    and one per parent — automatic absence is school-wide, and those queries
+    run inside the open transaction.
+
+    Returns the number of push jobs staged.
+    """
+    from collections import defaultdict
+
+    if school is None:
+        raise ValueError('outbox: school is required')
+    items = list(items or [])
+    if not items:
+        return 0
+    for student, attendance_id, *_ in items:
+        if student.school_id != school.id:
+            raise ValueError(
+                f'outbox: student {student.id} does not belong to school '
+                f'{school.id} — refusing to stage a cross-school delivery')
+        if attendance_id is None:
+            raise ValueError('outbox: attendance_id is required (flush first)')
+
+    now = now or datetime.utcnow()
+    student_ids = [student.id for student, *_ in items]
+
+    parents_by_student = defaultdict(list)
+    for sid, uid in (db.session.query(parent_students.c.student_id,
+                                      parent_students.c.user_id)
+                     .filter(parent_students.c.student_id.in_(student_ids))
+                     .all()):
+        parents_by_student[sid].append(uid)
+
+    tokens_by_parent = defaultdict(list)
+    parent_ids = {uid for uids in parents_by_student.values() for uid in uids}
+
+    # The flush-time tenant guard (app/utils/scoping.py) validates that every
+    # Notification's target user belongs to the notification's school. Loading
+    # the recipients here in ONE query and attaching them via `target_user`
+    # lets the guard validate the attached object instead of issuing two
+    # SELECTs per feed row inside this transaction. The guard still runs.
+    users = {}
+    if parent_ids:
+        users = {u.id: u for u in (User.query.execution_options(**OPTS)
+                                   .filter(User.id.in_(parent_ids)).all())}
+
+    if parent_ids:
+        for tok in (MobileDeviceToken.query.execution_options(**OPTS)
+                    .filter(MobileDeviceToken.user_id.in_(parent_ids),
+                            MobileDeviceToken.school_id == school.id,
+                            MobileDeviceToken.is_active.is_(True))
+                    .order_by(MobileDeviceToken.id.asc())
+                    .all()):
+            tokens_by_parent[tok.user_id].append(tok)
+
+    staged = 0
+    for student, attendance_id, title, body, data in items:
+        student_parents = parents_by_student.get(student.id, ())
+        # Legacy parity for a corrupt link: _notify_absent_parents commits one
+        # student's feed rows together, so a parent outside this school makes
+        # the guard reject that commit and NONE of that student's parents are
+        # notified (the absence itself stays recorded). Reproduce exactly that
+        # instead of letting one bad link fail the whole school's commit.
+        bad = [uid for uid in student_parents
+               if uid not in users or users[uid].school_id != school.id]
+        if bad:
+            log.warning('[outbox] auto-absence student_id=%s school_id=%s: '
+                        '%d linked parent(s) outside this school — no '
+                        'notification staged for this student (legacy parity)',
+                        student.id, school.id, len(bad))
+            continue
+        payload = json.dumps(data or {}, ensure_ascii=False)
+        for parent_id in student_parents:
+            # The in-app feed row — same shape as _notify_absent_parents.
+            db.session.add(Notification(
+                school_id=school.id, title=title, body=body,
+                ntype='attendance', target_user=users[parent_id],
+                created_by=None))
+            for tok in tokens_by_parent.get(parent_id, ()):
+                db.session.add(NotificationOutbox(
+                    school_id=school.id,
+                    event_type=NotificationOutbox.EVENT_SCHOOL_ATTENDANCE_AUTO_ABSENCE,
+                    user_id=parent_id,
+                    device_token_id=tok.id,
+                    title=title, body=body, data_json=payload,
+                    ntype='attendance',
+                    dedup_key=_auto_absence_dedup_key(
+                        student.id, on_date, attendance_id, parent_id, tok.id),
+                    status=NotificationOutbox.STATUS_PENDING,
+                    attempts=0,
+                    next_attempt_at=now,
+                    created_at=now,
+                ))
+                staged += 1
 
     return staged
 

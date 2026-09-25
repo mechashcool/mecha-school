@@ -2774,6 +2774,9 @@ class NotificationOutbox(db.Model):
     # Manual school attendance (POST /attendance/take): check-in, check-out and
     # absence recorded by staff. Same table, state machine and worker.
     EVENT_SCHOOL_ATTENDANCE_MANUAL = 'school_attendance_manual'
+    # Automatic school absence (cutoff passed, no attendance row): GET
+    # /attendance/, "mark absent today", the scheduler and shift-mode runs.
+    EVENT_SCHOOL_ATTENDANCE_AUTO_ABSENCE = 'school_attendance_auto_absence'
 
     id = db.Column(db.BigInteger, primary_key=True)
 

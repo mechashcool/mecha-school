@@ -214,6 +214,22 @@ class Config:
         .strip().lower() == 'true'
     )
 
+    # ── Durable notification outbox for AUTOMATIC school absence ──────────────
+    # Fourth independent flag, default FALSE. Covers every automatic-absence
+    # producer: _run_auto_absent (GET /attendance/, "mark absent today", the
+    # scheduler and its midnight catch-up) and the shift-mode producers in
+    # app/services/auto_attendance.py. The absence decision itself is untouched.
+    #
+    # While true, the absence rows, the parent in-app rows and the push jobs
+    # commit in ONE transaction per existing commit unit (school, shift or
+    # shiftless fallback) and no Firebase call is made by the triggering
+    # request or scheduler thread. The scheduler runs inside the web process,
+    # so both read this same value.
+    AUTO_ABSENCE_OUTBOX_ENABLED = (
+        os.environ.get('AUTO_ABSENCE_OUTBOX_ENABLED', 'false')
+        .strip().lower() == 'true'
+    )
+
     # ── Redis coordination (P3) — OPTIONAL ────────────────────────────────────
     # When REDIS_URL is unset (the default) every Redis-backed feature silently
     # degrades to the existing in-process behaviour: pushes use the P0 thread

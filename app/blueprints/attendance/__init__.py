@@ -191,6 +191,65 @@ def _stage_manual_outbox(school, att_date, now_time, rows,
     return staged
 
 
+# ── Automatic absence durable outbox (AUTO_ABSENCE_OUTBOX_ENABLED) ────────────
+
+def _auto_absent_message(student, today_str: str, shift_name=None) -> tuple:
+    """Title, body and data exactly as _notify_absent_parents builds them,
+    including the optional shift_name key (added only when truthy, as there)."""
+    title, body, data = _manual_absent_message(student, today_str)
+    if shift_name:
+        data['shift_name'] = shift_name
+    return title, body, data
+
+
+def _commit_auto_absences_durably(school, pairs, target_date, *,
+                                  shift_name=None, tag='[attendance]') -> tuple:
+    """Durable commit for every automatic-absence producer.
+
+    `pairs` is [(student, StudentAttendance)] already added to the session by
+    the producer. Flushes (row ids), stages the parent feed rows and push jobs,
+    and commits ONCE — the same single commit the producer already makes, now
+    also carrying the notification work. No Firebase call.
+
+    Returns (outcome, staged_jobs):
+      'committed'      — absences + feed rows + jobs are durable;
+      'conflict'       — IntegrityError (a concurrent run inserted first, or a
+                         dedup-key collision); nothing of ours committed, the
+                         same outcome as the legacy commit conflict;
+      'staging_failed' — staging raised; everything rolled back, so no absence
+                         exists without its notification work. The students
+                         stay unmarked and the next run picks them up.
+    """
+    today_str = target_date.isoformat()
+    try:
+        db.session.flush()
+        try:
+            items = []
+            for student, row in pairs:
+                title, body, data = _auto_absent_message(student, today_str,
+                                                         shift_name)
+                items.append((student, row.id, title, body, data))
+            staged = outbox.stage_auto_absence_deliveries(
+                school, items, on_date=target_date)
+        except IntegrityError:
+            raise
+        except Exception:
+            db.session.rollback()
+            _log.exception('%s school_id=%s date=%s — auto-absence outbox '
+                           'staging failed; %d absence(s) NOT saved',
+                           tag, getattr(school, 'id', None), target_date,
+                           len(pairs))
+            return 'staging_failed', 0
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        _log.warning('%s school_id=%s date=%s — commit conflict (concurrent '
+                     'insert). Records already exist; nothing staged by this run.',
+                     tag, getattr(school, 'id', None), target_date)
+        return 'conflict', 0
+    return 'committed', staged
+
+
 def _is_teacher():
     return (current_user.is_authenticated and
             current_user.role and
@@ -205,6 +264,11 @@ def _get_settings():
         return s
     return SchoolSettings.get()
 
+
+_AUTO_ABSENCE_OUTBOX_FAILED_MSG = (
+    'تعذّر تجهيز إشعارات الغياب، ولم يتم تسجيل الغياب التلقائي. '
+    'يرجى المحاولة مرة أخرى.'
+)
 
 _INSTITUTE_AUTO_ABSENCE_MSG = (
     'هذه المؤسسة مسجّلة كـ«معهد»، والغياب التلقائي للطلاب معطّل. '
@@ -307,8 +371,12 @@ def _run_auto_absent(school, year, settings, recorded_by_id=None, target_date=No
         school_id, school_name, today, len(already_ids), len(unmarked),
     )
 
+    # Read ONCE per run: a flip mid-run must never notify some students inline
+    # and enqueue the others.
+    use_outbox = outbox.auto_absence_enabled()
+    pairs = []
     for student in unmarked:
-        db.session.add(StudentAttendance(
+        row = StudentAttendance(
             student_id       = student.id,
             school_id        = school_id,
             academic_year_id = year.id if year else None,
@@ -316,7 +384,29 @@ def _run_auto_absent(school, year, settings, recorded_by_id=None, target_date=No
             status           = 'absent',
             source           = 'automatic',
             recorded_by      = recorded_by_id,
-        ))
+        )
+        db.session.add(row)
+        pairs.append((student, row))
+
+    if unmarked and use_outbox:
+        # Durable path: the absences, the parent feed rows and the push jobs
+        # commit together in the SAME single commit as before; no Firebase call.
+        outcome, staged = _commit_auto_absences_durably(
+            school, pairs, today, tag='[attendance]')
+        if outcome != 'committed':
+            result = {'too_early': False, 'holiday': False, 'count': 0,
+                      'students': []}
+            if outcome == 'staging_failed':
+                result['outbox_failed'] = True
+            return result
+        _log.warning(
+            '[attendance] school_id=%s "%s" date=%s — absent_created=%d '
+            'outbox_jobs=%d (delivered by the outbox worker)',
+            school_id, school_name, today, len(unmarked), staged,
+        )
+        return {'too_early': False, 'holiday': False, 'count': len(unmarked),
+                'students': unmarked}
+
     if unmarked:
         try:
             from sqlalchemy.exc import IntegrityError
@@ -937,6 +1027,8 @@ def mark_absent_today():
         if summary.get('holiday'):
             flash('هذا اليوم عطلة، لا يتم تسجيل الغياب التلقائي.', 'info')
             return redirect(url_for('attendance.index'))
+        if summary.get('outbox_failed'):
+            flash(_AUTO_ABSENCE_OUTBOX_FAILED_MSG, 'danger')
         count = summary.get('count', 0)
         if count == 0:
             flash('لا يوجد طلاب لتسجيل غيابهم الآن (إما لم يحن وقت الغياب لأي دوام أو أن '
@@ -960,6 +1052,10 @@ def mark_absent_today():
 
     if result.get('holiday'):
         flash('هذا اليوم عطلة، لا يتم تسجيل الغياب التلقائي.', 'info')
+        return redirect(url_for('attendance.index'))
+
+    if result.get('outbox_failed'):
+        flash(_AUTO_ABSENCE_OUTBOX_FAILED_MSG, 'danger')
         return redirect(url_for('attendance.index'))
 
     count = result['count']
