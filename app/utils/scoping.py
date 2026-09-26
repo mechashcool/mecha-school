@@ -25,7 +25,8 @@ def _models():
         ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord,
         FeeType, Grade, InstituteAttendanceRecord,
         InstituteAttendanceSession, InstituteGroupEnrollment,
-        InstituteGroupSchedule, InstituteStudyGroup,
+        InstituteGroupSchedule, InstituteInstructorAttendance,
+        InstituteStudyGroup,
         InstituteSuspensionGroup, InstituteSuspensionScope,
         InventoryCategory, InventoryCount, InventoryItem,
         InventoryItemStock, InventoryMovement, InventoryWarehouse,
@@ -65,6 +66,9 @@ def _models():
         # Institute suspension group scope — school-scoped only, like
         # StudentSuspension, which it extends.
         InstituteSuspensionScope, InstituteSuspensionGroup,
+        # Institute teacher lesson attendance — school-scoped ONLY, like
+        # InstituteAttendanceRecord: its year comes from the session.
+        InstituteInstructorAttendance,
     )
     # Student, StudentDocument, StudentSuspension are school-scoped only —
     # they persist across academic years so that a year rollover does not

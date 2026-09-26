@@ -634,12 +634,26 @@
       </button>
       <ul class="nav-group-items">
         {% if 'employees' in enabled_modules and current_user.has_permission('manage_employees') %}
+        {#- Institutes only: per-lesson teacher attendance lives at the same
+            URL the school's daily sheet uses (employees.manual_attendance
+            branches on School.is_institute). A school renders exactly the
+            original two items. -#}
+        {% set _inst_teacher_att = school and school.is_institute %}
         <li class="nav-item">
           <a href="{{ url_for('employees.index') }}"
-             class="{{ 'active' if request.blueprint == 'employees' and request.endpoint != 'employees.attendance_report' and request.endpoint != 'employees.attendance_report_detail' }}">
+             class="{{ 'active' if request.blueprint == 'employees' and request.endpoint != 'employees.attendance_report' and request.endpoint != 'employees.attendance_report_detail'
+                                   and not (_inst_teacher_att and request.endpoint == 'employees.manual_attendance') }}">
             <i class="bi bi-person-badge"></i> الموظفون
           </a>
         </li>
+        {% if _inst_teacher_att %}
+        <li class="nav-item">
+          <a href="{{ url_for('employees.manual_attendance') }}"
+             class="{{ 'active' if request.endpoint == 'employees.manual_attendance' }}">
+            <i class="bi bi-person-check"></i> حضور المدرسين
+          </a>
+        </li>
+        {% endif %}
         {% if school_cfg.action_enabled('employee_attendance', 'view_report') %}
         <li class="nav-item">
           <a href="{{ url_for('employees.attendance_report') }}"

@@ -1,7 +1,8 @@
 """Al-Muhandis – Employees Blueprint  (Phase 6: user account, teacher assignments)"""
 import logging
 
-from flask import (Blueprint, render_template, redirect, url_for, flash, request, jsonify)
+from flask import (Blueprint, render_template, redirect, url_for, flash, request, jsonify,
+                   abort)
 from flask_login import login_required, current_user
 from datetime import datetime as dt, date
 
@@ -1621,6 +1622,120 @@ def attendance_report_employee_pdf(emp_id):
 #  Employee Manual Attendance
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _is_institute(school) -> bool:
+    return bool(school is not None and getattr(school, 'is_institute', False))
+
+
+def _institute_lesson_scope(school):
+    """(year, groups) the institute teacher-attendance page may act on.
+
+    Every group of THIS institute in its ACTIVE academic year — the same group
+    scope institute managers get on the student attendance page. Access to the
+    page itself stays the existing manage_employees permission.
+    """
+    from app.utils.institute_groups import all_groups_for_year
+    year = get_active_year(school.id)
+    groups = all_groups_for_year(school.id, year.id) if year else []
+    return year, groups
+
+
+def _institute_lesson_attendance_page(school):
+    """Institute branch of /employees/attendance/manual. READ-ONLY.
+
+    Date -> group -> lesson -> the lesson's scheduled teacher. Viewing and
+    filtering compute lessons from the weekly rules and write nothing: a
+    session is only materialized when a status is actually saved.
+    """
+    from app.services import institute_attendance as att
+    from app.blueprints.institute_groups import _parse_date_arg, _parse_lesson_arg
+
+    year, groups = _institute_lesson_scope(school)
+    today = att.local_today(school)
+    on_date = _parse_date_arg(request.args.get('date'), today)
+
+    group_filter = request.args.get('group_id', type=int)
+    if group_filter and group_filter not in {g.id for g in groups}:
+        group_filter = None          # a forged / foreign id drops out of scope
+    shown = [g for g in groups if not group_filter or g.id == group_filter]
+
+    lessons = att.instructor_lessons(school, shown, on_date)
+    lesson_options = sorted({(l.start_time, l.end_time) for l in lessons})
+    lesson_filter = _parse_lesson_arg(request.args.get('lesson'))
+    if lesson_filter not in lesson_options:
+        lesson_filter = None
+    if lesson_filter:
+        lessons = [l for l in lessons
+                   if (l.start_time, l.end_time) == lesson_filter]
+
+    return render_template(
+        'employees/institute_lesson_attendance.html',
+        school=school, year=year, groups=groups, lessons=lessons,
+        on_date=on_date, today=today, group_filter=group_filter,
+        lesson_options=lesson_options, lesson_filter=lesson_filter,
+        statuses=att.InstituteInstructorAttendance.STATUSES,
+        status_labels=att.STATUS_LABELS_AR,
+        day_name=att.day_name(att._py_to_app_dow(on_date)),
+        local_dt=att.local_formatter(school),
+    )
+
+
+@employees_bp.route('/attendance/manual/lessons/save', methods=['POST'])
+@login_required
+@historical_guard
+@permission_required('manage_employees')
+def manual_lesson_attendance_save():
+    """Institutes only: save scheduled-teacher statuses for one date's lessons.
+
+    Writes institute_instructor_attendance ONLY — never employee_attendance.
+    Every posted group / lesson / teacher is re-validated by the service
+    against this institute's scope; nothing from the form is trusted.
+    """
+    from app.services import institute_attendance as att
+    from app.blueprints.institute_groups import _parse_date_arg
+
+    school = get_current_school()
+    if not _is_institute(school):
+        abort(404)
+
+    on_date = _parse_date_arg(request.form.get('att_date'), None)
+    back = {k: v for k, v in (('group_id', request.form.get('group_id', type=int)),
+                              ('lesson', request.form.get('lesson', '').strip()))
+            if v}
+    if on_date is None:
+        flash('التاريخ غير صالح.', 'danger')
+        return redirect(url_for('employees.manual_attendance', **back))
+    back['date'] = on_date.strftime('%Y-%m-%d')
+
+    year, groups = _institute_lesson_scope(school)
+    if year is None:
+        flash('لا توجد سنة دراسية نشطة.', 'danger')
+        return redirect(url_for('employees.manual_attendance', **back))
+
+    entries = []
+    for key in request.form.getlist('lesson_keys')[:500]:
+        entries.append({
+            'group_id':    request.form.get(f'group_{key}'),
+            'start':       request.form.get(f'start_{key}'),
+            'employee_id': request.form.get(f'employee_{key}'),
+            'status':      request.form.get(f'status_{key}', ''),
+            'notes':       request.form.get(f'notes_{key}', ''),
+        })
+
+    try:
+        result = att.submit_instructor_attendance(
+            school, groups, on_date, entries, actor_user_id=current_user.id)
+    except att.AttendanceError as exc:
+        flash(str(exc), 'danger')
+        return redirect(url_for('employees.manual_attendance', **back))
+
+    log_action('institute_instructor_attendance_submit', 'institute_lessons', None,
+               details=f'{on_date}: {result["created"]} new, '
+                       f'{result["updated"]} updated')
+    flash(f'تم حفظ حضور المدرسين. سجلات جديدة: {result["created"]}، '
+          f'تعديلات: {result["updated"]}.', 'success')
+    return redirect(url_for('employees.manual_attendance', **back))
+
+
 @employees_bp.route('/attendance/manual')
 @login_required
 @permission_required('manage_employees')
@@ -1629,6 +1744,10 @@ def manual_attendance():
     from app.utils.attendance_helpers import get_local_date
 
     school = get_current_school()
+    # Institutes record teacher attendance PER LESSON instead of the daily
+    # school-style sheet below; a school never enters this branch.
+    if _is_institute(school):
+        return _institute_lesson_attendance_page(school)
     today  = get_local_date(school)   # School carries att_* and timezone settings
     employees   = _all_employees(school)
     departments = sorted({e.department for e in employees if e.department})
@@ -1651,6 +1770,9 @@ def manual_attendance_list():
     from app.utils.attendance_helpers import get_local_now
 
     school     = get_current_school()
+    # The daily sheet does not exist for an institute (see manual_attendance).
+    if _is_institute(school):
+        return jsonify({'error': 'not_found'}), 404
     settings   = school
     date_str   = request.args.get('date', '')
     department = request.args.get('department', '').strip()
@@ -1731,6 +1853,14 @@ def manual_attendance_save():
     from app.utils.attendance_helpers import get_local_now, determine_check_in_status
 
     school = get_current_school()
+    # An institute must never write a daily school-style employee_attendance
+    # row from this form; its lesson attendance has its own save route.
+    if _is_institute(school):
+        _log.warning('[emp-manual-att] refused daily save for institute '
+                     'school_id=%s user_id=%s', school.id,
+                     getattr(current_user, 'id', None))
+        flash('يُسجَّل حضور المدرسين في المعاهد لكل حصة من هذه الصفحة.', 'warning')
+        return redirect(url_for('employees.manual_attendance'))
     year   = get_active_year(school.id) if school else None
 
     if not school or not year:
