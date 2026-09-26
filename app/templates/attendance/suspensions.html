@@ -24,6 +24,22 @@
         <form method="POST" action="{{ url_for('attendance.create_suspension') }}" id="suspensionForm">
           <input type="hidden" name="csrf_token"
                  value="{{ csrf_token() if csrf_token is defined else '' }}">
+{%- if school and school.is_institute %}
+
+          <!-- ── Study-group filter (institutes) ── -->
+          <div class="mb-3">
+            <label class="form-label">المجموعة الدراسية</label>
+            <select id="groupFilter" class="form-select form-select-sm">
+              <option value="">كل المجموعات</option>
+              {% for g in inst_groups %}
+              <option value="{{ g.id }}">{{ g.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          {# Never set for an institute: kept so the shared name search sends
+             no section_id. #}
+          <input type="hidden" id="sectionId" value="">
+{% else %}
 
           <!-- ── Stage → Grade → Section cascade ── -->
           <div class="mb-2">
@@ -45,6 +61,7 @@
             </select>
           </div>
           <input type="hidden" id="sectionId" value="">
+{%- endif %}
 
           <!-- ── Student ── -->
           <div class="mb-3">
@@ -217,6 +234,63 @@
 }
 </style>
 <script>
+{%- if school and school.is_institute %}
+const studentSearchUrl = "{{ url_for('attendance.suspension_search_students') }}";
+
+const groupFilter    = document.getElementById('groupFilter');
+const sectionIdInput = document.getElementById('sectionId');
+const studentSearch  = document.getElementById('studentSearch');
+const studentResults = document.getElementById('studentResults');
+const selectedStudentEl = document.getElementById('selectedStudent');
+let searchTimer = null;
+
+function showSearchMode() {
+  document.getElementById('searchMode').classList.remove('d-none');
+  document.getElementById('dropdownMode').classList.add('d-none');
+  const dd = document.getElementById('studentDropdown');
+  dd.innerHTML = '<option value="">— اختر الطالب —</option>';
+  dd.disabled = true;
+}
+
+// A selected group lists ONLY its current members (validated server side).
+function showDropdownMode(groupId) {
+  document.getElementById('searchMode').classList.add('d-none');
+  const dm = document.getElementById('dropdownMode');
+  dm.classList.remove('d-none');
+  const dd = document.getElementById('studentDropdown');
+  dd.disabled = true;
+  dd.innerHTML = '<option value="">— جاري التحميل... —</option>';
+  fetch(`${studentSearchUrl}?group_id=${encodeURIComponent(groupId)}`, { headers: { 'Accept': 'application/json' } })
+    .then(r => r.ok ? r.json() : { results: [] })
+    .then(data => {
+      const students = data.results || [];
+      if (!students.length) {
+        dd.innerHTML = '<option value="">— لا يوجد طلاب في هذه المجموعة —</option>';
+        return;
+      }
+      dd.innerHTML = '<option value="">— اختر الطالب —</option>';
+      students.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = encodeURIComponent(JSON.stringify(s));
+        opt.textContent = `${s.full_name} — ${s.student_id || ''}`;
+        dd.appendChild(opt);
+      });
+      dd.disabled = false;
+    })
+    .catch(() => {
+      dd.innerHTML = '<option value="">— خطأ في تحميل الطلاب —</option>';
+    });
+}
+
+groupFilter.addEventListener('change', function() {
+  clearStudentSelection();
+  if (this.value) {
+    showDropdownMode(this.value);
+  } else {
+    showSearchMode();
+  }
+});
+{% else %}
 const stagesUrl        = "{{ url_for('attendance.suspension_api_stages') }}";
 const gradesUrl        = "{{ url_for('attendance.suspension_api_grades') }}";
 const sectionsUrl      = "{{ url_for('attendance.suspension_api_sections') }}";
@@ -346,6 +420,7 @@ sectionFilter.addEventListener('change', function() {
     showSearchMode();
   }
 });
+{%- endif %}
 
 // ── Student search ────────────────────────────────────────────────────────────
 function hideStudentResults() {
@@ -479,6 +554,6 @@ document.getElementById('suspensionForm').addEventListener('submit', event => {
   }
 });
 
-loadStages();
+{% if not (school and school.is_institute) %}loadStages();{% endif %}
 </script>
 {% endblock %}
