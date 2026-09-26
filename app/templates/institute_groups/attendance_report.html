@@ -43,6 +43,10 @@
   </div>
   <div class="d-flex gap-2 no-print">
     {% if report.rows %}
+    <a href="{{ url_for('institute_groups.attendance_report_export_pdf', **export_args) }}"
+       class="btn btn-danger">
+      <i class="bi bi-file-earmark-pdf me-2"></i>تصدير PDF
+    </a>
     <button type="button" class="btn btn-outline-primary" onclick="window.print()">
       <i class="bi bi-printer me-2"></i>طباعة
     </button>

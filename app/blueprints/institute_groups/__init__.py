@@ -20,6 +20,7 @@ GET       /institute-groups/<id>                    detail + roster
 POST      /institute-groups/<id>/enroll             bulk-add existing students
 POST      /institute-groups/<id>/enrollments/<eid>/end   end ONE active enrollment
 GET       /institute-groups/attendance/report       read-only attendance report
+GET       /institute-groups/attendance/report/export-pdf   same report as PDF
 
 Isolation
 ---------
@@ -980,18 +981,45 @@ def attendance_report():
     shown = [g for g in groups if not group_filter or g.id == group_filter]
 
     q = (request.args.get('q') or '').strip()[:att.REPORT_MAX_NAME_QUERY]
+    return {'is_manager': is_manager, 'groups': groups, 'shown': shown,
+            'group_filter': group_filter,
+            'selected_group': next((g for g in groups
+                                    if g.id == group_filter), None),
+            'q': q, 'start': start, 'end': end, 'today': today}
+
+
+def _report_filter_args(scope):
+    """The effective filters as query arguments — what the PDF link carries."""
+    args = {'start': scope['start'].strftime('%Y-%m-%d'),
+            'end': scope['end'].strftime('%Y-%m-%d')}
+    if scope['group_filter']:
+        args['group_id'] = scope['group_filter']
+    if scope['q']:
+        args['q'] = scope['q']
+    return args
+
+
+@institute_groups_bp.route('/attendance/report', methods=['GET'])
+@group_read_access_required
+def attendance_report():
+    school, year = _require_institute()
+    if not school or not year:
+        return redirect(url_for('institute_groups.index'))
+    scope = _attendance_report_scope(school, year)
+    groups, group_filter, q = scope['groups'], scope['group_filter'], scope['q']
+    start, end, is_manager = scope['start'], scope['end'], scope['is_manager']
 
     try:
-        report = att.attendance_report(school, shown, start, end,
-                                       name_query=q, today=today)
+        report = att.attendance_report(school, scope['shown'], start, end,
+                                       name_query=q, today=scope['today'])
     except att.AttendanceError as exc:
         flash(str(exc), 'danger')
         report = att.attendance_report(school, [], start, end)
 
     return render_template('institute_groups/attendance_report.html',
                            groups=groups, group_filter=group_filter,
-                           selected_group=next((g for g in groups
-                                                if g.id == group_filter), None),
+                           selected_group=scope['selected_group'],
+                           export_args=_report_filter_args(scope),
                            q=q, start=start, end=end, report=report,
                            row_limit=REPORT_ROW_LIMIT,
                            statuses=att.InstituteAttendanceRecord.STATUSES,
@@ -1006,6 +1034,63 @@ def attendance_report():
 # The detail table renders at most this many rows; the summary always counts
 # every matching row.
 REPORT_ROW_LIMIT = 2000
+
+
+@institute_groups_bp.route('/attendance/report/export-pdf', methods=['GET'])
+@group_read_access_required
+def attendance_report_export_pdf():
+    """The CURRENT filtered report as a PDF. Same scope, same filters and the
+    same attendance_report() result as the page — nothing is recomputed."""
+    from flask import make_response
+    from app.utils.institute_attendance_pdf import (
+        generate_institute_attendance_report_pdf)
+
+    school, year = _require_institute()
+    if not school or not year:
+        return redirect(url_for('institute_groups.index'))
+    scope = _attendance_report_scope(school, year)
+    back = url_for('institute_groups.attendance_report',
+                   **_report_filter_args(scope))
+
+    try:
+        report = att.attendance_report(school, scope['shown'], scope['start'],
+                                       scope['end'], name_query=scope['q'],
+                                       today=scope['today'])
+    except att.AttendanceError as exc:
+        flash(str(exc), 'danger')
+        return redirect(back)
+
+    group = scope['selected_group']
+    if group is None:
+        group_label = 'كل المجموعات'
+    else:
+        group_label = group.name + (f' — {group.subject.name}'
+                                    if group.subject else '')
+    student_label = ''
+    if scope['q']:
+        student_label = (report['student_names'][0] if report['students'] == 1
+                         else f'«{scope["q"]}» ({report["students"]} طالب)')
+
+    start_s = scope['start'].strftime('%Y-%m-%d')
+    end_s = scope['end'].strftime('%Y-%m-%d')
+    pdf_bytes = generate_institute_attendance_report_pdf(
+        report, school=school, date_from=start_s, date_to=end_s,
+        group_label=group_label, student_label=student_label,
+        status_labels=att.STATUS_LABELS_AR,
+        unrecorded=att.REPORT_UNRECORDED,
+        unrecorded_label=att.REPORT_UNRECORDED_LABEL_AR,
+        day_names=att.DAY_NAMES_AR, local_dt=att.local_formatter(school))
+    if not pdf_bytes:
+        flash('تعذّر إنشاء ملف PDF — تأكد من تثبيت مكتبة ReportLab وتوفر الخط العربي.',
+              'danger')
+        return redirect(back)
+
+    resp = make_response(pdf_bytes)
+    resp.headers['Content-Type'] = 'application/pdf'
+    resp.headers['Content-Disposition'] = (
+        f'attachment; filename="institute_attendance_report_{start_s}_{end_s}.pdf"')
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
 
 
 # ── Take / correct attendance for one occurrence ────────────────────────────
