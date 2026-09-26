@@ -289,7 +289,10 @@
       </a>
     </li>
     {% endif %}
-    {% if 'employees' in enabled_modules and school_cfg.action_enabled('employee_attendance', 'view_report') %}
+    {#- Institutes record teacher attendance per lesson; the daily employee
+        attendance item is school-only. -#}
+    {% if 'employees' in enabled_modules and school_cfg.action_enabled('employee_attendance', 'view_report')
+          and not (school and school.is_institute) %}
     <li class="nav-section-label">الحضور</li>
     <li class="nav-item">
       <a href="{{ url_for('employees.attendance_report') }}"
@@ -636,25 +639,27 @@
         {% if 'employees' in enabled_modules and current_user.has_permission('manage_employees') %}
         {#- Institutes only: per-lesson teacher attendance lives at the same
             URL the school's daily sheet uses (employees.manual_attendance
-            branches on School.is_institute). A school renders exactly the
-            original two items. -#}
+            branches on School.is_institute). Institutes get "حضور المدرسين" INSTEAD of the daily
+            "حضور الموظفين"; a school renders exactly the original items. -#}
         {% set _inst_teacher_att = school and school.is_institute %}
+        {% set _inst_teacher_endpoints = ('employees.manual_attendance',
+                                          'employees.lesson_attendance_report') %}
         <li class="nav-item">
           <a href="{{ url_for('employees.index') }}"
              class="{{ 'active' if request.blueprint == 'employees' and request.endpoint != 'employees.attendance_report' and request.endpoint != 'employees.attendance_report_detail'
-                                   and not (_inst_teacher_att and request.endpoint == 'employees.manual_attendance') }}">
+                                   and not (_inst_teacher_att and request.endpoint in _inst_teacher_endpoints) }}">
             <i class="bi bi-person-badge"></i> الموظفون
           </a>
         </li>
         {% if _inst_teacher_att %}
         <li class="nav-item">
           <a href="{{ url_for('employees.manual_attendance') }}"
-             class="{{ 'active' if request.endpoint == 'employees.manual_attendance' }}">
+             class="{{ 'active' if request.endpoint in _inst_teacher_endpoints }}">
             <i class="bi bi-person-check"></i> حضور المدرسين
           </a>
         </li>
         {% endif %}
-        {% if school_cfg.action_enabled('employee_attendance', 'view_report') %}
+        {% if school_cfg.action_enabled('employee_attendance', 'view_report') and not _inst_teacher_att %}
         <li class="nav-item">
           <a href="{{ url_for('employees.attendance_report') }}"
              class="{{ 'active' if request.endpoint in ['employees.attendance_report', 'employees.attendance_report_detail'] }}">
