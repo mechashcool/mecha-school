@@ -169,6 +169,32 @@ def group_slots(school_id: int, group_id: int, *, active_only: bool = True):
                       InstituteGroupSchedule.start_time).all()
 
 
+def slots_by_group(school_id: int, academic_year_id: int, group_ids,
+                   *, active_only: bool = False) -> dict:
+    """{group_id: [weekly rules ordered for display]} for MANY groups at once.
+
+    One query regardless of how many groups are listed — the bulk counterpart
+    of group_slots() for the all-groups schedules page. bypass_tenant_scope
+    disables BOTH the school and the year criteria, so both are re-applied
+    explicitly here rather than trusted to the ORM.
+    """
+    group_ids = list(group_ids or [])
+    if not school_id or not academic_year_id or not group_ids:
+        return {}
+    q = (InstituteGroupSchedule.query
+         .execution_options(**OPTS)
+         .filter(InstituteGroupSchedule.school_id == school_id,
+                 InstituteGroupSchedule.academic_year_id == academic_year_id,
+                 InstituteGroupSchedule.group_id.in_(group_ids)))
+    if active_only:
+        q = q.filter(InstituteGroupSchedule.is_active.is_(True))
+    out = {}
+    for slot in q.order_by(InstituteGroupSchedule.day_of_week,
+                           InstituteGroupSchedule.start_time).all():
+        out.setdefault(slot.group_id, []).append(slot)
+    return out
+
+
 def validate_slot(day_of_week, start_time, end_time):
     """(day, start, end) or raise AttendanceError. Pure validation, no I/O."""
     try:

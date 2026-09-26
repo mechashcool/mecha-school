@@ -19,6 +19,7 @@ POST      /institute-groups/<id>/toggle-active      activate / deactivate
 GET       /institute-groups/<id>                    detail + roster
 POST      /institute-groups/<id>/enroll             bulk-add existing students
 POST      /institute-groups/<id>/enrollments/<eid>/end   end ONE active enrollment
+GET       /institute-groups/schedules               all-groups weekly schedules
 GET       /institute-groups/attendance/report       read-only attendance report
 GET       /institute-groups/attendance/report/export-pdf   same report as PDF
 
@@ -804,6 +805,22 @@ def _parse_time_arg(raw):
 
 # ── Weekly schedule management (managers only) ──────────────────────────────
 
+def _after_slot_change(group):
+    """Where a slot add / edit / delete returns to.
+
+    Default: the group's own weekly-schedule editor, exactly as before. The
+    all-groups schedules page posts return_to=overview so the manager lands
+    back on it. The target is an allow-listed endpoint, never a posted URL, and
+    the kept group filter is an int the overview re-validates against scope.
+    """
+    if request.form.get('return_to') == 'overview':
+        keep = request.form.get('return_group_id', type=int)
+        args = {'group_id': keep} if keep else {}
+        return redirect(url_for('institute_groups.schedules_overview',
+                                _anchor=f'group-{group.id}', **args))
+    return redirect(url_for('institute_groups.schedule', group_id=group.id))
+
+
 @institute_groups_bp.route('/<int:group_id>/schedule', methods=['GET'])
 @permission_required('manage_institute_groups')
 def schedule(group_id):
@@ -843,7 +860,7 @@ def schedule_add(group_id):
                    f'{att.day_name(slot.day_of_week)} '
                    f'{slot.start_time.strftime("%H:%M")}')
         flash('تمت إضافة الموعد الأسبوعي.', 'success')
-    return redirect(url_for('institute_groups.schedule', group_id=group.id))
+    return _after_slot_change(group)
 
 
 @institute_groups_bp.route('/<int:group_id>/schedule/<int:slot_id>/edit',
@@ -874,7 +891,7 @@ def schedule_edit(group_id, slot_id):
                    f'مجموعة {group.name}: تعديل موعد #{slot.id}')
         flash('تم تحديث الموعد. لا يؤثر التعديل على الجلسات المسجّلة سابقاً.',
               'success')
-    return redirect(url_for('institute_groups.schedule', group_id=group.id))
+    return _after_slot_change(group)
 
 
 @institute_groups_bp.route('/<int:group_id>/schedule/<int:slot_id>/delete',
@@ -896,7 +913,76 @@ def schedule_delete(group_id, slot_id):
                f'مجموعة {group.name}: حذف موعد #{slot_id}')
     flash('تم حذف الموعد. السجلات التاريخية للحضور محفوظة ولم تتأثر.',
           'success')
-    return redirect(url_for('institute_groups.schedule', group_id=group.id))
+    return _after_slot_change(group)
+
+
+# ── All-groups schedules page (institute "الجداول الدراسية") ─────────────────
+#
+# The institute counterpart of the school /schedules/ page. It is a separate
+# route on purpose: the school schedules blueprint is not touched at all, and
+# only the institute branch of the sidebar points here.
+#
+# Read-only by itself — every add / edit / delete control posts to the EXISTING
+# schedule_add / schedule_edit / schedule_delete routes above, so validation,
+# duplicate protection, history rules and audit logging are not duplicated.
+
+@institute_groups_bp.route('/schedules', methods=['GET'])
+@permission_required('manage_institute_groups')
+def schedules_overview():
+    school, year = _require_institute()
+    if not school:
+        return redirect(url_for('admin.dashboard'))
+
+    # Same permission as the per-group schedule page. A manager sees every
+    # group of this institute and year (active first, as on the group list);
+    # an account that holds the permission but is a teacher stays limited to
+    # its own assigned groups — the scope is never widened here.
+    is_manager = _is_group_manager()
+    groups = []
+    if year:
+        if is_manager:
+            groups = (InstituteStudyGroup.query
+                      .execution_options(bypass_tenant_scope=True)
+                      .filter_by(school_id=school.id, academic_year_id=year.id)
+                      .order_by(InstituteStudyGroup.is_active.desc(),
+                                InstituteStudyGroup.name)
+                      .all())
+        else:
+            groups = instructor_groups(school, current_user, year,
+                                       active_only=False)
+
+    # A group outside this account's scope — another institute's, another
+    # year's, or a nonexistent id — is a plain 404, never "all groups".
+    group_filter = request.args.get('group_id', type=int)
+    if group_filter and group_filter not in {g.id for g in groups}:
+        abort(404)
+    shown = [g for g in groups if not group_filter or g.id == group_filter]
+
+    # Bulk loads: one query each for slots, subjects and instructors, every one
+    # explicitly bounded by this school — never one query per group.
+    slots = att.slots_by_group(school.id, year.id if year else None,
+                               [g.id for g in shown])
+    subject_ids = {g.subject_id for g in shown if g.subject_id}
+    instructor_ids = {g.instructor_id for g in shown if g.instructor_id}
+    subjects = ({s.id: s for s in (Subject.query
+                                   .execution_options(bypass_tenant_scope=True)
+                                   .filter(Subject.school_id == school.id,
+                                           Subject.id.in_(subject_ids))
+                                   .all())}
+                if subject_ids else {})
+    instructors = ({e.id: e for e in (Employee.query
+                                      .execution_options(bypass_tenant_scope=True)
+                                      .filter(Employee.school_id == school.id,
+                                              Employee.id.in_(instructor_ids))
+                                      .all())}
+                   if instructor_ids else {})
+
+    return render_template('institute_groups/schedules_overview.html',
+                           year=year, groups=groups, shown=shown,
+                           group_filter=group_filter, slots=slots,
+                           subjects=subjects, instructors=instructors,
+                           is_manager=is_manager,
+                           day_names=att.DAY_NAMES_AR)
 
 
 # ── Scheduled sessions by date (managers + assigned instructors) ────────────
