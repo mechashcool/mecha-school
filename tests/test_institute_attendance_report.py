@@ -13,6 +13,8 @@
   9.  The report writes nothing (no session is materialized by viewing it).
   10. School-type institutions cannot reach the report, and the school
       attendance report still renders unchanged.
+  11. PDF export: same scope and filters as the page, the generator receives
+      the service result unchanged, no writes, and the school PDF still works.
 
 Fixed September 2025 dates, so every count below is deterministic:
   A-Group  Sundays 16:00-18:00 -> 07, 14, 21, 28
@@ -20,6 +22,7 @@ Fixed September 2025 dates, so every count below is deterministic:
 """
 import unittest
 from datetime import date, datetime, time
+from unittest.mock import patch
 from urllib.parse import urlencode
 from uuid import uuid4
 
@@ -478,6 +481,179 @@ class InstituteAttendanceReportTest(unittest.TestCase):
                 logout_user()
         self.assertIn('تقرير الحضور والغياب', html)
         self.assertIn('name="report_type"', html)
+
+    # ── PDF export ───────────────────────────────────────────────────────────
+
+    def _pdf(self, user_key, **args):
+        """Call the real PDF route as `user_key`, with the REAL generator
+        wrapped (not replaced) so its exact inputs can be inspected.
+        Returns (response, generator kwargs incl. 'report')."""
+        from app.blueprints.institute_groups import attendance_report_export_pdf
+        from app.utils import institute_attendance_pdf as pdfmod
+        args.setdefault('start', START.isoformat())
+        args.setdefault('end', END.isoformat())
+        with patch.object(pdfmod, 'generate_institute_attendance_report_pdf',
+                          wraps=pdfmod.generate_institute_attendance_report_pdf) as gen:
+            with self.app.test_request_context(
+                    '/institute-groups/attendance/report/export-pdf?'
+                    + urlencode(args)):
+                login_user(self._obj(User, user_key))
+                self._run_before_request()
+                try:
+                    resp = attendance_report_export_pdf()
+                finally:
+                    logout_user()
+        kwargs = dict(gen.call_args.kwargs) if gen.called else {}
+        if gen.called:
+            kwargs['report'] = gen.call_args.args[0]
+        return resp, kwargs
+
+    def _assert_pdf(self, resp, start=START, end=END):
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.headers['Content-Type'], 'application/pdf')
+        body = resp.get_data()
+        self.assertTrue(body.startswith(b'%PDF-'))
+        self.assertGreater(len(body), 1000)
+        self.assertIn(f'institute_attendance_report_{start}_{end}.pdf',
+                      resp.headers['Content-Disposition'])
+        self.assertEqual(resp.headers.get('Cache-Control'), 'no-store')
+
+    @staticmethod
+    def _cells(report):
+        return {(r['student'].full_name, r['group'].name, r['date']): r['status']
+                for r in report['rows']}
+
+    def test_pdf_all_groups_matches_service(self):
+        resp, kw = self._pdf('uadmin')
+        self._assert_pdf(resp)
+        rep, cells = self._service()
+        self.assertEqual(kw['report']['totals'], rep['totals'])
+        for key in ('lessons', 'recorded_lessons', 'unrecorded_lessons',
+                    'students', 'rate'):
+            self.assertEqual(kw['report'][key], rep[key], key)
+        self.assertEqual(self._cells(kw['report']), cells)
+        self.assertEqual(kw['group_label'], 'كل المجموعات')
+        self.assertEqual(kw['student_label'], '')
+        self.assertEqual((kw['date_from'], kw['date_to']),
+                         (START.isoformat(), END.isoformat()))
+
+    def test_pdf_preserves_group_filter(self):
+        resp, kw = self._pdf('uadmin', group_id=self.ids['gb'])
+        self._assert_pdf(resp)
+        rep, cells = self._service(group_keys=('gb',))
+        self.assertEqual(kw['report']['totals'], rep['totals'])
+        self.assertEqual(self._cells(kw['report']), cells)
+        self.assertTrue(kw['group_label'].startswith('B-Group'))
+
+    def test_pdf_preserves_student_filter(self):
+        resp, kw = self._pdf('uadmin', q='sara')
+        self._assert_pdf(resp)
+        self.assertEqual(kw['student_label'], 'Sara Kareem')
+        self.assertEqual({n for n, _g, _d in self._cells(kw['report'])},
+                         {'Sara Kareem'})
+        rep, _ = self._service(q='sara')
+        self.assertEqual(kw['report']['totals'], rep['totals'])
+
+    def test_pdf_preserves_combined_filters_and_dates(self):
+        start, end = date(2025, 9, 10), date(2025, 9, 25)
+        resp, kw = self._pdf('uadmin', group_id=self.ids['ga'], q='ali',
+                             start=start.isoformat(), end=end.isoformat())
+        self._assert_pdf(resp, start.isoformat(), end.isoformat())
+        self.assertEqual((kw['date_from'], kw['date_to']),
+                         (start.isoformat(), end.isoformat()))
+        self.assertEqual(self._cells(kw['report']), {
+            ('Ali Hassan', 'A-Group', SUN[1]): 'late',
+            ('Ali Hassan', 'A-Group', SUN[2]): UNREC,
+        })
+
+    def test_pdf_unrecorded_is_not_absent(self):
+        from app.utils.institute_attendance_pdf import summary_cells
+        _resp, kw = self._pdf('uadmin')
+        cells = dict(summary_cells(kw['report'], att.STATUS_LABELS_AR,
+                                   UNREC, att.REPORT_UNRECORDED_LABEL_AR))
+        self.assertEqual(cells[att.STATUS_LABELS_AR['absent']], 1)
+        self.assertEqual(cells[att.REPORT_UNRECORDED_LABEL_AR], 14)
+        self.assertEqual(cells['نسبة الحضور'], f'{round(5 / 6 * 100, 1)}%')
+        self.assertEqual(cells['حصص غير مُسجَّلة'], 6)
+
+    def test_pdf_tenant_isolation(self):
+        _resp, kw = self._pdf('uadmin', q='sara')
+        names = {n for n, _g, _d in self._cells(kw['report'])}
+        self.assertNotIn('Sara Other', names)
+        _resp, kw = self._pdf('uadmin')
+        self.assertNotIn('O-Group', {g for _n, g, _d in self._cells(kw['report'])})
+        with self.assertRaises(NotFound):
+            self._pdf('uadmin', group_id=self.ids['go'])
+        with self.assertRaises(NotFound):
+            self._pdf('uadmin', group_id=999999999)
+
+    def test_pdf_instructor_scope(self):
+        _resp, kw = self._pdf('ua')
+        self.assertEqual({g for _n, g, _d in self._cells(kw['report'])},
+                         {'A-Group'})
+        with self.assertRaises(NotFound):
+            self._pdf('ua', group_id=self.ids['gb'])
+        with self.assertRaises(NotFound):
+            self._pdf('uo', group_id=self.ids['ga'])
+
+    def test_pdf_rejects_school_and_parent(self):
+        with self.assertRaises(Forbidden):
+            self._pdf('usadmin')
+        with self.assertRaises(Forbidden):
+            self._pdf('uparent')
+
+    def test_pdf_writes_nothing(self):
+        def counts():
+            with self.app.app_context():
+                return tuple(m.query.execution_options(**OPTS).count() for m in (
+                    InstituteAttendanceSession, InstituteAttendanceRecord,
+                    InstituteGroupEnrollment, Notification))
+        before = counts()
+        self._pdf('uadmin')
+        self._pdf('ua', q='ali')
+        self.assertEqual(counts(), before)
+
+    def test_pdf_row_limit_is_explicit_not_silent(self):
+        from app.utils.institute_attendance_pdf import (
+            generate_institute_attendance_report_pdf)
+        with self.app.app_context():
+            rep = att.attendance_report(
+                self._obj(School, 'inst'),
+                [self._obj(InstituteStudyGroup, k) for k in ('ga', 'gb')],
+                START, END, today=TODAY)
+            full = generate_institute_attendance_report_pdf(
+                rep, status_labels=att.STATUS_LABELS_AR,
+                day_names=att.DAY_NAMES_AR, row_limit=None)
+            capped = generate_institute_attendance_report_pdf(
+                rep, status_labels=att.STATUS_LABELS_AR,
+                day_names=att.DAY_NAMES_AR, row_limit=5)
+        self.assertTrue(full.startswith(b'%PDF-'))
+        self.assertTrue(capped.startswith(b'%PDF-'))
+        self.assertEqual(len(rep['rows']), 21, 'the service result is never trimmed')
+
+    def test_report_page_pdf_button_carries_filters(self):
+        html = self._page('uadmin', group_id=self.ids['ga'], q='ali')
+        self.assertIn('تصدير PDF', html)
+        self.assertIn('/institute-groups/attendance/report/export-pdf?', html)
+        for part in (f'group_id={self.ids["ga"]}', 'q=ali',
+                     f'start={START.isoformat()}', f'end={END.isoformat()}'):
+            self.assertIn(part, html)
+
+    def test_school_pdf_export_still_works(self):
+        from app.blueprints.attendance import report_export_pdf
+        with self.app.test_request_context(
+                '/attendance/report/export-pdf?report_type=detail'
+                '&start=2025-09-01&end=2025-09-30'):
+            login_user(self._obj(User, 'usadmin'))
+            self._run_before_request()
+            try:
+                resp = report_export_pdf()
+            finally:
+                logout_user()
+        self.assertEqual(resp.headers['Content-Type'], 'application/pdf')
+        self.assertTrue(resp.get_data().startswith(b'%PDF-'))
+        self.assertIn('attendance_report_2025-09-01_2025-09-30.pdf',
+                      resp.headers['Content-Disposition'])
 
     def test_sessions_page_links_to_report(self):
         from app.blueprints.institute_groups import attendance_sessions
