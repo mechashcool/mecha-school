@@ -40,7 +40,8 @@ from app.models import (db, Employee, InstituteAttendanceRecord,
                         InstituteGroupSchedule, InstituteStudyGroup,
                         InstituteSuspensionGroup, InstituteSuspensionScope,
                         Student, StudentSuspension)
-from app.utils.attendance_helpers import _get_tz, get_local_date, utc_to_local
+from app.utils.attendance_helpers import (_get_tz, get_local_date, get_local_now,
+                                          utc_to_local)
 from app.utils.institute_groups import institute_enabled
 # Importing the module (not its table) is side-effect free: no query runs at
 # import time, so startup is safe even before the outbox migration is applied.
@@ -153,6 +154,11 @@ def local_today(school=None) -> date_type:
     Baghdad time must belong to that local day, not to the UTC one.
     """
     return get_local_date(school)
+
+
+def local_now(school=None) -> datetime:
+    """Now, as naive LOCAL wall-clock in the SCHOOL's timezone."""
+    return get_local_now(school)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -412,6 +418,61 @@ def occurrences_for_range(school, groups, start: date_type, end: date_type,
     out.sort(key=lambda o: (o.date, o.start_time or time_type(0, 0),
                             o.group.name or ''))
     return out
+
+
+# ── One day's attendance queue (display only) ───────────────────────────────
+# Presentation states for ONE day's occurrences. Never stored, never a session
+# or record status, and never a restriction: every lesson keeps its own
+# attendance_take link exactly as before, whatever its state.
+QUEUE_CURRENT    = 'current'     # today, not recorded, start <= now < end
+QUEUE_DUE        = 'due'         # today, not recorded, end already passed
+QUEUE_UPCOMING   = 'upcoming'    # today, not recorded, not started yet
+QUEUE_UNRECORDED = 'unrecorded'  # another date, not recorded
+QUEUE_RECORDED   = 'recorded'    # attendance submitted (any date)
+
+QUEUE_PENDING = (QUEUE_CURRENT, QUEUE_DUE, QUEUE_UNRECORDED)
+
+
+def daily_queue(occurrences, *, is_today: bool, now_time=None) -> list:
+    """Group ONE day's occurrences by study group, most urgent group first.
+
+    Pure: reads only the occurrences handed in — no query, no write, no session
+    materialized. Each occurrence stays its own attendance unit; grouping is
+    visual only.
+
+    Returns [{'group', 'lessons': [(occurrence, state)], 'rank'}], lessons by
+    start time. rank 0 = has a current/due (or, on another date, unrecorded)
+    lesson, 1 = only upcoming ones left, 2 = everything recorded.
+    """
+    by_group = {}
+    for occ in occurrences or []:
+        by_group.setdefault(occ.group.id, (occ.group, []))[1].append(occ)
+
+    entries = []
+    for group, occs in by_group.values():
+        occs.sort(key=lambda o: o.start_time or time_type(0, 0))
+        lessons = []
+        for occ in occs:
+            if occ.is_recorded:
+                state = QUEUE_RECORDED
+            elif not is_today or now_time is None:
+                state = QUEUE_UNRECORDED
+            elif now_time < occ.start_time:
+                state = QUEUE_UPCOMING
+            elif occ.end_time and now_time < occ.end_time:
+                state = QUEUE_CURRENT
+            else:
+                state = QUEUE_DUE
+            lessons.append((occ, state))
+        states = {s for _o, s in lessons}
+        rank = (0 if states.intersection(QUEUE_PENDING)
+                else 1 if QUEUE_UPCOMING in states else 2)
+        entries.append({'group': group, 'lessons': lessons, 'rank': rank})
+
+    entries.sort(key=lambda e: (e['rank'],
+                                e['lessons'][0][0].start_time or time_type(0, 0),
+                                e['group'].name or ''))
+    return entries
 
 
 def find_occurrence(school, group, on_date: date_type, start_time):

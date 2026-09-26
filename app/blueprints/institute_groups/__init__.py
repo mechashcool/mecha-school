@@ -1002,32 +1002,35 @@ def attendance_sessions():
     else:
         groups = instructor_groups(school, current_user, year)
 
-    today = att.local_today(school)
-    start = _parse_date_arg(request.args.get('start'), today)
-    end = _parse_date_arg(request.args.get('end'), start + timedelta(days=6))
-    if end < start:
-        end = start
+    # ONE day — today in the institute's timezone unless a date is chosen.
+    # Multi-day ranges belong to the attendance report page.
+    now = att.local_now(school)
+    today = now.date()
+    on_date = _parse_date_arg(request.args.get('date'), today)
+    is_today = on_date == today
 
     group_filter = request.args.get('group_id', type=int)
     if group_filter and group_filter not in {g.id for g in groups}:
         group_filter = None          # a forged id simply drops out of scope
     shown = [g for g in groups if not group_filter or g.id == group_filter]
 
-    try:
-        occurrences = att.occurrences_for_range(school, shown, start, end)
-    except att.AttendanceError as exc:
-        flash(str(exc), 'danger')
-        occurrences = []
-
+    # Read-only: computed occurrences plus sessions that already exist.
+    # Nothing is materialized by viewing or filtering this page.
+    occurrences = att.occurrences_for_range(school, shown, on_date, on_date)
     summary = att.attendance_summary(
         school, [o.session.id for o in occurrences if o.session])
+    queue = att.daily_queue(occurrences, is_today=is_today,
+                            now_time=now.time() if is_today else None)
 
     return render_template('institute_groups/attendance_sessions.html',
-                           groups=groups, occurrences=occurrences,
-                           summary=summary, start=start, end=end,
-                           group_filter=group_filter, today=today,
+                           groups=groups, queue=queue,
+                           active=[e for e in queue if e['rank'] < 2],
+                           done=[e for e in queue if e['rank'] == 2],
+                           summary=summary, on_date=on_date, today=today,
+                           is_today=is_today, group_filter=group_filter,
                            is_manager=_is_group_manager(),
-                           day_names=att.DAY_NAMES_AR)
+                           day_names=att.DAY_NAMES_AR,
+                           day_name=att.day_name(att._py_to_app_dow(on_date)))
 
 
 # ── Attendance report (managers + assigned instructors, read-only) ───────────
