@@ -502,7 +502,8 @@
              class="{{ 'active' if request.blueprint == 'institute_groups'
                        and request.endpoint not in
                        ('institute_groups.attendance_sessions',
-                        'institute_groups.attendance_take') }}">
+                        'institute_groups.attendance_take',
+                        'institute_groups.schedules_overview') }}">
             <i class="bi bi-collection"></i> المجموعات الدراسية
           </a>
         </li>
@@ -547,7 +548,18 @@
           </a>
         </li>
         {% endif %}
-        {% if 'schedules' in enabled_modules and _can_schedules %}
+        {#- Institutes: "الجداول الدراسية" shows study-group schedules. A school
+            (is_institute False) renders the original item below, unchanged. -#}
+        {% if school and school.is_institute %}
+        {% if _can_inst_groups %}
+        <li class="nav-item">
+          <a href="{{ url_for('institute_groups.schedules_overview') }}"
+             class="{{ 'active' if request.endpoint == 'institute_groups.schedules_overview' }}">
+            <i class="bi bi-table"></i> الجداول الدراسية
+          </a>
+        </li>
+        {% endif %}
+        {% elif 'schedules' in enabled_modules and _can_schedules %}
         <li class="nav-item">
           <a href="{{ url_for('schedules.index') }}"
              class="{{ 'active' if request.blueprint == 'schedules' }}">

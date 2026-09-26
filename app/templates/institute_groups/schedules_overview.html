@@ -1,0 +1,212 @@
+{% extends "shared/base.html" %}
+{% block title %}الجداول الدراسية{% endblock %}
+{% block page_title %}الجداول الدراسية{% endblock %}
+
+{#- Institute-only "الجداول الدراسية". One card per study group — lessons of
+    different groups are never merged into one grid. Every write control posts
+    to the EXISTING per-group schedule routes with return_to=overview. -#}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">الجداول الدراسية</h1>
+    <p class="page-subtitle">جداول المجموعات الدراسية</p>
+  </div>
+</div>
+
+{# ── Group filter ─────────────────────────────────────────────────────────── #}
+<div class="card mb-4">
+  <div class="card-body py-3">
+    <form method="GET" class="d-flex align-items-center gap-2 flex-wrap">
+      <label for="schedGroup" class="form-label mb-0" style="font-size:13px;font-weight:600">
+        المجموعة الدراسية:
+      </label>
+      <select name="group_id" id="schedGroup" class="form-select d-inline-block" style="width:auto"
+              onchange="this.form.submit()">
+        <option value="">كل المجموعات</option>
+        {% for g in groups %}
+        <option value="{{ g.id }}" {{ 'selected' if g.id == group_filter }}>
+          {{ g.name }}{% if not g.is_active %} (غير مفعّلة){% endif %}
+        </option>
+        {% endfor %}
+      </select>
+      <noscript><button type="submit" class="btn btn-sm btn-outline-primary">عرض</button></noscript>
+    </form>
+  </div>
+</div>
+
+{% if not shown %}
+<div class="card">
+  <div class="card-body text-center text-muted py-5">
+    لا توجد مجموعات دراسية متاحة.
+  </div>
+</div>
+{% endif %}
+
+{% for g in shown %}
+{% set group_slots = slots.get(g.id, []) %}
+{% set subj = subjects.get(g.subject_id) %}
+{% set instr = instructors.get(g.instructor_id) %}
+<div class="card mb-4" id="group-{{ g.id }}">
+  <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+    <div>
+      <i class="bi bi-collection text-accent"></i>
+      <span class="fw-bold">{{ g.name }}</span>
+      {% if not g.is_active %}
+      <span class="badge-status badge-inactive ms-1">غير مفعّلة</span>
+      {% endif %}
+      <span class="text-muted ms-2" style="font-size:12px">
+        {{ subj.name if subj else '—' }}
+        &nbsp;•&nbsp;المدرّس: {{ instr.full_name if instr else 'غير معيّن' }}
+      </span>
+    </div>
+    <div class="d-flex gap-2">
+      {% if is_manager and not is_historical_year %}
+      <button type="button" class="btn btn-sm btn-primary"
+              data-bs-toggle="collapse" data-bs-target="#add-slot-{{ g.id }}"
+              aria-expanded="false" aria-controls="add-slot-{{ g.id }}">
+        <i class="bi bi-plus-lg me-1"></i>إضافة حصة
+      </button>
+      {% endif %}
+      <a href="{{ url_for('institute_groups.schedule', group_id=g.id) }}"
+         class="btn btn-sm btn-outline-secondary">
+        <i class="bi bi-calendar-week me-1"></i>الجدول الأسبوعي
+      </a>
+    </div>
+  </div>
+
+  {% if is_manager and not is_historical_year %}
+  <div class="collapse" id="add-slot-{{ g.id }}">
+    <div class="card-body border-bottom">
+      <form method="POST" action="{{ url_for('institute_groups.schedule_add', group_id=g.id) }}"
+            class="row g-3 align-items-end">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="return_to" value="overview">
+        <input type="hidden" name="return_group_id" value="{{ group_filter or '' }}">
+        <div class="col-md-4">
+          <label class="form-label">اليوم <span class="text-danger">*</span></label>
+          <select name="day_of_week" class="form-select" required>
+            <option value="">— اختر اليوم —</option>
+            {% for d in day_names %}
+            <option value="{{ loop.index0 }}">{{ d }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">من الساعة <span class="text-danger">*</span></label>
+          <input type="time" name="start_time" class="form-control" required>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">إلى الساعة <span class="text-danger">*</span></label>
+          <input type="time" name="end_time" class="form-control" required>
+        </div>
+        <div class="col-md-2">
+          <button type="submit" class="btn btn-primary w-100">
+            <i class="bi bi-plus-lg me-1"></i>إضافة
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="table-wrapper">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>اليوم</th><th>المادة</th><th>المدرّس</th>
+          <th>من</th><th>إلى</th><th>الحالة</th>
+          {% if is_manager and not is_historical_year %}<th>الإجراءات</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for slot in group_slots %}
+        <tr>
+          <td class="fw-600">{{ day_names[slot.day_of_week] }}</td>
+          <td>{{ subj.name if subj else '—' }}</td>
+          <td>{{ instr.full_name if instr else 'غير معيّن' }}</td>
+          <td>{{ slot.start_time.strftime('%H:%M') }}</td>
+          <td>{{ slot.end_time.strftime('%H:%M') }}</td>
+          <td>
+            {% if slot.is_active %}
+            <span class="badge-status badge-active">مفعّل</span>
+            {% else %}
+            <span class="badge-status badge-inactive">معطّل</span>
+            {% endif %}
+          </td>
+          {% if is_manager and not is_historical_year %}
+          <td class="text-nowrap">
+            <button type="button" class="btn btn-sm btn-outline-primary" title="تعديل الحصة"
+                    data-bs-toggle="collapse" data-bs-target="#edit-slot-{{ slot.id }}"
+                    aria-expanded="false" aria-controls="edit-slot-{{ slot.id }}">
+              <i class="bi bi-pencil"></i>
+            </button>
+            <form method="POST" class="d-inline"
+                  action="{{ url_for('institute_groups.schedule_delete', group_id=g.id, slot_id=slot.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="return_to" value="overview">
+              <input type="hidden" name="return_group_id" value="{{ group_filter or '' }}">
+              <button class="btn btn-sm btn-outline-danger" title="حذف الحصة"
+                      data-confirm="حذف موعد {{ day_names[slot.day_of_week] }} {{ slot.start_time.strftime('%H:%M') }}؟ لن يتم حذف أي سجل حضور مسجّل سابقاً.">
+                <i class="bi bi-trash"></i>
+              </button>
+            </form>
+          </td>
+          {% endif %}
+        </tr>
+        {% if is_manager and not is_historical_year %}
+        <tr class="collapse" id="edit-slot-{{ slot.id }}">
+          <td colspan="7" style="background:#f8fbff">
+            <form method="POST"
+                  action="{{ url_for('institute_groups.schedule_edit', group_id=g.id, slot_id=slot.id) }}"
+                  class="row g-2 align-items-end">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="return_to" value="overview">
+              <input type="hidden" name="return_group_id" value="{{ group_filter or '' }}">
+              <div class="col-md-3">
+                <label class="form-label small mb-1">اليوم</label>
+                <select name="day_of_week" class="form-select form-select-sm">
+                  {% for d in day_names %}
+                  <option value="{{ loop.index0 }}" {{ 'selected' if slot.day_of_week == loop.index0 }}>{{ d }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-md-3">
+                <label class="form-label small mb-1">من</label>
+                <input type="time" name="start_time" class="form-control form-control-sm"
+                       value="{{ slot.start_time.strftime('%H:%M') }}" required>
+              </div>
+              <div class="col-md-3">
+                <label class="form-label small mb-1">إلى</label>
+                <input type="time" name="end_time" class="form-control form-control-sm"
+                       value="{{ slot.end_time.strftime('%H:%M') }}" required>
+              </div>
+              <div class="col-md-1">
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" name="is_active" value="1"
+                         id="ovact{{ slot.id }}" {{ 'checked' if slot.is_active }}>
+                  <label class="form-check-label small" for="ovact{{ slot.id }}">مفعّل</label>
+                </div>
+              </div>
+              <div class="col-md-2">
+                <button type="submit" class="btn btn-sm btn-primary w-100">
+                  <i class="bi bi-check-lg me-1"></i>حفظ
+                </button>
+              </div>
+            </form>
+          </td>
+        </tr>
+        {% endif %}
+        {% else %}
+        <tr>
+          <td colspan="7" class="text-center text-muted py-4">
+            لا توجد حصص مضافة لهذه المجموعة.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endfor %}
+{% endblock %}
