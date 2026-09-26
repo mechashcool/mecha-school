@@ -30,11 +30,12 @@ with an explicit school_id equality filter before it is used. On top of that,
 the database itself rejects a cross-school link through the composite foreign
 keys on both tables, so a route bug cannot produce mixed-school data.
 """
+import json
 from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import (Blueprint, render_template, redirect, url_for,
-                   flash, request, abort)
+                   flash, request, abort, jsonify)
 from flask_login import login_required, current_user
 
 from app.models import (db, AcademicYear, Employee, Grade,
@@ -247,7 +248,8 @@ def _parse_date(raw):
 
 
 def _validate_group_form(school, year, *, exclude_group_id=None,
-                         current_subject_id=None):
+                         current_subject_id=None, form=None,
+                         instructor_required=True):
     """Validate the posted group form against THIS institute and year.
 
     Returns (data_dict, errors_list). Every id is verified to belong to the
@@ -260,16 +262,24 @@ def _validate_group_form(school, year, *, exclude_group_id=None,
     stage and grade are UI/filtering inputs only. They are re-checked here
     against the subject so a forged combination is rejected, but neither is
     stored on the group: subject_id remains the only persisted link.
+
+    `form` defaults to request.form; the employee-page quick-create passes one
+    pending group's fields instead, so every group — however it is created —
+    goes through exactly these rules. `instructor_required=False` is used ONLY
+    by that quick-create pre-check, where the instructor is the employee being
+    saved and is supplied (and re-validated with this default) at save time.
     """
+    if form is None:
+        form = request.form
     errors = []
 
-    name = (request.form.get('name') or '').strip()
+    name = (form.get('name') or '').strip()
     if not name:
         errors.append('اسم المجموعة مطلوب.')
     elif len(name) > 150:
         errors.append('اسم المجموعة طويل جداً (الحد الأقصى 150 حرفاً).')
 
-    is_active = request.form.get('is_active') == '1'
+    is_active = form.get('is_active') == '1'
 
     # ── Stage → grade → subject ────────────────────────────────────────
     # The browser cascade is a convenience, never the authority. Each level is
@@ -277,10 +287,10 @@ def _validate_group_form(school, year, *, exclude_group_id=None,
     # chain subject → grade → stage is re-checked, so a hand-crafted POST that
     # pairs a valid subject with someone else's grade or a mismatched stage is
     # rejected. Nothing is written until every check below has passed.
-    posted_grade_id = request.form.get('grade_id', type=int) or None
-    posted_stage    = (request.form.get('stage') or '').strip()
+    posted_grade_id = form.get('grade_id', type=int) or None
+    posted_stage    = (form.get('stage') or '').strip()
 
-    subject_id = request.form.get('subject_id', type=int)
+    subject_id = form.get('subject_id', type=int)
     subject = None
     if not subject_id:
         errors.append('المادة مطلوبة.')
@@ -331,7 +341,7 @@ def _validate_group_form(school, year, *, exclude_group_id=None,
                     subject_id = None
 
     # Instructor — must be an employee of this institute.
-    instructor_id = request.form.get('instructor_id', type=int) or None
+    instructor_id = form.get('instructor_id', type=int) or None
     if instructor_id:
         instructor = (Employee.query
                       .execution_options(bypass_tenant_scope=True)
@@ -343,13 +353,13 @@ def _validate_group_form(school, year, *, exclude_group_id=None,
     # An ACTIVE group must have an instructor. An inactive (archived) group may
     # be left without one, which is also the state an employee deletion leaves
     # behind via ON DELETE SET NULL (instructor_id).
-    if is_active and not instructor_id:
+    if is_active and not instructor_id and instructor_required:
         errors.append('المجموعة المفعّلة يجب أن يكون لها مدرّس.')
 
-    start_date, start_ok = _parse_date(request.form.get('start_date'))
+    start_date, start_ok = _parse_date(form.get('start_date'))
     if not start_ok:
         errors.append('صيغة تاريخ البداية غير صحيحة.')
-    end_date, end_ok = _parse_date(request.form.get('end_date'))
+    end_date, end_ok = _parse_date(form.get('end_date'))
     if not end_ok:
         errors.append('صيغة تاريخ النهاية غير صحيحة.')
     if start_date and end_date and end_date < start_date:
@@ -455,6 +465,206 @@ def new():
 
     return render_template('institute_groups/form.html', group=None,
                            taxonomy=taxonomy, instructors=instructors, form=None)
+
+
+# ─── Employee page: study groups an instructor teaches ────────────────────────
+#
+# The employee create/edit page (institutes only) assigns groups through the
+# ONE canonical link, InstituteStudyGroup.instructor_id — no second relationship.
+# A group created from that page is pre-checked here by the canonical validator
+# (nothing written) and created later, inside the employee save transaction,
+# after being validated again with the normal rules.
+
+_QUICK_GROUP_FIELDS = ('name', 'stage', 'grade_id', 'subject_id',
+                       'start_date', 'end_date')
+_MAX_QUICK_GROUPS = 20
+_MAX_QUICK_GROUP_JSON = 2000
+
+
+def _quick_group_form(fields, instructor_id=None):
+    """A quick-created group's fields as the form the canonical validator reads.
+
+    Always an ACTIVE group; only the known fields are carried over.
+    """
+    from werkzeug.datastructures import ImmutableMultiDict
+    data = {k: str(fields.get(k) or '').strip() for k in _QUICK_GROUP_FIELDS}
+    data['is_active'] = '1'
+    if instructor_id:
+        data['instructor_id'] = str(instructor_id)
+    return ImmutableMultiDict(data)
+
+
+@institute_groups_bp.route('/quick-validate', methods=['POST'])
+@login_required
+@historical_guard
+@permission_required('manage_institute_groups')
+def quick_validate():
+    """Pre-check one group for the employee page. JSON; writes NOTHING.
+
+    Same permission as the normal create page. The instructor is the employee
+    being saved, so it is not required here — the save re-validates the group
+    with the normal rules, instructor included.
+    """
+    school, year = _require_institute()
+    if not school or not year:
+        return jsonify({'ok': False,
+                        'errors': ['لا يوجد عام دراسي نشط لهذه المؤسسة.']}), 400
+    data, errors = _validate_group_form(
+        school, year, form=_quick_group_form(request.form),
+        instructor_required=False)
+    if errors:
+        return jsonify({'ok': False, 'errors': errors}), 400
+    return jsonify({'ok': True, 'group': {'name': data['name'],
+                                          'subject_id': data['subject_id']}})
+
+
+def employee_group_context(school, year, employee=None):
+    """Data for the employee page's institute teaching section.
+
+    Offered groups: this institute's ACTIVE groups of the active year, plus any
+    group of that year already assigned to this employee (so an inactive one
+    can still be shown and removed). Four bulk queries, never one per group.
+    """
+    groups = (InstituteStudyGroup.query
+              .execution_options(bypass_tenant_scope=True)
+              .filter_by(school_id=school.id, academic_year_id=year.id)
+              .order_by(InstituteStudyGroup.name).all()) if year else []
+    emp_id = employee.id if employee else None
+    current_ids = [g.id for g in groups if emp_id and g.instructor_id == emp_id]
+    # Changing assignments (or creating a group) is group management; without
+    # manage_institute_groups the section is read-only and shows only the
+    # employee's own groups.
+    can_manage = bool(year) and current_user.has_permission(
+        'manage_institute_groups')
+    offered = [g for g in groups
+               if g.id in current_ids or (can_manage and g.is_active)]
+
+    subject_ids = {g.subject_id for g in offered if g.subject_id}
+    subjects = ({s.id: s for s in Subject.query
+                 .execution_options(bypass_tenant_scope=True)
+                 .filter(Subject.school_id == school.id,
+                         Subject.id.in_(subject_ids)).all()}
+                if subject_ids else {})
+    grade_ids = {s.grade_id for s in subjects.values() if s.grade_id}
+    grades = ({g.id: g for g in Grade.query
+               .execution_options(bypass_tenant_scope=True)
+               .filter(Grade.school_id == school.id,
+                       Grade.id.in_(grade_ids)).all()}
+              if grade_ids else {})
+    instructor_ids = {g.instructor_id for g in offered if g.instructor_id}
+    instructors = ({e.id: e.full_name for e in Employee.query
+                    .execution_options(bypass_tenant_scope=True)
+                    .filter(Employee.school_id == school.id,
+                            Employee.id.in_(instructor_ids)).all()}
+                   if instructor_ids else {})
+
+    def _row(g):
+        subj = subjects.get(g.subject_id)
+        grade = grades.get(subj.grade_id) if subj and subj.grade_id else None
+        return {'id': g.id, 'name': g.name, 'is_active': bool(g.is_active),
+                'subject_id': g.subject_id,
+                'subject': subj.name if subj else '',
+                'grade': grade.name if grade else '',
+                'instructor_id': g.instructor_id,
+                'instructor': instructors.get(g.instructor_id, '')}
+
+    return {
+        'groups': [_row(g) for g in offered],
+        'current_ids': current_ids,
+        'taxonomy': _form_taxonomy(school, year) if can_manage else None,
+        'can_manage': can_manage,
+        'can_create': can_manage,
+    }
+
+
+def stage_employee_groups(school, year, employee, form):
+    """Apply the employee page's group selection for `employee`. NO commit.
+
+    Validates everything before changing anything and raises ValueError with
+    an Arabic message on any problem, so the caller's rollback leaves nothing
+    behind. Only groups of THIS institute and THIS active year are touched.
+
+      * inst_group_ids[]  — the full desired set of existing groups. Each must
+        be an active group of this institute/year or one already his. Adding a
+        group makes him its instructor (moving it from any previous one).
+        Removing him from an ACTIVE group is refused: the canonical rule is
+        that an active group must have an instructor.
+      * inst_new_group[]  — groups created from the page (JSON). Each passes
+        the canonical validator with this employee as instructor.
+
+    Requires manage_institute_groups for ANY call; without it nothing changes.
+
+    Returns the list of newly created (flushed, uncommitted) groups.
+    """
+    from app.utils.institute_groups import parse_posted_group_ids
+    # Every change here mutates InstituteStudyGroup.instructor_id (or creates a
+    # group), so it needs the canonical group-management permission — holding
+    # manage_employees alone is never enough. Refused before anything changes.
+    if not current_user.has_permission('manage_institute_groups'):
+        raise ValueError('لا تملك صلاحية تعديل المجموعات الدراسية.')
+    if not school or not year:
+        raise ValueError('لا يوجد عام دراسي نشط لهذه المؤسسة.')
+
+    ids, ok = parse_posted_group_ids(form.getlist('inst_group_ids[]'))
+    if not ok:
+        raise ValueError('تعذّر قراءة المجموعات الدراسية المحددة.')
+
+    scope = {g.id: g for g in (InstituteStudyGroup.query
+                               .execution_options(bypass_tenant_scope=True)
+                               .filter_by(school_id=school.id,
+                                          academic_year_id=year.id).all())}
+    current = {gid for gid, g in scope.items()
+               if employee.id and g.instructor_id == employee.id}
+    selectable = {gid for gid, g in scope.items() if g.is_active} | current
+    if any(gid not in selectable for gid in ids):
+        # Never disclose whether the id exists in another institute.
+        raise ValueError('بعض المجموعات الدراسية المحددة غير صالحة لهذه المؤسسة '
+                         'أو غير مفعّلة. لم يتم حفظ أي تغيير.')
+
+    removed = current - set(ids)
+    for gid in sorted(removed):
+        if scope[gid].is_active:
+            raise ValueError(
+                f'لا يمكن إزالة المدرّس من المجموعة المفعّلة «{scope[gid].name}»، '
+                'فكل مجموعة مفعّلة يجب أن يكون لها مدرّس. '
+                'عيّن مدرّساً آخر لها من صفحة المجموعة أولاً.')
+
+    raw_new = [r for r in form.getlist('inst_new_group[]') if (r or '').strip()]
+    if len(raw_new) > _MAX_QUICK_GROUPS:
+        raise ValueError('عدد المجموعات الجديدة كبير جداً.')
+    new_data, seen = [], set()
+    for raw in raw_new:
+        try:
+            fields = json.loads(raw) if len(raw) <= _MAX_QUICK_GROUP_JSON else None
+        except ValueError:
+            fields = None
+        if not isinstance(fields, dict):
+            raise ValueError('تعذّر قراءة بيانات مجموعة جديدة.')
+        data, errors = _validate_group_form(
+            school, year, form=_quick_group_form(fields, employee.id))
+        if errors:
+            raise ValueError(f'المجموعة الجديدة «{str(fields.get("name") or "")[:150]}»: '
+                             f'{errors[0]}')
+        key = (data['subject_id'], data['name'])
+        if key in seen:
+            raise ValueError('توجد مجموعتان جديدتان بنفس الاسم لنفس المادة.')
+        seen.add(key)
+        new_data.append(data)
+
+    # ── Everything validated — apply ───────────────────────────────────────
+    for gid in ids:
+        if gid not in current:
+            scope[gid].instructor_id = employee.id
+    for gid in removed:                      # inactive groups only (checked)
+        scope[gid].instructor_id = None
+    created = []
+    for data in new_data:
+        group = InstituteStudyGroup(school_id=school.id,
+                                    academic_year_id=year.id, **data)
+        db.session.add(group)
+        created.append(group)
+    db.session.flush()
+    return created
 
 
 # ─── Edit ─────────────────────────────────────────────────────────────────────

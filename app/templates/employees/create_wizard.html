@@ -687,6 +687,9 @@
     <div class="card">
       <div class="card-header"><i class="bi bi-journal-bookmark-fill text-accent"></i>إعدادات التدريسي</div>
       <div class="card-body">
+{%- if inst_teaching %}
+        {% include 'employees/_institute_teaching.html' %}
+{%- else %}
 
         {% if grades %}
 
@@ -750,6 +753,7 @@
           لا توجد صفوف دراسية معرّفة للعام الدراسي الحالي.
         </p>
         {% endif %}
+{%- endif %}
 
       </div>
     </div>
@@ -1571,6 +1575,22 @@ function taCollectSubjects() {
         s5 += `<div class="rv-empty"><i class="bi bi-exclamation-triangle"></i>
           لن تُحفظ الشعب التي يدرسها بدون اختيار مادة دراسية واحدة على الأقل.</div>`;
       }
+{%- if inst_teaching %}
+      // Institutes: study groups and the subjects derived from them.
+      if (window.instTeachingSummary) {
+        const it = window.instTeachingSummary();
+        const list = items => `<div class="rv-ta-secs">${
+          items.map(x => `<span class="rv-ta-sec">${esc2(x)}</span>`).join('')}</div>`;
+        if (it.groups.length) {
+          s5 += `<div class="rv-ta-block">
+            <div class="rv-ta-label">المجموعات الدراسية التي يدرّسها</div>${list(it.groups)}</div>`;
+        }
+        if (it.subjects.length) {
+          s5 += `<div class="rv-ta-block">
+            <div class="rv-ta-label">المواد الدراسية التي يدرّسها</div>${list(it.subjects)}</div>`;
+        }
+      }
+{%- endif %}
       if (!s5) {
         s5 = '<div class="rv-empty"><i class="bi bi-journal-x"></i>لم تُحدد تكليفات تدريسية.</div>';
       }

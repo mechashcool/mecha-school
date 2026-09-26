@@ -1,0 +1,364 @@
+{#- Institute teaching settings for the employee create wizard and edit form.
+    INSTITUTES ONLY — the school grades/sections UI is never rendered for an
+    institute and this partial is never rendered for a school.
+
+    Groups are assigned through the ONE canonical link,
+    InstituteStudyGroup.instructor_id. Subjects are not stored per employee:
+    each group already has exactly one subject, so the subjects an instructor
+    teaches are derived from his groups and shown read-only.
+
+    A group created from "+ إنشاء مجموعة جديدة" is pre-checked by the canonical
+    group validator (nothing written) and created together with the employee
+    save. Every value below is re-validated server-side.
+
+    Expects: inst_teaching (employee_group_context), employee (or None). -#}
+{% set _posted = request.form.get('save_institute_groups') %}
+{#- Without manage_institute_groups the section is read-only: no marker, no
+    inputs — and the server refuses any group change regardless. -#}
+{% if inst_teaching.can_manage %}
+<input type="hidden" name="save_institute_groups" value="1">
+{% endif %}
+
+<div class="mb-4" id="instTeaching">
+  <h6 class="fw-semibold mb-2">
+    <i class="bi bi-collection me-1 text-accent"></i>المجموعات الدراسية التي يدرّسها
+  </h6>
+  {% if inst_teaching.can_manage %}
+  <div class="d-flex flex-wrap gap-2 mb-2">
+    <select id="instGroupPicker" class="form-select form-select-sm" style="max-width:380px"
+            aria-label="اختر مجموعة دراسية" data-wizard-enter-optout>
+      <option value="">— اختر مجموعة دراسية —</option>
+    </select>
+    {% if inst_teaching.can_create %}
+    <button type="button" class="btn btn-sm btn-outline-primary" id="instNewGroupBtn">
+      <i class="bi bi-plus-lg"></i> إنشاء مجموعة جديدة
+    </button>
+    {% endif %}
+  </div>
+  {% endif %}
+  <div id="instGroupChips" class="d-flex flex-column gap-2"></div>
+  <div id="instGroupEmpty" class="text-muted small">
+    <i class="bi bi-dash-circle me-1"></i>لم تُحدَّد أي مجموعة دراسية.
+  </div>
+  {% if inst_teaching.can_manage %}
+  <div class="form-text">
+    إضافة مجموعة لها مدرّس آخر تنقلها إلى هذا الموظف عند الحفظ.
+    لا يمكن إزالة المدرّس من مجموعة مفعّلة من هنا — كل مجموعة مفعّلة يجب أن يكون لها مدرّس.
+  </div>
+  {% else %}
+  <div class="form-text">للعرض فقط — تعديل المجموعات الدراسية يتطلب صلاحية إدارة المجموعات الدراسية.</div>
+  {% endif %}
+</div>
+
+<div class="mb-2">
+  <h6 class="fw-semibold mb-2">
+    <i class="bi bi-journals me-1 text-accent"></i>المواد الدراسية التي يدرّسها
+  </h6>
+  <div id="instSubjects" class="d-flex flex-wrap gap-2"></div>
+  <div class="form-text">تُحدَّد المواد تلقائياً من المجموعات الدراسية المختارة — لكل مجموعة مادة واحدة.</div>
+</div>
+
+{% if inst_teaching.can_create %}
+{# Moved to <body> on load, so its inputs are never part of the employee form. #}
+<div class="modal fade" id="instGroupModal" tabindex="-1" aria-labelledby="instGroupModalTitle" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="instGroupModalTitle">إنشاء مجموعة دراسية جديدة</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+      </div>
+      <div class="modal-body">
+        <div id="instGrpErrors" class="alert alert-danger py-2 d-none" role="alert"></div>
+        <div class="mb-2">
+          <label class="form-label" for="instGrpName">اسم المجموعة <span class="text-danger">*</span></label>
+          <input type="text" id="instGrpName" class="form-control" maxlength="150">
+        </div>
+        <div class="row g-2 mb-2">
+          <div class="col-6">
+            <label class="form-label" for="instGrpStage">المرحلة</label>
+            <select id="instGrpStage" class="form-select">
+              <option value="">— اختر المرحلة —</option>
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label" for="instGrpGrade">الصف</label>
+            <select id="instGrpGrade" class="form-select" disabled>
+              <option value="">— اختر الصف —</option>
+            </select>
+          </div>
+        </div>
+        <div class="mb-2">
+          <label class="form-label" for="instGrpSubject">المادة <span class="text-danger">*</span></label>
+          <input type="search" id="instGrpSubjSearch" class="form-control form-control-sm mb-1"
+                 placeholder="ابحث باسم المادة..." disabled>
+          <select id="instGrpSubject" class="form-select" size="5" disabled></select>
+          <div id="instGrpSubjHint" class="form-text">اختر المرحلة والصف لعرض المواد الدراسية.</div>
+        </div>
+        <div class="row g-2">
+          <div class="col-6">
+            <label class="form-label" for="instGrpStart">تاريخ البداية</label>
+            <input type="date" id="instGrpStart" class="form-control">
+          </div>
+          <div class="col-6">
+            <label class="form-label" for="instGrpEnd">تاريخ النهاية</label>
+            <input type="date" id="instGrpEnd" class="form-control">
+          </div>
+        </div>
+        <div class="form-text mt-2">تُنشأ المجموعة مفعّلةً وهذا الموظف مدرّسها، عند حفظ بيانات الموظف.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">إلغاء</button>
+        <button type="button" class="btn btn-primary" id="instGrpSave">إضافة المجموعة</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<script>
+(function () {
+  const DATA = {{ inst_teaching|tojson }};
+  const INIT_SELECTED = {{ (request.form.getlist('inst_group_ids[]') if _posted else inst_teaching.current_ids)|tojson }};
+  const INIT_PENDING  = {{ (request.form.getlist('inst_new_group[]') if _posted else [])|tojson }};
+  const EMP_ID        = {{ (employee.id if employee else none)|tojson }};
+  const CAN_MANAGE    = {{ inst_teaching.can_manage|tojson }};
+  const VALIDATE_URL  = {{ url_for('institute_groups.quick_validate')|tojson }};
+
+  const groupsById = new Map(DATA.groups.map(g => [String(g.id), g]));
+  const currentIds = new Set(DATA.current_ids.map(String));
+  const tax = DATA.taxonomy || { stages: [], grades: [], subjects: [] };
+  const gradesById = new Map(tax.grades.map(g => [String(g.id), g]));
+  const subjectsById = new Map(tax.subjects.map(s => [String(s.id), s]));
+
+  const picker = document.getElementById('instGroupPicker');
+  const chips  = document.getElementById('instGroupChips');
+  const empty  = document.getElementById('instGroupEmpty');
+  const subjBox = document.getElementById('instSubjects');
+
+  const selected = [];     // existing group ids (strings), in selection order
+  const pending  = [];     // quick-created group fields, created on save
+
+  // Every DB value goes through textContent — never parsed as HTML.
+  function node(tag, cls, text) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+  function groupLabel(g) {
+    return g.name + (g.subject ? ' — ' + g.subject : '') + (g.grade ? ' (' + g.grade + ')' : '');
+  }
+  function pendingLabel(f) {
+    const s = subjectsById.get(String(f.subject_id));
+    const gr = s ? gradesById.get(String(s.grade_id)) : null;
+    return (f.name || '') + (s ? ' — ' + s.name : '') + (gr ? ' (' + gr.name + ')' : '');
+  }
+  function removeButton(label, onClick, disabledReason) {
+    const b = node('button', 'btn btn-sm btn-outline-danger py-0 px-1 ms-auto');
+    b.type = 'button';
+    b.setAttribute('aria-label', 'إزالة ' + label);
+    b.appendChild(node('i', 'bi bi-x-lg'));
+    if (disabledReason) { b.disabled = true; b.title = disabledReason; }
+    else b.addEventListener('click', onClick);
+    return b;
+  }
+  function chip(label, extra, hidden, removeBtn) {
+    const row = node('div', 'd-flex align-items-center gap-2 border rounded px-2 py-1');
+    row.appendChild(node('i', 'bi bi-collection text-primary-custom'));
+    const text = node('span', 'fw-600', label);
+    row.appendChild(text);
+    if (extra) row.appendChild(extra);
+    row.appendChild(hidden);
+    row.appendChild(removeBtn);
+    return row;
+  }
+  function hiddenInput(name, value) {
+    const h = node('input');
+    h.type = 'hidden'; h.name = name; h.value = value;
+    return h;
+  }
+
+  function fillPicker() {
+    picker.replaceChildren(node('option', '', '— اختر مجموعة دراسية —'));
+    picker.options[0].value = '';
+    DATA.groups.forEach(g => {
+      if (selected.includes(String(g.id))) return;
+      let text = groupLabel(g);
+      if (g.instructor && String(g.instructor_id) !== String(EMP_ID)) text += ' — المدرّس الحالي: ' + g.instructor;
+      if (!g.is_active) text += ' — غير مفعّلة';
+      const o = node('option', '', text);
+      o.value = g.id;
+      picker.appendChild(o);
+    });
+  }
+
+  function renderSubjects() {
+    const labels = [];
+    selected.forEach(id => {
+      const g = groupsById.get(id);
+      if (g && g.subject) labels.push(g.subject + (g.grade ? ' (' + g.grade + ')' : ''));
+    });
+    pending.forEach(p => {
+      const s = subjectsById.get(String(p.subject_id));
+      const gr = s ? gradesById.get(String(s.grade_id)) : null;
+      if (s) labels.push(s.name + (gr ? ' (' + gr.name + ')' : ''));
+    });
+    const unique = [...new Set(labels)];
+    subjBox.replaceChildren(...(unique.length
+      ? unique.map(l => node('span', 'badge bg-light text-dark border', l))
+      : [node('span', 'text-muted small', 'لا توجد مواد — اختر مجموعة دراسية أولاً.')]));
+  }
+
+  function render() {
+    chips.replaceChildren();
+    selected.forEach(id => {
+      const g = groupsById.get(id);
+      if (!g) return;
+      if (!CAN_MANAGE) {               // read-only: label only, nothing posted
+        const row = node('div', 'd-flex align-items-center gap-2 border rounded px-2 py-1');
+        row.append(node('i', 'bi bi-collection text-primary-custom'), node('span', 'fw-600', groupLabel(g)));
+        if (!g.is_active) row.appendChild(node('small', 'text-muted', '(غير مفعّلة)'));
+        chips.appendChild(row);
+        return;
+      }
+      let extra = null;
+      if (g.instructor_id && String(g.instructor_id) !== String(EMP_ID) && g.instructor) {
+        extra = node('small', 'text-warning', '(ستُنقل من: ' + g.instructor + ')');
+      } else if (!g.is_active) {
+        extra = node('small', 'text-muted', '(غير مفعّلة)');
+      }
+      const locked = currentIds.has(id) && g.is_active
+        ? 'لا يمكن إزالة المدرّس من مجموعة مفعّلة' : '';
+      chips.appendChild(chip(groupLabel(g), extra, hiddenInput('inst_group_ids[]', g.id),
+        removeButton(g.name, () => { selected.splice(selected.indexOf(id), 1); render(); }, locked)));
+    });
+    pending.forEach((f, i) => {
+      chips.appendChild(chip(pendingLabel(f), node('span', 'badge bg-primary', 'جديدة'),
+        hiddenInput('inst_new_group[]', JSON.stringify(f)),
+        removeButton(f.name || '', () => { pending.splice(i, 1); render(); })));
+    });
+    empty.style.display = (selected.length || pending.length) ? 'none' : '';
+    if (picker) fillPicker();
+    renderSubjects();
+  }
+
+  if (picker) picker.addEventListener('change', () => {
+    if (picker.value && !selected.includes(picker.value)) selected.push(picker.value);
+    render();
+  });
+
+  INIT_SELECTED.map(String).forEach(id => {
+    if (groupsById.has(id) && !selected.includes(id)) selected.push(id);
+  });
+  if (CAN_MANAGE) INIT_PENDING.forEach(raw => {
+    try {
+      const f = JSON.parse(raw);
+      if (f && typeof f === 'object') pending.push(f);
+    } catch (_) { /* ignore a malformed echo; the server rejected it anyway */ }
+  });
+  render();
+
+  // Read-only summary for the create wizard's review step.
+  window.instTeachingSummary = function () {
+    return {
+      groups: selected.map(id => groupsById.get(id)).filter(Boolean).map(groupLabel)
+                .concat(pending.map(f => pendingLabel(f) + ' (جديدة)')),
+      subjects: Array.from(subjBox.querySelectorAll('.badge')).map(b => b.textContent)
+    };
+  };
+
+  // ── Quick-create modal ──────────────────────────────────────────────────
+  const modalEl = document.getElementById('instGroupModal');
+  const openBtn = document.getElementById('instNewGroupBtn');
+  if (!modalEl || !openBtn) return;
+  document.body.appendChild(modalEl);      // outside the employee <form>
+
+  const f = {
+    name: document.getElementById('instGrpName'),
+    stage: document.getElementById('instGrpStage'),
+    grade: document.getElementById('instGrpGrade'),
+    search: document.getElementById('instGrpSubjSearch'),
+    subject: document.getElementById('instGrpSubject'),
+    hint: document.getElementById('instGrpSubjHint'),
+    start: document.getElementById('instGrpStart'),
+    end: document.getElementById('instGrpEnd'),
+    errors: document.getElementById('instGrpErrors'),
+    save: document.getElementById('instGrpSave')
+  };
+
+  tax.stages.forEach(s => {
+    const o = node('option', '', s.label);
+    o.value = s.value;
+    f.stage.appendChild(o);
+  });
+
+  // Stage -> grade -> subject: display filtering only.
+  function fillGrades() {
+    f.grade.replaceChildren(node('option', '', '— اختر الصف —'));
+    f.grade.options[0].value = '';
+    const opts = tax.grades.filter(g => f.stage.value !== '' && g.stage === f.stage.value);
+    opts.forEach(g => { const o = node('option', '', g.name); o.value = g.id; f.grade.appendChild(o); });
+    f.grade.disabled = !opts.length;
+    fillSubjects();
+  }
+  function fillSubjects() {
+    const q = f.search.value.trim().toLowerCase();
+    const keep = f.subject.value;
+    f.subject.replaceChildren();
+    const gid = f.grade.value;
+    const opts = gid ? tax.subjects.filter(s => String(s.grade_id) === gid
+                                          && (!q || String(s.name).toLowerCase().includes(q))) : [];
+    opts.forEach(s => { const o = node('option', '', s.name); o.value = s.id; f.subject.appendChild(o); });
+    if (keep && opts.some(s => String(s.id) === keep)) f.subject.value = keep;
+    f.subject.disabled = !gid;
+    f.search.disabled = !gid;
+    f.hint.style.display = gid ? 'none' : '';
+  }
+  f.stage.addEventListener('change', fillGrades);
+  f.grade.addEventListener('change', () => { f.search.value = ''; fillSubjects(); });
+  f.search.addEventListener('input', fillSubjects);
+  modalEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') e.preventDefault();
+  });
+
+  function showErrors(list) {
+    f.errors.replaceChildren(...list.map(m => node('div', '', m)));
+    f.errors.classList.toggle('d-none', !list.length);
+  }
+
+  openBtn.addEventListener('click', () => {
+    f.name.value = ''; f.start.value = ''; f.end.value = ''; f.search.value = '';
+    f.stage.value = '';
+    fillGrades();
+    showErrors([]);
+    bootstrap.Modal.getOrCreateInstance(modalEl).show();
+  });
+
+  f.save.addEventListener('click', () => {
+    const fields = {
+      name: f.name.value.trim(), stage: f.stage.value, grade_id: f.grade.value,
+      subject_id: f.subject.value, start_date: f.start.value, end_date: f.end.value
+    };
+    const body = new FormData();
+    Object.keys(fields).forEach(k => body.append(k, fields[k]));
+    f.save.disabled = true;
+    // Pre-check only: the server writes nothing here.
+    fetch(VALIDATE_URL, { method: 'POST', body: body, headers: { 'Accept': 'application/json' } })
+      .then(r => r.json().catch(() => ({ ok: false })))
+      .then(res => {
+        if (!res || !res.ok) {
+          showErrors((res && res.errors) || ['تعذّر التحقق من بيانات المجموعة.']);
+          return;
+        }
+        const dup = pending.some(p => String(p.subject_id) === String(fields.subject_id)
+                                      && p.name === fields.name);
+        if (dup) { showErrors(['توجد مجموعة جديدة بنفس الاسم لنفس المادة.']); return; }
+        pending.push(fields);
+        render();
+        bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+      })
+      .catch(() => showErrors(['تعذّر الاتصال بالخادم. يرجى المحاولة مرة أخرى.']))
+      .finally(() => { f.save.disabled = false; });
+  });
+})();
+</script>
