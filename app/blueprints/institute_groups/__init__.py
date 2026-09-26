@@ -946,13 +946,12 @@ def attendance_sessions():
 
 # ── Attendance report (managers + assigned instructors, read-only) ───────────
 
-@institute_groups_bp.route('/attendance/report', methods=['GET'])
-@group_read_access_required
-def attendance_report():
-    school, year = _require_institute()
-    if not school or not year:
-        return redirect(url_for('institute_groups.index'))
+def _attendance_report_scope(school, year):
+    """The authorized scope and parsed filters shared by the report page and
+    its PDF export, so both apply exactly the same checks.
 
+    Aborts 404 for a group outside this account's scope.
+    """
     # The SAME group scope as attendance_sessions: a manager sees every group
     # of this institute and year, an instructor only their own active groups.
     is_manager = _is_group_manager()
