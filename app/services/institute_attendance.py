@@ -36,7 +36,8 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models import (db, Employee, InstituteAttendanceRecord,
                         InstituteAttendanceSession, InstituteGroupEnrollment,
-                        InstituteGroupSchedule, InstituteStudyGroup, Student)
+                        InstituteGroupSchedule, InstituteStudyGroup, Student,
+                        StudentSuspension)
 from app.utils.attendance_helpers import _get_tz, get_local_date, utc_to_local
 from app.utils.institute_groups import institute_enabled
 # Importing the module (not its table) is side-effect free: no query runs at
@@ -555,6 +556,26 @@ def eligible_student_ids(school, group_id) -> set:
     return {r[0] for r in rows}
 
 
+def suspended_student_ids(school, student_ids, on_date) -> set:
+    """Students with a StudentSuspension covering `on_date`, in ONE query.
+
+    Mirrors school manual attendance exactly (start_date <= date <= end_date,
+    date bounds only), scoped to this school explicitly.
+    """
+    student_ids = list(student_ids or [])
+    if school is None or not student_ids or on_date is None:
+        return set()
+    rows = (StudentSuspension.query
+            .execution_options(**OPTS)
+            .filter(StudentSuspension.school_id == school.id,
+                    StudentSuspension.student_id.in_(student_ids),
+                    StudentSuspension.start_date <= on_date,
+                    StudentSuspension.end_date >= on_date)
+            .with_entities(StudentSuspension.student_id)
+            .all())
+    return {r[0] for r in rows}
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  Submission — the ONE write path for web and mobile
 # ═════════════════════════════════════════════════════════════════════════════
@@ -611,6 +632,19 @@ def submit_attendance(school, session, statuses, *, source, actor_user_id,
         raise AttendanceError(
             'أحد الطلاب المرسلين غير مسجّل حالياً في هذه المجموعة الدراسية. '
             'لم يتم حفظ أي سجل.')
+
+    # "إيقاف الطالب" — the SAME rule school manual attendance applies: a
+    # StudentSuspension whose date range covers the lesson date. A suspended
+    # student is skipped entirely (no new row, no change to an existing row,
+    # no notification) while everyone else in the submission is processed.
+    suspended = suspended_student_ids(school, cleaned, session.session_date)
+    if suspended:
+        cleaned = {sid: st for sid, st in cleaned.items()
+                   if sid not in suspended}
+        if not cleaned:
+            raise AttendanceError(
+                'الطلاب المحددون موقوفون في تاريخ هذه الجلسة. '
+                'لم يتم حفظ أي سجل.')
 
     now = datetime.utcnow()
     created, updated, unchanged = [], [], []
@@ -692,7 +726,8 @@ def submit_attendance(school, session, statuses, *, source, actor_user_id,
             _notify_absent(school, session, newly_absent)
 
     return {'created': len(created), 'updated': len(updated),
-            'unchanged': len(unchanged), 'notified': len(newly_absent)}
+            'unchanged': len(unchanged), 'notified': len(newly_absent),
+            'skipped_suspended': len(suspended)}
 
 
 def _notify_absent(school, session, student_ids):
