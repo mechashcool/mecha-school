@@ -364,6 +364,12 @@
 
     {% if not current_user.is_super_admin %}
 
+    {#- Institutes: school-oriented student-record, external-registration and
+        attendance/calendar items are replaced by institute workflows, so they
+        are not rendered. Routes and permissions are unchanged; a school
+        (is_institute False) renders every item exactly as before. -#}
+    {% set _is_institute = school and school.is_institute %}
+
     {# ═══ Group: Students ═══════════════════════════════════════════════ #}
     {% if 'students' in enabled_modules and (current_user.has_permission('view_students')
           or current_user.has_permission('manage_residential_areas')) %}
@@ -381,7 +387,7 @@
           </a>
         </li>
         {% endif %}
-        {% if current_user.has_permission('view_student_records') %}
+        {% if not _is_institute and current_user.has_permission('view_student_records') %}
         <li class="nav-item">
           <a href="{{ url_for('student_records.index') }}"
              class="{{ 'active' if request.blueprint == 'student_records' }}">
@@ -397,7 +403,7 @@
           </a>
         </li>
         {% endif %}
-        {% if current_user.has_permission('view_students') %}
+        {% if not _is_institute and current_user.has_permission('view_students') %}
         <li class="nav-item">
           <a href="{{ url_for('admissions.index') }}"
              class="{{ 'active' if request.blueprint == 'admissions' }}">
@@ -413,10 +419,11 @@
     {% endif %}
 
     {# ═══ Group: Attendance & discipline ════════════════════════════════ #}
-    {% if ('attendance' in enabled_modules and (current_user.has_permission('take_attendance') or
-                                                current_user.has_permission('manage_suspensions') or
-                                                current_user.has_permission('manage_attendance_settings') or
-                                                current_user.has_permission('manage_calendar'))) or
+    {% if ('attendance' in enabled_modules and (current_user.has_permission('manage_suspensions') or
+                                                (not _is_institute and
+                                                 (current_user.has_permission('take_attendance') or
+                                                  current_user.has_permission('manage_attendance_settings') or
+                                                  current_user.has_permission('manage_calendar'))))) or
           ('attendance_devices' in enabled_modules and (current_user.has_permission('view_attendance_devices') or
                                                         current_user.has_permission('manage_attendance_devices'))) %}
     <li class="nav-group" data-group="attendance">
@@ -425,7 +432,7 @@
         <i class="bi bi-chevron-left chevron"></i>
       </button>
       <ul class="nav-group-items">
-        {% if 'attendance' in enabled_modules and current_user.has_permission('take_attendance') %}
+        {% if not _is_institute and 'attendance' in enabled_modules and current_user.has_permission('take_attendance') %}
         <li class="nav-item">
           <a href="{{ url_for('attendance.index') }}"
              class="{{ 'active' if request.endpoint in ['attendance.index'] }}">
@@ -447,7 +454,7 @@
           </a>
         </li>
         {% endif %}
-        {% if 'attendance' in enabled_modules and current_user.has_permission('manage_attendance_settings') %}
+        {% if not _is_institute and 'attendance' in enabled_modules and current_user.has_permission('manage_attendance_settings') %}
         <li class="nav-item">
           <a href="{{ url_for('admin.attendance_settings') }}"
              class="{{ 'active' if request.endpoint == 'admin.attendance_settings' }}">
@@ -455,7 +462,7 @@
           </a>
         </li>
         {% endif %}
-        {% if 'attendance' in enabled_modules and current_user.has_permission('manage_calendar') %}
+        {% if not _is_institute and 'attendance' in enabled_modules and current_user.has_permission('manage_calendar') %}
         <li class="nav-item">
           <a href="{{ url_for('school_calendar.index') }}"
              class="{{ 'active' if request.blueprint == 'school_calendar' }}">
