@@ -19,6 +19,10 @@
     <span class="text-muted" style="font-size:12px">
       <i class="bi bi-person-badge me-1"></i>{{ group.instructor.full_name }}
     </span>
+    {% else %}
+    <span class="text-muted" style="font-size:12px">
+      <i class="bi bi-person-dash me-1"></i>لا يوجد مدرس مرتبط بهذه المجموعة.
+    </span>
     {% endif %}
   </div>
   <ul class="list-group list-group-flush">
@@ -97,14 +101,26 @@
   </div>
 </div>
 
-{# ── Filters: one day + one group ─────────────────────────────────────────── #}
+{# ── Filters: date → group → lesson ─────────────────────────────────────────
+   Changing the date or the group reloads the page with the lesson reset, so
+   the lesson list always matches the chosen day and group. Every value is
+   re-validated server side against this account's scope. #}
 <div class="card mb-4">
+  <div class="card-header py-2">
+    <i class="bi bi-funnel me-1 text-primary-custom"></i>
+    <span class="small fw-600">اختيار التاريخ والمجموعة والحصة</span>
+  </div>
   <div class="card-body py-3">
-    <form method="GET" class="row g-2 align-items-end">
-      <div class="col-6 col-md-4">
-        <label class="form-label small fw-600">المجموعة الدراسية</label>
-        <select name="group_id" class="form-select">
-          <option value="">كل المجموعات</option>
+    <form method="GET" class="row g-2 align-items-end" id="sessionFilters">
+      <div class="col-12 col-md-3">
+        <label class="form-label small fw-600" for="fDate">التاريخ</label>
+        <input type="date" name="date" id="fDate" class="form-control js-reset-lesson"
+               value="{{ on_date.strftime('%Y-%m-%d') }}">
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label small fw-600" for="fGroup">المجموعة</label>
+        <select name="group_id" id="fGroup" class="form-select js-reset-lesson">
+          <option value="">جميع المجموعات</option>
           {% for g in groups %}
           <option value="{{ g.id }}" {% if group_filter == g.id %}selected{% endif %}>
             {{ g.name }}{% if g.subject %} — {{ g.subject.name }}{% endif %}
@@ -112,11 +128,20 @@
           {% endfor %}
         </select>
       </div>
-      <div class="col-6 col-md-4">
-        <label class="form-label small fw-600">التاريخ</label>
-        <input type="date" name="date" class="form-control" value="{{ on_date.strftime('%Y-%m-%d') }}">
+      <div class="col-6 col-md-3">
+        <label class="form-label small fw-600" for="fLesson">الحصة</label>
+        <select name="lesson" id="fLesson" class="form-select"
+                {% if not lesson_options %}disabled{% endif %}>
+          <option value="">جميع الحصص</option>
+          {% for start, end in lesson_options %}
+          {% set key = start.strftime('%H:%M') ~ '-' ~ end.strftime('%H:%M') %}
+          <option value="{{ key }}" {% if lesson_filter == (start, end) %}selected{% endif %}>
+            {{ start.strftime('%H:%M') }} – {{ end.strftime('%H:%M') }}
+          </option>
+          {% endfor %}
+        </select>
       </div>
-      <div class="col-12 col-md-4 d-flex gap-2">
+      <div class="col-12 col-md-3 d-flex gap-2">
         <button class="btn btn-primary flex-grow-1"><i class="bi bi-funnel-fill me-1"></i>عرض</button>
         <a href="{{ url_for('institute_groups.attendance_sessions') }}"
            class="btn btn-outline-secondary" title="اليوم">اليوم</a>
@@ -138,7 +163,8 @@
 {% elif not queue %}
 <div class="card"><div class="card-body text-center text-muted py-5">
   <i class="bi bi-calendar-x" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-  {% if is_today %}لا توجد مجموعات لديها حصص مجدولة اليوم.{% else %}لا توجد حصص مجدولة في هذا اليوم.{% endif %}
+  {% if group_filter %}لا توجد حصص مجدولة لهذه المجموعة في التاريخ المحدد.
+  {% elif is_today %}لا توجد مجموعات لديها حصص مجدولة اليوم.{% else %}لا توجد حصص مجدولة في هذا اليوم.{% endif %}
   {% if is_manager %}<div class="small mt-1">أضف جدولاً أسبوعياً للمجموعة أولاً.</div>{% endif %}
 </div></div>
 {% else %}
@@ -167,4 +193,24 @@
   </details>
   {% endif %}
 {% endif %}
+
+<script>
+(function () {
+  /* Progressive filtering: a new date or group invalidates the chosen lesson,
+     so reload with the lesson cleared. The lesson select then lists only that
+     day's lessons for that group. */
+  var form = document.getElementById('sessionFilters');
+  var lesson = document.getElementById('fLesson');
+  if (!form) return;
+  form.querySelectorAll('.js-reset-lesson').forEach(function (el) {
+    el.addEventListener('change', function () {
+      if (lesson) { lesson.value = ''; }
+      form.submit();
+    });
+  });
+  if (lesson) {
+    lesson.addEventListener('change', function () { form.submit(); });
+  }
+})();
+</script>
 {% endblock %}
