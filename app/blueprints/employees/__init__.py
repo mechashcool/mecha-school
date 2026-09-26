@@ -263,7 +263,15 @@ def _form_context(employee=None):
                                    .filter_by(employee_id=employee.id, is_active=True)
                                    .first())
 
+    # Institutes: study groups the instructor teaches (InstituteStudyGroup.
+    # instructor_id) replace grades/sections. Never computed for a school.
+    inst_teaching = None
+    if school and getattr(school, 'is_institute', False):
+        from app.blueprints.institute_groups import employee_group_context
+        inst_teaching = employee_group_context(school, year, employee)
+
     return dict(
+        inst_teaching           = inst_teaching,
         employee                = employee,
         subjects                = subjects,
         grades                  = grades,
@@ -288,6 +296,18 @@ def _form_context(employee=None):
         emp_cur_job             = cur_job,
         emp_cur_dep             = cur_dep,
     )
+
+
+# Every field the institute teaching section can post. ANY of them marks a
+# group-mutation request (routed to stage_employee_groups, which refuses users
+# without manage_institute_groups); a request with NONE of them — e.g. the
+# read-only view — never reaches the mutation path and leaves groups untouched.
+_INSTITUTE_GROUP_FIELDS = ('save_institute_groups', 'inst_group_ids[]',
+                           'inst_new_group[]')
+
+
+def _has_institute_group_payload(form):
+    return any(field in form for field in _INSTITUTE_GROUP_FIELDS)
 
 
 def _save_teacher_assignments(emp):
@@ -812,6 +832,7 @@ def _handle_employee_post(employee):
     _doc_saved     = 0
     _doc_warnings  = []
     _ta_no_subject = False
+    _inst_created  = []           # institute groups created from this page
     if is_create:
         from app.models import EmployeeDocument
         _ALLOWED_DOC_EXTS = {'pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'}
@@ -845,6 +866,13 @@ def _handle_employee_post(employee):
             _ts_ids, _subj_ids = _save_wizard_teacher_assignments(
                 employee, school, year)
             _ta_no_subject = bool(_ts_ids and not _subj_ids)
+            # Institutes: study groups, staged in the SAME transaction as the
+            # employee — a later failure leaves no group and no assignment.
+            if (getattr(school, 'is_institute', False)
+                    and _has_institute_group_payload(request.form)):
+                from app.blueprints.institute_groups import stage_employee_groups
+                _inst_created = stage_employee_groups(school, year, employee,
+                                                      request.form)
         except ValueError as _ta_err:
             # Forged / stale / cross-school selection — reject the whole create.
             db.session.rollback()
@@ -858,6 +886,9 @@ def _handle_employee_post(employee):
             return render_template(_tmpl, error_step='teacher', **_form_context(None))
 
     db.session.commit()
+    for _g in _inst_created:
+        log_action('create', 'institute_study_group', _g.id,
+                   details=f'created study group "{_g.name}" from employee page')
     flash_msgs = [('success',
                    f'تم {"إضافة" if is_create else "تحديث"} بيانات الموظف {employee.full_name}.')]
     if is_create and _new_emp_username:
@@ -989,6 +1020,27 @@ def _handle_employee_post(employee):
             _log.exception('Teacher assignment save failed employee_id=%s', employee.id)
             flash_msgs.append(('warning',
                                'خطأ في حفظ تكليفات التدريسي — يرجى المحاولة مرة أخرى.'))
+
+    # ── Institute study groups — EDIT flow only ──────────────────────────────
+    if ((not is_create) and getattr(school, 'is_institute', False)
+            and _has_institute_group_payload(request.form)):
+        from app.blueprints.institute_groups import stage_employee_groups
+        try:
+            _created = stage_employee_groups(school, year, employee, request.form)
+            db.session.commit()
+            for _g in _created:
+                log_action('create', 'institute_study_group', _g.id,
+                           details=f'created study group "{_g.name}" from employee page')
+            flash_msgs.append(('success', 'تم حفظ المجموعات الدراسية للمدرّس.'))
+        except ValueError as _grp_err:
+            db.session.rollback()
+            flash_msgs.append(('danger', str(_grp_err)))
+        except Exception:
+            db.session.rollback()
+            _log.exception('Institute group assignment save failed employee_id=%s',
+                           employee.id)
+            flash_msgs.append(('warning',
+                               'خطأ في حفظ المجموعات الدراسية — يرجى المحاولة مرة أخرى.'))
 
     for level, msg in flash_msgs:
         flash(msg, level)
