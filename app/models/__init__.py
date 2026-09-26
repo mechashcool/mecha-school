@@ -1502,6 +1502,80 @@ class StudentSuspension(db.Model):
         return f'<StudentSuspension student={self.student_id} {self.start_date}–{self.end_date}>'
 
 
+class InstituteSuspensionScope(db.Model):
+    """INSTITUTES ONLY — which study groups one StudentSuspension applies to.
+
+    A companion row; StudentSuspension itself (and every school suspension) is
+    untouched. At most one scope per suspension.
+
+      * no scope row           -> ALL groups (every suspension created before
+                                  this feature, so its behaviour never changes)
+      * applies_to_all_groups  -> ALL groups, evaluated at attendance time, so a
+                                  group joined later is covered too
+      * otherwise              -> ONLY the groups in InstituteSuspensionGroup
+
+    ON DELETE CASCADE from the suspension: the existing delete route, the raw
+    student delete and school cleanup remove the scope with no code of their own.
+    """
+    __tablename__ = 'institute_suspension_scopes'
+    __school_scoped__ = True
+
+    id                    = db.Column(db.Integer, primary_key=True)
+    suspension_id         = db.Column(db.Integer, nullable=False)
+    school_id             = db.Column(db.Integer, nullable=False, index=True)
+    applies_to_all_groups = db.Column(db.Boolean, nullable=False)
+    created_at            = db.Column(db.DateTime, default=datetime.utcnow)
+
+    groups = db.relationship('InstituteSuspensionGroup', lazy='selectin',
+                             cascade='all, delete-orphan', passive_deletes=True)
+
+    __table_args__ = (
+        db.ForeignKeyConstraint(['suspension_id'], ['student_suspensions.id'],
+                                name='fk_institute_susp_scope_suspension',
+                                ondelete='CASCADE'),
+        db.ForeignKeyConstraint(['school_id'], ['schools.id'],
+                                name='fk_institute_susp_scope_school'),
+        db.UniqueConstraint('suspension_id', name='uq_institute_susp_scope_suspension'),
+        # Parent side of the group-row composite FK.
+        db.UniqueConstraint('id', 'school_id', name='uq_institute_susp_scope_id_school'),
+    )
+
+    def __repr__(self):
+        return (f'<InstituteSuspensionScope susp={self.suspension_id} '
+                f'all={self.applies_to_all_groups}>')
+
+
+class InstituteSuspensionGroup(db.Model):
+    """One selected study group of a selected-groups InstituteSuspensionScope.
+
+    Both composite FKs carry school_id, so PostgreSQL guarantees the scope and
+    the group belong to the SAME institute — a foreign group cannot be linked.
+    """
+    __tablename__ = 'institute_suspension_groups'
+    __school_scoped__ = True
+
+    id        = db.Column(db.Integer, primary_key=True)
+    scope_id  = db.Column(db.Integer, nullable=False)
+    school_id = db.Column(db.Integer, nullable=False, index=True)
+    group_id  = db.Column(db.Integer, nullable=False, index=True)
+
+    __table_args__ = (
+        db.ForeignKeyConstraint(
+            ['scope_id', 'school_id'],
+            ['institute_suspension_scopes.id', 'institute_suspension_scopes.school_id'],
+            name='fk_institute_susp_group_scope_school', ondelete='CASCADE'),
+        # RESTRICT, like enrollments: groups are never hard-deleted in normal use.
+        db.ForeignKeyConstraint(
+            ['group_id', 'school_id'],
+            ['institute_study_groups.id', 'institute_study_groups.school_id'],
+            name='fk_institute_susp_group_group_school', ondelete='RESTRICT'),
+        db.UniqueConstraint('scope_id', 'group_id', name='uq_institute_susp_group'),
+    )
+
+    def __repr__(self):
+        return f'<InstituteSuspensionGroup scope={self.scope_id} group={self.group_id}>'
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  5. EMPLOYEES
 # ═════════════════════════════════════════════════════════════════════════════

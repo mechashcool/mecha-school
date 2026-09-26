@@ -65,6 +65,30 @@ def active_enrollments_for_student(school_id: int, student_id: int):
             .all())
 
 
+def student_active_groups(school_id: int, academic_year_id: int, student_id: int):
+    """ACTIVE groups of THIS institute and year in which THIS student holds an
+    ACTIVE enrollment, ordered by name — one query.
+
+    The only groups a group-scoped suspension may name: the form offers exactly
+    these, and the create route re-validates every posted id against them.
+    """
+    if not school_id or not academic_year_id or not student_id:
+        return []
+    return (InstituteStudyGroup.query
+            .execution_options(bypass_tenant_scope=True)
+            .join(InstituteGroupEnrollment,
+                  InstituteGroupEnrollment.group_id == InstituteStudyGroup.id)
+            .filter(InstituteStudyGroup.school_id == school_id,
+                    InstituteStudyGroup.academic_year_id == academic_year_id,
+                    InstituteStudyGroup.is_active.is_(True),
+                    InstituteGroupEnrollment.school_id == school_id,
+                    InstituteGroupEnrollment.student_id == student_id,
+                    InstituteGroupEnrollment.status
+                    == InstituteGroupEnrollment.STATUS_ACTIVE)
+            .order_by(InstituteStudyGroup.name)
+            .all())
+
+
 def parse_posted_group_ids(raw_values) -> tuple[list[int], bool]:
     """Turn posted group id strings into ints.
 

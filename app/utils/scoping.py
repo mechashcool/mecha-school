@@ -26,6 +26,7 @@ def _models():
         FeeType, Grade, InstituteAttendanceRecord,
         InstituteAttendanceSession, InstituteGroupEnrollment,
         InstituteGroupSchedule, InstituteStudyGroup,
+        InstituteSuspensionGroup, InstituteSuspensionScope,
         InventoryCategory, InventoryCount, InventoryItem,
         InventoryItemStock, InventoryMovement, InventoryWarehouse,
         LeaveRequest, Notification, NotificationOutbox, PayrollItem,
@@ -61,6 +62,9 @@ def _models():
         # External (public) student-registration intake — school-scoped only so
         # staff see all of their school's requests regardless of the view year.
         StudentRegistrationRequest, StudentRegistrationRequestDocument,
+        # Institute suspension group scope — school-scoped only, like
+        # StudentSuspension, which it extends.
+        InstituteSuspensionScope, InstituteSuspensionGroup,
     )
     # Student, StudentDocument, StudentSuspension are school-scoped only —
     # they persist across academic years so that a year rollover does not
