@@ -1,0 +1,214 @@
+{% extends "shared/base.html" %}
+{% block title %}حضور المدرسين في الحصص{% endblock %}
+{% block page_title %}حضور المدرسين — حسب الحصة{% endblock %}
+
+{#- Institutes only (employees.manual_attendance branches here for
+    School.is_institute). Each row is ONE lesson with its own status; a teacher
+    with several lessons on the same day has one independent row per lesson.
+    Nothing on this page writes to the daily employee attendance. -#}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">
+      <i class="bi bi-person-check me-2 text-primary-custom"></i>حضور المدرسين في الحصص
+    </h1>
+    <p class="page-subtitle">اختر التاريخ والمجموعة والحصة ثم سجّل حضور المدرس المجدول</p>
+  </div>
+  <a href="{{ url_for('employees.attendance_report') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>تقرير الحضور
+  </a>
+</div>
+
+<div class="alert alert-secondary d-flex gap-2 align-items-start py-2">
+  <i class="bi bi-info-circle flex-shrink-0 mt-1"></i>
+  <div style="font-size:13px">
+    تُعرض فقط الحصص المجدولة في التاريخ المحدد مع مدرّسها.
+    الحصة التي لم تُحدَّد حالتها تبقى <strong>«غير مُسجَّلة»</strong> —
+    ولا يُحتسب أي مدرس غائباً تلقائياً. حضور الحصص مستقل عن الحضور اليومي للموظفين.
+  </div>
+</div>
+
+{# ── Filters: date → group → lesson ───────────────────────────────────────── #}
+<div class="card mb-4">
+  <div class="card-header py-2">
+    <i class="bi bi-funnel me-1 text-primary-custom"></i>
+    <span class="small fw-600">اختيار التاريخ والمجموعة والحصة</span>
+  </div>
+  <div class="card-body py-3">
+    <form method="GET" class="row g-2 align-items-end" id="lessonFilters">
+      <div class="col-12 col-md-3">
+        <label class="form-label small fw-600" for="fDate">التاريخ</label>
+        <input type="date" name="date" id="fDate" class="form-control js-reset-lesson"
+               value="{{ on_date.strftime('%Y-%m-%d') }}">
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label small fw-600" for="fGroup">المجموعة</label>
+        <select name="group_id" id="fGroup" class="form-select js-reset-lesson">
+          <option value="">جميع المجموعات</option>
+          {% for g in groups %}
+          <option value="{{ g.id }}" {% if group_filter == g.id %}selected{% endif %}>{{ g.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label small fw-600" for="fLesson">الحصة</label>
+        <select name="lesson" id="fLesson" class="form-select"
+                {% if not lesson_options %}disabled{% endif %}>
+          <option value="">جميع الحصص</option>
+          {% for start, end in lesson_options %}
+          {% set key = start.strftime('%H:%M') ~ '-' ~ end.strftime('%H:%M') %}
+          <option value="{{ key }}" {% if lesson_filter == (start, end) %}selected{% endif %}>
+            {{ start.strftime('%H:%M') }} – {{ end.strftime('%H:%M') }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-12 col-md-3 d-flex gap-2">
+        <button class="btn btn-primary flex-grow-1"><i class="bi bi-arrow-repeat me-1"></i>تحميل</button>
+        <a href="{{ url_for('employees.manual_attendance') }}"
+           class="btn btn-outline-secondary" title="اليوم">اليوم</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<h2 class="h6 fw-600 mb-3">
+  <i class="bi bi-calendar-day me-1 text-primary-custom"></i>
+  {{ day_name }} {{ on_date.strftime('%Y-%m-%d') }}
+</h2>
+
+{% if not year %}
+<div class="card"><div class="card-body text-center text-muted py-5">
+  لا توجد سنة دراسية نشطة لهذه المؤسسة.
+</div></div>
+{% elif not lessons %}
+<div class="card"><div class="card-body text-center text-muted py-5">
+  <i class="bi bi-calendar-x" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+  {% if group_filter %}لا توجد حصص مجدولة لهذه المجموعة في التاريخ المحدد.
+  {% else %}لا توجد حصص مجدولة لهذا التاريخ.{% endif %}
+</div></div>
+{% else %}
+<form method="POST" action="{{ url_for('employees.manual_lesson_attendance_save') }}" id="lessonAttForm">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="att_date" value="{{ on_date.strftime('%Y-%m-%d') }}">
+  {% if group_filter %}<input type="hidden" name="group_id" value="{{ group_filter }}">{% endif %}
+  {% if lesson_filter %}<input type="hidden" name="lesson"
+         value="{{ lesson_filter[0].strftime('%H:%M') }}-{{ lesson_filter[1].strftime('%H:%M') }}">{% endif %}
+
+  <div class="card">
+    <div class="table-wrapper">
+      <table class="table mb-0 align-middle">
+        <thead>
+          <tr>
+            <th>الحصة</th>
+            <th>المدرس</th>
+            <th>المادة</th>
+            <th>المجموعة</th>
+            <th style="min-width:300px">الحالة</th>
+            <th>ملاحظات</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for l in lessons %}
+          <tr class="lesson-row" data-recorded="{{ 1 if l.record else 0 }}"
+              data-group="{{ l.group.id }}" data-start="{{ l.start_time.strftime('%H:%M') }}"
+              data-employee="{{ l.employee.id if l.employee else '' }}">
+            <td class="fw-600 text-nowrap">
+              <i class="bi bi-clock me-1 text-muted"></i>{{ l.start_time.strftime('%H:%M') }} – {{ l.end_time.strftime('%H:%M') }}
+            </td>
+            <td>
+              {% if l.employee %}
+              <span class="teacher-name fw-600">{{ l.employee.full_name }}</span>
+              {% else %}
+              <span class="text-muted" style="font-size:12px">لا يوجد مدرس مرتبط بهذه الحصة.</span>
+              {% endif %}
+            </td>
+            <td>{{ l.subject.name if l.subject else '—' }}</td>
+            <td>{{ l.group.name }}</td>
+            <td>
+              {% if l.employee %}
+              <input type="hidden" name="lesson_keys" value="{{ l.key }}">
+              <input type="hidden" name="group_{{ l.key }}" value="{{ l.group.id }}">
+              <input type="hidden" name="start_{{ l.key }}" value="{{ l.start_time.strftime('%H:%M') }}">
+              <input type="hidden" name="employee_{{ l.key }}" value="{{ l.employee.id }}">
+              <div class="btn-group btn-group-sm" role="group">
+                {% for st in statuses %}
+                <input type="radio" class="btn-check" name="status_{{ l.key }}"
+                       id="t{{ l.key }}_{{ st }}" value="{{ st }}"
+                       {{ 'checked' if l.record and l.record.status == st }}>
+                <label class="btn btn-outline-{{ 'success' if st == 'present'
+                                                 else 'danger' if st == 'absent'
+                                                 else 'warning' if st == 'late'
+                                                 else 'secondary' }}"
+                       for="t{{ l.key }}_{{ st }}">{{ status_labels[st] }}</label>
+                {% endfor %}
+              </div>
+              {% if l.record %}
+              <div class="text-muted mt-1" style="font-size:11px">
+                آخر تسجيل: {{ local_dt(l.record.recorded_at).strftime('%Y-%m-%d %H:%M') }}
+              </div>
+              {% else %}
+              <span class="text-muted ms-2" style="font-size:12px">غير مُسجَّلة</span>
+              {% endif %}
+              {% else %}—{% endif %}
+            </td>
+            <td>
+              {% if l.employee %}
+              <input type="text" name="notes_{{ l.key }}" class="form-control form-control-sm"
+                     maxlength="500" value="{{ l.record.notes if l.record and l.record.notes else '' }}">
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="card-footer d-flex justify-content-between align-items-center">
+      <span class="text-muted" style="font-size:12px">
+        <i class="bi bi-shield-lock me-1"></i>
+        الحصص غير المحدّدة تبقى بلا حالة ولا تُسجَّل غياباً.
+      </span>
+      <button type="submit" class="btn btn-primary px-5" id="saveBtn">
+        <i class="bi bi-save-fill me-2"></i>حفظ الحضور
+      </button>
+    </div>
+  </div>
+</form>
+{% endif %}
+
+<script>
+(function () {
+  /* Progressive filtering: a new date or group invalidates the chosen lesson,
+     so reload with the lesson cleared. Every value is re-validated server side. */
+  var filters = document.getElementById('lessonFilters');
+  var lesson = document.getElementById('fLesson');
+  if (filters) {
+    filters.querySelectorAll('.js-reset-lesson').forEach(function (el) {
+      el.addEventListener('change', function () {
+        if (lesson) { lesson.value = ''; }
+        filters.submit();
+      });
+    });
+    if (lesson) {
+      lesson.addEventListener('change', function () { filters.submit(); });
+    }
+  }
+
+  /* Prevent a duplicate submission from repeated taps; the backend is
+     idempotent regardless (one row per lesson and teacher). */
+  var form = document.getElementById('lessonAttForm');
+  var save = document.getElementById('saveBtn');
+  if (form && save) {
+    form.addEventListener('submit', function () {
+      save.disabled = true;
+      save.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>جارٍ الحفظ…';
+      setTimeout(function () {
+        save.disabled = false;
+        save.innerHTML = '<i class="bi bi-save-fill me-2"></i>حفظ الحضور';
+      }, 8000);
+    });
+  }
+})();
+</script>
+{% endblock %}

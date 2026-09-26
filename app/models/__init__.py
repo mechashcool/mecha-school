@@ -1303,6 +1303,98 @@ class InstituteAttendanceRecord(db.Model):
                 f'stu={self.student_id} {self.status}>')
 
 
+class InstituteInstructorAttendance(db.Model):
+    """One teacher's explicit attendance status in one institute lesson.
+
+    Deliberately separate from employee_attendance, which carries
+    UNIQUE (employee_id, date) — one row per employee per DAY — and feeds
+    payroll, device (AI Face) attendance, the leave sync and the daily employee
+    reports. An institute teacher may teach several lessons on one day, each
+    with its own status, so a per-session table is required. Nothing here is
+    ever written into employee_attendance, and nothing reads this table for
+    payroll.
+
+    employee_id IS the historical snapshot of who taught the lesson: it is
+    resolved server-side when the row is written and never re-derived from
+    InstituteStudyGroup.instructor_id afterwards, so reassigning a group later
+    cannot rewrite recorded history.
+
+    role 'substitute' is declared so a later substitute-teacher action needs
+    no schema change; only 'scheduled' rows are produced for now.
+    """
+    __tablename__ = 'institute_instructor_attendance'
+    __school_scoped__ = True
+
+    ROLE_SCHEDULED  = 'scheduled'
+    ROLE_SUBSTITUTE = 'substitute'
+    ROLES = (ROLE_SCHEDULED, ROLE_SUBSTITUTE)
+
+    # Same vocabulary and sources as InstituteAttendanceRecord — not re-invented.
+    STATUSES = InstituteAttendanceRecord.STATUSES
+    SOURCES = InstituteAttendanceSession.SOURCES
+
+    id          = db.Column(db.Integer, primary_key=True)
+    school_id   = db.Column(db.Integer, nullable=False, index=True)
+    session_id  = db.Column(db.Integer, nullable=False, index=True)
+    employee_id = db.Column(db.Integer, nullable=False, index=True)
+    role        = db.Column(db.String(20), nullable=False,
+                            default=ROLE_SCHEDULED, server_default=ROLE_SCHEDULED)
+    status      = db.Column(db.String(20), nullable=False)
+    source      = db.Column(db.String(20), nullable=False)
+    recorded_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    recorded_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    notes       = db.Column(db.Text, nullable=True)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at  = db.Column(db.DateTime, default=datetime.utcnow,
+                            onupdate=datetime.utcnow)
+
+    school   = db.relationship(
+        'School', viewonly=True,
+        primaryjoin='foreign(InstituteInstructorAttendance.school_id) == School.id')
+    session  = db.relationship(
+        'InstituteAttendanceSession', viewonly=True,
+        primaryjoin=('foreign(InstituteInstructorAttendance.session_id) '
+                     '== InstituteAttendanceSession.id'))
+    employee = db.relationship(
+        'Employee', viewonly=True,
+        primaryjoin=('foreign(InstituteInstructorAttendance.employee_id) '
+                     '== Employee.id'))
+    recorder = db.relationship('User', foreign_keys=[recorded_by])
+
+    __table_args__ = (
+        db.ForeignKeyConstraint(['school_id'], ['schools.id'],
+                                name='fk_institute_instr_att_school'),
+        # Same-institute ownership of the lesson AND the teacher, enforced by
+        # PostgreSQL. RESTRICT: recorded history is never silently removed.
+        db.ForeignKeyConstraint(
+            ['session_id', 'school_id'],
+            ['institute_attendance_sessions.id',
+             'institute_attendance_sessions.school_id'],
+            name='fk_institute_instr_att_session_school', ondelete='RESTRICT'),
+        db.ForeignKeyConstraint(
+            ['employee_id', 'school_id'], ['employees.id', 'employees.school_id'],
+            name='fk_institute_instr_att_employee_school', ondelete='RESTRICT'),
+        # ONE status per (lesson, teacher): a retried or concurrent save
+        # updates the same row instead of duplicating it.
+        db.UniqueConstraint('session_id', 'employee_id',
+                            name='uq_institute_instr_att_session_employee'),
+        db.CheckConstraint("role IN ('scheduled', 'substitute')",
+                           name='ck_institute_instr_att_role'),
+        db.CheckConstraint(
+            "status IN ('present', 'absent', 'late', 'excused')",
+            name='ck_institute_instr_att_status'),
+        db.CheckConstraint(
+            "source IN ('manual_admin', 'manual_instructor', 'card', 'device')",
+            name='ck_institute_instr_att_source'),
+        db.Index('ix_institute_instr_att_school_employee',
+                 'school_id', 'employee_id'),
+    )
+
+    def __repr__(self):
+        return (f'<InstituteInstructorAttendance {self.id} s={self.session_id} '
+                f'emp={self.employee_id} {self.role} {self.status}>')
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  4. STUDENTS  (with RFID + school + year)
 # ═════════════════════════════════════════════════════════════════════════════

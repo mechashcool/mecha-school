@@ -37,9 +37,10 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models import (db, Employee, InstituteAttendanceRecord,
                         InstituteAttendanceSession, InstituteGroupEnrollment,
-                        InstituteGroupSchedule, InstituteStudyGroup,
+                        InstituteGroupSchedule, InstituteInstructorAttendance,
+                        InstituteStudyGroup,
                         InstituteSuspensionGroup, InstituteSuspensionScope,
-                        Student, StudentSuspension)
+                        Student, StudentSuspension, Subject)
 from app.utils.attendance_helpers import (_get_tz, get_local_date, get_local_now,
                                           utc_to_local)
 from app.utils.institute_groups import institute_enabled
@@ -1051,3 +1052,278 @@ def attendance_report(school, groups, start: date_type, end: date_type, *,
         'rate': round((present + late) / counted * 100, 1) if counted else None,
     })
     return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Teacher (instructor) attendance per lesson
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# One status per (lesson session, teacher), stored in
+# institute_instructor_attendance. Completely independent of
+# employee_attendance: nothing here reads or writes the daily employee record,
+# so payroll, AI Face, the leave sync and the daily employee reports are never
+# affected by a lesson status.
+#
+# The same invariants as student attendance apply: listing computes lessons and
+# writes nothing; a row exists only because a human saved a status; an
+# unmarked lesson is "not recorded", never "absent".
+
+INSTRUCTOR_NOTES_MAX = 500
+
+
+class InstructorLesson:
+    """One lesson of one date as the teacher-attendance page shows it.
+
+    `employee` is the lesson's teacher (see _scheduled_teacher_id) or None when
+    the group has no instructor; `record` is the saved scheduled-teacher row or
+    None when nothing was recorded yet.
+    """
+
+    __slots__ = ('occurrence', 'employee', 'subject', 'record')
+
+    def __init__(self, occurrence, employee, subject, record):
+        self.occurrence = occurrence
+        self.employee = employee
+        self.subject = subject
+        self.record = record
+
+    @property
+    def group(self):
+        return self.occurrence.group
+
+    @property
+    def start_time(self):
+        return self.occurrence.start_time
+
+    @property
+    def end_time(self):
+        return self.occurrence.end_time
+
+    @property
+    def key(self) -> str:
+        """Form key for this lesson: group id + start time (the session key)."""
+        return f'{self.group.id}_{self.start_time.strftime("%H%M")}'
+
+
+def _scheduled_teacher_id(occurrence, record=None):
+    """The teacher a lesson belongs to, most historical source first.
+
+    1. A saved scheduled row -> its own employee_id. The row IS the snapshot,
+       so reassigning the group afterwards never changes what it shows.
+    2. A materialized session -> its instructor_id snapshot, taken when the
+       session was first opened (by either student or teacher attendance).
+    3. Neither -> the group's current instructor_id (the lesson has not been
+       opened yet, so "now" is the only truth there is).
+    """
+    if record is not None:
+        return record.employee_id
+    sess = occurrence.session
+    if sess is not None and sess.instructor_id:
+        return sess.instructor_id
+    return occurrence.group.instructor_id
+
+
+def _scheduled_rows(school, session_ids) -> dict:
+    """{session_id: scheduled-teacher row} in ONE query."""
+    session_ids = list(session_ids or [])
+    if school is None or not session_ids:
+        return {}
+    out = {}
+    for row in (InstituteInstructorAttendance.query
+                .execution_options(**OPTS)
+                .filter(InstituteInstructorAttendance.school_id == school.id,
+                        InstituteInstructorAttendance.session_id.in_(session_ids),
+                        InstituteInstructorAttendance.role
+                        == InstituteInstructorAttendance.ROLE_SCHEDULED)
+                .order_by(InstituteInstructorAttendance.id)
+                .all()):
+        out.setdefault(row.session_id, row)
+    return out
+
+
+def instructor_lessons(school, groups, on_date: date_type) -> list:
+    """[InstructorLesson] for every lesson of `groups` on one date. READ-ONLY.
+
+    `groups` must already be the caller's authorized scope; anything outside
+    `school` is dropped again here. Nothing is materialized or written.
+
+    Queries: two for the occurrences, then one each for the saved rows, the
+    teachers and the subjects — never one per lesson, teacher or group.
+    """
+    groups = [g for g in (groups or []) if school is not None
+              and g.school_id == school.id]
+    if not groups:
+        return []
+    occurrences = occurrences_for_range(school, groups, on_date, on_date)
+    rows = _scheduled_rows(school, [o.session.id for o in occurrences
+                                    if o.session])
+
+    teacher_ids = []
+    for occ in occurrences:
+        rec = rows.get(occ.session.id) if occ.session else None
+        teacher_ids.append(_scheduled_teacher_id(occ, rec))
+    wanted = {t for t in teacher_ids if t}
+    employees = ({e.id: e for e in Employee.query.execution_options(**OPTS)
+                  .filter(Employee.school_id == school.id,
+                          Employee.id.in_(wanted)).all()}
+                 if wanted else {})
+    subject_ids = {g.subject_id for g in groups if g.subject_id}
+    subjects = ({s.id: s for s in Subject.query.execution_options(**OPTS)
+                 .filter(Subject.school_id == school.id,
+                         Subject.id.in_(subject_ids)).all()}
+                if subject_ids else {})
+
+    return [InstructorLesson(
+                occ,
+                employees.get(teacher_id),
+                subjects.get(occ.group.subject_id),
+                rows.get(occ.session.id) if occ.session else None)
+            for occ, teacher_id in zip(occurrences, teacher_ids)]
+
+
+def submit_instructor_attendance(school, groups, on_date: date_type, entries, *,
+                                 actor_user_id,
+                                 source=InstituteAttendanceSession.SOURCE_MANUAL_ADMIN):
+    """Record or correct scheduled-teacher statuses for lessons of one date.
+
+    `entries` is a list of {'group_id', 'start', 'employee_id', 'status',
+    'notes'} exactly as posted. Every entry is validated BEFORE any attendance
+    row is written; one invalid entry rejects the whole submission:
+
+      * the group must be in `groups` (the caller's authorized scope) and in
+        this institute;
+      * (group, date, start) must be a real lesson — an active weekly rule or
+        an already materialized session — so no date or time can be invented;
+      * the posted employee must be the lesson's teacher as resolved SERVER
+        side; a forged, foreign or stale teacher id is refused, never used;
+      * the status must be one of the existing institute statuses.
+
+    An entry without a status is left unmarked. Sessions are materialized
+    through get_or_create_session() — the same race-safe path student
+    attendance uses — only after validation passed; a materialized session
+    records nothing by itself. UNIQUE (session_id, employee_id) makes a retry
+    update the same row instead of duplicating it.
+
+    Never touches employee_attendance.
+    """
+    if school is None or not institute_enabled(school):
+        raise AttendanceError('المؤسسة غير صالحة.')
+    if source not in InstituteAttendanceSession.SOURCES:
+        raise AttendanceError('مصدر التسجيل غير صالح.')
+
+    group_by_id = {g.id: g for g in (groups or []) if g.school_id == school.id}
+    occ_by_key = {(o.group.id, o.start_time): o for o in
+                  occurrences_for_range(school, list(group_by_id.values()),
+                                        on_date, on_date)}
+
+    # ── Validate the shape of every entry first ─────────────────────────────
+    cleaned, seen = [], set()
+    for entry in entries or []:
+        status = (entry.get('status') or '').strip()
+        if not status:
+            continue               # unmarked — deliberately left alone
+        if status not in InstituteInstructorAttendance.STATUSES:
+            raise AttendanceError('حالة حضور غير صالحة. لم يتم حفظ أي سجل.')
+        try:
+            gid = int(entry.get('group_id'))
+            emp_id = int(entry.get('employee_id'))
+            start = datetime.strptime(str(entry.get('start')).strip(),
+                                      '%H:%M').time()
+        except (TypeError, ValueError):
+            raise AttendanceError('بيانات الحصة غير صالحة. لم يتم حفظ أي سجل.')
+        occ = occ_by_key.get((gid, start)) if gid in group_by_id else None
+        if occ is None:
+            # Foreign, out-of-scope, nonexistent and unscheduled all look alike.
+            raise AttendanceError('الحصة المحددة غير صالحة أو غير مجدولة في هذا '
+                                  'التاريخ. لم يتم حفظ أي سجل.')
+        if (gid, start) in seen:
+            raise AttendanceError('تم إرسال الحصة نفسها أكثر من مرة. '
+                                  'لم يتم حفظ أي سجل.')
+        seen.add((gid, start))
+        notes = (entry.get('notes') or '').strip()[:INSTRUCTOR_NOTES_MAX] or None
+        cleaned.append([occ, emp_id, status, notes])
+
+    if not cleaned:
+        raise AttendanceError('لم يتم تحديد حالة أي مدرس.')
+
+    mismatch = ('المدرس المرسل لا يطابق المدرس المجدول لهذه الحصة. '
+                'يرجى إعادة تحميل الصفحة. لم يتم حفظ أي سجل.')
+
+    # ── The teacher is resolved server side, never taken from the client ────
+    saved = _scheduled_rows(school, [item[0].session.id for item in cleaned
+                                     if item[0].session])
+    for occ, emp_id, _status, _notes in cleaned:
+        expected = _scheduled_teacher_id(
+            occ, saved.get(occ.session.id) if occ.session else None)
+        if not expected:
+            raise AttendanceError('لا يوجد مدرس مرتبط بهذه الحصة. '
+                                  'لم يتم حفظ أي سجل.')
+        if expected != emp_id:
+            raise AttendanceError(mismatch)
+
+    teachers = {e.id: e for e in Employee.query.execution_options(**OPTS)
+                .filter(Employee.school_id == school.id,
+                        Employee.id.in_({item[1] for item in cleaned})).all()}
+    for occ, emp_id, _status, _notes in cleaned:
+        teacher = teachers.get(emp_id)
+        if teacher is None:
+            raise AttendanceError(mismatch)
+        already = occ.session is not None and occ.session.id in saved
+        if not already and (teacher.status or '') != 'active':
+            raise AttendanceError(f'المدرس {teacher.full_name} غير فعّال. '
+                                  'لم يتم حفظ أي سجل.')
+
+    # ── Materialize (race-safe, no duplicates) and re-check the snapshot ────
+    for item in cleaned:
+        occ, emp_id = item[0], item[1]
+        session = occ.session or get_or_create_session(school, occ.group, occ)
+        if (occ.session is None and session.instructor_id
+                and session.instructor_id != emp_id):
+            # The group was reassigned between page load and save; the fresh
+            # snapshot wins. The session itself records nothing.
+            raise AttendanceError(mismatch)
+        item[0] = session
+
+    session_ids = [item[0].id for item in cleaned]
+    existing = {(r.session_id, r.employee_id): r for r in
+                InstituteInstructorAttendance.query.execution_options(**OPTS)
+                .filter(InstituteInstructorAttendance.school_id == school.id,
+                        InstituteInstructorAttendance.session_id.in_(session_ids))
+                .all()}
+
+    now = datetime.utcnow()
+    created = updated = unchanged = 0
+    for session, emp_id, status, notes in cleaned:
+        row = existing.get((session.id, emp_id))
+        if row is None:
+            db.session.add(InstituteInstructorAttendance(
+                school_id=school.id, session_id=session.id,
+                employee_id=emp_id,
+                role=InstituteInstructorAttendance.ROLE_SCHEDULED,
+                status=status, source=source, recorded_by=actor_user_id,
+                recorded_at=now, notes=notes))
+            created += 1
+        elif row.role != InstituteInstructorAttendance.ROLE_SCHEDULED:
+            db.session.rollback()
+            raise AttendanceError(mismatch)
+        elif row.status != status or (notes is not None and row.notes != notes):
+            row.status = status
+            if notes is not None:
+                row.notes = notes
+            row.source = source
+            row.recorded_by = actor_user_id
+            row.recorded_at = now
+            updated += 1
+        else:
+            unchanged += 1        # identical re-submission: touch nothing
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # Lost a race on uq_institute_instr_att_session_employee: the winner
+        # already stored an equivalent row and nothing of ours committed.
+        db.session.rollback()
+        raise AttendanceError('تم حفظ حضور هذه الحصة من جهة أخرى في الوقت نفسه. '
+                              'يرجى إعادة تحميل الصفحة لعرض السجل المحدّث.')
+
+    return {'created': created, 'updated': updated, 'unchanged': unchanged}

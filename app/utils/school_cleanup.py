@@ -13,7 +13,8 @@ from app.models import (
     ExpenseCategory,
     FeeInstallment, FeeRecord, FeeRefundEvent, FeeReminderLog, FeeType, Grade,
     InstituteAttendanceRecord, InstituteAttendanceSession,
-    InstituteGroupEnrollment, InstituteGroupSchedule, InstituteStudyGroup,
+    InstituteGroupEnrollment, InstituteGroupSchedule,
+    InstituteInstructorAttendance, InstituteStudyGroup,
     InventoryCategory, InventoryCount, InventoryItem, InventoryItemStock,
     InventoryMovement, InventoryWarehouse,
     LeaveRequest, Notification, NotificationRead, PayrollItem, PayrollSettings,
@@ -101,6 +102,7 @@ LINKED_SCHOOL_MODELS = (
     (InstituteGroupSchedule, 'جداول المجموعات الدراسية'),
     (InstituteAttendanceSession, 'جلسات حضور المجموعات'),
     (InstituteAttendanceRecord, 'سجلات حضور المجموعات'),
+    (InstituteInstructorAttendance, 'حضور المدرسين في الحصص'),
 )
 
 
@@ -203,6 +205,8 @@ SCHOOL_DELETE_ORDER = (
     # group. Nothing here cascades by design — institute history is only ever
     # removed as part of an explicit full-school teardown.
     (InstituteAttendanceRecord, 'سجلات حضور المجموعات'),
+    # Teacher lesson attendance RESTRICT-references sessions AND employees.
+    (InstituteInstructorAttendance, 'حضور المدرسين في الحصص'),
     (InstituteAttendanceSession, 'جلسات حضور المجموعات'),
     (InstituteGroupSchedule, 'جداول المجموعات الدراسية'),
     (InstituteGroupEnrollment, 'اشتراكات المجموعات الدراسية'),
