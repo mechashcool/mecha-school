@@ -292,19 +292,16 @@ def _form_context(employee=None):
 
 def _save_teacher_assignments(emp):
     """
-    Replace teacher assignments for this employee.
-    Homeroom  → Section.teacher_id  (ORM-scoped to current year).
+    Replace the teaching assignments for this employee.
     Teaching  → teacher_subjects rows: delete-all then re-insert from form.
+
+    "الصفوف الرئيسية / مشرف الصف" is retired from the employee form: any posted
+    homeroom field is ignored, and existing Section.teacher_id assignments
+    (which drive teacher access scope) are never cleared, added or changed
+    here. Admin user management remains the place that manages them.
     """
-    homeroom_section_ids = request.form.getlist('homeroom_section_ids', type=int)
     teaching_section_ids = request.form.getlist('teaching_section_ids', type=int)
     subject_ids          = request.form.getlist('subject_ids', type=int)
-
-    Section.query.filter_by(teacher_id=emp.id).update(
-        {'teacher_id': None}, synchronize_session=False)
-    if homeroom_section_ids:
-        Section.query.filter(Section.id.in_(homeroom_section_ids)).update(
-            {'teacher_id': emp.id}, synchronize_session=False)
 
     db.session.execute(
         teacher_subjects.delete().where(
@@ -323,15 +320,15 @@ def _save_teacher_assignments(emp):
 # ─────────────────────────────────────────────────────────────────────────────
 #  Create-wizard teacher assignments (multi grade → multi section)
 #
-#  The "Add New Employee" wizard submits every teaching / homeroom section as an
-#  explicit "<grade_id>:<section_id>" pair, so the grade a section was chosen
-#  under is part of the request instead of being inferred from the section id.
-#  Storage is unchanged and identical to what the School User Management screen
-#  writes: homeroom → Section.teacher_id, teaching → teacher_subjects rows
-#  (subject × section). No new table, model, or parallel assignment store.
+#  The "Add New Employee" wizard submits every teaching section as an explicit
+#  "<grade_id>:<section_id>" pair, so the grade a section was chosen under is
+#  part of the request instead of being inferred from the section id. Storage
+#  is unchanged: teaching → teacher_subjects rows (subject × section). Homeroom
+#  (Section.teacher_id) is retired from this form and managed only by School
+#  User Management.
 #
-#  Only the create wizard uses these helpers; the employee EDIT form keeps using
-#  _save_teacher_assignments above, unchanged.
+#  Only the create wizard uses these helpers; the employee EDIT form uses
+#  _save_teacher_assignments above.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Generic Arabic messages — never echo the submitted ids, model names, or the
@@ -378,16 +375,18 @@ def _wizard_teacher_selection(school, year):
     year, or a section paired with the wrong grade) is rejected before anything
     is written.
 
-    Returns ``(homeroom_section_ids, teaching_section_ids, subject_ids)`` with
-    duplicates removed, or raises ``ValueError`` carrying a friendly Arabic
-    message for the caller to flash.
+    Returns ``(teaching_section_ids, subject_ids)`` with duplicates removed, or
+    raises ``ValueError`` carrying a friendly Arabic message for the caller to
+    flash.
+
+    The retired "الصفوف الرئيسية / مشرف الصف" input (``wiz_homeroom[]``) is
+    never read: employee creation does not assign homeroom sections.
     """
-    hr_pairs    = _parse_grade_section_pairs('wiz_homeroom[]')
     ts_pairs    = _parse_grade_section_pairs('wiz_teaching[]')
     subject_ids = [i for i in request.form.getlist('subject_ids', type=int) if i]
 
-    if not (hr_pairs or ts_pairs or subject_ids):
-        return [], [], []
+    if not (ts_pairs or subject_ids):
+        return [], []
 
     if not (school and year):
         raise ValueError(_TA_ERR_NO_YEAR)
@@ -431,11 +430,9 @@ def _wizard_teacher_selection(school, year):
             out.append(section_id)
         return out
 
-    homeroom_ids = _clean_pairs(hr_pairs)
     teaching_ids = _clean_pairs(ts_pairs)
 
-    # Grades actually selected under "الشعب التي يدرسها". Homeroom-only grades
-    # deliberately do NOT widen the set of acceptable subjects.
+    # Grades actually selected under "الشعب التي يدرسها".
     teaching_grade_ids = {section_grade[s_id] for s_id in teaching_ids}
 
     clean_subjects, seen_subjects = [], set()
@@ -453,38 +450,27 @@ def _wizard_teacher_selection(school, year):
         seen_subjects.add(subject_id)
         clean_subjects.append(subject_id)
 
-    return homeroom_ids, teaching_ids, clean_subjects
+    return teaching_ids, clean_subjects
 
 
 def _save_wizard_teacher_assignments(emp, school, year):
     """Persist the validated create-wizard teacher assignments for *emp*.
 
-    Uses the existing relationships only:
-      * homeroom  → ``Section.teacher_id``
+    Uses the existing relationship only:
       * teaching  → ``teacher_subjects`` (employee_id, subject_id, section_id)
 
-    Homeroom and teaching stay separate: a taught section never sets
-    ``teacher_id``. No commit here — the caller commits once, together with the
-    employee, the linked user account, the photo, and the documents.
+    ``Section.teacher_id`` (homeroom) is never written here. No commit — the
+    caller commits once, together with the employee, the linked user account,
+    the photo, and the documents.
     """
-    homeroom_ids, teaching_ids, subject_ids = _wizard_teacher_selection(school, year)
-
-    if homeroom_ids:
-        # Re-assert the school/year filter on the write itself so the UPDATE can
-        # only ever touch rows already proven to belong to this school and year.
-        (Section.query
-         .execution_options(bypass_tenant_scope=True)
-         .filter(Section.id.in_(homeroom_ids),
-                 Section.school_id == school.id,
-                 Section.academic_year_id == year.id)
-         .update({'teacher_id': emp.id}, synchronize_session=False))
+    teaching_ids, subject_ids = _wizard_teacher_selection(school, year)
 
     rows = [{'employee_id': emp.id, 'subject_id': subject_id, 'section_id': section_id}
             for section_id in teaching_ids for subject_id in subject_ids]
     if rows:
         db.session.execute(teacher_subjects.insert(), rows)
 
-    return homeroom_ids, teaching_ids, subject_ids
+    return teaching_ids, subject_ids
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -856,7 +842,7 @@ def _handle_employee_post(employee):
             _doc_saved += 1
 
         try:
-            _hr_ids, _ts_ids, _subj_ids = _save_wizard_teacher_assignments(
+            _ts_ids, _subj_ids = _save_wizard_teacher_assignments(
                 employee, school, year)
             _ta_no_subject = bool(_ts_ids and not _subj_ids)
         except ValueError as _ta_err:

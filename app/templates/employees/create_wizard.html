@@ -690,32 +690,7 @@
 
         {% if grades %}
 
-        {# ─── 1. Homeroom / class supervisor ─────────────────────────────────
-             Kept deliberately separate from "الشعب التي يدرسها": teaching a
-             section never makes the employee its homeroom supervisor. #}
-        <div class="ta-area mb-4">
-          <div class="ta-area-hd">
-            <i class="bi bi-person-check-fill"></i>
-            <span>الصفوف الرئيسية / مشرف الصف</span>
-            <span class="ta-area-hint">اختياري — مستقل تماماً عن الشعب التي يدرسها</span>
-          </div>
-          <div class="ta-picker">
-            <select class="form-select form-select-sm" data-ta-picker="homeroom"
-                    aria-label="اختر صفاً لإضافته إلى الإشراف">
-              <option value="">— اختر صفاً لإضافته —</option>
-            </select>
-            <button type="button" class="btn btn-sm btn-outline-primary"
-                    data-ta-add="homeroom">
-              <i class="bi bi-plus-lg"></i> إضافة صف
-            </button>
-          </div>
-          <div class="ta-cards" data-ta-cards="homeroom"></div>
-          <div class="ta-empty" data-ta-empty="homeroom">
-            <i class="bi bi-dash-circle"></i>لم يُحدَّد أي صف للإشراف.
-          </div>
-        </div>
-
-        {# ─── 2. Teaching grades → sections ──────────────────────────────────
+        {# ─── 1. Teaching grades → sections ──────────────────────────────────
              One card per selected grade; the sections inside a card belong to
              that grade only, and each checkbox submits "<grade_id>:<section_id>"
              so the relationship is part of the request, never inferred. #}
@@ -741,7 +716,7 @@
           </div>
         </div>
 
-        {# ─── 3. Subjects — filtered by the TEACHING grades only ─────────────
+        {# ─── 2. Subjects — filtered by the TEACHING grades only ─────────────
              Rendered client-side from the same trusted server data as the grade
              cards, and rebuilt whenever a teaching grade or one of its sections
              is selected or deselected — the same set the server validates.
@@ -1123,7 +1098,6 @@ function taApplySubjSearch() {
 
 (function () {
   const AREAS = {
-    homeroom: { field: 'wiz_homeroom[]', idp: 'hr' },
     teaching: { field: 'wiz_teaching[]', idp: 'ts' }
   };
 
@@ -1567,7 +1541,6 @@ function taCollectSubjects() {
       // All three read the LIVE DOM, so anything removed from the wizard —
       // a grade, a section, or a subject whose grade was dropped — is simply
       // absent here. No stale, duplicated, or invalid entry can be shown.
-      const homeroom = taCollect('wiz_homeroom[]');
       const teaching = taCollect('wiz_teaching[]');
       const subjects = taCollectSubjects();
 
@@ -1592,12 +1565,6 @@ function taCollectSubjects() {
         s5 += `<div class="rv-ta-block">
           <div class="rv-ta-label">الصفوف والشعب التي يُدرّسها</div>
           ${gradeBlocks(teaching)}
-        </div>`;
-      }
-      if (homeroom.length) {
-        s5 += `<div class="rv-ta-block">
-          <div class="rv-ta-label">الصفوف الرئيسية / الإشراف</div>
-          ${gradeBlocks(homeroom)}
         </div>`;
       }
       if (teaching.length && !subjects.length) {

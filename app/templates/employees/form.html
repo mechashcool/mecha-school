@@ -305,7 +305,7 @@
 
       {# ── 3. Teacher Assignments ──────────────────────────────────────── #}
       {% if school_cfg.section_visible('employees', 'teacher_assignment') %}
-      {% set has_assignments = (existing_homeroom_ids or existing_section_ids or existing_subject_ids) %}
+      {% set has_assignments = (existing_section_ids or existing_subject_ids) %}
       <div class="card mb-3">
         <div class="card-header d-flex justify-content-between align-items-center"
              role="button"
@@ -342,29 +342,6 @@
               <i class="bi bi-arrow-up-circle me-1"></i>
               اختر المرحلة والصف لعرض الشعب والمواد الخاصة بهذا الصف.
             </p>
-
-            {# ── Homeroom sections — one panel per grade in DOM ── #}
-            <div id="taHomeroomWrap" style="display:none">
-              <h6 class="fw-semibold mb-2">الصفوف الرئيسية (مشرف الصف)</h6>
-              {% for grade in grades %}
-              {% set gs = sections | selectattr('grade_id', 'equalto', grade.id) | list %}
-              {% if gs %}
-              <div class="ta-grade-homeroom" data-gid="{{ grade.id }}" style="display:none">
-                <div class="d-flex flex-wrap gap-2 mb-3">
-                  {% for sec in gs %}
-                  <div class="form-check form-check-inline">
-                    <input class="form-check-input" type="checkbox"
-                           name="homeroom_section_ids" value="{{ sec.id }}"
-                           id="hr_sec_{{ sec.id }}"
-                           {{ 'checked' if sec.id in existing_homeroom_ids }}>
-                    <label class="form-check-label" for="hr_sec_{{ sec.id }}">{{ sec.name }}</label>
-                  </div>
-                  {% endfor %}
-                </div>
-              </div>
-              {% endif %}
-              {% endfor %}
-            </div>
 
             {# ── Teaching sections — one panel per grade in DOM ── #}
             <div id="taSectionsWrap" style="display:none">
@@ -554,7 +531,6 @@
   var gradeSel  = document.getElementById('taGradeFilter');
   var stageCol  = document.getElementById('taStageCol');
   var hint      = document.getElementById('taSelectHint');
-  var hrWrap    = document.getElementById('taHomeroomWrap');
   var secWrap   = document.getElementById('taSectionsWrap');
   var subjWrap  = document.getElementById('taSubjectsWrap');
 
@@ -603,10 +579,10 @@
 
   function refreshContent(gradeId) {
     var show = gradeId !== null && gradeId !== '';
-    [hrWrap, secWrap, subjWrap].forEach(function(w) { if (w) w.style.display = show ? '' : 'none'; });
+    [secWrap, subjWrap].forEach(function(w) { if (w) w.style.display = show ? '' : 'none'; });
     if (hint) hint.style.display = show ? 'none' : '';
 
-    ['ta-grade-homeroom', 'ta-grade-sections', 'ta-grade-subjects'].forEach(function(cls) {
+    ['ta-grade-sections', 'ta-grade-subjects'].forEach(function(cls) {
       document.querySelectorAll('.' + cls).forEach(function(el) {
         el.style.display = (String(el.dataset.gid) === String(gradeId)) ? '' : 'none';
       });
