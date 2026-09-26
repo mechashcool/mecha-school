@@ -756,31 +756,18 @@ def _ensure_admin_member(room: ChatRoom) -> ChatRoomMember:
 
 # ─── Read-receipt helper ──────────────────────────────────────────────────────
 
-# Repeated polls only re-check messages above the client's cursor, minus this
-# many ids. The look-back covers a message whose INSERT got a lower serial id
-# but committed after the cursor passed it (ids are assigned at insert, not at
-# commit — see docs/adr/0001-sync-cursor-commit-order.md), so such a message is
-# still marked read exactly as the old full-room scan did. Constant, so poll
-# work does not grow with room history.
-_POLL_READ_LOOKBACK_IDS = 200
-
-
-def _mark_all_room_messages_read(room_id: int, user_id: int, label: str = '',
-                                 min_id: int | None = None) -> None:
+def _mark_all_room_messages_read(room_id: int, user_id: int, label: str = '') -> None:
     """Insert ChatMessageRead rows for every non-deleted, non-self message in
     the room that the user has not yet read.
 
-    With ``min_id=None`` (room open, load-older) the entire room is covered, so
-    rooms with many messages (where the load-100 window covers only old
-    messages) are fully cleared. The repeated poll passes ``min_id`` so only
-    messages with ``id > min_id`` are considered; everything below was already
-    covered when the room was opened.
-
-    Unread ids are found with a single anti-join (only rows that still lack a
-    receipt come back), so the full id list and the user's read rows are never
-    loaded into Python. Safe to call even if all messages are already read
-    (no-op in that case). Silently rolls back and returns on any DB error so a
-    read-marking failure never breaks the page load.
+    Scans the entire room — not a limited window — so rooms with many messages
+    (where the load-100 window covers only old messages) are fully cleared,
+    including a message whose lower id committed late. The unread ids are
+    found with a single anti-join, so only messages still lacking a receipt
+    reach Python — never the room's full id list or the user's read rows.
+    Safe to call even if all messages are already read (no-op in that case).
+    Silently rolls back and returns on any DB error so a read-marking failure
+    never breaks the page load.
     """
     try:
         q = (db.session.query(ChatMessage.id)
@@ -795,8 +782,6 @@ def _mark_all_room_messages_read(room_id: int, user_id: int, label: str = '',
                  ChatMessage.sender_user_id != user_id,
                  ChatMessageRead.id.is_(None),
              ))
-        if min_id is not None:
-            q = q.filter(ChatMessage.id > min_id)
         _new = [
             ChatMessageRead(message_id=mid, user_id=user_id)
             for (mid,) in q.all()
@@ -2395,8 +2380,7 @@ def room_poll(room_id: int):
             .filter_by(id=room_id, school_id=school.id if school else 0)
             .first_or_404())
     after_id = max(0, int(request.args.get('after_id', 0)))
-    _mark_all_room_messages_read(room.id, current_user.id, label='room_poll',
-                                 min_id=after_id - _POLL_READ_LOOKBACK_IDS)
+    _mark_all_room_messages_read(room.id, current_user.id, label='room_poll')
     return _poll_messages_json(room_id, current_user.id, after_id)
 
 
@@ -2514,8 +2498,7 @@ def user_room_poll(room_id: int):
     if not membership:
         abort(403)
     after_id = max(0, int(request.args.get('after_id', 0)))
-    _mark_all_room_messages_read(room.id, current_user.id, label='user_room_poll',
-                                 min_id=after_id - _POLL_READ_LOOKBACK_IDS)
+    _mark_all_room_messages_read(room.id, current_user.id, label='user_room_poll')
     return _poll_messages_json(room_id, current_user.id, after_id)
 
 
