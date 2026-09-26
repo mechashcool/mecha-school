@@ -44,6 +44,7 @@ from app.models import (
 )
 from app.utils.modules import is_module_enabled
 from app.utils.features import is_feature_enabled
+from app.utils.chat_send_lock import ChatRoomLockError, lock_room_for_message_insert
 
 from . import mobile_api_bp
 from .utils import jwt_required, role_required, ok, err, photo_url, page_args
@@ -588,6 +589,14 @@ def chat_send_message(room_id):
     max_len = int((raw_cfg.get('extra') or {}).get('message_max_length') or 2000)
     if len(body) > max_len:
         return err(f'الرسالة طويلة جداً. الحد الأقصى {max_len} حرف.', 400)
+
+    # Lock the room before the id is allocated (held until commit) so
+    # per-room message ids follow commit order.
+    try:
+        lock_room_for_message_insert(room.id, room.school_id)
+    except ChatRoomLockError:
+        db.session.rollback()
+        return err('المحادثة غير موجودة.', 404)
 
     msg = ChatMessage(
         room_id=room.id,

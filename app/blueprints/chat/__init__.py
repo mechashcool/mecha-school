@@ -48,6 +48,7 @@ from app.models import (
 from app.utils.decorators import (admin_required, permission_required,
                                    get_current_school, get_active_year)
 from app.utils.modules import is_module_enabled
+from app.utils.chat_send_lock import lock_room_for_message_insert
 
 _log = logging.getLogger('mecha.chat')
 
@@ -1168,6 +1169,9 @@ def room_detail(room_id):
             body = body[:2000]
 
         try:
+            # Lock the room before the id is allocated (held until commit) so
+            # per-room message ids follow commit order.
+            lock_room_for_message_insert(room.id, room.school_id)
             msg = ChatMessage(
                 room_id=room.id,
                 sender_user_id=current_user.id,
@@ -2277,6 +2281,9 @@ def user_room(room_id):
             body = body[:2000]
 
         try:
+            # Lock the room before the id is allocated (held until commit) so
+            # per-room message ids follow commit order.
+            lock_room_for_message_insert(room.id, room.school_id)
             msg = ChatMessage(
                 room_id        = room.id,
                 sender_user_id = current_user.id,
