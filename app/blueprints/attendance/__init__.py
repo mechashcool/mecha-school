@@ -1769,14 +1769,59 @@ def suspensions():
 
     # Institutes: the study-group filter replaces stage/grade/section.
     inst_groups = []
+    # Institutes: suspension id -> [group labels] for selected-groups scopes.
+    # Absent id = all groups (explicit all-groups scope, or a legacy row).
+    susp_scope_groups = {}
     if school and getattr(school, 'is_institute', False):
+        from app.models import (InstituteStudyGroup, InstituteSuspensionGroup,
+                                InstituteSuspensionScope)
         from app.utils.institute_groups import active_groups_for_form
         year = get_active_year(school.id)
         inst_groups = active_groups_for_form(school.id, year.id if year else None)
+        susp_ids = [s.id for s in all_suspensions]
+        if susp_ids:
+            rows = (db.session.query(InstituteSuspensionScope.suspension_id,
+                                     InstituteStudyGroup)
+                    .join(InstituteSuspensionGroup,
+                          InstituteSuspensionGroup.scope_id == InstituteSuspensionScope.id)
+                    .join(InstituteStudyGroup,
+                          InstituteStudyGroup.id == InstituteSuspensionGroup.group_id)
+                    .filter(InstituteSuspensionScope.school_id == school.id,
+                            InstituteSuspensionScope.suspension_id.in_(susp_ids),
+                            InstituteSuspensionScope.applies_to_all_groups.is_(False),
+                            InstituteSuspensionGroup.school_id == school.id,
+                            InstituteStudyGroup.school_id == school.id)
+                    .execution_options(bypass_tenant_scope=True)
+                    .order_by(InstituteStudyGroup.name)
+                    .all())
+            for susp_id, grp in rows:
+                susp_scope_groups.setdefault(susp_id, []).append(grp.name)
 
     return render_template('attendance/suspensions.html',
                            all_suspensions=all_suspensions,
-                           inst_groups=inst_groups)
+                           inst_groups=inst_groups,
+                           susp_scope_groups=susp_scope_groups)
+
+
+@attendance_bp.route('/suspensions/api/student-groups')
+@login_required
+@permission_required('manage_suspensions')
+def suspension_api_student_groups():
+    """Institutes only: the groups a suspension of this student may name."""
+    from flask import abort
+    from app.utils.institute_groups import student_active_groups
+    school = get_current_school()
+    if not school or not getattr(school, 'is_institute', False):
+        abort(404)
+    year = get_active_year(school.id)
+    student_id = request.args.get('student_id', type=int)
+    student = (Student.query.filter_by(id=student_id, school_id=school.id,
+                                       status='active').first()
+               if student_id else None)
+    if not student or not year:
+        abort(404)
+    groups = student_active_groups(school.id, year.id, student.id)
+    return jsonify([{'id': g.id, 'name': g.name} for g in groups])
 
 
 @attendance_bp.route('/suspensions/create', methods=['POST'])
@@ -1819,6 +1864,32 @@ def create_suspension():
         flash('الطالب المحدد غير موجود أو لا ينتمي لهذه المدرسة.', 'danger')
         return redirect(url_for('attendance.suspensions'))
 
+    # Institutes only: the suspension scope — all groups, or selected groups.
+    # Validated BEFORE any write; a school never reaches this block.
+    is_institute = getattr(school, 'is_institute', False)
+    scope_group_ids = []
+    if is_institute:
+        from app.utils.institute_groups import (parse_posted_group_ids,
+                                                student_active_groups)
+        scope_mode = (request.form.get('scope') or 'all').strip()
+        if scope_mode not in ('all', 'groups'):
+            flash('نطاق الإيقاف غير صالح.', 'danger')
+            return redirect(url_for('attendance.suspensions'))
+        if scope_mode == 'groups':
+            scope_group_ids, ok = parse_posted_group_ids(
+                request.form.getlist('group_ids'))
+            if not ok or not scope_group_ids:
+                flash('يرجى اختيار مجموعة دراسية واحدة على الأقل.', 'danger')
+                return redirect(url_for('attendance.suspensions'))
+            # Every id must be an ACTIVE group of THIS institute and year in
+            # which THIS student is actively enrolled. One bad id rejects all.
+            allowed = {g.id for g in student_active_groups(school.id, year.id,
+                                                           student.id)}
+            if any(gid not in allowed for gid in scope_group_ids):
+                flash('إحدى المجموعات المحددة غير صالحة لهذا الطالب. '
+                      'لم يتم حفظ الإيقاف.', 'danger')
+                return redirect(url_for('attendance.suspensions'))
+
     susp = StudentSuspension(
         student_id       = student_id,
         school_id        = school.id,
@@ -1829,6 +1900,15 @@ def create_suspension():
         created_by       = current_user.id,
     )
     db.session.add(susp)
+    if is_institute:
+        from app.models import InstituteSuspensionGroup, InstituteSuspensionScope
+        db.session.flush()
+        # Same transaction as the suspension: both commit or neither does.
+        db.session.add(InstituteSuspensionScope(
+            suspension_id=susp.id, school_id=school.id,
+            applies_to_all_groups=not scope_group_ids,
+            groups=[InstituteSuspensionGroup(school_id=school.id, group_id=gid)
+                    for gid in scope_group_ids]))
     db.session.commit()
     flash('تم تسجيل إيقاف الطالب بنجاح.', 'success')
     return redirect(url_for('attendance.suspensions'))

@@ -32,12 +32,14 @@ from __future__ import annotations
 
 from datetime import date as date_type, datetime, time as time_type, timedelta
 
+from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
 
 from app.models import (db, Employee, InstituteAttendanceRecord,
                         InstituteAttendanceSession, InstituteGroupEnrollment,
-                        InstituteGroupSchedule, InstituteStudyGroup, Student,
-                        StudentSuspension)
+                        InstituteGroupSchedule, InstituteStudyGroup,
+                        InstituteSuspensionGroup, InstituteSuspensionScope,
+                        Student, StudentSuspension)
 from app.utils.attendance_helpers import _get_tz, get_local_date, utc_to_local
 from app.utils.institute_groups import institute_enabled
 # Importing the module (not its table) is side-effect free: no query runs at
@@ -556,22 +558,37 @@ def eligible_student_ids(school, group_id) -> set:
     return {r[0] for r in rows}
 
 
-def suspended_student_ids(school, student_ids, on_date) -> set:
-    """Students with a StudentSuspension covering `on_date`, in ONE query.
+def suspended_student_ids(school, student_ids, on_date, group_id) -> set:
+    """Students suspended from `group_id` on `on_date`, in ONE query.
 
-    Mirrors school manual attendance exactly (start_date <= date <= end_date,
-    date bounds only), scoped to this school explicitly.
+    Date rule mirrors school manual attendance exactly (start_date <= date <=
+    end_date). A suspension active on that date blocks this group when:
+      * it has NO InstituteSuspensionScope (legacy row -> all groups), or
+      * its scope applies_to_all_groups (evaluated now, so it also covers a
+        group joined after the suspension was created), or
+      * its scope explicitly selects this group.
+    A selected-groups suspension that does not name this group blocks nothing.
     """
     student_ids = list(student_ids or [])
     if school is None or not student_ids or on_date is None:
         return set()
-    rows = (StudentSuspension.query
-            .execution_options(**OPTS)
+    scope, sel = InstituteSuspensionScope, InstituteSuspensionGroup
+    rows = (db.session.query(StudentSuspension.student_id)
+            .select_from(StudentSuspension)
+            .outerjoin(scope, and_(scope.suspension_id == StudentSuspension.id,
+                                   scope.school_id == school.id))
+            .outerjoin(sel, and_(sel.scope_id == scope.id,
+                                 sel.school_id == school.id,
+                                 sel.group_id == group_id))
             .filter(StudentSuspension.school_id == school.id,
                     StudentSuspension.student_id.in_(student_ids),
                     StudentSuspension.start_date <= on_date,
-                    StudentSuspension.end_date >= on_date)
-            .with_entities(StudentSuspension.student_id)
+                    StudentSuspension.end_date >= on_date,
+                    or_(scope.id.is_(None),
+                        scope.applies_to_all_groups.is_(True),
+                        sel.id.isnot(None)))
+            .execution_options(**OPTS)
+            .distinct()
             .all())
     return {r[0] for r in rows}
 
@@ -637,7 +654,8 @@ def submit_attendance(school, session, statuses, *, source, actor_user_id,
     # StudentSuspension whose date range covers the lesson date. A suspended
     # student is skipped entirely (no new row, no change to an existing row,
     # no notification) while everyone else in the submission is processed.
-    suspended = suspended_student_ids(school, cleaned, session.session_date)
+    suspended = suspended_student_ids(school, cleaned, session.session_date,
+                                      session.group_id)
     if suspended:
         cleaned = {sid: st for sid, st in cleaned.items()
                    if sid not in suspended}

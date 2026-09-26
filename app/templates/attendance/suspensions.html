@@ -88,6 +88,23 @@
               <div id="selectedStudent" class="selected-student d-none"></div>
             </div>
           </div>
+{%- if school and school.is_institute %}
+
+          <!-- ── Suspension scope (institutes) — shown once a student is selected ── -->
+          <div id="scopeBlock" class="mb-3 d-none">
+            <label class="form-label">نطاق الإيقاف <span class="text-danger">*</span></label>
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="scope" id="scopeAll" value="all" checked>
+              <label class="form-check-label" for="scopeAll">كل المجموعات</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="scope" id="scopeGroups" value="groups">
+              <label class="form-check-label" for="scopeGroups">مجموعات محددة</label>
+            </div>
+            <div id="scopeGroupList" class="mt-2 d-none"></div>
+            <div id="scopeError" class="text-danger small mt-1 d-none">يرجى اختيار مجموعة دراسية واحدة على الأقل.</div>
+          </div>
+{%- endif %}
 
           <div class="mb-3">
             <label class="form-label">من تاريخ <span class="text-danger">*</span></label>
@@ -122,7 +139,11 @@
           <thead>
             <tr>
               <th>الطالب</th>
+              {%- if school and school.is_institute %}
+              <th>نطاق الإيقاف</th>
+              {%- else %}
               <th>الصف / الشعبة</th>
+              {%- endif %}
               <th>من</th>
               <th>إلى</th>
               <th>الحالة</th>
@@ -134,6 +155,15 @@
             {% for susp in all_suspensions %}
             <tr>
               <td class="fw-600">{{ susp.student.full_name }}</td>
+              {%- if school and school.is_institute %}
+              <td>
+                {% if susp.id in susp_scope_groups %}
+                {% for gname in susp_scope_groups[susp.id] %}
+                <span class="badge" style="background:#e8f4fd;color:#1a3a5c">{{ gname }}</span>
+                {% endfor %}
+                {% else %}كل المجموعات{% endif %}
+              </td>
+              {%- else %}
               <td>
                 {% if susp.student.section %}
                 <span class="badge" style="background:#e8f4fd;color:#1a3a5c">
@@ -141,6 +171,7 @@
                 </span>
                 {% else %}—{% endif %}
               </td>
+              {%- endif %}
               <td>{{ susp.start_date.strftime('%Y-%m-%d') }}</td>
               <td>{{ susp.end_date.strftime('%Y-%m-%d') }}</td>
               <td>
@@ -288,6 +319,81 @@ groupFilter.addEventListener('change', function() {
     showDropdownMode(this.value);
   } else {
     showSearchMode();
+  }
+});
+
+// ── Suspension scope ─────────────────────────────────────────────────────────
+// The group filter above only FINDS a student; this block defines the scope.
+// The server re-validates every posted group id.
+const studentGroupsUrl = "{{ url_for('attendance.suspension_api_student_groups') }}";
+const scopeBlock     = document.getElementById('scopeBlock');
+const scopeAll       = document.getElementById('scopeAll');
+const scopeGroups    = document.getElementById('scopeGroups');
+const scopeGroupList = document.getElementById('scopeGroupList');
+const scopeError     = document.getElementById('scopeError');
+let scopeStudentId = '';
+
+function resetScope() {
+  scopeAll.checked = true;
+  scopeGroupList.replaceChildren();
+  scopeGroupList.classList.add('d-none');
+  scopeError.classList.add('d-none');
+}
+
+function loadScopeGroups() {
+  const sid = scopeStudentId;
+  scopeGroupList.replaceChildren(el('div', 'text-muted small', 'جاري التحميل...'));
+  fetch(`${studentGroupsUrl}?student_id=${encodeURIComponent(sid)}`, { headers: { 'Accept': 'application/json' } })
+    .then(r => r.ok ? r.json() : [])
+    .then(groups => {
+      if (sid !== scopeStudentId) return;   // selection changed meanwhile
+      if (!groups.length) {
+        scopeGroupList.replaceChildren(el('div', 'text-muted small', 'لا توجد مجموعات فعّالة لهذا الطالب.'));
+        return;
+      }
+      scopeGroupList.replaceChildren(...groups.map(g => {
+        const row = el('div', 'form-check');
+        const box = el('input', 'form-check-input');
+        box.type = 'checkbox';
+        box.name = 'group_ids';
+        box.value = g.id;
+        box.id = `scopeGroup${g.id}`;
+        const label = el('label', 'form-check-label', g.name);
+        label.htmlFor = box.id;
+        row.append(box, label);
+        return row;
+      }));
+    })
+    .catch(() => {
+      scopeGroupList.replaceChildren(el('div', 'text-danger small', 'خطأ في تحميل المجموعات'));
+    });
+}
+
+// The shared code re-renders the selected-student card on every select and
+// clears it on every deselect, so the scope follows that card.
+new MutationObserver(() => {
+  const sid = document.getElementById('studentId').value;
+  if (sid === scopeStudentId) return;
+  scopeStudentId = sid;
+  resetScope();
+  scopeBlock.classList.toggle('d-none', !sid);
+}).observe(selectedStudentEl, { childList: true });
+
+[scopeAll, scopeGroups].forEach(radio => radio.addEventListener('change', () => {
+  scopeError.classList.add('d-none');
+  if (scopeGroups.checked) {
+    scopeGroupList.classList.remove('d-none');
+    loadScopeGroups();
+  } else {
+    scopeGroupList.replaceChildren();
+    scopeGroupList.classList.add('d-none');
+  }
+}));
+
+document.getElementById('suspensionForm').addEventListener('submit', event => {
+  if (scopeGroups.checked && !scopeGroupList.querySelector('input[name="group_ids"]:checked')) {
+    event.preventDefault();
+    scopeError.classList.remove('d-none');
   }
 });
 {% else %}
