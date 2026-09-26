@@ -12,10 +12,12 @@ Covers:
   - non-member / cross-school denial (unchanged)
   - response JSON shape and ordering (unchanged)
   - room open and "load older" still mark the whole room read
-  - the commit-order look-back: an unread message just below the cursor is
-    still marked read by the poll
-  - query shape: a poll with no new messages fetches the same number of rows
-    from chat tables for a 10-message room and a 10,000-message room
+  - exact read semantics at any id distance: an unread eligible message far
+    below the client's cursor (200, 1000 ids, or a real delayed commit that
+    obtained a lower id while 1,100 later messages committed) is marked read
+    by the very next poll, exactly like the pre-optimization full-room scan
+  - application rows: a poll materializes only still-unread ids, never the
+    room's full id list or the user's read rows (10 vs 10,000 messages)
   - pages that are not an open room never reference a room poll URL
 """
 import unittest
@@ -24,7 +26,6 @@ from uuid import uuid4
 from sqlalchemy import event
 
 from app import create_app
-from app.blueprints.chat import _POLL_READ_LOOKBACK_IDS
 from app.models import (
     db, Role, School, User, AuditLog,
     ChatRoom, ChatRoomMember, ChatMessage, ChatMessageRead,
@@ -225,19 +226,76 @@ class ChatPollReadMarkTest(unittest.TestCase):
         self.assertEqual(self._reads('room_a', 'p2'), 4)
         self.assertEqual(self._reads('room_a', 'p1'), 4)
 
-    def test_lookback_marks_late_committed_message(self):
-        """A message below the cursor that is still unread (the commit-order
-        race) is marked read exactly as the old full-room scan did."""
-        ids = self._add_messages('room_a', 'p2', 10)
+    def _has_read(self, message_id, user_key):
+        with self.app.app_context():
+            return ChatMessageRead.query.filter_by(
+                message_id=message_id, user_id=self.ids[user_key]).count()
+
+    def _assert_old_unread_marked_by_poll(self, distance):
+        """An eligible message `distance` ids below the cursor, still unread,
+        is marked read by the next poll (the old full-room scan did this)."""
+        ids = self._add_messages('room_a', 'p2', distance + 1)
+        self._login('p1')
+        self.client.get(f"/chat/my-rooms/{self.ids['room_a']}")      # marks all
+        old_id = ids[0]
+        with self.app.app_context():                # leave one old message unread
+            ChatMessageRead.query.filter_by(message_id=old_id,
+                                            user_id=self.ids['p1']).delete()
+            db.session.commit()
+        cursor = self._max_id('room_a')
+        self.assertGreaterEqual(cursor - old_id, distance)
+        resp = self._user_poll('room_a', cursor)
+        self.assertEqual(resp.get_json(), {'messages': []})
+        self.assertEqual(self._has_read(old_id, 'p1'), 1)
+        self.assertEqual(self._reads('room_a', 'p1'), distance + 1)
+        self._user_poll('room_a', cursor)                           # no duplicate
+        self.assertEqual(self._has_read(old_id, 'p1'), 1)
+
+    def test_unread_message_200_ids_below_cursor(self):
+        self._assert_old_unread_marked_by_poll(200)
+
+    def test_unread_message_1000_ids_below_cursor(self):
+        self._assert_old_unread_marked_by_poll(1000)
+
+    def test_delayed_commit_lower_id_marked_by_next_poll(self):
+        """1. a message obtains an id inside a transaction that stays open;
+        2. 1,100 later message ids are allocated and committed;
+        3. the client's cursor advances past them;
+        4. the lower-id transaction commits;
+        5. the next poll must mark it read (old full-room scan semantics)."""
         self._login('p1')
         self.client.get(f"/chat/my-rooms/{self.ids['room_a']}")
-        with self.app.app_context():                # simulate the late commit
-            ChatMessageRead.query.filter_by(message_id=ids[3], user_id=self.ids['p1']).delete()
-            db.session.commit()
-        self.assertEqual(self._reads('room_a', 'p1'), 9)
-        self._user_poll('room_a', ids[-1])
-        self.assertEqual(self._reads('room_a', 'p1'), 10)
-        self.assertLess(ids[-1] - ids[3], _POLL_READ_LOOKBACK_IDS)
+        with self.app.app_context():
+            engine = db.engine
+        conn = engine.connect()
+        try:
+            trans = conn.begin()
+            late_id = conn.execute(
+                ChatMessage.__table__.insert().returning(ChatMessage.__table__.c.id),
+                dict(room_id=self.ids['room_a'], sender_user_id=self.ids['p2'],
+                     body='late', message_type='text', is_deleted=False),
+            ).scalar_one()
+            later = self._add_messages('room_a', 'p2', 1100)
+            self.assertGreater(min(later), late_id)
+
+            cursor = self._max_id('room_a')                          # late row invisible
+            self.assertGreaterEqual(cursor - late_id, 1100)
+            polled = self._user_poll('room_a', 0).get_json()['messages']
+            self.assertNotIn(late_id, [m['id'] for m in polled])
+            self._user_poll('room_a', cursor)
+            self.assertEqual(self._has_read(late_id, 'p1'), 0)
+            self.assertEqual(self._reads('room_a', 'p1'), 1100)
+
+            trans.commit()                                           # late commit
+        finally:
+            conn.close()
+
+        resp = self._user_poll('room_a', cursor)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(self._has_read(late_id, 'p1'), 1)
+        self.assertEqual(self._reads('room_a', 'p1'), 1101)
+        self._user_poll('room_a', cursor)
+        self.assertEqual(self._has_read(late_id, 'p1'), 1)
 
     def test_room_open_and_load_older_still_mark_whole_room(self):
         ids = self._add_messages('room_big', 'p2', 300)
@@ -313,7 +371,10 @@ class ChatPollReadMarkTest(unittest.TestCase):
                 event.remove(engine, 'after_cursor_execute', after)
         return stats
 
-    def test_no_new_message_poll_is_independent_of_history(self):
+    def test_no_unread_poll_materializes_no_history_rows(self):
+        """Application side only: the database still checks every room
+        message (see the EXPLAIN evidence in the task report), but no
+        historical id or read row is returned to Python."""
         self._add_messages('room_a', 'p2', 10)
         self._add_messages('room_big', 'p2', 10_000)
         self._login('p1')
@@ -327,11 +388,27 @@ class ChatPollReadMarkTest(unittest.TestCase):
 
         self.assertEqual(small['rows'], 0, small['sql'])
         self.assertEqual(big['rows'], 0, big['sql'])
-        self.assertEqual(small['selects'], big['selects'])
+        self.assertEqual(small['selects'], 2, small['sql'])      # read-mark + poll
+        self.assertEqual(big['selects'], 2, big['sql'])
         readmark = [s for s in big['sql'] if 'chat_message_reads' in s.lower()]
         self.assertEqual(len(readmark), 1, big['sql'])
-        self.assertIn('chat_messages.id >', readmark[0])
         self.assertIn('LEFT OUTER JOIN chat_message_reads', readmark[0])
+        self.assertIn('chat_message_reads.id IS NULL', readmark[0])
+        self.assertNotIn('chat_messages.id >', readmark[0])      # no id window
+
+    def test_large_room_one_old_unread_message(self):
+        ids = self._add_messages('room_big', 'p2', 10_000)
+        self._login('p1')
+        self.client.get(f"/chat/my-rooms/{self.ids['room_big']}")
+        with self.app.app_context():
+            ChatMessageRead.query.filter_by(message_id=ids[5],
+                                            user_id=self.ids['p1']).delete()
+            db.session.commit()
+        cursor = self._max_id('room_big')
+        stats = self._chat_rows_fetched_during(lambda: self._user_poll('room_big', cursor))
+        self.assertEqual(stats['rows'], 1, stats['sql'])          # just the unread id
+        self.assertEqual(self._has_read(ids[5], 'p1'), 1)
+        self.assertEqual(self._reads('room_big', 'p1'), 10_000)
 
     def test_one_new_message_in_large_room_scales_with_new_data(self):
         self._add_messages('room_big', 'p2', 10_000)
