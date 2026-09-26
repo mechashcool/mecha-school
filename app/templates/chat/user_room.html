@@ -339,11 +339,18 @@ if (textarea) {
 }
 
 // ─── Polling ──────────────────────────────────────────────────────────────────
-const POLL_URL = '{{ poll_url }}';
-let pollTimer  = null;
+// One loop per page: the next poll is scheduled only after the previous one
+// has finished, so a slow response never overlaps the next request. Paused
+// while the tab is hidden; ends when the page is left.
+const POLL_URL      = '{{ poll_url }}';
+const POLL_INTERVAL = 3000;
+let pollTimer    = null;   // pending timeout for the next poll
+let pollInFlight = false;  // a poll request is running
+let pollActive   = false;  // the loop should keep going
 
 async function pollOnce() {
-  if (document.hidden) return;
+  if (document.hidden || pollInFlight) return;
+  pollInFlight = true;
   try {
     const resp = await fetch(POLL_URL + '?after_id=' + lastMsgId,
       { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
@@ -354,23 +361,35 @@ async function pollOnce() {
       lastMsgId = Math.max(lastMsgId, msg.id);
     });
   } catch (e) { console.debug('[chat-poll] error:', e); }
+  finally {
+    pollInFlight = false;
+    scheduleNextPoll();
+  }
+}
+
+function scheduleNextPoll() {
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  if (!pollActive || document.hidden) return;
+  pollTimer = setTimeout(function() { pollTimer = null; pollOnce(); }, POLL_INTERVAL);
 }
 
 function startPolling() {
-  if (pollTimer) return;
-  pollTimer = setInterval(pollOnce, 3000);
+  if (pollActive) return;
+  pollActive = true;
+  scheduleNextPoll();
   console.log('[chat-poll] started interval=3s');
 }
 function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  pollActive = false;
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
 }
 
 document.addEventListener('visibilitychange', function() {
   if (document.hidden) {
     stopPolling();
   } else {
-    pollOnce();
     startPolling();
+    pollOnce();
   }
 });
 
