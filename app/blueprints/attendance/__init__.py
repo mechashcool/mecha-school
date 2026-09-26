@@ -1700,11 +1700,34 @@ def suspension_search_students():
 
     term = request.args.get('q', '').strip()
     section_id = request.args.get('section_id', type=int)
+    # Institutes narrow by study group instead of stage/grade/section. Read
+    # ONLY for an institute, so a school request is handled exactly as before.
+    group_id = (request.args.get('group_id', type=int)
+                if getattr(school, 'is_institute', False) else None)
 
-    if len(term) < 2 and not section_id:
+    if len(term) < 2 and not section_id and not group_id:
         return jsonify({'results': []})
 
     query = Student.query.filter_by(status='active', school_id=school.id)
+
+    if group_id:
+        # The group must be an ACTIVE group of THIS institute in its ACTIVE
+        # year — the same set the dropdown offers. Anything else (another
+        # institute, another year, a forged id) is a 404, never a wider search.
+        from flask import abort
+        from app.models import InstituteGroupEnrollment
+        from app.utils.institute_groups import active_groups_for_form
+        year = get_active_year(school.id)
+        if group_id not in {g.id for g in active_groups_for_form(
+                school.id, year.id if year else None)}:
+            abort(404)
+        # Current members only: an ended enrollment does not qualify.
+        query = query.filter(Student.id.in_(
+            db.session.query(InstituteGroupEnrollment.student_id)
+            .filter(InstituteGroupEnrollment.school_id == school.id,
+                    InstituteGroupEnrollment.group_id == group_id,
+                    InstituteGroupEnrollment.status
+                    == InstituteGroupEnrollment.STATUS_ACTIVE)))
 
     if section_id:
         year = get_active_year(school.id)
@@ -1722,7 +1745,7 @@ def suspension_search_students():
             Student.student_id.ilike(f'%{term}%')
         )
 
-    limit = 200 if (section_id and not term) else 20
+    limit = 200 if ((section_id or group_id) and not term) else 20
     students = query.order_by(Student.full_name).limit(limit).all()
     return jsonify({'results': [_suspension_student_payload(s) for s in students]})
 
@@ -1744,8 +1767,16 @@ def suspensions():
                        .order_by(StudentSuspension.start_date.desc())
                        .all())
 
+    # Institutes: the study-group filter replaces stage/grade/section.
+    inst_groups = []
+    if school and getattr(school, 'is_institute', False):
+        from app.utils.institute_groups import active_groups_for_form
+        year = get_active_year(school.id)
+        inst_groups = active_groups_for_form(school.id, year.id if year else None)
+
     return render_template('attendance/suspensions.html',
-                           all_suspensions=all_suspensions)
+                           all_suspensions=all_suspensions,
+                           inst_groups=inst_groups)
 
 
 @attendance_bp.route('/suspensions/create', methods=['POST'])
