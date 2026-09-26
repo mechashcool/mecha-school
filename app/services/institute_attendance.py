@@ -1327,3 +1327,87 @@ def submit_instructor_attendance(school, groups, on_date: date_type, entries, *,
                               'يرجى إعادة تحميل الصفحة لعرض السجل المحدّث.')
 
     return {'created': created, 'updated': updated, 'unchanged': unchanged}
+
+
+def instructor_report_teachers(school, year) -> list:
+    """Employees a teacher-report filter may name, for THIS institute and year.
+
+    Every instructor of the year's groups plus anyone already holding a lesson
+    record in that year (a teacher reassigned away keeps their history). Two
+    queries; never another institute's employee.
+    """
+    if school is None or year is None:
+        return []
+    ids = {r[0] for r in db.session.query(InstituteStudyGroup.instructor_id)
+           .execution_options(**OPTS)
+           .filter(InstituteStudyGroup.school_id == school.id,
+                   InstituteStudyGroup.academic_year_id == year.id,
+                   InstituteStudyGroup.instructor_id.isnot(None)).all()}
+    ids |= {r[0] for r in db.session.query(InstituteInstructorAttendance.employee_id)
+            .execution_options(**OPTS)
+            .join(InstituteAttendanceSession, and_(
+                InstituteAttendanceSession.id
+                == InstituteInstructorAttendance.session_id,
+                InstituteAttendanceSession.school_id == school.id))
+            .filter(InstituteInstructorAttendance.school_id == school.id,
+                    InstituteAttendanceSession.academic_year_id == year.id)
+            .distinct().all()}
+    if not ids:
+        return []
+    return (Employee.query.execution_options(**OPTS)
+            .filter(Employee.school_id == school.id, Employee.id.in_(ids))
+            .order_by(Employee.full_name).all())
+
+
+def instructor_attendance_report(school, year, start: date_type, end: date_type, *,
+                                 employee_id=None, group_id=None,
+                                 status=None) -> dict:
+    """Recorded teacher lesson attendance for one institute and year. READ-ONLY.
+
+    Reads institute_instructor_attendance ONLY — never employee_attendance.
+    One joined query; bypass_tenant_scope disables BOTH the school and the year
+    ORM criteria, so school_id is re-applied on EVERY joined table and the
+    academic year on the session. Filters are expected to be validated by the
+    caller against this institute's scope; they can only narrow the result.
+
+    Rows are ordered by date, lesson start time, then group name.
+    """
+    totals = {s: 0 for s in InstituteInstructorAttendance.STATUSES}
+    result = {'rows': [], 'totals': totals, 'total': 0}
+    if school is None or year is None or start > end:
+        return result
+    if (end - start).days > 400:
+        raise AttendanceError('المدى الزمني المطلوب كبير جداً.')
+
+    IIA, Sess, Grp = (InstituteInstructorAttendance, InstituteAttendanceSession,
+                      InstituteStudyGroup)
+    q = (db.session.query(IIA, Sess, Grp, Employee, Subject)
+         .execution_options(**OPTS)
+         .join(Sess, and_(Sess.id == IIA.session_id,
+                          Sess.school_id == school.id))
+         .join(Grp, and_(Grp.id == Sess.group_id, Grp.school_id == school.id))
+         .join(Employee, and_(Employee.id == IIA.employee_id,
+                              Employee.school_id == school.id))
+         .outerjoin(Subject, and_(Subject.id == Grp.subject_id,
+                                  Subject.school_id == school.id))
+         .filter(IIA.school_id == school.id,
+                 Sess.academic_year_id == year.id,
+                 Sess.session_date >= start,
+                 Sess.session_date <= end))
+    if employee_id:
+        q = q.filter(IIA.employee_id == employee_id)
+    if group_id:
+        q = q.filter(Sess.group_id == group_id)
+    if status:
+        q = q.filter(IIA.status == status)
+
+    rows = []
+    for rec, sess, group, emp, subject in q.order_by(
+            Sess.session_date, Sess.start_time, Grp.name, Employee.full_name).all():
+        totals[rec.status] = totals.get(rec.status, 0) + 1
+        rows.append({'record': rec, 'date': sess.session_date,
+                     'day_of_week': _py_to_app_dow(sess.session_date),
+                     'start_time': sess.start_time, 'end_time': sess.end_time,
+                     'teacher': emp, 'group': group, 'subject': subject})
+    result.update({'rows': rows, 'total': len(rows)})
+    return result

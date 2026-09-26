@@ -1,0 +1,136 @@
+{% extends "shared/base.html" %}
+{% block title %}تقرير حضور المدرسين{% endblock %}
+{% block page_title %}تقرير حضور المدرسين — حسب الحصة{% endblock %}
+
+{#- Institutes only. Read-only: reads institute_instructor_attendance for this
+    institute and its active academic year — never the daily employee
+    attendance. -#}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">
+      <i class="bi bi-bar-chart-line me-2 text-primary-custom"></i>تقرير حضور المدرسين
+    </h1>
+    <p class="page-subtitle">الحصص المسجّل فيها حضور المدرسين فقط</p>
+  </div>
+  <a href="{{ url_for('employees.manual_attendance') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>حضور المدرسين
+  </a>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header py-2">
+    <i class="bi bi-funnel me-1 text-primary-custom"></i>
+    <span class="small fw-600">تصفية التقرير</span>
+  </div>
+  <div class="card-body py-3">
+    <form method="GET" class="row g-2 align-items-end" id="reportFilters">
+      <div class="col-6 col-md-2">
+        <label class="form-label small fw-600" for="rStart">من تاريخ</label>
+        <input type="date" name="start" id="rStart" class="form-control"
+               value="{{ start.strftime('%Y-%m-%d') }}">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small fw-600" for="rEnd">إلى تاريخ</label>
+        <input type="date" name="end" id="rEnd" class="form-control"
+               value="{{ end.strftime('%Y-%m-%d') }}">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small fw-600" for="rTeacher">المدرس</label>
+        <select name="employee_id" id="rTeacher" class="form-select">
+          <option value="">جميع المدرسين</option>
+          {% for t in teachers %}
+          <option value="{{ t.id }}" {% if teacher_filter == t.id %}selected{% endif %}>{{ t.full_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small fw-600" for="rGroup">المجموعة</label>
+        <select name="group_id" id="rGroup" class="form-select">
+          <option value="">جميع المجموعات</option>
+          {% for g in groups %}
+          <option value="{{ g.id }}" {% if group_filter == g.id %}selected{% endif %}>{{ g.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label small fw-600" for="rStatus">الحالة</label>
+        <select name="status" id="rStatus" class="form-select">
+          <option value="">جميع الحالات</option>
+          {% for st in statuses %}
+          <option value="{{ st }}" {% if status_filter == st %}selected{% endif %}>{{ status_labels[st] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2 d-flex gap-2">
+        <button class="btn btn-primary flex-grow-1"><i class="bi bi-funnel-fill me-1"></i>عرض</button>
+        <a href="{{ url_for('employees.lesson_attendance_report') }}"
+           class="btn btn-outline-secondary" title="إعادة تعيين"><i class="bi bi-x-lg"></i></a>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ── Totals ───────────────────────────────────────────────────────────────── #}
+{% set t = report.totals %}
+<div class="row g-2 mb-4" id="reportTotals">
+  <div class="col-6 col-md">
+    <div class="card"><div class="card-body py-2 text-center">
+      <div class="text-muted small">إجمالي الحصص</div>
+      <div class="fw-700 fs-5" data-total="all">{{ report.total }}</div>
+    </div></div>
+  </div>
+  {% for st, color in (('present', 'success'), ('absent', 'danger'),
+                       ('late', 'warning'), ('excused', 'secondary')) %}
+  <div class="col-6 col-md">
+    <div class="card"><div class="card-body py-2 text-center">
+      <div class="text-muted small">{{ status_labels[st] }}</div>
+      <div class="fw-700 fs-5 text-{{ color }}" data-total="{{ st }}">{{ t.get(st, 0) }}</div>
+    </div></div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table mb-0 align-middle">
+      <thead>
+        <tr>
+          <th>التاريخ</th>
+          <th>المدرس</th>
+          <th>المادة</th>
+          <th>المجموعة</th>
+          <th>وقت الحصة</th>
+          <th>الحالة</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in report.rows %}
+        {% set st = r.record.status %}
+        <tr class="report-row" data-status="{{ st }}" data-employee="{{ r.teacher.id }}"
+            data-group="{{ r.group.id }}" data-date="{{ r.date.strftime('%Y-%m-%d') }}">
+          <td class="text-nowrap">{{ day_names[r.day_of_week] }} {{ r.date.strftime('%Y-%m-%d') }}</td>
+          <td class="fw-600">{{ r.teacher.full_name }}</td>
+          <td>{{ r.subject.name if r.subject else '—' }}</td>
+          <td>{{ r.group.name }}</td>
+          <td class="text-nowrap">{{ r.start_time.strftime('%H:%M') }} – {{ r.end_time.strftime('%H:%M') }}</td>
+          <td>
+            <span class="badge bg-{{ 'success' if st == 'present' else 'danger' if st == 'absent'
+                                     else 'warning text-dark' if st == 'late' else 'secondary' }}">
+              {{ status_labels[st] }}
+            </span>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="text-center text-muted py-4">
+            لا توجد سجلات حضور للمدرسين ضمن هذه التصفية.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

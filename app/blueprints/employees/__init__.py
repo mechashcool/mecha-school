@@ -1736,6 +1736,59 @@ def manual_lesson_attendance_save():
     return redirect(url_for('employees.manual_attendance', **back))
 
 
+@employees_bp.route('/attendance/lessons/report')
+@login_required
+@permission_required('manage_employees')
+def lesson_attendance_report():
+    """Institutes only: read-only report of teacher attendance per lesson.
+
+    Reads institute_instructor_attendance only (never employee_attendance),
+    for THIS institute and its active academic year. A teacher or group id
+    outside that scope is a 404, never a silent widening.
+    """
+    from app.services import institute_attendance as att
+    from app.blueprints.institute_groups import _parse_date_arg
+
+    school = get_current_school()
+    if not _is_institute(school):
+        abort(404)
+    year, groups = _institute_lesson_scope(school)
+    teachers = att.instructor_report_teachers(school, year)
+
+    today = att.local_today(school)
+    start = _parse_date_arg(request.args.get('start'), today.replace(day=1))
+    end = _parse_date_arg(request.args.get('end'), today)
+    if end < start:
+        end = start
+
+    teacher_filter = request.args.get('employee_id', type=int)
+    if teacher_filter and teacher_filter not in {t.id for t in teachers}:
+        abort(404)
+    group_filter = request.args.get('group_id', type=int)
+    if group_filter and group_filter not in {g.id for g in groups}:
+        abort(404)
+    status_filter = request.args.get('status', '').strip()
+    if status_filter not in att.InstituteInstructorAttendance.STATUSES:
+        status_filter = ''
+
+    try:
+        report = att.instructor_attendance_report(
+            school, year, start, end, employee_id=teacher_filter,
+            group_id=group_filter, status=status_filter or None)
+    except att.AttendanceError as exc:
+        flash(str(exc), 'danger')
+        report = att.instructor_attendance_report(school, None, start, end)
+
+    return render_template(
+        'employees/institute_lesson_attendance_report.html',
+        year=year, groups=groups, teachers=teachers, report=report,
+        start=start, end=end, teacher_filter=teacher_filter,
+        group_filter=group_filter, status_filter=status_filter,
+        statuses=att.InstituteInstructorAttendance.STATUSES,
+        status_labels=att.STATUS_LABELS_AR, day_names=att.DAY_NAMES_AR,
+    )
+
+
 @employees_bp.route('/attendance/manual')
 @login_required
 @permission_required('manage_employees')
