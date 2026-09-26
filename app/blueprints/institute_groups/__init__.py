@@ -1013,6 +1013,17 @@ def _parse_time_arg(raw):
     return None
 
 
+def _parse_lesson_arg(raw):
+    """'HH:MM-HH:MM' -> (start, end) times, or None when malformed."""
+    start, sep, end = str(raw or '').partition('-')
+    if not sep:
+        return None
+    start, end = _parse_time_arg(start), _parse_time_arg(end)
+    if start is None or end is None:
+        return None
+    return start, end
+
+
 # ── Weekly schedule management (managers only) ──────────────────────────────
 
 def _after_slot_change(group):
@@ -1227,6 +1238,18 @@ def attendance_sessions():
     # Read-only: computed occurrences plus sessions that already exist.
     # Nothing is materialized by viewing or filtering this page.
     occurrences = att.occurrences_for_range(school, shown, on_date, on_date)
+
+    # Lesson (الحصة) filter: one start–end slot among the lessons ALREADY in
+    # this account's scope for the chosen date and group. It can only narrow
+    # that list; a malformed or unknown value drops out, like a forged group.
+    lesson_options = sorted({(o.start_time, o.end_time) for o in occurrences})
+    lesson_filter = _parse_lesson_arg(request.args.get('lesson'))
+    if lesson_filter not in lesson_options:
+        lesson_filter = None
+    if lesson_filter:
+        occurrences = [o for o in occurrences
+                       if (o.start_time, o.end_time) == lesson_filter]
+
     summary = att.attendance_summary(
         school, [o.session.id for o in occurrences if o.session])
     queue = att.daily_queue(occurrences, is_today=is_today,
@@ -1238,6 +1261,8 @@ def attendance_sessions():
                            done=[e for e in queue if e['rank'] == 2],
                            summary=summary, on_date=on_date, today=today,
                            is_today=is_today, group_filter=group_filter,
+                           lesson_options=lesson_options,
+                           lesson_filter=lesson_filter,
                            is_manager=_is_group_manager(),
                            day_names=att.DAY_NAMES_AR,
                            day_name=att.day_name(att._py_to_app_dow(on_date)))
