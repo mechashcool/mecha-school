@@ -2,6 +2,68 @@
 {% block title %}جلسات الحضور{% endblock %}
 {% block page_title %}جلسات الحضور{% endblock %}
 
+{#- One group card; every lesson inside keeps its OWN attendance_take link
+    (group + date + start), so each occurrence stays an independent unit. -#}
+{% macro group_card(entry, summary, muted=False) %}
+{% set group = entry.group %}
+<div class="card mb-3" {% if muted %}style="opacity:.8"{% endif %}>
+  <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+    <div>
+      <i class="bi bi-collection me-1 text-primary-custom"></i>
+      <span class="fw-600">{{ group.name }}</span>
+      {% if group.subject %}
+      <span class="text-muted" style="font-size:13px">— {{ group.subject.name }}</span>
+      {% endif %}
+    </div>
+    {% if group.instructor %}
+    <span class="text-muted" style="font-size:12px">
+      <i class="bi bi-person-badge me-1"></i>{{ group.instructor.full_name }}
+    </span>
+    {% endif %}
+  </div>
+  <ul class="list-group list-group-flush">
+    {% for occ, state in entry.lessons %}
+    {% set counts = summary.get(occ.session.id, {}) if occ.session else {} %}
+    <li class="list-group-item d-flex flex-wrap align-items-center gap-2 lesson-row"
+        data-state="{{ state }}" {% if state == 'recorded' %}style="background:#fafbfc"{% endif %}>
+      <span class="fw-600" style="min-width:110px">
+        <i class="bi bi-clock me-1 text-muted"></i>{{ occ.start_time.strftime('%H:%M') }} – {{ occ.end_time.strftime('%H:%M') }}
+      </span>
+      {% if state == 'current' %}
+        <span class="badge bg-warning text-dark">جارية الآن</span>
+      {% elif state == 'due' %}
+        <span class="badge bg-danger">مستحقة للتسجيل</span>
+      {% elif state == 'upcoming' %}
+        <span class="badge bg-light text-dark border">قادمة اليوم</span>
+      {% elif state == 'recorded' %}
+        <span class="badge-status badge-active">تم التسجيل</span>
+      {% else %}
+        <span class="badge-status badge-inactive">غير مُسجَّل</span>
+      {% endif %}
+      {% if counts %}
+      <span style="font-size:12px">
+        <span class="badge bg-success">حاضر {{ counts.get('present', 0) }}</span>
+        <span class="badge bg-danger">غائب {{ counts.get('absent', 0) }}</span>
+        {% if counts.get('late') %}<span class="badge bg-warning text-dark">متأخر {{ counts['late'] }}</span>{% endif %}
+        {% if counts.get('excused') %}<span class="badge bg-secondary">بعذر {{ counts['excused'] }}</span>{% endif %}
+      </span>
+      {% endif %}
+      <a class="btn btn-sm ms-auto {{ 'btn-outline-secondary' if state == 'recorded'
+                                     else 'btn-primary' if state in ('current', 'due')
+                                     else 'btn-outline-primary' }}"
+         href="{{ url_for('institute_groups.attendance_take',
+                          group_id=group.id,
+                          date_str=occ.date.strftime('%Y-%m-%d'),
+                          start=occ.start_time.strftime('%H:%M')) }}">
+        <i class="bi bi-{{ 'pencil-square' if state == 'recorded' else 'clipboard-check' }} me-1"></i>
+        {{ 'مراجعة وتعديل' if state == 'recorded' else 'تسجيل الحضور' }}
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endmacro %}
+
 {% block content %}
 <div class="page-header">
   <div>
@@ -35,11 +97,11 @@
   </div>
 </div>
 
-{# ── Filters ─────────────────────────────────────────────────────────────── #}
+{# ── Filters: one day + one group ─────────────────────────────────────────── #}
 <div class="card mb-4">
   <div class="card-body py-3">
     <form method="GET" class="row g-2 align-items-end">
-      <div class="col-6 col-md-3">
+      <div class="col-6 col-md-4">
         <label class="form-label small fw-600">المجموعة الدراسية</label>
         <select name="group_id" class="form-select">
           <option value="">كل المجموعات</option>
@@ -50,91 +112,59 @@
           {% endfor %}
         </select>
       </div>
-      <div class="col-6 col-md-3">
-        <label class="form-label small fw-600">من تاريخ</label>
-        <input type="date" name="start" class="form-control" value="{{ start.strftime('%Y-%m-%d') }}">
+      <div class="col-6 col-md-4">
+        <label class="form-label small fw-600">التاريخ</label>
+        <input type="date" name="date" class="form-control" value="{{ on_date.strftime('%Y-%m-%d') }}">
       </div>
-      <div class="col-6 col-md-3">
-        <label class="form-label small fw-600">إلى تاريخ</label>
-        <input type="date" name="end" class="form-control" value="{{ end.strftime('%Y-%m-%d') }}">
-      </div>
-      <div class="col-6 col-md-3 d-flex gap-2">
+      <div class="col-12 col-md-4 d-flex gap-2">
         <button class="btn btn-primary flex-grow-1"><i class="bi bi-funnel-fill me-1"></i>عرض</button>
         <a href="{{ url_for('institute_groups.attendance_sessions') }}"
-           class="btn btn-outline-secondary" title="إعادة تعيين"><i class="bi bi-x-lg"></i></a>
+           class="btn btn-outline-secondary" title="اليوم">اليوم</a>
       </div>
     </form>
   </div>
 </div>
 
-{# ── Occurrences ─────────────────────────────────────────────────────────── #}
-<div class="card">
-  <div class="table-wrapper">
-    <table class="table table-hover mb-0">
-      <thead>
-        <tr>
-          <th>التاريخ</th><th>اليوم</th><th>المجموعة</th><th>التوقيت</th>
-          <th>حالة التسجيل</th><th>الملخّص</th><th>الإجراءات</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for occ in occurrences %}
-        {% set counts = summary.get(occ.session.id, {}) if occ.session else {} %}
-        <tr {% if occ.date == today %}style="background:#f6fbff"{% endif %}>
-          <td class="fw-600">{{ occ.date.strftime('%Y-%m-%d') }}</td>
-          <td style="font-size:13px">{{ day_names[occ.day_of_week] }}</td>
-          <td>
-            <i class="bi bi-collection me-1 text-primary-custom"></i>{{ occ.group.name }}
-            {% if occ.group.subject %}
-            <span class="text-muted" style="font-size:12px">— {{ occ.group.subject.name }}</span>
-            {% endif %}
-          </td>
-          <td style="font-size:13px;color:#6b7a8d">
-            {{ occ.start_time.strftime('%H:%M') }} — {{ occ.end_time.strftime('%H:%M') }}
-          </td>
-          <td>
-            {% if occ.is_recorded %}
-            <span class="badge-status badge-active">مُسجَّل</span>
-            {% else %}
-            <span class="badge-status badge-inactive">غير مُسجَّل</span>
-            {% endif %}
-          </td>
-          <td style="font-size:12px">
-            {% if counts %}
-              <span class="badge bg-success">حاضر {{ counts.get('present', 0) }}</span>
-              <span class="badge bg-danger">غائب {{ counts.get('absent', 0) }}</span>
-              {% if counts.get('late') %}<span class="badge bg-warning text-dark">متأخر {{ counts['late'] }}</span>{% endif %}
-              {% if counts.get('excused') %}<span class="badge bg-secondary">بعذر {{ counts['excused'] }}</span>{% endif %}
-            {% else %}
-              <span class="text-muted">—</span>
-            {% endif %}
-          </td>
-          <td>
-            <a class="btn btn-sm {{ 'btn-outline-secondary' if occ.is_recorded else 'btn-outline-primary' }}"
-               href="{{ url_for('institute_groups.attendance_take',
-                                group_id=occ.group.id,
-                                date_str=occ.date.strftime('%Y-%m-%d'),
-                                start=occ.start_time.strftime('%H:%M')) }}">
-              <i class="bi bi-{{ 'pencil-square' if occ.is_recorded else 'clipboard-check' }} me-1"></i>
-              {{ 'مراجعة وتعديل' if occ.is_recorded else 'تسجيل الحضور' }}
-            </a>
-          </td>
-        </tr>
-        {% else %}
-        <tr>
-          <td colspan="7" class="text-center text-muted py-5">
-            <i class="bi bi-calendar-x" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
-            {% if not groups %}
-              لا توجد مجموعات دراسية متاحة لحسابك في هذا العام الدراسي.
-            {% else %}
-              لا توجد حصص مجدولة في هذه الفترة.
-              {% if is_manager %}أضف جدولاً أسبوعياً للمجموعة أولاً.{% endif %}
-            {% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+<h2 class="h6 fw-600 mb-3">
+  <i class="bi bi-calendar-day me-1 text-primary-custom"></i>
+  {% if is_today %}حصص اليوم — {% endif %}{{ day_name }} {{ on_date.strftime('%Y-%m-%d') }}
+</h2>
+
+{% if not groups %}
+<div class="card"><div class="card-body text-center text-muted py-5">
+  <i class="bi bi-calendar-x" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+  لا توجد مجموعات دراسية متاحة لحسابك في هذا العام الدراسي.
+</div></div>
+{% elif not queue %}
+<div class="card"><div class="card-body text-center text-muted py-5">
+  <i class="bi bi-calendar-x" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
+  {% if is_today %}لا توجد مجموعات لديها حصص مجدولة اليوم.{% else %}لا توجد حصص مجدولة في هذا اليوم.{% endif %}
+  {% if is_manager %}<div class="small mt-1">أضف جدولاً أسبوعياً للمجموعة أولاً.</div>{% endif %}
+</div></div>
+{% else %}
+  {% if not active %}
+  <div class="alert alert-success d-flex gap-2 align-items-center">
+    <i class="bi bi-check-circle-fill"></i>
+    {% if is_today %}تم تسجيل حضور جميع حصص اليوم.{% else %}تم تسجيل حضور جميع حصص هذا اليوم.{% endif %}
   </div>
-</div>
+  {% endif %}
+
+  {# Groups that still need action — most urgent first. #}
+  {% for entry in active %}
+  {{ group_card(entry, summary) }}
+  {% endfor %}
+
+  {# Fully recorded groups — kept out of the way, one click to review. #}
+  {% if done %}
+  <details class="mt-2" id="recordedSection">
+    <summary class="fw-600 mb-2" style="cursor:pointer">
+      <i class="bi bi-check2-all me-1 text-success"></i>
+      {{ 'مسجلة اليوم' if is_today else 'مسجلة' }} ({{ done|length }})
+    </summary>
+    {% for entry in done %}
+    {{ group_card(entry, summary, muted=True) }}
+    {% endfor %}
+  </details>
+  {% endif %}
+{% endif %}
 {% endblock %}
