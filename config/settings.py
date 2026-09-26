@@ -255,6 +255,30 @@ class Config:
     # is re-queued up to this many total attempts, then dropped with an ERROR log.
     DURABLE_QUEUE_MAX_ATTEMPTS = int(os.environ.get('DURABLE_QUEUE_MAX_ATTEMPTS', 3))
 
+    # ── Mobile synchronization foundation (Part B1) — DISABLED BY DEFAULT ──────
+    # These two flags gate work that is NOT implemented yet. B1 adds only the
+    # additive `change_journal` / `sync_meta` tables; no capture hook, no
+    # /sync/* endpoint, no cursor logic, and no signal service exist.
+    #
+    # Unlike the other switches in this file (which default to 'true' and are
+    # flipped off for rollback), these default to 'false': the feature must be
+    # explicitly opted into, so an upgrade can never silently start capturing
+    # or expose a signal port.
+    #
+    # SYNC_JOURNAL_ENABLED — when true (Part B2), committed changes to
+    #   whitelisted models will be captured into `change_journal` inside the
+    #   SAME transaction as the business write. While false, nothing is written
+    #   to the journal by any code path.
+    # SYNC_SIGNAL_ENABLED  — when true (a later part), an authenticated
+    #   foreground signal service may be started. While false, no listener,
+    #   thread, or port is created.
+    SYNC_JOURNAL_ENABLED = (
+        os.environ.get('SYNC_JOURNAL_ENABLED', 'false').lower() == 'true'
+    )
+    SYNC_SIGNAL_ENABLED = (
+        os.environ.get('SYNC_SIGNAL_ENABLED', 'false').lower() == 'true'
+    )
+
     @staticmethod
     def init_app(app):
         pass
@@ -328,10 +352,72 @@ class ProductionConfig(Config):
 
 
 class TestingConfig(Config):
-    """Testing configuration."""
+    """Testing configuration.
+
+    The database URI comes from ``TEST_DATABASE_URL`` and from nowhere else.
+    It deliberately does NOT fall back to ``DATABASE_URL``, to ``.env``, or to
+    a built-in default: the previous hardcoded
+    ``postgresql://postgres:password@localhost:5432/almuhandis_test`` pointed at
+    the developer's normal PostgreSQL service on port 5432, one typo away from
+    the real databases living on that same instance.
+
+    ``init_app`` validates the URI and aborts before SQLAlchemy can build an
+    engine.  ``tests/conftest.py`` performs the same validation independently
+    and earlier; both layers are intentional, because this class is also
+    reachable outside pytest (``create_app('testing')`` from a script).
+    """
     TESTING = True
-    SQLALCHEMY_DATABASE_URI = 'postgresql://postgres:password@localhost:5432/almuhandis_test'
     WTF_CSRF_ENABLED = False
+    SQLALCHEMY_DATABASE_URI = os.environ.get('TEST_DATABASE_URL')
+
+    # Integrations are forced off at the config layer as well. Most consumers
+    # read os.environ directly (fcm_service at import time, redis_client per
+    # call), so conftest scrubbing is the real boundary — these values close the
+    # gap for the config-driven consumers.
+    SUPABASE_URL              = ''
+    SUPABASE_SERVICE_KEY      = ''
+    REDIS_URL                 = ''
+    PRIVATE_UPLOADS_ENABLED   = False
+    DURABLE_PUSH_QUEUE_ENABLED = False
+    OBSERVABILITY_ENABLED     = False
+    # NOTE: deliberately no ASYNC_DISPATCH_SYNC here. async_dispatch already
+    # runs inline when ``app.testing`` is set, and tests that exercise the real
+    # background pool switch it off with ``app.testing = False`` — a config key
+    # would override that and make the pool untestable.
+
+    @classmethod
+    def init_app(cls, app):
+        Config.init_app(app)
+
+        uri = app.config.get('SQLALCHEMY_DATABASE_URI')
+        if not uri:
+            raise RuntimeError(
+                'TEST_DATABASE_URL is not set. The testing configuration has '
+                'no default database and never falls back to DATABASE_URL or '
+                '.env. Point TEST_DATABASE_URL at an isolated local test '
+                'database and set TEST_DATABASE_APPROVED to its name.'
+            )
+
+        from urllib.parse import urlsplit, unquote
+        parts = urlsplit(uri)
+        host = (parts.hostname or '').lower()
+        name = unquote((parts.path or '').lstrip('/'))
+
+        if host not in ('127.0.0.1', 'localhost', '::1'):
+            raise RuntimeError(
+                f'Refusing to run tests against non-loopback host {host!r}.'
+            )
+        if not name.endswith('_test'):
+            raise RuntimeError(
+                f'Refusing to run tests against database {name!r}: a test '
+                f'database name must end with "_test".'
+            )
+        if (os.environ.get('TEST_DATABASE_APPROVED') or '').strip() != name:
+            raise RuntimeError(
+                f'Database {name!r} is not explicitly approved for testing. '
+                f'Set TEST_DATABASE_APPROVED={name} to confirm it is a '
+                f'disposable, isolated test database.'
+            )
 
 
 config = {

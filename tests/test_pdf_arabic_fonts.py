@@ -9,7 +9,7 @@ from app.utils.pdf_gen import generate_fee_receipt, generate_schedule_pdf
 class ArabicPdfFontTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.app = create_app('development')
+        cls.app = create_app('testing')
 
     def _school(self):
         return SimpleNamespace(

@@ -3,7 +3,10 @@
     "allow": [
       "Bash(python -m flask db current)",
       "Bash(echo \"EXIT:$?\")",
-      "Bash(flask db *)"
+      "Bash(flask db *)",
+      "Bash(python -c ' *)",
+      "Bash(cd /d \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('app/blueprints/admin/__init__.py', doraise=True\\); print\\('admin blueprint: OK'\\)\")"
     ]
   }
 }

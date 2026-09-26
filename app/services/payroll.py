@@ -234,24 +234,22 @@ def compute_attendance(record: SalaryRecord, settings: PayrollSettings, school,
     else:  # 'fixed'
         absence_deduction = _d(settings.absence_fixed_amount) * absence_days
 
-    # ── Late deduction ────────────────────────────────────────────────────────
+    # ── Late deduction ── PERMANENTLY DISABLED ────────────────────────────────
+    # Late arrivals no longer carry any financial effect, regardless of the
+    # stored PayrollSettings values (late_deduction_enabled / late_method /
+    # late_amount / late_allowed_count / late_group_size). Those columns are
+    # kept for backward compatibility but are intentionally not read here.
+    # late_count / total_late_minutes are still measured above and stay
+    # available as informational counts on the salary record.
     late_deduction = ZERO
-    if settings.late_deduction_enabled:
-        allowed = settings.late_allowed_count or 0
-        if settings.late_method == 'per_minute':
-            late_deduction = _d(settings.late_amount) * total_late_minutes
-        else:
-            effective = max(0, late_count - allowed)
-            if settings.late_method == 'per_group':
-                group = settings.late_group_size or 1
-                late_deduction = _d(settings.late_amount) * (effective // group)
-            else:  # 'fixed_each'
-                late_deduction = _d(settings.late_amount) * effective
 
-    # ── Early-leave deduction ──────────────────────────────────────────────────
+    # ── Early-leave deduction ── PERMANENTLY DISABLED ─────────────────────────
+    # Early departures no longer carry any financial effect, regardless of the
+    # stored early_leave_deduction_enabled / early_leave_amount values.
+    # early_leave_count is still measured above for reporting only.
+    # NOTE: this covers early leave ONLY — unpaid-leave handling is a separate
+    # rule and is deliberately untouched.
     early_leave_deduction = ZERO
-    if settings.early_leave_deduction_enabled:
-        early_leave_deduction = _d(settings.early_leave_amount) * early_leave_count
 
     result.update(
         absence_days=absence_days,

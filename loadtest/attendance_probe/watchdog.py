@@ -111,7 +111,11 @@ class Watchdog:
         return p
 
     def _pg_processes(self):
-        data_dir = os.path.normcase(os.path.abspath(os.path.join(self.root, 'pgdata')))
+        # pg_data_dir: a run that reuses a PRESERVED cluster outside this root
+        # (VPS AI Face round) names it explicitly; every other round keeps
+        # <root>/pgdata.
+        data_dir = os.path.normcase(os.path.abspath(
+            self.cfg.get('pg_data_dir') or os.path.join(self.root, 'pgdata')))
         post = None
         pidfile = os.path.join(data_dir, 'postmaster.pid')
         if os.path.exists(pidfile):
@@ -138,15 +142,22 @@ class Watchdog:
         from the experiment's own institute fixtures, so the query can only see
         rows this experiment created.
         """
-        fx_path = os.path.join(self.root, 'run', 'institute_fixtures.json')
-        if not os.path.exists(fx_path):
-            raise SystemExit(
-                '--outbox-monitor requires run/institute_fixtures.json; this '
-                'round has no institute fixtures. Omit the flag for an AI Face '
-                'round.')
-        with open(fx_path, encoding='utf-8') as fh:
-            fx = json.load(fh)
-        school_ids = sorted({sch['school_id'] for sch in fx['schools'].values()})
+        if getattr(getattr(self, 'a', None), 'outbox_schools_from_fixtures', False):
+            # AI Face outbox round on a preserved AI Face population: the
+            # experiment's schools are seed.py's fixtures (load + precheck).
+            with open(os.path.join(self.root, 'run', 'fixtures.json'), encoding='utf-8') as fh:
+                fx = json.load(fh)
+            school_ids = sorted({sch['id'] for sch in fx['schools'].values()})
+        else:
+            fx_path = os.path.join(self.root, 'run', 'institute_fixtures.json')
+            if not os.path.exists(fx_path):
+                raise SystemExit(
+                    '--outbox-monitor requires run/institute_fixtures.json; this '
+                    'round has no institute fixtures. Omit the flag for an AI Face '
+                    'round.')
+            with open(fx_path, encoding='utf-8') as fh:
+                fx = json.load(fh)
+            school_ids = sorted({sch['school_id'] for sch in fx['schools'].values()})
         if not school_ids:
             raise SystemExit('--outbox-monitor: institute fixtures name no schools')
 
@@ -220,7 +231,9 @@ class Watchdog:
         th = guard_rules.build_thresholds(
             min_mem_pct=self.a.min_mem_pct, allow_degraded_host=self.a.allow_degraded_host,
             mem_total_gb=round(psutil.virtual_memory().total / 2**30, 2),
-            live_health_url=self.a.live_health_url or None)
+            live_health_url=self.a.live_health_url or None,
+            host_cpu_pct=getattr(self.a, 'host_cpu_pct', 85.0),
+            db_connections_frac=getattr(self.a, 'db_conn_frac', 0.9))
         gate = guard_rules.startup_gate(self.baseline or {}, min_mem_pct=self.a.min_mem_pct,
                                         allow_degraded_host=self.a.allow_degraded_host) if self.baseline else None
         json.dump({'thresholds': th, 'baseline': self.baseline, 'startup_gate': gate},
@@ -335,12 +348,16 @@ class Watchdog:
                 n, act, lockw, longest = c.fetchone()
                 c.execute('SHOW max_connections')
                 maxc = int(c.fetchone()[0])
-                c.execute('SELECT xact_commit, blks_read, tup_inserted FROM pg_stat_database WHERE datname=%s',
-                          (self.cfg['db_name'],))
-                xc, br, ti = c.fetchone()
+                c.execute('SELECT xact_commit, blks_read, tup_inserted, deadlocks FROM pg_stat_database '
+                          'WHERE datname=%s', (self.cfg['db_name'],))
+                xc, br, ti, dl = c.fetchone()
+            if not hasattr(self, 'deadlocks_at_start'):
+                self.deadlocks_at_start = dl
             s.update({'db_connections': n, 'db_active': act, 'db_lock_waits': lockw,
                       'db_longest_active_s': round(float(longest), 3), 'db_max_connections': maxc,
-                      'db_xact_commit': xc, 'db_blks_read': br, 'db_tup_inserted': ti})
+                      'db_xact_commit': xc, 'db_blks_read': br, 'db_tup_inserted': ti,
+                      'db_deadlocks_total': dl,
+                      'db_deadlocks_since_start': dl - self.deadlocks_at_start})
         except Exception as exc:
             s['db_error'] = type(exc).__name__
         grown = self._read_log()
@@ -388,8 +405,8 @@ class Watchdog:
         if self.cross_school_rows:
             halt.append(f'{self.cross_school_rows} attendance rows with school_id != student.school_id')
         # host
-        if self._sustained('cpu', s['host_cpu_pct'] > th['host_cpu_pct'], th['host_cpu_sustain_s']):
-            rec.append(f"host CPU > {th['host_cpu_pct']}% for {th['host_cpu_sustain_s']}s")
+        if self._sustained('cpu', s['host_cpu_pct'] >= th['host_cpu_pct'], th['host_cpu_sustain_s']):
+            rec.append(f"host CPU >= {th['host_cpu_pct']}% for {th['host_cpu_sustain_s']}s")
         if self._sustained('mem', s['host_mem_available_pct'] < th['mem_available_floor_pct'], th['mem_sustain_s']):
             rec.append(f"MemAvailable < {th['mem_available_floor_pct']}% for {th['mem_sustain_s']}s")
         if s['disk_free_gb'] < th['disk_free_floor_gb']:
@@ -407,7 +424,12 @@ class Watchdog:
         if s.get('log_pool_timeout'):
             rec.append('database pool timeout / connection exhaustion in target log')
         if s.get('db_connections') and s['db_connections'] >= th['db_connections_frac_of_max'] * s['db_max_connections']:
-            rec.append('database connections >= 90% of max_connections')
+            rec.append(f"database connections >= {th['db_connections_frac_of_max']:.0%} of max_connections")
+        if (s.get('db_deadlocks_since_start') or 0) > th.get('db_deadlocks_allowed', 0):
+            halt.append(f"database deadlock(s) during the round: {s['db_deadlocks_since_start']}")
+        if 'db_lock_wait_sustain_s' in th and self._sustained(
+                'lock_waits', (s.get('db_lock_waits') or 0) > 0, th['db_lock_wait_sustain_s']):
+            rec.append(f"sessions waiting on locks for {th['db_lock_wait_sustain_s']}s")
         # generator traffic
         agg_ops = collections.defaultdict(lambda: {'n': 0, 'errors': 0, 'p95': []})
         backlog = 0
@@ -491,7 +513,7 @@ class Watchdog:
         if abs(self.gen.create_time() - self.gen_create) > 1.0:
             return
         cmd = ' '.join(self.gen.cmdline()).lower()
-        if 'locust' not in cmd and 'thread_driver' not in cmd:
+        if 'locust' not in cmd and 'thread_driver' not in cmd and 'aiface_load.py' not in cmd:
             return
         procs = [self.gen] + self.gen.children(recursive=True)
         for p in procs:
@@ -548,6 +570,11 @@ class Watchdog:
             time.sleep(2)
             s = self.sample()
             gen_done = self.gen is not None and not s.get('generator_alive', False)
+            # --done-file: the generator declares the round over (VPS AI Face
+            # driver) before its own teardown stops the target and worker.
+            done_file = getattr(self.a, 'done_file', '')
+            if done_file and os.path.exists(done_file):
+                gen_done = True
             if time.monotonic() - last_attr >= 10:
                 try:
                     self.check_attribution()
@@ -616,6 +643,19 @@ def main():
                          'enforce the outbox guard rules. Requires '
                          'run/institute_fixtures.json. OFF by default, so AI '
                          'Face rounds are unaffected.')
+    ap.add_argument('--outbox-schools-from-fixtures', action='store_true',
+                    help='with --outbox-monitor: take the experiment school ids from '
+                         'run/fixtures.json (AI Face outbox round) instead of '
+                         'run/institute_fixtures.json')
+    ap.add_argument('--host-cpu-pct', type=float, default=85.0,
+                    help='host-wide CPU %% that, held for 20 s, stops the round '
+                         '(default 85; may only be lowered)')
+    ap.add_argument('--db-conn-frac', type=float, default=0.9,
+                    help='fraction of max_connections that stops the round '
+                         '(default 0.9; may only be lowered)')
+    ap.add_argument('--done-file', default='',
+                    help='when this file appears the round is over: stop enforcing, '
+                         'observe --post-seconds, write the summary and exit')
     ap.add_argument('--check-gate', action='store_true',
                     help='evaluate the startup safety gate against baseline.json and exit '
                          '(0 = safe to start, 3 = unsafe/rejected)')

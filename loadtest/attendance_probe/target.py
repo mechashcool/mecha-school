@@ -43,7 +43,7 @@ def venv_bin(root, name):
 
 
 def build_env(cfg: dict, sec: dict, *, ws_enabled=True,
-              outbox_enabled=False) -> dict:
+              outbox_enabled=False, aiface_outbox_enabled=False) -> dict:
     root = cfg['root']
     env = {k: os.environ[k] for k in PASSTHROUGH if k in os.environ}
     env['PATH'] = os.pathsep.join([os.path.dirname(venv_bin(root, 'python')),
@@ -90,6 +90,10 @@ def build_env(cfg: dict, sec: dict, *, ws_enabled=True,
         # are staged by submit_attendance() inside THIS process, so the flag
         # has to be here and not only in the worker.
         'INSTITUTE_ATTENDANCE_OUTBOX_ENABLED': 'true' if outbox_enabled else 'false',
+        # Always injected explicitly (default 'false', the production default)
+        # so load_dotenv() can never supply it. The AI Face outbox round opts
+        # in: jobs are staged inside the WS sendlog transaction in THIS process.
+        'AIFACE_ATTENDANCE_OUTBOX_ENABLED': 'true' if aiface_outbox_enabled else 'false',
     })
     env.update(cfg['gunicorn_env'])
     return env
@@ -124,7 +128,8 @@ def http_ok(cfg, path='/ops/health', timeout=3):
         return False
 
 
-def start(cfg, sec, *, ws_enabled=True, outbox_enabled=False):
+def start(cfg, sec, *, ws_enabled=True, outbox_enabled=False,
+          aiface_outbox_enabled=False):
     # ws_enabled defaults to True so every existing caller keeps its behaviour.
     # The institute/outbox smoke test passes False: that round never speaks the
     # AI Face protocol, so nothing should bind a WebSocket port at all.
@@ -135,7 +140,8 @@ def start(cfg, sec, *, ws_enabled=True, outbox_enabled=False):
             print('target already running', info['pid'])
             return info
     env = build_env(cfg, sec, ws_enabled=ws_enabled,
-                    outbox_enabled=outbox_enabled)
+                    outbox_enabled=outbox_enabled,
+                    aiface_outbox_enabled=aiface_outbox_enabled)
     app_src = os.path.join(cfg['root'], 'app_src')
     if IS_WINDOWS:
         cmd = [venv_bin(cfg['root'], 'python'), os.path.join(common.TOOL_DIR, 'serve_waitress.py')]
@@ -152,6 +158,7 @@ def start(cfg, sec, *, ws_enabled=True, outbox_enabled=False):
     ident.update({'log': log_path, 'http_port': cfg['http_port'],
                   'ws_port': cfg['ws_port'] if ws_enabled else None,
                   'ws_enabled': ws_enabled, 'outbox_enabled': outbox_enabled,
+                  'aiface_outbox_enabled': aiface_outbox_enabled,
                   'started_at': manifest.utcnow_iso()})
     json.dump(ident, open(_pid_file(cfg), 'w'), indent=2)
     manifest.add_resource(cfg['root'], 'process', role='target-app', **ident)

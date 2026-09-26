@@ -26,7 +26,12 @@ DEFAULT_MIN_MEM_PCT = 20.0             # the requested, non-lowerable MemAvailab
 
 
 def build_thresholds(*, min_mem_pct: float = 20.0, allow_degraded_host: bool = False,
-                     mem_total_gb: float | None = None, live_health_url: str | None = None) -> dict:
+                     mem_total_gb: float | None = None, live_health_url: str | None = None,
+                     host_cpu_pct: float = 85.0, db_connections_frac: float = 0.9) -> dict:
+    """host_cpu_pct / db_connections_frac default to the values every earlier
+    round used; a round may only pass STRICTER ones (lower), never looser."""
+    if host_cpu_pct > 85.0 or db_connections_frac > 0.9:
+        raise ValueError('host_cpu_pct / db_connections_frac may only be tightened')
     """Return the threshold dict and the compliance mode. No baseline adaptation."""
     if allow_degraded_host:
         mem_floor = ABSOLUTE_MEM_EXHAUSTION_PCT
@@ -43,14 +48,15 @@ def build_thresholds(*, min_mem_pct: float = 20.0, allow_degraded_host: bool = F
         'ack_p95_ms': 5000, 'ack_sustain_s': 20,
         'min_samples_for_percentile': 20,
         'error_rate': 0.01, 'min_samples_for_error_rate': 100,
-        'host_cpu_pct': 85.0, 'host_cpu_sustain_s': 20,
+        'host_cpu_pct': host_cpu_pct, 'host_cpu_sustain_s': 20,
         'mem_available_floor_pct': mem_floor, 'mem_sustain_s': 10, 'mem_note': note,
         'mem_requested_guardrail_pct': min_mem_pct, 'mem_total_gb': mem_total_gb,
         'disk_free_floor_gb': 5.0, 'disk_decline_gb': 2.0,
         'log_growth_mb_per_min': 50.0,
         'io_time_ratio': 1.5, 'io_sustain_s': 20,
         'swap_growth_gb': 1.0,
-        'db_connections_frac_of_max': 0.9,
+        'db_connections_frac_of_max': db_connections_frac,
+        'db_lock_wait_sustain_s': 20, 'db_deadlocks_allowed': 0,
         'event_backlog': 50, 'backlog_growth_window_s': 20,
         'send_delay_p95_s': 10.0,
         'generator_cpu_pct_of_one_core': 90.0, 'generator_sustain_s': 20,

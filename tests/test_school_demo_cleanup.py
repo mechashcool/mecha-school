@@ -22,7 +22,7 @@ from app.utils.school_cleanup import cleanup_school_cascade
 class SchoolDemoCleanupTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.app = create_app('development')
+        cls.app = create_app('testing')
 
     def setUp(self):
         self.suffix = uuid4().hex[:10]

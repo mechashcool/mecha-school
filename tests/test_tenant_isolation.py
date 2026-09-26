@@ -13,7 +13,7 @@ from app.models import (
 class TenantIsolationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.app = create_app('development')
+        cls.app = create_app('testing')
 
     def setUp(self):
         self.created = {}
@@ -192,7 +192,27 @@ class TenantIsolationTest(unittest.TestCase):
             self.assertIsNone(leaked)
             logout_user()
 
-    def test_current_year_default_and_historical_opt_in(self):
+    def test_students_persist_across_years_but_never_across_schools(self):
+        """Student is a MASTER record: school-scoped, deliberately not year-scoped.
+
+        ``app/utils/scoping.py`` puts Student in ``school_scoped`` and
+        deliberately leaves it out of ``year_scoped``: "Student,
+        StudentDocument, StudentSuspension are school-scoped only — they
+        persist across academic years so that a year rollover does not require
+        re-entering master student data."
+
+        This test previously asserted the opposite — that last year's student
+        is hidden from a default query — and so contradicted the documented
+        rule it was meant to protect. It now pins the rule that actually
+        holds, and the isolation boundary that actually matters:
+
+          * a user sees BOTH years' students of their OWN school;
+          * a user sees NEITHER student of another school.
+
+        The year dimension is applied by the routes that need it (and by the
+        year-scoped models such as StudentAttendance, Section, and Grade), not
+        by a global filter on Student.
+        """
         with self.app.test_request_context('/'):
             user_b = db.session.get(
                 User,
@@ -203,13 +223,47 @@ class TenantIsolationTest(unittest.TestCase):
             self._run_before_request()
 
             visible_codes = {s.student_id for s in Student.query.all()}
-            self.assertIn(self.created['student_current_code'], visible_codes)
-            self.assertNotIn(self.created['student_old_code'], visible_codes)
 
-            historical = Student.query.execution_options(include_all_years=True).filter_by(
-                student_id=self.created['student_old_code']
-            ).first()
+            # Master records persist across the year rollover.
+            self.assertIn(self.created['student_current_code'], visible_codes)
+            self.assertIn(
+                self.created['student_old_code'], visible_codes,
+                'Student is intentionally not year-scoped; a prior-year master '
+                'record must remain visible to its own school')
+
+            # The historical opt-in changes nothing for Student, precisely
+            # because no year criterion is applied to it in the first place.
+            historical = Student.query.execution_options(
+                include_all_years=True
+            ).filter_by(student_id=self.created['student_old_code']).first()
             self.assertIsNotNone(historical)
+            logout_user()
+
+        # School isolation is the boundary that must hold, in both years.
+        with self.app.test_request_context('/'):
+            user_a = db.session.get(
+                User,
+                self.created['user_a_id'],
+                execution_options={'bypass_tenant_scope': True},
+            )
+            login_user(user_a)
+            self._run_before_request()
+
+            other_school_codes = {s.student_id for s in Student.query.all()}
+            self.assertNotIn(self.created['student_current_code'],
+                             other_school_codes)
+            self.assertNotIn(self.created['student_old_code'],
+                             other_school_codes)
+
+            # And the historical opt-in must not become a cross-school escape.
+            for code in (self.created['student_current_code'],
+                         self.created['student_old_code']):
+                leaked = Student.query.execution_options(
+                    include_all_years=True
+                ).filter_by(student_id=code).first()
+                self.assertIsNone(
+                    leaked,
+                    'include_all_years must never cross the school boundary')
             logout_user()
 
     def test_super_admin_global_can_read_all_schools(self):

@@ -63,7 +63,18 @@
       "Bash(python -m py_compile migrations/versions/h7i8j9k0l1m2_professional_payroll.py app/services/payroll.py app/blueprints/salaries/__init__.py app/utils/scoping.py app/utils/school_cleanup.py app/models/__init__.py)",
       "Bash(python -m py_compile migrations/versions/h7i8j9k0l1m2_professional_payroll.py)",
       "Bash(Get-ChildItem -Path . -Name)",
-      "Bash(powershell -Command \"Get-ChildItem 'app\\\\templates\\\\employees' -Name\")"
+      "Bash(powershell -Command \"Get-ChildItem 'app\\\\templates\\\\employees' -Name\")",
+      "Bash(pip show *)",
+      "Bash(python -c \"import inspect; from openpyxl.styles import Alignment; print\\(inspect.signature\\(Alignment.__init__\\)\\)\")",
+      "Bash(dir \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\app\\\\templates\" /b)",
+      "PowerShell(New-Item -ItemType Directory -Force \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\app\\\\static\\\\images\")",
+      "PowerShell(Copy-Item \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\static\\\\images\\\\login_hero.png\" \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\app\\\\static\\\\images\\\\login_hero.png\" -Force)",
+      "PowerShell(Copy-Item \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\static\\\\images\\\\Logo-Core-School.png\" \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\app\\\\static\\\\images\\\\Logo-Core-School.png\" -Force)",
+      "PowerShell(Copy-Item \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\static\\\\images\\\\login_hero_v2.png\" \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\app\\\\static\\\\images\\\\login_hero_v2.png\" -Force)",
+      "PowerShell(Copy-Item \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\static\\\\images\\\\Logo-Core-School-clean.png\" \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\app\\\\static\\\\images\\\\Logo-Core-School-clean.png\" -Force)",
+      "Bash(Get-ChildItem \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\app\\\\static\\\\images\")",
+      "Bash(Select-Object Name, Length)",
+      "PowerShell(Copy-Item \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\static\\\\images\\\\login_hero_v3.png\" \"d:\\\\Projects\\\\Mecha-School\\\\Projects\\\\mecha-school\\\\app\\\\static\\\\images\\\\login_hero_v3.png\")"
     ]
   }
 }

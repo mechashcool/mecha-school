@@ -254,7 +254,10 @@ def step_venvs(root, cfg, repo, args):
         manifest.write_owner_marker(target, cfg['experiment_id'])
         if args.target_requirements == 'pinned':
             req = os.path.join(root, 'app_src', 'requirements.txt')
-            run([venv_python(target), '-m', 'pip', 'install', '-q', '-r', req, 'gunicorn'])
+            # --constraints: resolve transitive dependencies to the versions
+            # production runs (requirements.txt leaves e.g. SQLAlchemy unpinned).
+            cons = ['-c', args.constraints] if getattr(args, 'constraints', None) else []
+            run([venv_python(target), '-m', 'pip', 'install', '-q', '-r', req] + cons + ['gunicorn'])
         else:
             # Mirror the package set of an existing, working interpreter
             # (used when the pinned set has no wheels for the local Python).
@@ -270,8 +273,9 @@ def step_venvs(root, cfg, repo, args):
         manifest.add_resource(root, 'venv', path=gen, note='load generator + watchdog + reconciliation')
         run([py, '-m', 'venv', gen])
         manifest.write_owner_marker(gen, cfg['experiment_id'])
+        # pytz: the AI Face driver derives the school-local test dates.
         run([venv_python(gen), '-m', 'pip', 'install', '-q', 'locust', 'websocket-client',
-             'psycopg2-binary', 'psutil'])
+             'psycopg2-binary', 'psutil', 'pytz'])
         manifest.update_resource(root, 'venv', {'path': gen}, status='ready')
 
 
@@ -288,6 +292,8 @@ def main():
     ap.add_argument('--python', default=None)
     ap.add_argument('--target-requirements', choices=['pinned', 'mirror'], default='pinned')
     ap.add_argument('--mirror-python', default=None)
+    ap.add_argument('--constraints', default=None,
+                    help='pip constraints file for the pinned target install')
     ap.add_argument('--steps', default='config,pg,db,src,venv')
     args = ap.parse_args()
     root = os.path.abspath(args.root)

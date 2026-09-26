@@ -43,7 +43,7 @@ from app.models import (
 class SchoolManagerUsersTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.app = create_app('development')
+        cls.app = create_app('testing')
 
     def setUp(self):
         self.suffix = uuid4().hex[:10]

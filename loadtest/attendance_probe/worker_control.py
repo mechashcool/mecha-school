@@ -80,7 +80,8 @@ def build_worker_env(cfg: dict, sec: dict, *, batch_size: int = 20,
                      poll_seconds: float = 5.0,
                      lease_seconds: int = EXPERIMENT_LEASE_SECONDS,
                      max_attempts: int = 5,
-                     fake_mode: str = 'success') -> dict:
+                     fake_mode: str = 'success',
+                     aiface_outbox_enabled: bool = False) -> dict:
     """The worker's complete environment. Pure: builds a dict, starts nothing.
 
     Starts from the target's environment so every isolation control already
@@ -98,6 +99,8 @@ def build_worker_env(cfg: dict, sec: dict, *, batch_size: int = 20,
     env['MECHA_PROCESS_ROLE'] = ROLE
     env['FLASK_ENV'] = 'production'
     env['INSTITUTE_ATTENDANCE_OUTBOX_ENABLED'] = 'true'
+    env['AIFACE_ATTENDANCE_OUTBOX_ENABLED'] = (
+        'true' if aiface_outbox_enabled else 'false')
 
     env['OUTBOX_BATCH_SIZE'] = str(int(batch_size))
     env['OUTBOX_POLL_SECONDS'] = str(poll_seconds)
@@ -156,6 +159,7 @@ def start(cfg, sec, **kw):
                  'poll_seconds': env['OUTBOX_POLL_SECONDS'],
                  'lease_seconds': env['OUTBOX_LEASE_SECONDS'],
                  'fake_firebase_mode': env['ATTLT_FAKE_FIREBASE_MODE'],
+                 'aiface_outbox_enabled': env['AIFACE_ATTENDANCE_OUTBOX_ENABLED'],
                  'started_at': manifest.utcnow_iso()})
     json.dump(info, open(_pid_file(cfg), 'w'), indent=2)
     # `info` already carries role=ROLE; passing it again would collide.

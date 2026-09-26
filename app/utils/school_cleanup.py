@@ -23,7 +23,8 @@ from app.models import (
     SchoolAnnouncement, SchoolContentRead, SchoolVideo, Section,
     Student, StudentAttendance, StudentDocument, StudentRegistrationRecord,
     StudentRegistrationRequest, StudentRegistrationRequestDocument,
-    StudentSuspension, StudentTransport, Subject, TransportRoute, User,
+    StudentSuspension, StudentTransport, Subject, SyncPrincipalState,
+    TransportRoute, User,
     parent_students, teacher_subjects, user_permissions,
 )
 
@@ -216,6 +217,16 @@ SCHOOL_DELETE_ORDER = (
     (Subject, 'المواد'),
     (Grade, 'المراحل'),
     (Employee, 'الموظفون/التدريسيون'),
+    # SyncPrincipalState.user_id -> users.id and .school_id -> schools.id are
+    # both ON DELETE CASCADE, so the database would remove these rows anyway.
+    # Listing it explicitly ahead of User keeps the teardown order readable
+    # and self-documenting instead of relying on the cascade as the only
+    # mechanism; the cascades stay in place as the final safety net.
+    #
+    # NOTE: rows for super admins have school_id = NULL and are therefore not
+    # matched by this school-scoped delete — correct, because a super admin is
+    # not owned by, and must not be deleted with, any one school.
+    (SyncPrincipalState, 'حالة مزامنة المستخدمين'),
     (User, 'المستخدمون'),
     # ── Transport (must precede school deletion) ───────────────────────────────
     # StudentTransport already deleted above; no FK blocks TransportRoute now.

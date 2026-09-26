@@ -76,7 +76,7 @@ class Sentinel:
             except (psutil.Error, KeyError):
                 continue
             cmd = ' '.join(res['cmdline']).lower()
-            if 'locust' not in cmd and 'thread_driver' not in cmd:
+            if 'locust' not in cmd and 'thread_driver' not in cmd and 'aiface_load.py' not in cmd:
                 continue        # never signal anything that is not the load generator
             found.append(p)
         return found
@@ -143,6 +143,16 @@ class Sentinel:
             if self.breach('production_health', bad, self.a.health_sustain_s):
                 halt.append(f"PRODUCTION health endpoint {s.get('production_health_status')} "
                             f'for {self.a.health_sustain_s}s')
+            # Opt-in (0 = off): material production latency degradation.
+            if self.a.health_slow_ms and self.breach(
+                    'production_slow', (s.get('production_health_ms') or 0) > self.a.health_slow_ms,
+                    self.a.health_slow_sustain_s):
+                halt.append(f"PRODUCTION health slower than {self.a.health_slow_ms} ms "
+                            f'for {self.a.health_slow_sustain_s}s')
+        # Opt-in (0 = off): host-wide CPU, measured outside the namespace too.
+        if self.a.max_cpu_pct and self.breach('cpu', s['host_cpu_pct'] >= self.a.max_cpu_pct,
+                                              self.a.cpu_sustain_s):
+            halt.append(f"host CPU >= {self.a.max_cpu_pct}% for {self.a.cpu_sustain_s}s")
         return halt
 
     # ── output ────────────────────────────────────────────────────────────────
@@ -214,6 +224,9 @@ class Sentinel:
             'thresholds': {'min_mem_pct': self.a.min_mem_pct, 'mem_sustain_s': self.a.mem_sustain_s,
                            'absolute_mem_exhaustion_pct': guard_rules.ABSOLUTE_MEM_EXHAUSTION_PCT,
                            'min_disk_gb': self.a.min_disk_gb, 'health_sustain_s': self.a.health_sustain_s,
+                           'max_cpu_pct': self.a.max_cpu_pct, 'cpu_sustain_s': self.a.cpu_sustain_s,
+                           'health_slow_ms': self.a.health_slow_ms,
+                           'health_slow_sustain_s': self.a.health_slow_sustain_s,
                            'live_health_url_configured': bool(self.a.live_health_url),
                            'lowering_or_override_possible': False},
             'stop_written': self.stop_written, 'terminated': self.terminated, 'events': self.events,
@@ -243,6 +256,13 @@ def main():
     ap.add_argument('--interval', type=float, default=2.0)
     ap.add_argument('--tail-seconds', type=float, default=150.0)
     ap.add_argument('--max-seconds', type=float, default=1800.0)
+    ap.add_argument('--max-cpu-pct', type=float, default=0.0,
+                    help='halt when host-wide CPU >= this for --cpu-sustain-s (0 = off)')
+    ap.add_argument('--cpu-sustain-s', type=float, default=20.0)
+    ap.add_argument('--health-slow-ms', type=float, default=0.0,
+                    help='halt when production health takes longer than this for '
+                         '--health-slow-sustain-s (0 = off)')
+    ap.add_argument('--health-slow-sustain-s', type=float, default=20.0)
     a = ap.parse_args()
     if a.min_mem_pct < guard_rules.DEFAULT_MIN_MEM_PCT:
         raise SystemExit(f'refusing to run with a memory floor below the fixed '

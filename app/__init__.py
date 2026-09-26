@@ -661,7 +661,13 @@ def create_app(config_name=None):
     import sys as _sys
     import logging as _logging
     _cli_cmd = _sys.argv[1] if len(_sys.argv) >= 2 else ''
-    _skip_schedulers = _cli_cmd in ('db', 'shell', 'routes', 'digest', 'collect')
+    # Tests must never start background services either. Under pytest argv[1] is
+    # a path or a flag, so the CLI check above does not catch it, and every
+    # create_app() in the suite was starting the AI-face WebSocket server, the
+    # Hikvision sync loop, both schedulers, and the durable-queue consumer.
+    _skip_schedulers = (app.testing
+                        or _cli_cmd in ('db', 'shell', 'routes', 'digest',
+                                        'collect'))
 
     _startup_log = _logging.getLogger('mecha.startup')
     _startup_log.info(

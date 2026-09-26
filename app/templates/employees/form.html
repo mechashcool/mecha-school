@@ -305,7 +305,7 @@
 
       {# ── 3. Teacher Assignments ──────────────────────────────────────── #}
       {% if school_cfg.section_visible('employees', 'teacher_assignment') %}
-      {% set has_assignments = (existing_section_ids or existing_subject_ids) %}
+      {% set has_assignments = (existing_section_ids or existing_subject_ids) %}{%- if inst_teaching %}{% set has_assignments = inst_teaching.current_ids %}{% endif %}
       <div class="card mb-3">
         <div class="card-header d-flex justify-content-between align-items-center"
              role="button"
@@ -317,6 +317,9 @@
         </div>
         <div class="collapse{{ ' show' if has_assignments }}" id="collapseTeacher">
           <div class="card-body">
+{%- if inst_teaching %}
+            {% include 'employees/_institute_teaching.html' %}
+{%- else %}
             <input type="hidden" name="save_teacher_section" value="1">
 
             {% if sections or subjects %}
@@ -414,6 +417,7 @@
               لا توجد شعب أو مواد محددة للعام الدراسي الحالي.
             </p>
             {% endif %}
+{%- endif %}
           </div>
         </div>
       </div>

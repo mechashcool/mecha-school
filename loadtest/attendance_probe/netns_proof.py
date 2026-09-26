@@ -40,6 +40,8 @@ FORBIDDEN = [
     ('production Redis (loopback)', '127.0.0.1', 6379),
     ('any local PostgreSQL', '127.0.0.1', 5432),
     ('production HTTPS (public address)', None, 443),      # host filled from --public-ip
+    ('production AI Face WS (loopback)', '127.0.0.1', 7788),
+    ('production AI Face WS (public address)', None, 7788),
     ('external DNS', '1.1.1.1', 53),
     ('external HTTPS', '1.1.1.1', 443),
 ]
@@ -131,6 +133,7 @@ def main():
     ap.add_argument('--nspid', type=int, default=0)
     ap.add_argument('--public-ip', default='')
     ap.add_argument('--live-health-url', default='')
+    ap.add_argument('--targets-file', default='')
     a = ap.parse_args()
     root = os.path.abspath(a.root)
     res = {'scope': a.scope, 'label': a.label, 'at_utc': manifest.utcnow_iso(),
@@ -150,8 +153,27 @@ def main():
             p = tcp_probe(host, port)
             p['what'] = name
             probes.append(p)
+        # --targets-file: production DB/Redis/Firebase addresses resolved on the
+        # HOST (vps_forbidden_targets.py). Only labels and outcomes are kept.
+        extra_names = []
+        if a.targets_file:
+            with open(a.targets_file, encoding='utf-8') as fh:
+                tf = json.load(fh)
+            for t in tf.get('targets', []):
+                p = tcp_probe(t['ip'], int(t['port']))
+                p['what'] = t['label']
+                p['target'] = f"<{t['label']}>:{t['port']}"      # no address in the report
+                probes.append(p)
+            extra_names = [n for n in tf.get('names_to_resolve', []) if n]
+            res['targets_file_probes'] = len(tf.get('targets', []))
+            if not tf.get('targets'):
+                res['failures'].append('targets file lists no production targets')
         res['reachability_probes'] = probes
         res['dns_resolution'] = {n: resolves(n) for n in FORBIDDEN_NAMES}
+        for i, n in enumerate(extra_names):
+            if resolves(n):
+                res['failures'].append(f'DNS resolves production name #{i} inside the namespace')
+        res['production_names_checked'] = len(extra_names)
         # required properties
         if res['interfaces'] != ['lo']:
             res['failures'].append(f"namespace has interfaces other than lo: {res['interfaces']}")

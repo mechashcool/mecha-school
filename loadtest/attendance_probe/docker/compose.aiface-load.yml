@@ -1,0 +1,69 @@
+# AI Face attendance + durable outbox LOAD VALIDATION.
+#
+# Same isolation properties as compose.institute-load.yml:
+#   * attlt_net is `internal: true` — no route off the private network.
+#     docker/aiface_load.py PROVES this from inside before it writes anything.
+#   * no ports are published: 18180/18188 exist only on container loopback.
+#   * the database lives in a NAMED VOLUME belonging to this compose project,
+#     so `down -v` destroys the data with it.
+#
+# One addition: track_commit_timestamp=on on the DISPOSABLE database, so the
+# runner can prove from pg_xact_commit_timestamp() that every attendance
+# transaction committed BEFORE the device received its sendlog ACK. It changes
+# no application behaviour.
+#
+#   ATTLT_COMPOSE_PROJECT=attlt_<tag> \
+#   ATTLT_TOOLING_DIR=<repo>/loadtest/attendance_probe \
+#   ATTLT_EXP_DIR=<experiment root> \
+#   docker compose -p attlt_<tag> -f compose.aiface-load.yml up --build
+name: ${ATTLT_COMPOSE_PROJECT:?set ATTLT_COMPOSE_PROJECT to attlt_<experiment tag>}
+
+services:
+  db:
+    image: postgres:16-alpine
+    command: ["postgres", "-c", "track_commit_timestamp=on"]
+    environment:
+      POSTGRES_DB: core_school_attendance_load_test
+      POSTGRES_USER: ${ATTLT_PG_USER:?set ATTLT_PG_USER}
+      POSTGRES_PASSWORD: ${ATTLT_PG_PASSWORD:?set ATTLT_PG_PASSWORD}
+    networks: [attlt_net]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ATTLT_PG_USER} -d core_school_attendance_load_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.driver
+    command: ["python", "/tooling/docker/aiface_load.py"]
+    depends_on:
+      db: {condition: service_healthy}
+    environment:
+      ATTLT_PG_HOST: db
+      ATTLT_PG_PORT: "5432"
+      ATTLT_TARGET_HOST: 127.0.0.1
+      ATTLT_EXPERIMENT_TAG: ${ATTLT_EXPERIMENT_TAG:?set ATTLT_EXPERIMENT_TAG}
+      ATTLT_EXPECTED_COMMIT: ${ATTLT_EXPECTED_COMMIT:?set ATTLT_EXPECTED_COMMIT}
+      # The production DB host this experiment must be unable to resolve. Used
+      # ONLY for a getaddrinfo() negative probe; no connection is ever opened.
+      ATTLT_FORBIDDEN_HOST: ${ATTLT_FORBIDDEN_HOST:-example.invalid}
+    volumes:
+      - type: bind
+        source: ${ATTLT_TOOLING_DIR:?set ATTLT_TOOLING_DIR to the attendance_probe dir}
+        target: /tooling
+        read_only: true
+      - type: bind
+        source: ${ATTLT_EXP_DIR:?set ATTLT_EXP_DIR to the experiment root}
+        target: /exp
+    networks: [attlt_net]
+
+networks:
+  attlt_net:
+    internal: true            # no external connectivity; endpoints are private
+
+volumes:
+  pgdata:                     # project-scoped: removed by `down -v`, never shared

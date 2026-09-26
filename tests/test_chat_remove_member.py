@@ -34,7 +34,7 @@ class ChatRemoveMemberTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.app = create_app('development')
+        cls.app = create_app('testing')
         with cls.app.app_context():
             cls.school_admin_role = Role.query.filter_by(name='school_admin').first()
             cls.parent_role       = Role.query.filter_by(name='parent').first()

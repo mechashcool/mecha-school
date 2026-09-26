@@ -25,7 +25,7 @@ from app.utils import badge_cache
 class LiveBadgesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.app = create_app('development')
+        cls.app = create_app('testing')
 
     def setUp(self):
         self.suffix = uuid4().hex[:10]
@@ -168,32 +168,121 @@ class LiveBadgesTest(unittest.TestCase):
             logout_user()
         return resp.get_json()['counts']
 
-    def _add_complaint(self, parent_id, student_id, school_id, year_id, status='new'):
+    def _add_complaint(self, parent_id, student_id, school_id, year_id,
+                       status='new', force=False):
+        """Insert a complaint.
+
+        ``force=True`` plants a row the application would normally REFUSE to
+        create, by setting the same ``skip_tenant_validation`` flag that
+        ``app/utils/school_cleanup.py`` uses. It is the test-only way to get a
+        hostile row into the database so the READ path can be proven to reject
+        it. The write guard itself is never modified — see
+        ``test_cross_school_complaint_is_rejected_by_the_write_guard``.
+        """
         with self.app.app_context():
             c = Complaint(parent_id=parent_id, student_id=student_id, school_id=school_id,
                           academic_year_id=year_id, title=f'C {self.suffix}',
                           complaint_type='academic', details='x', status=status)
             db.session.add(c)
-            db.session.commit()
+            if force:
+                previous = db.session.info.get('skip_tenant_validation')
+                db.session.info['skip_tenant_validation'] = True
+                try:
+                    db.session.commit()
+                finally:
+                    if previous is None:
+                        db.session.info.pop('skip_tenant_validation', None)
+                    else:
+                        db.session.info['skip_tenant_validation'] = previous
+            else:
+                db.session.commit()
             return c.id
+
+    def _poll_raw(self, user_id):
+        """Full badge payload, for asserting nothing extra leaks into it."""
+        from app.blueprints.live import badges
+        badge_cache.clear()
+        with self.app.test_request_context('/live/badges'):
+            user = db.session.get(User, user_id,
+                                  execution_options={'bypass_tenant_scope': True})
+            login_user(user)
+            self._run_before_request()
+            resp = badges()
+            logout_user()
+        return resp.get_json()
 
     # ── Tests ───────────────────────────────────────────────────────────────
 
-    def test_admin_counts_scoped_to_own_school(self):
-        ids = self.created
-        # One pending complaint in A, one pending in B.
-        self._add_complaint(ids['parent_a_id'], ids['student_a_id'],
-                            ids['school_a_id'], ids['year_a_id'])
-        self._add_complaint(ids['parent_a2_id'], ids['student_b_id'],
-                            ids['school_b_id'], ids['year_b_id'])
+    def test_cross_school_complaint_is_rejected_by_the_write_guard(self):
+        """The normal path must refuse a complaint that spans two schools.
 
-        counts_a = self._poll(ids['manager_a_id'])
+        This is the control that made the old version of
+        ``test_admin_counts_scoped_to_own_school`` impossible to set up: the
+        fixture tried to create a complaint whose parent was in school A and
+        whose student/school were B, and ``_validate_relationship_scope``
+        correctly refused it. Pinned here so the count test below can bypass
+        the guard for its own fixture without anyone concluding the guard is
+        optional.
+        """
+        ids = self.created
+        with self.assertRaises(ValueError) as ctx:
+            self._add_complaint(ids['parent_a2_id'], ids['student_b_id'],
+                                ids['school_b_id'], ids['year_b_id'])
+        self.assertIn('Parent request must match parent school', str(ctx.exception))
+        with self.app.app_context():
+            db.session.rollback()
+
+    def test_admin_counts_scoped_to_own_school(self):
+        """A hostile cross-school row must not be counted by the other school.
+
+        School A gets a legitimate pending complaint. School B gets a row that
+        the write guard would normally reject: ``school_id`` = B, but
+        ``parent_id`` = a parent belonging to A. It is planted with
+        ``skip_tenant_validation`` so the READ path can be tested against data
+        that a bug, a bad migration, or a future code path could produce.
+
+        Manager A must count only its own complaint — the hostile row must not
+        reach A through its parent, and none of school B's identifiers may
+        appear in A's payload.
+        """
+        ids = self.created
+        complaint_a = self._add_complaint(
+            ids['parent_a_id'], ids['student_a_id'],
+            ids['school_a_id'], ids['year_a_id'])
+
+        hostile = self._add_complaint(
+            ids['parent_a2_id'], ids['student_b_id'],
+            ids['school_b_id'], ids['year_b_id'], force=True)
+
+        with self.app.app_context():
+            planted = db.session.get(
+                Complaint, hostile,
+                execution_options={'bypass_tenant_scope': True})
+            self.assertIsNotNone(planted, 'the hostile row must really exist')
+            self.assertEqual(planted.school_id, ids['school_b_id'])
+            self.assertEqual(planted.parent_id, ids['parent_a2_id'],
+                             'parent belongs to school A — this is the attack')
+
+        payload_a = self._poll_raw(ids['manager_a_id'])
+        counts_a = payload_a['counts']
         counts_b = self._poll(ids['manager_b_id'])
 
         self.assertEqual(counts_a['pending_complaints'], 1,
-                         'Manager A must only count school A complaints')
+                         'Manager A must count only school A complaints, even '
+                         'though the school B row references a school A parent')
         self.assertEqual(counts_b['pending_complaints'], 1,
-                         'Manager B must only count school B complaints')
+                         'Manager B must count its own school B row')
+
+        # No school B identifier may appear anywhere in school A's response.
+        import json
+        blob = json.dumps(payload_a)
+        for leaked in (hostile, ids['school_b_id'], ids['student_b_id'],
+                       ids['year_b_id']):
+            self.assertNotIn(
+                str(leaked), blob,
+                f'school B identifier {leaked} leaked into school A payload')
+        self.assertIn(str(counts_a['pending_complaints']), blob)
+        del complaint_a
 
     def test_parent_counts_scoped_to_own_requests(self):
         ids = self.created

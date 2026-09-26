@@ -4299,3 +4299,186 @@ class StudentRegistrationRequestDocument(db.Model):
     def __repr__(self):
         return (f'<StudentRegistrationRequestDocument {self.id} '
                 f'request={self.request_id}>')
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  25. MOBILE SYNCHRONIZATION FOUNDATION  (Part B1 — inert while disabled)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# These two tables are the additive storage foundation for incremental mobile
+# synchronization. In Part B1 they are DEFINED AND MIGRATED ONLY — nothing in
+# the application reads or writes them:
+#   * no capture hook is registered,
+#   * no /sync/* endpoint exists,
+#   * SYNC_JOURNAL_ENABLED and SYNC_SIGNAL_ENABLED both default to false.
+#
+# Deliberately NOT marked __school_scoped__ / __year_scoped__:
+#   Adding them to the ORM tenant guard (app/utils/scoping.py) would change
+#   existing scoping behaviour. The journal is an append-only operational log,
+#   not tenant-facing data. Every future read path (Part B2) must apply its own
+#   EXPLICIT school_id + authorized-scope filters — the same rule the mobile
+#   badge and school-board queries already follow.
+
+# Naive UTC, matching the project convention (every other timestamp column in
+# this file is `timestamp without time zone` holding a datetime.utcnow() value).
+#
+# A bare now() would be wrong: now() is timestamptz, and storing it into a naive
+# column keeps the SERVER'S LOCAL wall-clock, so two sessions with different
+# TimeZone settings write different values for the same instant. That would
+# corrupt age-based retention pruning. `AT TIME ZONE 'utc'` converts first.
+UTC_NOW = db.text("(now() AT TIME ZONE 'utc')")
+
+
+class ChangeJournal(db.Model):
+    """Append-only record that "something a client may cache has changed".
+
+    Carries invalidations, never payload data: a row names a scope and a
+    resource, so a future sync endpoint can tell an authorized client what to
+    refetch through the existing (already authorized) endpoints. No student,
+    grade, or attendance content is stored here.
+
+    ``xid`` holds the writing transaction's 64-bit transaction id. Part B1 does
+    NOT populate it and deliberately sets no server default; Part B2 will write
+    it explicitly from ``pg_current_xact_id()``. Production is PostgreSQL 17.6
+    (server_version_num 170006, Supabase), so that function is available and
+    the deprecated ``txid_current()`` is not used. There is no direct
+    ``xid8 -> numeric`` cast, so the value must be converted through text:
+    ``pg_current_xact_id()::text::numeric(20, 0)``. NUMERIC(20,0) is required
+    because xid8 spans the full unsigned 64-bit range, overflowing BIGINT.
+
+    ``xid`` is NOT a commit-order sequence. An XID is allocated at a
+    transaction's first write, not at its commit, so a transaction holding an
+    earlier XID can commit *after* a later one. The same applies to the
+    BIGSERIAL ``id``. A cursor must therefore never simply order by ``xid`` (or
+    ``id``) and advance to the largest value seen — that permanently skips the
+    late commit. See docs/adr/0001-sync-cursor-commit-order.md.
+    """
+    __tablename__ = 'change_journal'
+
+    id               = db.Column(db.BigInteger, primary_key=True)
+    school_id        = db.Column(db.Integer,
+                                 db.ForeignKey('schools.id', ondelete='CASCADE'),
+                                 nullable=False)
+    # Plain integer, no FK: the journal is an operational log and must not add
+    # a delete-ordering dependency to academic-year maintenance.
+    academic_year_id = db.Column(db.Integer, nullable=True)
+    scope_type       = db.Column(db.String(24), nullable=False)
+    scope_id         = db.Column(db.Integer, nullable=False)
+    resource         = db.Column(db.String(32), nullable=False)
+    resource_id      = db.Column(db.Integer, nullable=True)
+    op               = db.Column(db.String(16), nullable=False)
+    xid              = db.Column(db.Numeric(20, 0), nullable=False)
+    created_at       = db.Column(db.DateTime, nullable=False,
+                                 server_default=UTC_NOW)
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "op IN ('upsert', 'delete', 'reset', 'scopes_changed')",
+            name='ck_change_journal_op',
+        ),
+        db.Index('ix_change_journal_scope',
+                 'school_id', 'scope_type', 'scope_id', 'xid', 'id'),
+        db.Index('ix_change_journal_xid', 'xid'),
+        db.Index('ix_change_journal_created_at', 'created_at'),
+    )
+
+    def __repr__(self):
+        return (f'<ChangeJournal {self.id} school={self.school_id} '
+                f'{self.scope_type}:{self.scope_id} {self.resource} {self.op}>')
+
+
+class SyncMeta(db.Model):
+    """Singleton row describing synchronization history continuity.
+
+    ``generation`` must be incremented whenever the journal's history stops
+    being a continuous record of changes — capture disabled then re-enabled,
+    a database restore, or a journal truncation. A client presenting a cursor
+    from an older generation must be told to rebuild rather than being served
+    an incomplete change list.
+
+    ``min_retained_xid`` is advanced by the (future) pruner and marks the
+    oldest still-replayable position.
+    """
+    __tablename__ = 'sync_meta'
+
+    id               = db.Column(db.Integer, primary_key=True, default=1)
+    generation       = db.Column(db.Integer, nullable=False, server_default='1')
+    capture_enabled  = db.Column(db.Boolean, nullable=False,
+                                 server_default=db.false())
+    min_retained_xid = db.Column(db.Numeric(20, 0), nullable=True)
+    updated_at       = db.Column(db.DateTime, nullable=False,
+                                 server_default=UTC_NOW)
+
+    __table_args__ = (
+        db.CheckConstraint('id = 1', name='ck_sync_meta_singleton'),
+    )
+
+    def __repr__(self):
+        return (f'<SyncMeta generation={self.generation} '
+                f'capture_enabled={self.capture_enabled}>')
+
+
+class SyncPrincipalState(db.Model):
+    """Durable per-principal scope version. INERT in B1 — nothing writes it.
+
+    WHY THIS EXISTS SEPARATELY FROM THE JOURNAL
+    A client must be able to detect that its authorized scopes changed (a
+    parent unlinked from a child, a teacher unassigned from a section) without
+    the server ever naming an identifier the client is no longer allowed to
+    see. The natural place to record that would be a ``op='scopes_changed'``
+    journal row — but journal rows are cascade-deleted with their school and
+    are pruned by retention, so a version derived from them would silently
+    reset and a stale client would look up to date. Entitlement state has to
+    outlive the change feed, so it lives here.
+
+    THE PRINCIPAL IS ``users.id``
+    Every authenticated caller — parent, teacher, employee, school manager,
+    admin, super admin — is a row in ``users``. The mobile JWT path re-loads
+    that row on every request and rejects inactive accounts, and web sessions
+    go through Flask-Login on the same table. There is no second principal
+    model to mirror, so a per-user row is the honest representation.
+
+    ``school_id`` MIRRORS ``users.school_id`` AND IS THEREFORE NULLABLE
+    The User docstring is explicit: "school_id = NULL -> super-admin (can see
+    all schools)". Declaring NOT NULL here would invent a tenant for a
+    principal the real model says has none. Reads must scope by school_id the
+    same way every other query does; NULL means "not scoped to one school",
+    never "matches any school".
+
+    THE JOURNAL IS NEVER THE AUTHORITY FOR ENTITLEMENT
+    This row records only *that* a principal's scopes changed (a monotonically
+    increasing counter). What those scopes actually are is resolved on each
+    request from the existing authorization rules — parent/child links,
+    teacher assignments, role permissions, and the requested academic year.
+
+    Part B2 adds the writers that bump ``scopes_version``. B1 adds no hook, no
+    row creation, and no read path: existing principals have no row at all, and
+    absence must be read as "version 1", never as an error.
+    """
+    __tablename__ = 'sync_principal_state'
+
+    id             = db.Column(db.BigInteger, primary_key=True)
+    user_id        = db.Column(db.Integer,
+                               db.ForeignKey('users.id', ondelete='CASCADE'),
+                               nullable=False)
+    school_id      = db.Column(db.Integer,
+                               db.ForeignKey('schools.id', ondelete='CASCADE'),
+                               nullable=True)
+    # BIGINT: a permanent monotonic counter, bumped on every scope change for
+    # the life of the principal. It only ever grows, so a 2^31 ceiling would be
+    # an avoidable lifetime limit.
+    scopes_version = db.Column(db.BigInteger, nullable=False,
+                               server_default='1')
+    updated_at     = db.Column(db.DateTime, nullable=False,
+                               server_default=UTC_NOW)
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', name='uq_sync_principal_state_user_id'),
+        db.CheckConstraint('scopes_version >= 1',
+                           name='ck_sync_principal_state_version'),
+        db.Index('ix_sync_principal_state_school', 'school_id', 'user_id'),
+    )
+
+    def __repr__(self):
+        return (f'<SyncPrincipalState user={self.user_id} '
+                f'school={self.school_id} v={self.scopes_version}>')
