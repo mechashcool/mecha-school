@@ -446,17 +446,31 @@ function studentMeta(s) {
   return parts.join(' - ');
 }
 
+// Student values (name, code, grade, section) come from the database and may
+// hold user-supplied text, so they are only ever assigned via textContent —
+// never parsed as HTML.
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function renderSelectedStudent(student) {
+  const label = el('span');
+  label.append(document.createTextNode(student.full_name),
+               el('small', '', studentMeta(student)));
+  const clearBtn = el('button', 'btn btn-sm btn-outline-secondary', 'تغيير');
+  clearBtn.type = 'button';
+  clearBtn.id = 'clearStudent';
+  selectedStudentEl.replaceChildren(el('i', 'bi bi-person-check-fill'), label, clearBtn);
+}
+
 function chooseStudent(student) {
   document.getElementById('studentId').value = student.id;
   if (studentSearch) studentSearch.value = student.full_name;
   selectedStudentEl.classList.remove('d-none');
-  selectedStudentEl.innerHTML = `
-    <i class="bi bi-person-check-fill"></i>
-    <span>
-      ${student.full_name}
-      <small>${studentMeta(student)}</small>
-    </span>
-    <button type="button" id="clearStudent" class="btn btn-sm btn-outline-secondary">تغيير</button>`;
+  renderSelectedStudent(student);
   hideStudentResults();
 }
 
@@ -466,15 +480,16 @@ function renderStudentResults(students) {
     studentResults.classList.remove('d-none');
     return;
   }
-  studentResults.innerHTML = students.map(s => `
-    <button type="button" class="student-result-item" data-student="${encodeURIComponent(JSON.stringify(s))}">
-      <span>
-        <span class="student-result-name">${s.full_name}</span>
-        <span class="student-result-meta d-block">${studentMeta(s)}</span>
-      </span>
-      <i class="bi bi-chevron-left text-muted"></i>
-    </button>
-  `).join('');
+  studentResults.replaceChildren(...students.map(s => {
+    const item = el('button', 'student-result-item');
+    item.type = 'button';
+    item.dataset.student = encodeURIComponent(JSON.stringify(s));
+    const text = el('span');
+    text.append(el('span', 'student-result-name', s.full_name),
+                el('span', 'student-result-meta d-block', studentMeta(s)));
+    item.append(text, el('i', 'bi bi-chevron-left text-muted'));
+    return item;
+  }));
   studentResults.classList.remove('d-none');
 }
 
@@ -514,13 +529,7 @@ if (studentDropdownEl) {
     const student = JSON.parse(decodeURIComponent(this.value));
     document.getElementById('studentId').value = student.id;
     selectedStudentEl.classList.remove('d-none');
-    selectedStudentEl.innerHTML = `
-      <i class="bi bi-person-check-fill"></i>
-      <span>
-        ${student.full_name}
-        <small>${studentMeta(student)}</small>
-      </span>
-      <button type="button" id="clearStudent" class="btn btn-sm btn-outline-secondary">تغيير</button>`;
+    renderSelectedStudent(student);
   });
 }
 
