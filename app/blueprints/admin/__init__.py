@@ -23,6 +23,7 @@ from app.utils.decorators import (admin_required, staff_required,
                                    get_current_school,
                                    get_active_year, get_view_year, super_admin_required)
 from app.utils import code_generator
+from app.utils.board_images import BoardImageError, optimize_board_image
 
 admin_bp = Blueprint('admin', __name__, template_folder='../../templates/admin')
 
@@ -3081,6 +3082,26 @@ VIDEO_MEDIA_TYPES = {
 # are unaffected. Rejection happens before any Storage write or DB change.
 BOARD_VIDEO_DISABLED_MSG = 'رفع الفيديو غير متاح حالياً.'
 
+# Board media is uploaded images only: new external links (video_url /
+# thumbnail_url) are refused. Existing rows keep whatever URL they hold.
+BOARD_EXTERNAL_URL_DISABLED_MSG = 'الروابط الخارجية غير متاحة. يرجى رفع صورة.'
+
+
+def _store_board_image(optimized, school_id):
+    """Store an already-optimised board image (WebP) through the unchanged
+    generic helper; only these optimised bytes are ever uploaded."""
+    import io
+    from werkzeug.datastructures import FileStorage
+    from app.utils.helpers import save_uploaded_file
+    return save_uploaded_file(
+        FileStorage(io.BytesIO(optimized.data), filename='board.webp',
+                    content_type='image/webp'),
+        subfolder=f'schools/{school_id}/board/media',
+        bucket='school-media',
+        allowed_exts={'webp'},
+    )
+
+
 # ISO-BMFF brands that are still images (HEIF/AVIF), not video.
 _ISOBMFF_IMAGE_BRANDS = {b'heic', b'heix', b'hevc', b'heim', b'heis',
                          b'mif1', b'msf1', b'avif', b'avis'}
@@ -3274,6 +3295,13 @@ def school_board_video_create():
                                    video=None, audience_labels=BOARD_AUDIENCES,
                                    media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
 
+        # New external links are refused (the form no longer offers them).
+        if fallback_url or thumbnail_url:
+            flash(BOARD_EXTERNAL_URL_DISABLED_MSG, 'danger')
+            return render_template('admin/school_board_video_form.html',
+                                   video=None, audience_labels=BOARD_AUDIENCES,
+                                   media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
+
         final_url = None
         upload_file = request.files.get('media_file')
 
@@ -3296,14 +3324,16 @@ def school_board_video_create():
                 return render_template('admin/school_board_video_form.html',
                                        video=None, audience_labels=BOARD_AUDIENCES,
                                        media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
-            upload_file.stream.seek(0)
-            result = save_uploaded_file(
-                upload_file,
-                subfolder=f'schools/{school_id}/board/media',
-                bucket='school-media',
-                allowed_exts=allowed_ext,
-                max_size=max_bytes,
-            )
+            # Validate from the actual bytes and optimise once; only the
+            # optimised WebP is stored — never the original upload.
+            try:
+                optimized = optimize_board_image(raw)
+            except BoardImageError as exc:
+                flash(str(exc), 'danger')
+                return render_template('admin/school_board_video_form.html',
+                                       video=None, audience_labels=BOARD_AUDIENCES,
+                                       media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
+            result = _store_board_image(optimized, school_id)
             if not result:
                 flash('فشل رفع الملف إلى التخزين. تحقق من الإعدادات أو حاول مجدداً.', 'danger')
                 return render_template('admin/school_board_video_form.html',
@@ -3312,13 +3342,14 @@ def school_board_video_create():
             final_url = result
             # Diagnostics: record what was stored so a local path vs external/
             # Supabase URL is obvious in the logs (no secrets, no file contents).
-            _sb_log.info('school_board_video_create stored media path=%s', final_url)
-        elif fallback_url and fallback_url.startswith(('http://', 'https://')):
-            final_url = fallback_url
+            _sb_log.info('school_board_video_create stored media path=%s '
+                         '%dx%d %s %d -> %d bytes', final_url, optimized.width,
+                         optimized.height, optimized.source_format, len(raw),
+                         len(optimized.data))
 
         errors = []
         if not final_url:
-            errors.append('يرجى رفع ملف أو إدخال رابط خارجي.')
+            errors.append('يرجى رفع صورة.')
         if audience not in BOARD_AUDIENCES:
             errors.append('الجمهور المستهدف غير صالح.')
 
@@ -3414,6 +3445,15 @@ def school_board_video_edit(video_id):
                                    video=video, audience_labels=BOARD_AUDIENCES,
                                    media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
 
+        # No new or changed external link. An absent field keeps the existing
+        # (possibly legacy external) URLs; re-posting the same value is a no-op.
+        if ((fallback_url and fallback_url != video.video_url)
+                or (thumbnail_url and thumbnail_url != video.thumbnail_url)):
+            flash(BOARD_EXTERNAL_URL_DISABLED_MSG, 'danger')
+            return render_template('admin/school_board_video_form.html',
+                                   video=video, audience_labels=BOARD_AUDIENCES,
+                                   media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
+
         if upload_file and upload_file.filename:
             ext = (upload_file.filename.rsplit('.', 1)[-1].lower()
                    if '.' in upload_file.filename else '')
@@ -3433,27 +3473,28 @@ def school_board_video_edit(video_id):
                 return render_template('admin/school_board_video_form.html',
                                        video=video, audience_labels=BOARD_AUDIENCES,
                                        media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
-            upload_file.stream.seek(0)
-            result = save_uploaded_file(
-                upload_file,
-                subfolder=f'schools/{school_id}/board/media',
-                bucket='school-media',
-                allowed_exts=allowed_ext,
-                max_size=max_bytes,
-            )
+            try:
+                optimized = optimize_board_image(raw)
+            except BoardImageError as exc:
+                flash(str(exc), 'danger')
+                return render_template('admin/school_board_video_form.html',
+                                       video=video, audience_labels=BOARD_AUDIENCES,
+                                       media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
+            result = _store_board_image(optimized, school_id)
             if not result:
                 flash('فشل رفع الملف إلى التخزين. تحقق من الإعدادات أو حاول مجدداً.', 'danger')
                 return render_template('admin/school_board_video_form.html',
                                        video=video, audience_labels=BOARD_AUDIENCES,
                                        media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
             final_url = result
-            _sb_log.info('school_board_video_edit stored media path=%s', final_url)
-        elif fallback_url and fallback_url.startswith(('http://', 'https://')):
-            final_url = fallback_url
+            _sb_log.info('school_board_video_edit stored media path=%s '
+                         '%dx%d %s %d -> %d bytes', final_url, optimized.width,
+                         optimized.height, optimized.source_format, len(raw),
+                         len(optimized.data))
 
         errors = []
         if not final_url:
-            errors.append('يرجى رفع ملف أو إدخال رابط خارجي.')
+            errors.append('يرجى رفع صورة.')
         if audience not in BOARD_AUDIENCES:
             errors.append('الجمهور المستهدف غير صالح.')
 
@@ -3464,11 +3505,12 @@ def school_board_video_edit(video_id):
                                    video=video, audience_labels=BOARD_AUDIENCES,
                                    media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
 
+        if final_url != video.video_url:
+            video.thumbnail_url = None   # old preview belongs to the replaced media
         video.title         = title
         video.description   = description
         video.media_type    = media_type
         video.video_url     = final_url
-        video.thumbnail_url = thumbnail_url
         video.audience      = audience
         video.is_featured   = is_featured
         video.is_active     = is_active

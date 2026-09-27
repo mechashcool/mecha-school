@@ -12,8 +12,8 @@ Proves:
     Storage call, before any DB row, before any push;
   * on edit, a new video file, a new video link, or turning an image post into
     a video is refused; editing an existing video's details still works;
-  * image posts (create + edit), announcements, and the generic upload helper
-    for documents behave as before;
+  * image posts (create + edit) still work (now optimised to WebP),
+    announcements and the generic upload helper for documents are unchanged;
   * existing videos: admin list, toggle, delete, and the mobile list/detail/
     featured responses are unchanged (exact serialization);
   * unauthenticated, wrong-permission and cross-school callers get the same
@@ -27,6 +27,8 @@ from datetime import datetime
 from unittest import mock
 from uuid import uuid4
 
+from PIL import Image
+
 from app import create_app
 from app.models import (
     db, Role, School, User, AuditLog,
@@ -34,6 +36,7 @@ from app.models import (
 )
 from app.blueprints.mobile_api.utils import encode_token
 from app.utils import helpers
+from app.utils.board_images import MSG_INVALID
 
 PASSWORD = 'Test1234!'
 DISABLED = 'رفع الفيديو غير متاح حالياً.'
@@ -42,8 +45,17 @@ FAKE_STORAGE_URL = 'https://storage.test/school-media/obj'
 MP4 = b'\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom' + b'\x00' * 64
 MOV = b'\x00\x00\x00\x14ftypqt  \x00\x00\x02\x00qt  ' + b'\x00' * 64
 WEBM = b'\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01' + b'\x00' * 64
-PNG = b'\x89PNG\r\n\x1a\n' + b'\x00' * 64
-JPEG = b'\xff\xd8\xff\xe0\x00\x10JFIF\x00' + b'\x00' * 64
+
+
+def _real_image(fmt):
+    # Board images are now decoded and re-encoded, so they must be real.
+    buf = io.BytesIO()
+    Image.new('RGB', (64, 48), (200, 30, 30)).save(buf, fmt)
+    return buf.getvalue()
+
+
+PNG = _real_image('PNG')
+JPEG = _real_image('JPEG')
 HEIC = b'\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic' + b'\x00' * 64
 
 VIDEO_KEYS = {'id', 'title', 'description', 'media_type', 'media_url', 'video_url',
@@ -293,7 +305,7 @@ class BoardVideoUploadDisabledTest(unittest.TestCase):
 
     # ── 10-12: images, announcements, documents unchanged ────────────────────
 
-    def test_image_post_create_and_edit_unchanged(self):
+    def test_image_post_create_and_edit_still_work(self):
         client = self._client('admin_a')
         resp = self._create(client, media_type='image', title='Pic post',
                             file=('pic.png', PNG, 'image/png'))
@@ -301,18 +313,27 @@ class BoardVideoUploadDisabledTest(unittest.TestCase):
         self.storage.assert_called_once()
         _, object_path, content_type = self.storage.call_args.args
         self.assertTrue(object_path.startswith(f"schools/{self.ids['school_a']}/board/media/"))
-        self.assertEqual((content_type, self.storage.call_args.kwargs), ('image/png',
+        # stored as the optimised WebP (see test_board_image_optimization.py)
+        self.assertTrue(object_path.endswith('.webp'))
+        self.assertEqual((content_type, self.storage.call_args.kwargs), ('image/webp',
                                                                          {'bucket': 'school-media'}))
         with self.app.app_context():
             row = SchoolVideo.query.execution_options(bypass_tenant_scope=True).filter_by(
                 school_id=self.ids['school_a'], title='Pic post').one()
             self.assertEqual((row.media_type, row.video_url), ('image', FAKE_STORAGE_URL))
         self.push.assert_called_once()
-        # image by external link, and a HEIF-branded .jpg is still not a "video"
-        self.assertEqual(self._create(client, media_type='image', title='Linked pic',
-                                      video_url='https://cdn.example.test/x.png').status_code, 302)
-        self.assertEqual(self._create(client, media_type='image', title='Heif pic',
-                                      file=('h.jpg', HEIC, 'image/jpeg')).status_code, 302)
+        # external links are no longer accepted; a HEIF-branded .jpg is still
+        # not treated as a video, but it is not a decodable jpg/png/webp either
+        linked = self._create(client, media_type='image', title='Linked pic',
+                              video_url='https://cdn.example.test/x.png')
+        self.assertIn('الروابط الخارجية غير متاحة', linked.get_data(as_text=True))
+        heif = self._create(client, media_type='image', title='Heif pic',
+                            file=('h.jpg', HEIC, 'image/jpeg')).get_data(as_text=True)
+        self.assertNotIn(DISABLED, heif)
+        self.assertIn(MSG_INVALID, heif)
+        with self.app.app_context():
+            self.assertEqual(SchoolVideo.query.execution_options(bypass_tenant_scope=True)
+                             .filter(SchoolVideo.title.in_(['Linked pic', 'Heif pic'])).count(), 0)
         # edit an image post with a new real image
         self.assertEqual(self._edit(client, self.ids['image'], media_type='image',
                                     file=('new.jpg', JPEG, 'image/jpeg')).status_code, 302)
