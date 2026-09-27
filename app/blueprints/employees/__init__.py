@@ -15,6 +15,9 @@ from app.utils.decorators import (permission_required, accountant_or_permission,
 from app.utils.helpers import save_uploaded_file
 from app.utils.employee_photo import (EMPLOYEE_PHOTO_MAX_BYTES, MSG_TOO_BIG,
                                       validate_employee_photo)
+from app.utils.employee_display_photo import (employee_display_value, employee_photo_url,
+                                              prepare_employee_display_photo,
+                                              save_employee_display_photo)
 from app.utils import code_generator
 from app.utils.audit import log_action
 
@@ -22,6 +25,8 @@ _log = logging.getLogger(__name__)
 
 employees_bp = Blueprint('employees', __name__,
                           template_folder='../../templates/employees')
+# Display-only employee photo URL (photo_display, else photo) for templates.
+employees_bp.add_app_template_global(employee_photo_url, 'employee_photo_url')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -721,6 +726,14 @@ def _handle_employee_post(employee):
             return render_template(_tmpl, error_step='documents',
                                    **_form_context(employee))
 
+    # Optional display-only copy — only once the original is stored, and never
+    # at the original's expense: both helpers never raise, and any failure
+    # yields None (photo_display NULL → display falls back to Employee.photo).
+    photo_display_path = None
+    if photo_path:
+        photo_display_path = save_employee_display_photo(
+            prepare_employee_display_photo(_photo_file))
+
     if is_create:
         employee = Employee(
             employee_id   = code_generator.generate_employee_id(school.id),
@@ -742,6 +755,7 @@ def _handle_employee_post(employee):
             salary_start_date = salary_start,
             payroll_status = request.form.get('payroll_status', 'active') or 'active',
             photo         = photo_path,
+            photo_display = photo_display_path,
             notes         = notes_value,
             school_id     = school.id if school else None,
         )
@@ -789,6 +803,9 @@ def _handle_employee_post(employee):
             employee.hire_date = hire_date
         if photo_path:
             employee.photo = photo_path
+            # A new original always gets its OWN display copy or NULL, so an
+            # old display copy is never shown for a new photo.
+            employee.photo_display = photo_display_path
 
     # ── Mandatory linked teacher account (CREATE flow only) ───────────────────
     # Every new employee automatically receives a login account. It is created in
@@ -1189,7 +1206,7 @@ def search():
             'department':  e.department or '—',
             'base_salary': e.base_salary,
             'status':      e.status,
-            'photo_url':   _rpu(e.photo) or '',
+            'photo_url':   _rpu(employee_display_value(e)) or '',
             'view_url':    url_for('employees.view', emp_id=e.id),
             'edit_url':    url_for('employees.edit', emp_id=e.id),
         })

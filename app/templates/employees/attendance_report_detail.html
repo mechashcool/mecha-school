@@ -40,8 +40,9 @@
     <div class="card h-100">
       <div class="card-body">
         <div class="d-flex align-items-center gap-3">
-          {% if emp.photo %}
-          <img src="{{ emp.photo }}" class="rounded-circle" width="56" height="56"
+          {% set _emp_photo = employee_photo_url(emp) %}
+          {% if _emp_photo %}
+          <img src="{{ _emp_photo }}" class="rounded-circle" width="56" height="56"
                style="object-fit:cover" alt="{{ emp.full_name }}">
           {% else %}
           <div class="rounded-circle bg-primary d-flex align-items-center justify-content-center text-white fw-bold"

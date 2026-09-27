@@ -284,7 +284,14 @@ class EmployeePhotoRouteTest(unittest.TestCase):
             return db.session.get(Employee, self.ids[key], execution_options=OPTS)
 
     def _assert_stored_verbatim(self, name, raw):
-        (call,) = self.storage.call_args_list            # exactly ONE write: the original
+        # The first write is the original, byte-identical. A new upload may add
+        # ONE separate display-only copy (employees/display/*.webp); the
+        # original itself is never replaced by it.
+        calls = self.storage.call_args_list
+        self.assertIn(len(calls), (1, 2), calls)
+        call = calls[0]
+        for extra in calls[1:]:
+            self.assertRegex(extra.args[1], r'^employees/display/[0-9a-f]{32}\.webp$')
         data, path, ctype = call.args
         self.assertEqual(hashlib.sha256(data).hexdigest(), hashlib.sha256(raw).hexdigest())
         ext = name.rsplit('.', 1)[1]

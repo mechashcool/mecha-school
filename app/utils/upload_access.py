@@ -223,6 +223,12 @@ def resolve_upload_owner(value: str | None) -> dict | None:
     if row:
         return owner(row, employee_id=getattr(row, 'id', None), kind='employee_photo')
 
+    # Display-only derivative of Employee.photo: the SAME owner and the same
+    # rules as the original it was made from (school, teacher-own, staff).
+    row = first('Employee', 'photo_display')
+    if row:
+        return owner(row, employee_id=getattr(row, 'id', None), kind='employee_photo')
+
     return None
 
 

@@ -14,6 +14,7 @@ from app.utils.login_throttle import check_lockout, record_failed_attempt, reset
 from app.utils.ratelimit import limiter, LOGIN_RATE_LIMIT
 from .utils import encode_token, jwt_required, ok, err, photo_url
 from app.utils.student_display_photo import student_display_value
+from app.utils.employee_display_photo import employee_display_value
 
 # Circular import guard — routes are registered by __init__.py after the bp is created
 from . import mobile_api_bp
@@ -171,7 +172,7 @@ def login():
                 'employee_id': emp.employee_id,
                 'name':        emp.full_name,
                 'job_title':   emp.job_title,
-                'photo':       photo_url(emp.photo),
+                'photo':       photo_url(employee_display_value(emp)),
             }
 
     return ok(

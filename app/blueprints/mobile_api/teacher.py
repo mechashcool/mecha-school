@@ -75,6 +75,7 @@ from app.utils.notification_visibility import notification_visible_to
 from . import mobile_api_bp
 from .utils import jwt_required, role_required, ok, ok_etag, err, photo_url, page_args
 from app.utils.student_display_photo import student_display_value
+from app.utils.employee_display_photo import employee_display_value
 from app.services import institute_attendance as inst_att
 
 
@@ -329,8 +330,8 @@ def teacher_profile():
             'department':  emp.department,
             'phone':       emp.phone,
             'email':       emp.email,
-            'photo':       photo_url(emp.photo),
-            'photo_url':   photo_url(emp.photo),
+            'photo':       photo_url(employee_display_value(emp)),   # display copy, else original
+            'photo_url':   photo_url(employee_display_value(emp)),
             'hire_date':   emp.hire_date.isoformat() if emp.hire_date else None,
             'status':      emp.status,
             'school_id':   emp.school_id,

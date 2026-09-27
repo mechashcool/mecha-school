@@ -463,8 +463,9 @@
       <div class="card mb-3">
         <div class="card-header"><i class="bi bi-camera-fill text-accent me-1"></i>صورة الموظف</div>
         <div class="card-body text-center">
-          {% if employee and resolve_photo_url(employee.photo) %}
-          <img src="{{ resolve_photo_url(employee.photo) }}"
+          {% set _emp_photo = employee_photo_url(employee) if employee else None %}
+          {% if _emp_photo %}
+          <img src="{{ _emp_photo }}"
                class="rounded-12 mb-3" style="width:120px;height:120px;object-fit:cover">
           {% else %}
           <div class="mb-3 mx-auto"

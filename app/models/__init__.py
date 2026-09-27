@@ -1766,6 +1766,12 @@ class Employee(db.Model):
     email         = db.Column(db.String(180), nullable=True, unique=True)
     address       = db.Column(db.Text, nullable=True)
     photo         = db.Column(db.String(255), nullable=True)
+    # Display-only derivative of `photo` (WebP, <=1024 px, metadata stripped),
+    # written only for NEW / replacement uploads. NULL for every existing
+    # employee and whenever generation failed — display code then falls back to
+    # `photo`. NEVER a biometric/AI Face source: `photo` stays the original.
+    # Requires migration e5m6p7d8s9p0 to be applied BEFORE this code is deployed.
+    photo_display = db.Column(db.String(255), nullable=True)
 
     base_salary   = db.Column(db.Numeric(12, 2), nullable=False, default=0)
     hire_date     = db.Column(db.Date, default=date.today)

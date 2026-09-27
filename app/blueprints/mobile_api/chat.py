@@ -44,6 +44,7 @@ from app.models import (
     User, Section, Student,
 )
 from app.utils.modules import is_module_enabled
+from app.utils.employee_display_photo import employee_display_value
 from app.utils.features import is_feature_enabled
 from app.utils.chat_send_lock import ChatRoomLockError, lock_room_for_message_insert
 
@@ -844,7 +845,7 @@ def chat_contacts():
                             'name':     u.full_name,
                             'role':     'teacher',
                             'job_title': emp_row.job_title,
-                            'photo':    photo_url(emp_row.photo),
+                            'photo':    photo_url(employee_display_value(emp_row)),
                         })
 
         # School admins
