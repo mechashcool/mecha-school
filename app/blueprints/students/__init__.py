@@ -18,6 +18,7 @@ from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    get_current_school, get_active_year, get_view_year,
                                    historical_guard)
 from app.utils.helpers import save_uploaded_file, resolve_photo_url
+from app.utils.student_photo import validate_student_photo
 from app.utils.upload_access import (object_path_of, protected_upload_url,
                                      resolve_upload_owner, storage_ref_of)
 from app.utils import code_generator
@@ -970,6 +971,16 @@ def create():
                 return _re_render(
                     f'يمكن رفع {MAX_STUDENT_DOCUMENTS} مستندات كحد أقصى للطالب.')
 
+        # ── Student photo — validated BEFORE any upload/DB write ─────────────
+        # Inspection only: the same FileStorage (rewound) is stored unchanged
+        # below, so AI Face keeps receiving the exact original bytes.
+        if ('photo' in request.files and request.files['photo'].filename
+                and is_feature_enabled(school.id if school else None,
+                                       'students.photo_upload')):
+            _photo_err = validate_student_photo(request.files['photo'])
+            if _photo_err:
+                return _re_render(_photo_err)
+
         # ── Residential area (optional) — validated BEFORE any upload/DB write ─
         # Empty is allowed (no area). A non-empty value must resolve to an active
         # area of THIS school; an invalid, inactive, or foreign-school id is
@@ -1763,6 +1774,18 @@ def edit(student_id):
                           f'المستمسكات الفعّالة حالياً: {_active_docs}.', 'danger')
                     return redirect(url_for('students.edit',
                                             student_id=student.id))
+
+        # ── New student photo — validated BEFORE any field is mutated ────────
+        # Inspection only: the same FileStorage (rewound) is stored unchanged
+        # further down, so AI Face keeps receiving the exact original bytes.
+        if ('photo' in request.files and request.files['photo'].filename
+                and is_feature_enabled(school.id if school else None,
+                                       'students.photo_upload')):
+            _photo_err = validate_student_photo(request.files['photo'])
+            if _photo_err:
+                # Nothing has been mutated or stored yet on this path.
+                flash(_photo_err, 'danger')
+                return redirect(url_for('students.edit', student_id=student.id))
 
         # ── RFID card (optional) — validated BEFORE any field is mutated ─────
         # Same normalisation, format rule and one-card-one-student rule as the
