@@ -569,8 +569,18 @@ def parent_child_homework(student_id):
 
     s = _assert_owns_student(student_id)
 
+    # Optional pagination (limit/offset — the API's convention). A request with
+    # neither parameter keeps the original unpaginated response exactly; only a
+    # paginated request gets the total/limit/offset metadata.
+    page_meta = {}
+    if 'limit' in request.args or 'offset' in request.args:
+        limit, offset = page_args(default_limit=20, max_limit=50)
+        page_meta = {'limit': limit, 'offset': offset}
+
     if not s.section_id:
-        return ok(student_id=s.id, count=0, homework=[])
+        if page_meta:
+            page_meta['total'] = 0
+        return ok(student_id=s.id, count=0, **page_meta, homework=[])
 
     # Resolve the school's active academic year. bypass_tenant_scope=True + explicit
     # school_id guard so this lookup is deterministic regardless of ORM scope state.
@@ -587,7 +597,12 @@ def parent_child_homework(student_id):
         q = q.filter_by(academic_year_id=year.id)
     # Only show homework that has been published (publish_date <= today)
     q = q.filter(Homework.publish_date <= today)
-    rows = q.order_by(Homework.publish_date.desc(), Homework.id.desc()).all()
+    q = q.order_by(Homework.publish_date.desc(), Homework.id.desc())
+    if page_meta:
+        page_meta['total'] = q.count()
+        rows = q.offset(page_meta['offset']).limit(page_meta['limit']).all()
+    else:
+        rows = q.all()
 
     def _hw_url(hw):
         if not hw.attachment_path:
@@ -612,6 +627,7 @@ def parent_child_homework(student_id):
         student_id=s.id,
         section=s.section.name if s.section else None,
         count=len(rows),
+        **page_meta,
         homework=[
             {
                 'id':              hw.id,

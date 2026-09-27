@@ -704,6 +704,8 @@ Homework for the child's current section (active, published, current academic ye
 `attachment_url` is `null` if no attachment was uploaded.  
 `attachment_type`: `"pdf"` | `"image"` | `null`.
 
+**Optional pagination:** `?limit=` (default 20, max 50) and/or `?offset=` (default 0), same ordering (newest `publish_date` first, then newest id). When either parameter is present, only that page is returned, `count` is the number of items in this page, and the response also carries `total`, `limit` and `offset`. When neither is present, the response is exactly as above: every row, no pagination fields.
+
 ---
 
 ### GET /parent/children/\<student_id\>/schedule

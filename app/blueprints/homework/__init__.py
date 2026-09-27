@@ -374,6 +374,24 @@ def _notify_homework_parents(hw: Homework, school_id: int) -> None:
 #  Routes
 # ═════════════════════════════════════════════════════════════════════════════
 
+HOMEWORK_PAGE_SIZE = 20
+
+
+def _paginate_index(q):
+    """One page of the (already scoped, filtered and ordered) index query.
+
+    LIMIT/OFFSET and the count run in the database. A page past the end falls
+    back to the last page rather than showing an empty list.
+    """
+    page = request.args.get('page', 1, type=int) or 1
+    pagination = q.paginate(page=max(page, 1), per_page=HOMEWORK_PAGE_SIZE,
+                            error_out=False)
+    if not pagination.items and pagination.pages and page > pagination.pages:
+        pagination = q.paginate(page=pagination.pages, per_page=HOMEWORK_PAGE_SIZE,
+                                error_out=False)
+    return pagination
+
+
 @homework_bp.route('/', methods=['GET'])
 @homework_access_required
 def index():
@@ -477,9 +495,10 @@ def index():
             q = q.filter(Homework.institute_group_id == f_group_id)
         if f_subject_id:
             q = q.filter(Homework.subject_id == f_subject_id)
-        homework_list = q.all()
+        pagination = _paginate_index(q)
         return render_template('homework/index.html',
-                               homework_list=homework_list,
+                               homework_list=pagination.items,
+                               pagination=pagination,
                                emp=emp,
                                is_admin=is_admin,
                                is_institute=True,
@@ -504,9 +523,10 @@ def index():
     if f_subject_id:
         q = q.filter(Homework.subject_id == f_subject_id)
 
-    homework_list = q.all()
+    pagination = _paginate_index(q)
     return render_template('homework/index.html',
-                           homework_list=homework_list,
+                           homework_list=pagination.items,
+                           pagination=pagination,
                            emp=emp,
                            is_admin=is_admin,
                            resolve_photo_url=resolve_photo_url,

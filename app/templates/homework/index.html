@@ -7,6 +7,7 @@
 {% set is_institute = is_institute|default(false) %}
 {% set filter_groups = filter_groups|default([]) %}
 {% set f_group_id = f_group_id|default(none) %}
+{% set pagination = pagination|default(none) %}
 <div class="page-header d-flex flex-wrap gap-2 align-items-center justify-content-between mb-3">
   <div>
     <h1 class="page-title mb-0">الواجبات</h1>
@@ -234,6 +235,7 @@
           {% if hw.attachment_type == 'image' %}
           <a href="{{ att_url }}" target="_blank">
             <img src="{{ att_url }}" alt="مرفق" class="img-fluid rounded"
+                 loading="lazy" decoding="async"
                  style="max-height:120px;object-fit:cover;width:100%"
                  onerror="this.style.display='none'">
           </a>
@@ -274,6 +276,31 @@
   </div>
   {% endfor %}
 </div>
+
+{% if pagination and pagination.pages > 1 %}
+{% set pg_args = {'f_stage': f_stage or none, 'f_grade_id': f_grade_id,
+                  'f_section_id': f_section_id, 'f_subject_id': f_subject_id,
+                  'f_group_id': f_group_id} %}
+<nav class="mt-3" aria-label="صفحات الواجبات">
+  <ul class="pagination pagination-sm mb-0 justify-content-center">
+    <li class="page-item {{ 'disabled' if not pagination.has_prev }}">
+      <a class="page-link" href="{{ url_for('homework.index', page=pagination.prev_num, **pg_args) if pagination.has_prev else '#' }}">السابق</a>
+    </li>
+    {% for p in pagination.iter_pages() %}
+      {% if p %}
+      <li class="page-item {{ 'active' if p == pagination.page }}">
+        <a class="page-link" href="{{ url_for('homework.index', page=p, **pg_args) }}">{{ p }}</a>
+      </li>
+      {% else %}
+      <li class="page-item disabled"><span class="page-link">…</span></li>
+      {% endif %}
+    {% endfor %}
+    <li class="page-item {{ 'disabled' if not pagination.has_next }}">
+      <a class="page-link" href="{{ url_for('homework.index', page=pagination.next_num, **pg_args) if pagination.has_next else '#' }}">التالي</a>
+    </li>
+  </ul>
+</nav>
+{% endif %}
 
 {% elif f_grade_id or f_section_id or f_subject_id or f_group_id %}
 <div class="card">
