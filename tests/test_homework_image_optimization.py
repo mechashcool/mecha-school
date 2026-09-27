@@ -35,7 +35,8 @@ from app.models import (db, AcademicYear, AuditLog, Employee, Grade, Homework,
                         User, parent_students, teacher_subjects)
 from app.utils import board_images, helpers
 from app.utils.board_images import MSG_ANIMATED, MSG_INVALID, MSG_TOO_LARGE, optimize_board_image
-from app.utils.homework_attachments import HomeworkImageError, prepare_homework_upload
+from app.utils.homework_attachments import (HOMEWORK_IMAGE_MAX_BYTES, MSG_IMAGE_TOO_BIG,
+                                            HomeworkImageError, prepare_homework_upload)
 
 PASSWORD = 'Test1234!'
 FAKE_URL = 'https://storage.test/uploads/homework/stored-object'
@@ -151,6 +152,20 @@ def _jpeg(w=1200, h=900):
     return _enc(_photo(w, h), 'JPEG', quality=90)
 
 
+def _padded_jpeg(total):
+    """A valid JPEG padded after EOI to exactly ``total`` bytes (decodes fine)."""
+    raw = _enc(_photo(2400, 1800), 'JPEG', quality=90)
+    assert len(raw) < total
+    return raw + b'\x00' * (total - len(raw))
+
+
+def _big_png():
+    """A genuinely large valid image (> 5 MB of real pixel data)."""
+    raw = _enc(Image.effect_noise((1400, 1300), 60).convert('RGB'), 'PNG', compress_level=0)
+    assert len(raw) > HOMEWORK_IMAGE_MAX_BYTES
+    return raw
+
+
 def _bad_uploads():
     good = _jpeg()
     a, b = _photo(200, 100), _photo(200, 100).rotate(180)
@@ -234,6 +249,28 @@ class HomeworkImageHelperTest(unittest.TestCase):
                     prepare_homework_upload(_fs(raw, name, 'image/jpeg'))
                 self.assertEqual(str(ctx.exception), msg)
 
+    def test_5mb_limit_matches_board_and_is_checked_before_decode(self):
+        self.assertEqual(HOMEWORK_IMAGE_MAX_BYTES, helpers.BOARD_IMAGE_MAX_BYTES)
+        self.assertEqual(HOMEWORK_IMAGE_MAX_BYTES, 5 * 1024 * 1024)
+        for total in (HOMEWORK_IMAGE_MAX_BYTES - 1, HOMEWORK_IMAGE_MAX_BYTES):
+            with self.subTest(accepted=total):
+                _, img = self._ok(_padded_jpeg(total), 'at-limit.jpg')
+                self.assertEqual(img.size, (1600, 1200))
+        with mock.patch('app.utils.homework_attachments.optimize_board_image') as opt:
+            for label, name, raw in (('limit + 1', 'over.jpg', _padded_jpeg(HOMEWORK_IMAGE_MAX_BYTES + 1)),
+                                     ('large valid png', 'big.png', _big_png())):
+                with self.subTest(label):
+                    with self.assertRaises(HomeworkImageError) as ctx:
+                        prepare_homework_upload(_fs(raw, name, 'image/jpeg'))
+                    self.assertEqual(str(ctx.exception), MSG_IMAGE_TOO_BIG)
+            opt.assert_not_called()                                 # never decoded
+
+    def test_pdf_over_5mb_returned_untouched(self):
+        big_pdf = PDF + b'0' * (6 * 1024 * 1024)
+        f = _fs(big_pdf, 'big.pdf', 'application/pdf')
+        self.assertIs(prepare_homework_upload(f), f)
+        self.assertEqual(f.read(), big_pdf)
+
     def test_22_pdf_and_other_uploads_returned_untouched(self):
         with mock.patch('app.utils.homework_attachments.optimize_board_image') as opt:
             for name in ('sheet.pdf', 'SHEET.PDF', 'clip.gif', 'noext'):
@@ -274,12 +311,16 @@ class HomeworkImageHelperTest(unittest.TestCase):
     def test_text_page_stays_legible(self):
         """WebP q80 adds little error on top of the 1600 px resize itself."""
         from PIL import ImageChops, ImageStat
-        for label, src in (('scan', _worksheet(2480, 3508, photographed=False)),
-                           ('photo', _worksheet(3024, 4032, photographed=True))):
+        # Uploads as they would arrive (a phone photo is a JPEG; both < 5 MB).
+        # The reference is the decoded upload, so only the optimiser's own
+        # error (resize aside) is measured.
+        for label, name, raw in (
+                ('scan', 'p.png', _enc(_worksheet(2480, 3508, photographed=False), 'PNG')),
+                ('photo', 'p.jpg', _enc(_worksheet(3024, 4032, photographed=True),
+                                        'JPEG', quality=90))):
             with self.subTest(label):
-                raw = _enc(src, 'PNG')
-                out = _decode(prepare_homework_upload(_fs(raw, 'p.png')).read())
-                ref = src.copy()
+                out = _decode(prepare_homework_upload(_fs(raw, name)).read())
+                ref = _decode(raw)
                 ref.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
                 self.assertEqual(out.size, ref.size)
                 diff = ImageChops.difference(out.convert('L'), ref.convert('L'))
@@ -637,6 +678,56 @@ class HomeworkImageRouteTest(unittest.TestCase):
                 self.assertEqual((resp.status_code, resp.get_json()),
                                  (400, {'ok': False, 'error': msg}))
                 self._assert_nothing_happened(before)
+
+    def _four_paths(self, name, raw):
+        client = self._web('teacher_a')
+        return [
+            ('web create', lambda: self._web_create(client, file=(name, raw))),
+            ('web edit', lambda: self._web_edit(client, self.ids['hw_a'], title='Big', file=(name, raw))),
+            ('mobile create', lambda: self._mobile_create(file=(name, raw))),
+            ('mobile update', lambda: self._mobile_update(self.ids['hw_a'], title='Big',
+                                                          file=(name, raw))),
+        ]
+
+    def test_image_over_5mb_refused_on_all_paths(self):
+        for label, name, raw in (('limit + 1', 'over.jpg', _padded_jpeg(HOMEWORK_IMAGE_MAX_BYTES + 1)),
+                                 ('large valid png', 'big.png', _big_png())):
+            for path, call in self._four_paths(name, raw):
+                with self.subTest(f'{label} / {path}'):
+                    before = self._snapshot()
+                    resp = call()
+                    if path.startswith('web'):
+                        self.assertEqual(resp.status_code, 200)
+                        self.assertIn(MSG_IMAGE_TOO_BIG, resp.get_data(as_text=True))
+                    else:
+                        self.assertEqual((resp.status_code, resp.get_json()),
+                                         (400, {'ok': False, 'error': MSG_IMAGE_TOO_BIG}))
+                    self._assert_nothing_happened(before)          # no Storage / DB / notify
+        self.optimize.assert_not_called()                          # never decoded
+        self.web_save.assert_not_called()
+
+    def test_image_at_5mb_accepted_on_all_paths(self):
+        raw = _padded_jpeg(HOMEWORK_IMAGE_MAX_BYTES)
+        for path, call in self._four_paths('limit.jpg', raw):
+            with self.subTest(path):
+                self.storage.reset_mock()
+                self.assertIn(call().status_code, (200, 201, 302))
+                self._assert_webp_stored(raw, (1600, 1200))
+        row = self._hw(self.ids['hw_a'])
+        self.assertEqual((row.attachment_path, row.attachment_type), (FAKE_URL, 'image'))
+
+    def test_pdf_over_5mb_stored_byte_identical_on_all_paths(self):
+        big_pdf = PDF + b'0' * (6 * 1024 * 1024)
+        for path, call in self._four_paths('big.pdf', big_pdf):
+            with self.subTest(path):
+                self.storage.reset_mock()
+                self.assertIn(call().status_code, (200, 201, 302))
+                data, obj, ctype = self._stored()
+                self.assertEqual((data, ctype), (big_pdf, 'application/pdf'))
+                self.assertTrue(obj.startswith('homework/') and obj.endswith('.pdf'), obj)
+        self.optimize.assert_not_called()
+        row = self._hw(self.ids['hw_a'])
+        self.assertEqual((row.attachment_path, row.attachment_type), (FAKE_URL, 'pdf'))
 
     def test_disallowed_extension_errors_unchanged(self):
         before = self._snapshot()
