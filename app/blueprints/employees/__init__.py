@@ -13,6 +13,8 @@ from app.utils.decorators import (permission_required, accountant_or_permission,
                                    get_current_school,
                                    historical_guard, get_active_year, action_required)
 from app.utils.helpers import save_uploaded_file
+from app.utils.employee_photo import (EMPLOYEE_PHOTO_MAX_BYTES, MSG_TOO_BIG,
+                                      validate_employee_photo)
 from app.utils import code_generator
 from app.utils.audit import log_action
 
@@ -45,17 +47,19 @@ MAX_EMPLOYEE_DOCUMENTS = 5
 # not a request limit: a valid submission may carry one photo plus five
 # documents, so the global MAX_CONTENT_LENGTH (16 MB) is deliberately left
 # untouched — lowering it would reject legitimate submissions.
-MAX_EMPLOYEE_PHOTO_BYTES    = 2 * 1024 * 1024   # 2 MB per employee photo
+MAX_EMPLOYEE_PHOTO_BYTES    = EMPLOYEE_PHOTO_MAX_BYTES   # 2 MB, create AND edit
 MAX_EMPLOYEE_DOCUMENT_BYTES = 2 * 1024 * 1024   # 2 MB per employee document
 MAX_EMPLOYEE_NOTES_CHARS    = 300               # characters, Python len()
 
 # Arabic validation messages for the limits above (kept generic on purpose —
 # they never echo a filename, path, byte count, or internal detail).
-_MSG_PHOTO_TOO_BIG = 'حجم صورة الموظف يجب ألا يتجاوز 2 ميجابايت.'
+_MSG_PHOTO_TOO_BIG = MSG_TOO_BIG
 _MSG_DOC_TOO_BIG   = 'حجم كل مستند يجب ألا يتجاوز 2 ميجابايت.'
 _MSG_NOTES_TOO_LONG = f'يجب ألا تتجاوز الملاحظات {MAX_EMPLOYEE_NOTES_CHARS} حرف.'
 _MSG_PHOTO_REJECTED = ('تعذّر حفظ صورة الموظف — تأكد من أن الصيغة مقبولة '
                        'وأن الحجم لا يتجاوز 2 ميجابايت.')
+_MSG_PHOTO_REPLACE_FAILED = ('تعذّر حفظ صورة الموظف الجديدة. لم يتم حفظ التعديلات '
+                             'وبقيت الصورة الحالية كما هي. يرجى المحاولة مرة أخرى.')
 
 
 def _uploaded_size(file_storage):
@@ -651,22 +655,30 @@ def _handle_employee_post(employee):
     # orphan uploaded file behind. The wizard enforces the same limits in the
     # browser; these are the independent server-side checks — JavaScript, the
     # Content-Length header, the MIME type, and the filename are all untrusted.
-    # Document rows exist only in the create wizard, so this block is create-only
-    # and the employee edit form keeps its current behaviour unchanged.
-    if is_create:
-        if len(notes_value) > MAX_EMPLOYEE_NOTES_CHARS:
-            flash(_MSG_NOTES_TOO_LONG, 'danger')
+    # Document rows exist only in the create wizard, so the notes/document
+    # checks are create-only; the photo check applies to create AND edit.
+    if is_create and len(notes_value) > MAX_EMPLOYEE_NOTES_CHARS:
+        flash(_MSG_NOTES_TOO_LONG, 'danger')
+        return render_template(_tmpl, error_step='documents',
+                               **_form_context(employee))
+
+    # ── New / replacement photo — validated BEFORE any Storage write ─────────
+    # Create and edit share one server-side gate: allowed extension, 2 MB,
+    # real JPEG/PNG/GIF/WEBP bytes, pixel ceiling, integrity. Validation only —
+    # the stream is rewound and the original bytes are stored unchanged (AI Face
+    # source). A refusal stops the whole request before anything is written, so
+    # on edit the current Employee.photo and every other field stay as they were.
+    # No photo submitted (metadata-only edit) → nothing is validated or stored.
+    _photo_file = request.files.get('photo')
+    _has_new_photo = bool(_photo_file and _photo_file.filename)
+    if _has_new_photo:
+        _photo_err = validate_employee_photo(_photo_file)
+        if _photo_err:
+            flash(_photo_err, 'danger')
             return render_template(_tmpl, error_step='documents',
                                    **_form_context(employee))
 
-        _photo_file = request.files.get('photo')
-        if _photo_file and _photo_file.filename:
-            _photo_size = _uploaded_size(_photo_file)
-            if _photo_size is None or _photo_size > MAX_EMPLOYEE_PHOTO_BYTES:
-                flash(_MSG_PHOTO_TOO_BIG, 'danger')
-                return render_template(_tmpl, error_step='documents',
-                                       **_form_context(employee))
-
+    if is_create:
         _submitted_doc_files = [f for f in request.files.getlist('doc_file[]')
                                 if f and f.filename]
         if len(_submitted_doc_files) > MAX_EMPLOYEE_DOCUMENTS:
@@ -683,17 +695,29 @@ def _handle_employee_post(employee):
                                        **_form_context(employee))
 
     photo_path = None
-    if 'photo' in request.files and request.files['photo'].filename:
+    if _has_new_photo:
         # max_size is a second, independent gate inside the shared upload helper
-        # (it measures the bytes it actually reads). Applied on create only, so
-        # the edit flow keeps its existing behaviour untouched.
-        photo_path = save_uploaded_file(
-            request.files['photo'], 'employees',
-            max_size=MAX_EMPLOYEE_PHOTO_BYTES if is_create else None)
-        if is_create and not photo_path:
-            # Rejected by the helper (extension or size) — stop before creating
-            # the employee rather than silently dropping the photo.
-            flash(_MSG_PHOTO_REJECTED, 'danger')
+        # (it measures the bytes it actually reads), on create and edit alike.
+        if is_create:
+            photo_path = save_uploaded_file(
+                _photo_file, 'employees', max_size=MAX_EMPLOYEE_PHOTO_BYTES)
+        else:
+            # Edit: nothing has been changed or committed yet, so a storage
+            # failure is reported and the edit stops — the current photo stays.
+            try:
+                photo_path = save_uploaded_file(
+                    _photo_file, 'employees', max_size=MAX_EMPLOYEE_PHOTO_BYTES)
+            except Exception:
+                # Module logger by name: `_log` is a local of this function
+                # (re-bound in the create branch), so it is unbound here.
+                logging.getLogger(__name__).exception(
+                    'Employee photo storage failed (edit) employee_id=%s', employee.id)
+                photo_path = None
+        if not photo_path:
+            # Never drop the photo silently: stop before creating / updating
+            # the employee.
+            flash(_MSG_PHOTO_REJECTED if is_create else _MSG_PHOTO_REPLACE_FAILED,
+                  'danger')
             return render_template(_tmpl, error_step='documents',
                                    **_form_context(employee))
 

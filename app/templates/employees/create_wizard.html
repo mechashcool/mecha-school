@@ -559,7 +559,7 @@
                 <i class="bi bi-upload me-1"></i>اختيار صورة
               </label>
               <input type="file" name="photo" id="photoInput" class="d-none" accept="image/*">
-              <div class="emp-upload-hint">PNG, JPG, JPEG — الحد الأقصى 2 ميجابايت</div>
+              <div class="emp-upload-hint">PNG, JPG, JPEG, WEBP, GIF — الحد الأقصى 2 ميجابايت</div>
               <div class="emp-photo-name" id="photoFileName"></div>
               <div class="emp-err d-none" id="photoError"></div>
             </div>
@@ -874,7 +874,7 @@ function empClearErr(el) {
       return;
     }
     if (!file.type.startsWith('image/')) {
-      empShowErr(errEl, 'يرجى اختيار ملف صورة صالح (PNG, JPG, JPEG).');
+      empShowErr(errEl, 'يرجى اختيار ملف صورة صالح (PNG, JPG, JPEG, WEBP, GIF).');
       restoreLastValid();
       return;
     }
