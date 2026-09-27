@@ -31,6 +31,7 @@ from app.models import (db, Employee, Grade, Homework, Section, Subject,
                         AcademicYear, Notification, teacher_subjects)
 from app.utils.decorators import get_current_school, get_active_year
 from app.utils.helpers import save_uploaded_file, resolve_photo_url
+from app.utils.homework_attachments import HomeworkImageError, prepare_homework_upload
 from app.utils.institute_groups import (active_groups_for_form,
                                         active_student_ids_in_group,
                                         institute_enabled, instructor_groups)
@@ -702,20 +703,28 @@ def create():
                 errors.append('المادة المحددة لا تنتمي إلى الصف المحدد.')
 
         # ── Attachment validation ────────────────────────────────────────────
+        # Images are validated from their bytes and optimised to WebP here,
+        # before any Storage write; PDFs pass through unchanged.
         attach_path = attach_type = None
+        upload = None
         if file and file.filename:
             ext = _ext(file.filename)
             if ext not in _ATTACH_ALL:
                 errors.append('نوع الملف غير مسموح. الأنواع المقبولة: jpg, jpeg, png, webp, pdf.')
             else:
                 attach_type = _attachment_type(file.filename)
+                if not errors:
+                    try:
+                        upload = prepare_homework_upload(file)
+                    except HomeworkImageError as exc:
+                        errors.append(str(exc))
 
         if errors:
             return _re_render(errors)
 
         # ── Save attachment ──────────────────────────────────────────────────
-        if file and file.filename:
-            attach_path = save_uploaded_file(file, subfolder='homework',
+        if upload is not None:
+            attach_path = save_uploaded_file(upload, subfolder='homework',
                                              allowed_exts=_ATTACH_ALL)
 
         teacher_id = emp.id if emp else None
@@ -937,12 +946,18 @@ def edit(hw_id):
                 errors.append('لا يمكنك تعيين واجب لمادة غير مرتبطة بك.')
 
         new_attach_path = new_attach_type = None
+        upload = None
         if file and file.filename:
             ext = _ext(file.filename)
             if ext not in _ATTACH_ALL:
                 errors.append('نوع الملف غير مسموح. الأنواع المقبولة: jpg, jpeg, png, webp, pdf.')
             else:
                 new_attach_type = _attachment_type(file.filename)
+                if not errors:
+                    try:
+                        upload = prepare_homework_upload(file)
+                    except HomeworkImageError as exc:
+                        errors.append(str(exc))
 
         if errors:
             for e in errors:
@@ -954,8 +969,8 @@ def edit(hw_id):
                                    posted=request.form,
                                    hw=hw, today=date.today())
 
-        if file and file.filename:
-            new_attach_path = save_uploaded_file(file, subfolder='homework',
+        if upload is not None:
+            new_attach_path = save_uploaded_file(upload, subfolder='homework',
                                                  allowed_exts=_ATTACH_ALL)
 
         # school_id, academic_year_id and teacher_id are never reassigned here,

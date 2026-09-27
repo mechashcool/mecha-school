@@ -2103,6 +2103,7 @@ def teacher_homework_create():
     """
     from app.utils.school_config import get_school_config
     from app.utils.helpers import save_uploaded_file
+    from app.utils.homework_attachments import HomeworkImageError, prepare_homework_upload
     from datetime import datetime as _dt
 
     user = g.mobile_user
@@ -2196,8 +2197,14 @@ def teacher_homework_create():
     att_type = None
     if attachment and attachment.filename:
         _HOMEWORK_EXTS = {'jpg', 'jpeg', 'png', 'webp', 'pdf'}
+        # Images are validated from their bytes and optimised to WebP before
+        # any Storage write; PDFs pass through unchanged.
+        try:
+            upload = prepare_homework_upload(attachment)
+        except HomeworkImageError as exc:
+            return err(str(exc))
         uploaded = save_uploaded_file(
-            attachment,
+            upload,
             subfolder='homework',
             allowed_exts=_HOMEWORK_EXTS,
         )
@@ -2277,6 +2284,7 @@ def teacher_homework_update(homework_id):
     """
     from app.utils.school_config import get_school_config
     from app.utils.helpers import save_uploaded_file
+    from app.utils.homework_attachments import HomeworkImageError, prepare_homework_upload
 
     user = g.mobile_user
     cfg  = get_school_config(user.school_id)
@@ -2368,8 +2376,12 @@ def teacher_homework_update(homework_id):
         attachment_file = request.files.get('attachment')
         if attachment_file and attachment_file.filename:
             _HOMEWORK_EXTS = {'jpg', 'jpeg', 'png', 'webp', 'pdf'}
+            try:
+                upload = prepare_homework_upload(attachment_file)
+            except HomeworkImageError as exc:
+                return err(str(exc))
             uploaded = save_uploaded_file(
-                attachment_file,
+                upload,
                 subfolder='homework',
                 allowed_exts=_HOMEWORK_EXTS,
             )

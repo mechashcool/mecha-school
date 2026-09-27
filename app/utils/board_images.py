@@ -1,9 +1,10 @@
 """
 School Board image optimisation — applied ONCE, at upload time.
 
-Only School Board media uses this module; the generic save_uploaded_file()
-helper and every other upload feature (students, employees, homework, leave,
-AI Face) are untouched.
+Used by School Board media and, with the same policy, by homework image
+attachments (app.utils.homework_attachments). The generic save_uploaded_file()
+helper and every other upload feature (students, employees, leave, AI Face)
+are untouched.
 
 Pipeline for an uploaded board image (raw size already checked <= 5 MB):
   1. decode with Pillow, restricted to the formats the feature allows
