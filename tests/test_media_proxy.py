@@ -261,6 +261,11 @@ def test_identity_upload_bucket_is_always_school_media(monkeypatch):
 # /files and /media-proxy. With PRIVATE_UPLOADS_ENABLED=true it must upgrade
 # private values to the signed /media-proxy flow (or deny), while public
 # branding/identity and the flag-off legacy path stay unchanged.
+#
+# Private upload auth hotfix: the upgrade used to MINT a fresh signed link for
+# ANY caller, so knowing a key was enough for permanent anonymous access. A
+# fresh link is now minted only after authentication + can_access_upload();
+# everyone else gets 404 (authorised flows: tests/test_private_upload_auth.py).
 
 _PRIVATE_MEDIA_KEYS = [
     'students/STU-1.png',                                   # student photo
@@ -274,31 +279,41 @@ _PRIVATE_MEDIA_KEYS = [
 ]
 
 
-def test_media_route_redirects_private_local_files_when_private_enabled():
-    """H-2 core: unauthenticated GET /media/uploads/<private-key> must NOT stream
-    the local file — it redirects (302) to a signed /media-proxy URL instead."""
+def test_media_route_private_keys_unauthenticated_404_nothing_minted(monkeypatch):
+    """Unauthenticated GET /media/uploads/<private-key> must neither stream the
+    local file NOR mint a signed /media-proxy link: 404, no token created."""
+    from app.utils import upload_access
+    minted = []
+    real = upload_access.make_remote_token
+    monkeypatch.setattr(upload_access, 'make_remote_token',
+                        lambda *a, **kw: minted.append(a) or real(*a, **kw))
     app = _app()
     client = app.test_client()
     for key in _PRIVATE_MEDIA_KEYS:
-        resp = client.get('/media/uploads/' + key)          # no redirect follow
-        assert resp.status_code in (301, 302), f'{key}: not redirected -> {resp.status_code}'
-        loc = resp.headers.get('Location', '')
-        assert f'/media-proxy/uploads/{key}' in loc, f'{key}: bad Location {loc}'
-        assert 'sig=' in loc and 'exp=' in loc, f'{key}: unsigned redirect {loc}'
-        # It must not have directly returned file bytes.
-        assert resp.status_code != 200, key
+        for route in ('/media/uploads/', '/files/uploads/'):
+            resp = client.get(route + key)                  # no redirect follow
+            assert resp.status_code == 404, f'{route}{key}: {resp.status_code}'
+            assert '/media-proxy/' not in resp.headers.get('Location', ''), key
+    assert minted == [], f'signed links minted for anonymous requests: {minted}'
 
 
-def test_media_route_private_redirect_then_streams_via_signed_proxy(monkeypatch):
-    """Following the /media redirect lands on /media-proxy, which streams only
-    after HMAC verification — i.e. access is now authorised, not anonymous."""
+def test_media_route_private_unauthenticated_never_streams(monkeypatch):
+    """Following redirects from an anonymous /media request must NOT end on the
+    signed proxy streaming the object (the pre-hotfix behaviour): 404, and the
+    object is never fetched from Storage."""
+    from app.utils import helpers
+    calls = []
+    # Stub the fetch the proxy really uses (a pooled Session, not requests.get),
+    # so an anonymous request WOULD stream b'DATA' if a link were minted.
+    monkeypatch.setattr(helpers, '_supabase_fetch',
+                        lambda key, bucket=None: calls.append(key) or (b'DATA', 'image/png'))
     app = _app()
-    _install_capture(monkeypatch)                            # stub Supabase fetch
     client = app.test_client()
     resp = client.get('/media/uploads/students/documents/x.png',
                       follow_redirects=True)
-    assert resp.status_code == 200                           # signed proxy served it
-    assert resp.data == b'DATA'
+    assert resp.status_code == 404
+    assert resp.data != b'DATA'
+    assert calls == []                                       # Storage never touched
 
 
 def test_media_route_traversal_blocked_when_private_enabled(monkeypatch):

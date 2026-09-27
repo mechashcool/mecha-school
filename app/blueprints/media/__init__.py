@@ -41,6 +41,47 @@ media_bp = Blueprint('media', __name__)
 _ALLOWED_PREFIX = 'uploads/'
 
 
+def _stored_value_candidates(op):
+    """The stored-value shapes a private ``uploads/<key>`` object can have.
+
+    resolve_upload_owner() matches the value persisted in the database EXACTLY,
+    and the same object is persisted as one of:
+      * ``uploads/<key>``                     — local / fallback uploads;
+      * ``<key>`` (no slash)                  — legacy bare filenames;
+      * ``{SUPABASE_URL}/storage/v1/object/public/{bucket}/<key>`` — the value
+        save_uploaded_file() stores for every Supabase upload.
+    All three name the very same object, so no access is broadened.
+    """
+    key = op[len(_ALLOWED_PREFIX):]
+    values = [op]
+    if '/' not in key:
+        values.append(key)
+    base = (current_app.config.get('SUPABASE_URL') or '').rstrip('/')
+    if base:
+        bucket = current_app.config.get('SUPABASE_BUCKET', 'uploads')
+        values.append(f'{base}/storage/v1/object/public/{bucket}/{key}')
+    return values
+
+
+def _may_mint_private_link(op):
+    """Authorise the CURRENT request for the private upload ``op`` BEFORE any
+    fresh signed link is minted for it.
+
+    Authenticated web session first (an anonymous request never reaches the
+    database), then the existing ownership + role rules unchanged:
+    resolve_upload_owner() → can_access_upload() (school isolation, parent →
+    own children, teacher → own/assigned scope, investor never, building
+    scope). An unknown owner is denied, exactly like can_access_upload().
+    """
+    from app.utils.upload_access import can_access_upload, resolve_upload_owner
+    if not current_user.is_authenticated:
+        return False
+    for value in _stored_value_candidates(op):
+        if resolve_upload_owner(value) is not None:
+            return can_access_upload(current_user, value)
+    return False
+
+
 @media_bp.route('/media/<path:stored>')
 def serve(stored):
     """Serve a locally-stored upload from ``app/static/<stored>``.
@@ -53,9 +94,10 @@ def serve(stored):
     Security (H-2): this route is unauthenticated. When ``PRIVATE_UPLOADS_ENABLED``
     is on it must NOT stream private local uploads (student/employee photos &
     documents, homework, complaint/leave attachments, board media) straight off
-    the local disk — that would bypass ``/files`` and ``/media-proxy``. Instead
-    each private value is upgraded to the same signed ``/media-proxy`` flow those
-    routes already use, so access requires a valid short-lived HMAC token. Public
+    the local disk — that would bypass ``/files`` and ``/media-proxy``. Instead,
+    ONLY for an authenticated caller who passes can_access_upload() (anyone else
+    gets 404), each private value is upgraded to the same signed ``/media-proxy``
+    flow those routes already use. Public
     branding/identity assets are non-personal and required before login, so they
     stay directly servable (identical to ``serve_protected``). When the flag is
     off, legacy direct local serving is preserved byte-for-byte.
@@ -70,6 +112,11 @@ def serve(stored):
         )
         op = object_path_of(stored) or stored
         if not is_public_upload(op):
+            # Authorise FIRST: a fresh signed link is minted only for a caller
+            # who may read this object. Unauthenticated, unauthorised and
+            # unknown objects all get the same 404 (existence is not revealed).
+            if not _may_mint_private_link(op):
+                abort(404)
             # Route through the signed proxy / public-branding resolver — same
             # protected model as /files/ and /media-proxy/. supabase_media_url
             # returns a signed /media-proxy URL for private local uploads and a
@@ -130,8 +177,14 @@ def serve_protected(stored):
     # Feature ON → upgrade any residual legacy /files/ link (bookmarks, cached
     # pages, older records) to the signed /media-proxy secure flow, so nothing is
     # served through this unsigned route while private uploads are enabled.
+    # Authorisation comes FIRST: an already-issued signed /files/ token for this
+    # exact path, or an authenticated session that passes the existing
+    # ownership rules. Anything else → 404 before any link is minted.
     if current_app.config.get('PRIVATE_UPLOADS_ENABLED'):
         from app.utils.upload_access import supabase_media_url
+        if not (verify_signed_token(op, request.args.get('exp'), request.args.get('sig'))
+                or _may_mint_private_link(op)):
+            abort(404)
         signed = supabase_media_url(op)
         if signed:
             return redirect(signed)
