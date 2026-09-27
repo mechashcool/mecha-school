@@ -1440,7 +1440,16 @@ Room detail including members and send schedule.
 ### GET /chat/rooms/\<room_id\>/messages
 Paginated message history (newest first, reversed before return so oldest is first in array).
 
-**Query params:** `limit` (default 50, max 100), `before` (message ID for cursor pagination).
+**Query params:** `limit` (default 50, max 100), `before` (message ID for cursor pagination), `after_id` (optional forward cursor, see below).
+
+**`after_id` (optional integer cursor):**
+- Absent → the newest-page behaviour described above, unchanged.
+- Present → only messages of this room with `id > after_id`, in ascending `id` order, at most `limit` rows (the *first* `limit` rows after the cursor, not the newest). Same response envelope and message schema.
+- Repeated requests drain a backlog without gaps: send the largest `id` received as the next `after_id`; continue while `count == limit`, stop when `count < limit` (if exactly `limit` rows remained, one final request returns `count: 0`). Use `limit` ≥ 1 — `limit=0` returns an empty page, as it always has.
+- Must be a plain non-negative integer (ASCII digits). Malformed or negative → HTTP 400 `{"ok": false, "error": "invalid after_id"}`.
+- Cannot be combined with `before` → HTTP 400 `{"ok": false, "error": "invalid pagination: use before or after_id, not both"}`.
+- Deleted messages newer than the cursor are returned with `is_deleted: true` as usual; a message deleted after it was already received is **not** re-delivered by `after_id` (its id is below the cursor) — a periodic full request without `after_id` is needed to pick up such changes.
+- Does not mark anything read; read receipts remain `POST /chat/rooms/<id>/read`.
 
 **Response:**
 ```json

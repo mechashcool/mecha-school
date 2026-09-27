@@ -30,6 +30,7 @@ Security rules
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 
 from flask import g, request
@@ -73,6 +74,18 @@ def _check_chat_access():
 
 def _get_membership(room_id: int, user_id: int) -> ChatRoomMember | None:
     return ChatRoomMember.query.filter_by(room_id=room_id, user_id=user_id).first()
+
+
+_BIGINT_MAX = 2 ** 63 - 1
+
+
+def _parse_after_id(raw: str | None) -> int | None:
+    """Strict ``after_id`` cursor: ASCII digits only (no sign, spaces,
+    underscores or non-ASCII digits), 0..BIGINT max. Anything else -> None."""
+    if raw is None or not re.fullmatch(r'[0-9]+', raw):
+        return None
+    value = int(raw)
+    return value if value <= _BIGINT_MAX else None
 
 
 _UNSET = object()   # sentinel: "no prefetched schedule supplied" (None is meaningful)
@@ -524,6 +537,30 @@ def chat_room_messages(room_id):
 
     limit, _ = page_args(default_limit=50, max_limit=100)
     before_id = request.args.get('before')
+
+    # Optional forward cursor. Absent -> the newest-page behaviour below,
+    # unchanged. Present -> the FIRST `limit` messages of this room with
+    # id > after_id, ascending, so repeated calls drain any backlog without
+    # gaps. Exact because every send path locks the room before its id is
+    # allocated (app/utils/chat_send_lock.py): per room, id order is commit
+    # order. Deleted rows keep their usual representation; a row already
+    # below the cursor is never re-sent. No read receipts are written.
+    if 'after_id' in request.args:
+        if before_id:
+            return err('invalid pagination: use before or after_id, not both')
+        after_id = _parse_after_id(request.args.get('after_id'))
+        if after_id is None:
+            return err('invalid after_id')
+        messages = (ChatMessage.query
+                    .filter(ChatMessage.room_id == room.id,
+                            ChatMessage.id > after_id)
+                    .order_by(ChatMessage.id.asc())
+                    .limit(limit).all())
+        return ok(
+            room_id=room_id,
+            count=len(messages),
+            messages=[_serialize_message(m, user.id) for m in messages],
+        )
 
     q = ChatMessage.query.filter_by(room_id=room.id)
     if before_id:
