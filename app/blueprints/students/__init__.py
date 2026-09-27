@@ -111,6 +111,56 @@ def validate_student_document_file(file_storage):
     return ext, None
 
 
+# Extensions a NEW document is stored under after processing: a PDF keeps its
+# exact bytes; an image document is stored as the optimised WebP (or a
+# metadata-free PNG when that is smaller). Existing rows are never rewritten.
+STUDENT_DOC_STORED_EXTS = {'pdf', 'webp', 'png'}
+
+
+def prepare_student_document_upload(file_storage):
+    """Validate and process ONE new student document BEFORE anything is stored.
+
+    The single path for Add Student, Edit → add and Replace. Returns
+    ``(upload, None)`` — the FileStorage to hand to ``save_uploaded_file()`` —
+    or ``(None, message)`` with a ready-to-flash Arabic message.
+
+      * validate_student_document_file(): extension allow-list, 5 MB cap and
+        magic bytes, exactly as before;
+      * PDF → returned unchanged (stored byte-for-byte, never converted);
+      * JPG/JPEG/PNG → real decode, pixel ceiling, EXIF orientation, metadata
+        stripped, <=1600 px, WebP q88 (app/utils/student_documents.py); only
+        the processed bytes are returned, the original is never stored.
+    """
+    import io
+    from werkzeug.datastructures import FileStorage
+    from app.utils.student_documents import (MSG_INVALID, StudentDocumentImageError,
+                                             optimize_document_image)
+
+    ext, err = validate_student_document_file(file_storage)
+    if err:
+        return None, err
+    if ext == 'pdf':
+        return file_storage, None
+    try:
+        stream = file_storage.stream
+        pos = stream.tell()
+        try:
+            stream.seek(0)
+            raw = stream.read()
+        finally:
+            stream.seek(pos)
+        processed = optimize_document_image(raw)
+    except StudentDocumentImageError as exc:
+        return None, str(exc)
+    except Exception:
+        current_app.logger.warning('[student_documents] image processing failed',
+                                   exc_info=True)
+        return None, MSG_INVALID
+    content_type = 'image/webp' if processed.ext == 'webp' else 'image/png'
+    return FileStorage(io.BytesIO(processed.data), filename=f'document.{processed.ext}',
+                       content_type=content_type), None
+
+
 def _stored_document_filename(stored_value):
     """Basename of a stored upload value — never the directory and never a
     signed query string, so the page can show a filename without exposing the
@@ -967,6 +1017,10 @@ def create():
         # Mirrors the client-side row limit so a hand-crafted submission with
         # extra document rows is rejected BEFORE any upload or DB write. Only
         # rows with an actual file count as documents.
+        # Each chosen document is then validated and processed here, with the
+        # same policy as Edit and Replace — an unsupported or corrupt file is
+        # reported instead of being silently dropped, and nothing is stored.
+        _create_docs = []
         if (is_feature_enabled(school.id, 'students.documents_upload')
                 and form_cfg.section_visible('student_documents')):
             _submitted_docs = [f for f in request.files.getlist('document_file[]')
@@ -974,6 +1028,15 @@ def create():
             if len(_submitted_docs) > MAX_STUDENT_DOCUMENTS:
                 return _re_render(
                     f'يمكن رفع {MAX_STUDENT_DOCUMENTS} مستندات كحد أقصى للطالب.')
+            for _doc_type_in, _doc_file_in in zip(
+                    request.form.getlist('document_type[]'),
+                    request.files.getlist('document_file[]')):
+                if not (_doc_file_in and _doc_file_in.filename):
+                    continue
+                _doc_upload, _doc_err = prepare_student_document_upload(_doc_file_in)
+                if _doc_err:
+                    return _re_render(_doc_err)
+                _create_docs.append((_doc_type_in, _doc_upload))
 
         # ── Student photo — validated BEFORE any upload/DB write ─────────────
         # Inspection only: the same FileStorage (rewound) is stored unchanged
@@ -1176,22 +1239,26 @@ def create():
                 return _re_render('هذه البطاقة مرتبطة بطالب آخر بالفعل.')
             return _re_render('تعذر حفظ بيانات الطالب بسبب تعارض في القيم. يرجى المحاولة مرة أخرى')
 
-        if is_feature_enabled(_school_id_for_feat, 'students.documents_upload') and form_cfg.section_visible('student_documents'):
-            doc_types = request.form.getlist('document_type[]')
-            doc_files = request.files.getlist('document_file[]')
-            for doc_type, doc_file in zip(doc_types, doc_files):
-                if doc_file and doc_file.filename:
-                    saved = save_uploaded_file(
-                        doc_file,
-                        'students/documents',
-                        prefix=f"{student.student_id}_{doc_type or 'document'}"
-                    )
-                    if saved:
-                        db.session.add(StudentDocument(
-                            student_id=student.id,
-                            document_type=doc_type.strip() or 'وثيقة',
-                            file_path=saved,
-                        ))
+        # Documents were validated/processed before any write (see above). A
+        # storage failure creates no row (never a broken reference) and is
+        # reported after the commit instead of being dropped silently.
+        _failed_doc_types = []
+        for doc_type, doc_upload in _create_docs:
+            saved = save_uploaded_file(
+                doc_upload,
+                'students/documents',
+                prefix=f"{student.student_id}_{doc_type or 'document'}",
+                allowed_exts=STUDENT_DOC_STORED_EXTS,
+                max_size=STUDENT_DOC_MAX_BYTES,
+            )
+            if saved:
+                db.session.add(StudentDocument(
+                    student_id=student.id,
+                    document_type=doc_type.strip() or 'وثيقة',
+                    file_path=saved,
+                ))
+            else:
+                _failed_doc_types.append(doc_type.strip() or 'وثيقة')
 
         # ── Create parent user account (auto-generated credentials) ──────────
         # Skipped when the manager linked an existing parent instead — the two
@@ -1432,6 +1499,9 @@ def create():
                 _op, student_id=_student_id_for_notify, school_id=school.id)
 
         flash(f'تم إضافة الطالب {student.full_name} برقم {student.student_id}.', 'success')
+        if _failed_doc_types:
+            flash('تعذّر رفع المستمسكات التالية: ' + '، '.join(_failed_doc_types)
+                  + '. تم حفظ الطالب؛ يرجى إضافتها من صفحة تعديل الطالب.', 'warning')
         if _institute_enrolled:
             flash(f'تم تسجيل الطالب في {_institute_enrolled} مجموعة دراسية.', 'success')
         if parent_created:
@@ -1766,13 +1836,13 @@ def edit(student_id):
                     request.files.getlist('document_file[]')):
                 if not (_doc_file_in and _doc_file_in.filename):
                     continue
-                _doc_ext, _doc_err = validate_student_document_file(_doc_file_in)
+                _doc_upload, _doc_err = prepare_student_document_upload(_doc_file_in)
                 if _doc_err:
                     # Nothing has been mutated or stored yet on this path.
                     flash(_doc_err, 'danger')
                     return redirect(url_for('students.edit',
                                             student_id=student.id))
-                _new_docs.append((_doc_type_in, _doc_file_in))
+                _new_docs.append((_doc_type_in, _doc_upload))
 
             # Same MAX_STUDENT_DOCUMENTS cap the Add Student form applies,
             # counted against ACTIVE documents only: a soft-deleted or
@@ -2034,7 +2104,7 @@ def edit(student_id):
                 _doc_file,
                 'students/documents',
                 prefix=f"{student.student_id}_{_doc_type or 'document'}",
-                allowed_exts=STUDENT_DOC_ALLOWED_EXTS,
+                allowed_exts=STUDENT_DOC_STORED_EXTS,
                 max_size=STUDENT_DOC_MAX_BYTES,
             )
             if not saved:
@@ -2329,7 +2399,8 @@ def replace_document(student_id, doc_id):
     Order of operations, so no partial update is possible:
       1. authorise the operator for this student (same guards as ``edit()``),
       2. re-fetch the ACTIVE document scoped to this student + school,
-      3. validate the new file (extension, magic bytes, size),
+      3. validate the new file (extension, magic bytes, size) and, for an
+         image, decode + optimise it (prepare_student_document_upload),
       4. upload it to a NEW unique path — the old path is never overwritten,
       5. verify the upload really landed,
       6. in ONE transaction: insert the new active document and soft-delete the
@@ -2353,7 +2424,7 @@ def replace_document(student_id, doc_id):
         flash('يرجى اختيار ملف بديل.', 'danger')
         return redirect(url_for('students.edit', student_id=student.id))
 
-    _ext, err_msg = validate_student_document_file(new_file)
+    new_upload, err_msg = prepare_student_document_upload(new_file)
     if err_msg:
         flash(err_msg, 'danger')
         return redirect(url_for('students.edit', student_id=student.id))
@@ -2363,10 +2434,10 @@ def replace_document(student_id, doc_id):
     # file_path is never written to.
     doc_type = doc.document_type
     saved = save_uploaded_file(
-        new_file,
+        new_upload,
         'students/documents',
         prefix=f"{student.student_id}_{doc_type or 'document'}",
-        allowed_exts=STUDENT_DOC_ALLOWED_EXTS,
+        allowed_exts=STUDENT_DOC_STORED_EXTS,
         max_size=STUDENT_DOC_MAX_BYTES,
     )
     if not saved or not _verify_stored_upload(saved):
