@@ -87,9 +87,10 @@
 
   <!-- Header -->
   <div class="rv-header">
-    {% if resolve_photo_url(student.photo) %}
+    {% set _photo_src = student_photo_url(student) %}
+    {% if _photo_src %}
     <img style="width:64px;height:64px;border-radius:12px;object-fit:cover;border:2px solid rgba(255,255,255,.35);flex-shrink:0"
-         src="{{ resolve_photo_url(student.photo) }}" alt="">
+         src="{{ _photo_src }}" alt="">
     {% else %}
     <div class="rv-header-avatar"><i class="bi bi-person-fill"></i></div>
     {% endif %}
@@ -132,12 +133,13 @@
   {% endif %}
 
   <!-- Section 3: Photo & documents -->
-  {% if resolve_photo_url(student.photo) or docs %}
+  {% set _review_photo_src = student_photo_url(student) %}
+  {% if _review_photo_src or docs %}
   <div class="rv-section">
     <div class="rv-section-hd"><i class="bi bi-folder-fill"></i>الصورة والمستندات</div>
-    {% if resolve_photo_url(student.photo) %}
+    {% if _review_photo_src %}
     <div class="rv-photo-wrap">
-      <img class="rv-photo-thumb" src="{{ resolve_photo_url(student.photo) }}" alt="">
+      <img class="rv-photo-thumb" src="{{ _review_photo_src }}" alt="">
       <div class="rv-photo-info"><div class="name">صورة الطالب</div></div>
     </div>
     {% endif %}

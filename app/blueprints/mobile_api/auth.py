@@ -13,6 +13,7 @@ from app.models import db, User, Employee, MobileDeviceToken
 from app.utils.login_throttle import check_lockout, record_failed_attempt, reset_attempts, format_wait_ar
 from app.utils.ratelimit import limiter, LOGIN_RATE_LIMIT
 from .utils import encode_token, jwt_required, ok, err, photo_url
+from app.utils.student_display_photo import student_display_value
 
 # Circular import guard — routes are registered by __init__.py after the bp is created
 from . import mobile_api_bp
@@ -155,7 +156,7 @@ def login():
                 'id':         s.id,
                 'student_id': s.student_id,
                 'name':       s.full_name,
-                'photo':      photo_url(s.photo),
+                'photo':      photo_url(student_display_value(s)),
                 'section':    s.section.name if s.section else None,
                 'grade':      s.section.grade.name if s.section and s.section.grade else None,
             }

@@ -1448,6 +1448,12 @@ class Student(db.Model):
     address       = db.Column(db.Text, nullable=True)
     phone         = db.Column(db.String(30), nullable=True)
     photo         = db.Column(db.String(255), nullable=True)
+    # Display-only derivative of `photo` (WebP, <=1024 px, metadata stripped),
+    # written only for NEW direct uploads. NULL for every existing student and
+    # whenever generation failed — display code then falls back to `photo`.
+    # NEVER a biometric/AI Face source: `photo` stays the original.
+    # Requires migration j1s2d3p4h5o6 to be applied BEFORE this code is deployed.
+    photo_display = db.Column(db.String(255), nullable=True)
 
     rfid_tag_id   = db.Column(db.String(64), nullable=True, index=True)
 

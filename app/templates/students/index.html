@@ -199,8 +199,9 @@
           <td><code class="text-primary-custom fw-600">{{ s.student_id }}</code></td>
           <td>
             <div class="d-flex align-items-center gap-2">
-              {% if resolve_photo_url(s.photo) %}
-              <img src="{{ resolve_photo_url(s.photo) }}"
+              {% set _photo_src = student_photo_url(s) %}
+              {% if _photo_src %}
+              <img src="{{ _photo_src }}" loading="lazy" decoding="async" alt=""
                    style="width:32px;height:32px;border-radius:8px;object-fit:cover">
               {% else %}
               <div style="width:32px;height:32px;border-radius:8px;background:#1a3a5c;
@@ -395,7 +396,7 @@ function onStageChange(el) {
 
   function avatarHtml(s) {
     if (s.photo_url) {
-      return `<img src="${s.photo_url}" style="width:32px;height:32px;border-radius:8px;object-fit:cover">`;
+      return `<img src="${s.photo_url}" loading="lazy" decoding="async" alt="" style="width:32px;height:32px;border-radius:8px;object-fit:cover">`;
     }
     const initial = s.full_name ? s.full_name[0] : '?';
     return `<div style="width:32px;height:32px;border-radius:8px;background:#1a3a5c;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:13px">${initial}</div>`;

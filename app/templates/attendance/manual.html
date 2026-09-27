@@ -370,7 +370,7 @@ function buildCard(s) {
     // Photo or placeholder
     let avatarHtml;
     if (s.photo_url) {
-        avatarHtml = `<div class="att-avatar"><img src="${escHtml(s.photo_url)}" alt=""></div>`;
+        avatarHtml = `<div class="att-avatar"><img src="${escHtml(s.photo_url)}" alt="" loading="lazy" decoding="async"></div>`;
     } else {
         avatarHtml = `<div class="att-avatar"><i class="bi bi-person-fill"></i></div>`;
     }

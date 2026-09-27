@@ -10,6 +10,7 @@ from flask import g, request
 
 from app.models import db, MobileDeviceToken
 from .utils import jwt_required, role_required, ok, err, photo_url
+from app.utils.student_display_photo import student_display_value
 from . import mobile_api_bp
 
 log = logging.getLogger('mecha.mobile.common')
@@ -37,7 +38,7 @@ def me():
                 'id':         c.id,
                 'student_id': c.student_id,
                 'name':       c.full_name,
-                'photo':      photo_url(c.photo),
+                'photo':      photo_url(student_display_value(c)),
                 'section':    c.section.name if c.section else None,
                 'grade':      c.section.grade.name if c.section and c.section.grade else None,
                 'status':     c.status,

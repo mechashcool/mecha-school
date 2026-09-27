@@ -259,13 +259,20 @@ class StudentPhotoRouteTest(unittest.TestCase):
             return db.session.get(Student, self.ids[key], execution_options=OPTS)
 
     def _assert_stored_verbatim(self, name, raw):
-        self.storage.assert_called_once()
-        data, path, ctype = self.storage.call_args.args
+        # The first write is the original, byte-identical. A new upload may add
+        # ONE separate display-only copy (students/display/*.webp); the original
+        # itself is never replaced by it.
+        calls = self.storage.call_args_list
+        self.assertIn(len(calls), (1, 2), calls)
+        data, path, ctype = calls[0].args
         self.assertEqual(hashlib.sha256(data).hexdigest(), hashlib.sha256(raw).hexdigest())
         ext = name.rsplit('.', 1)[1]
         self.assertTrue(path.startswith('students/') and path.endswith(f'.{ext}'), path)
         self.assertEqual(ctype, helpers._CONTENT_TYPES[ext])       # unchanged mapping
-        self.assertEqual(self.storage.call_args.kwargs, {'bucket': None})
+        self.assertEqual(calls[0].kwargs, {'bucket': None})
+        for extra in calls[1:]:
+            self.assertTrue(extra.args[1].startswith('students/display/')
+                            and extra.args[1].endswith('.webp'), extra.args[1])
         return data
 
     # ── 1-7: valid uploads stored byte-identical ─────────────────────────────

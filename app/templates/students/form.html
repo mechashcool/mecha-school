@@ -521,8 +521,9 @@
       <div class="card mb-4">
         <div class="card-header"><i class="bi bi-camera-fill text-accent"></i>صورة الطالب</div>
         <div class="card-body text-center">
-          {% if student and resolve_photo_url(student.photo) %}
-          <img src="{{ resolve_photo_url(student.photo) }}"
+          {% set _photo_src = student_photo_url(student) if student else None %}
+          {% if _photo_src %}
+          <img src="{{ _photo_src }}"
                class="rounded-12 mb-3" style="width:120px;height:120px;object-fit:cover">
           {% else %}
           <div class="mb-3" style="width:120px;height:120px;border-radius:12px;

@@ -19,6 +19,8 @@ from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    historical_guard)
 from app.utils.helpers import save_uploaded_file, resolve_photo_url
 from app.utils.student_photo import validate_student_photo
+from app.utils.student_display_photo import (prepare_display_photo, save_display_photo,
+                                             student_display_value, student_photo_url)
 from app.utils.upload_access import (object_path_of, protected_upload_url,
                                      resolve_upload_owner, storage_ref_of)
 from app.utils import code_generator
@@ -46,6 +48,8 @@ from app.utils.device_numbering import (DeviceNumberAllocationError,
 
 students_bp = Blueprint('students', __name__,
                          template_folder='../../templates/students')
+# Display-only student photo URL for templates (display copy, else original).
+students_bp.add_app_template_global(student_photo_url, 'student_photo_url')
 
 # Maximum number of documents a student may have uploaded through the Add
 # Student form. Mirrored by the client-side row limit in create_wizard.html.
@@ -773,7 +777,7 @@ def search():
             'status':         s.status,
             'enrollment_date': (s.enrollment_date.strftime('%Y-%m-%d')
                                 if s.enrollment_date else ''),
-            'photo_url':      _rpu(s.photo) or '',
+            'photo_url':      _rpu(student_display_value(s)) or '',
             'view_url':       url_for('students.view',    student_id=s.id),
             'edit_url':       url_for('students.edit',    student_id=s.id),
             'archive_url':    url_for('students.archive', student_id=s.id),
@@ -1090,8 +1094,14 @@ def create():
 
         _school_id_for_feat = school.id if school else None
         photo_path = None
+        photo_display_path = None
         if 'photo' in request.files and is_feature_enabled(_school_id_for_feat, 'students.photo_upload'):
             photo_path = save_uploaded_file(request.files['photo'], 'students')
+            # Optional display copy — only once the original is stored, and
+            # never at the original's expense (failure → NULL, falls back).
+            if photo_path:
+                photo_display_path = save_display_photo(
+                    prepare_display_photo(request.files['photo']))
 
         dob_str = request.form.get('date_of_birth', '').strip()
         dob     = dt.strptime(dob_str, '%Y-%m-%d').date() if dob_str else None
@@ -1140,6 +1150,8 @@ def create():
             school_id         = school.id if school else None,
             academic_year_id  = year.id   if year   else None,
         )
+        if photo_display_path:
+            student.photo_display = photo_display_path
         import logging as _logging
         _log = _logging.getLogger(__name__)
         from sqlalchemy.exc import IntegrityError as _IntegrityError
@@ -2006,6 +2018,10 @@ def edit(student_id):
             photo_path = save_uploaded_file(request.files['photo'], 'students')
             if photo_path:
                 student.photo = photo_path
+                # A new original always gets its OWN display copy or NULL,
+                # so an old display copy is never shown for a new photo.
+                student.photo_display = save_display_photo(
+                    prepare_display_photo(request.files['photo']))
 
         # ── Add the new attachments validated above ────────────────────
         # Same subfolder, prefix and storage helper the Add Student form uses,

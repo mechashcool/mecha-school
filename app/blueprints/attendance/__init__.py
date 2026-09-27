@@ -654,6 +654,7 @@ def manual_students():
         and now_time >= departure_time
     )
 
+    from app.utils.student_display_photo import student_display_value
     students = (Student.query
                 .execution_options(include_all_years=True)
                 .filter_by(section_id=section_id, status='active')
@@ -697,7 +698,7 @@ def manual_students():
             and rec.check_in is not None
             and rec.check_out is None
         )
-        photo  = resolve_photo_url(getattr(s, 'photo', None))
+        photo  = resolve_photo_url(student_display_value(s))   # display copy, else original
         result.append({
             'id':             s.id,
             'full_name':      s.full_name,

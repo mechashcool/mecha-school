@@ -52,6 +52,7 @@ from app.utils.notification_visibility import notification_visible_to
 
 from . import mobile_api_bp
 from .utils import jwt_required, role_required, ok, ok_etag, err, photo_url, page_args
+from app.utils.student_display_photo import student_display_value
 
 
 # ─── Ownership guard ──────────────────────────────────────────────────────────
@@ -84,7 +85,7 @@ def _student_brief(s: Student) -> dict:
         'id':         s.id,
         'student_id': s.student_id,
         'name':       s.full_name,
-        'photo':      photo_url(s.photo),
+        'photo':      photo_url(student_display_value(s)),   # display copy, else original
         'gender':     s.gender,
         'section':    s.section.name       if s.section              else None,
         'grade':      s.section.grade.name if s.section and s.section.grade else None,

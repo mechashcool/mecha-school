@@ -74,6 +74,7 @@ from app.utils.notification_visibility import notification_visible_to
 
 from . import mobile_api_bp
 from .utils import jwt_required, role_required, ok, ok_etag, err, photo_url, page_args
+from app.utils.student_display_photo import student_display_value
 from app.services import institute_attendance as inst_att
 
 
@@ -474,7 +475,7 @@ def teacher_section_students(section_id):
                 'student_id': s.student_id,
                 'name':       s.full_name,
                 'gender':     s.gender,
-                'photo':      photo_url(s.photo),
+                'photo':      photo_url(student_display_value(s)),
                 'status':     s.status,
             }
             for s in students
@@ -529,7 +530,7 @@ def teacher_student_profile(student_id):
             'student_id':      student.student_id,
             'name':            student.full_name,
             'gender':          student.gender,
-            'photo':           photo_url(student.photo),
+            'photo':           photo_url(student_display_value(student)),
             'date_of_birth':   student.date_of_birth.isoformat() if student.date_of_birth else None,
             'phone':           student.phone,
             'section':         student.section.name       if student.section else None,
