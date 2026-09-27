@@ -35,14 +35,49 @@ STUDENT_DISPLAY_SUBFOLDER = 'students/display'
 _ALLOWED_FORMATS = ('JPEG', 'PNG', 'GIF', 'WEBP')
 
 
-def student_display_value(student) -> str | None:
-    """Stored value to DISPLAY: photo_display when present, else Student.photo.
+def _display_usable(value: str | None) -> bool:
+    """Cheap, LOCAL-only check that a stored display value can be shown.
 
-    Never used by AI Face. Performs no Storage access and no generation.
+    Never makes a network/Storage request:
+      * empty / whitespace → not usable;
+      * a full http(s) URL (normal Supabase upload) → trusted as stored;
+      * a relative/local value exists only when the Supabase upload failed and
+        save_uploaded_file() fell back to local disk — such a copy was never
+        in Supabase, so it is usable only while its file is still on disk.
+    """
+    if not value or not value.strip():
+        return False
+    if value.startswith(('http://', 'https://')):
+        return True
+    import os
+    from flask import current_app
+    rel = value.strip().lstrip('/')
+    if rel.startswith('static/'):
+        rel = rel[len('static/'):]
+    if '/' not in rel:
+        rel = f'uploads/{rel}'                 # legacy bare-filename form
+    parts = rel.split('/')
+    if '..' in parts or '' in parts:
+        return False
+    try:
+        return os.path.isfile(os.path.join(current_app.root_path, 'static', *parts))
+    except Exception:
+        return False
+
+
+def student_display_value(student) -> str | None:
+    """Stored value to DISPLAY: photo_display when usable, else Student.photo.
+
+    A missing/broken display copy therefore never shows worse than having no
+    copy at all. Never used by AI Face. No Storage/network access, no
+    generation.
     """
     if student is None:
         return None
-    return student.photo_display or student.photo
+    display = student.photo_display
+    if _display_usable(display):
+        return display
+    return student.photo
 
 
 def student_photo_url(student) -> str | None:

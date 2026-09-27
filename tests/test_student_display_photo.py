@@ -128,6 +128,74 @@ class DisplayPolicyTest(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Fallback hardening: a broken display copy is never worse than none
+# ─────────────────────────────────────────────────────────────────────────────
+
+class DisplayFallbackTest(unittest.TestCase):
+    """student_display_value / student_photo_url: local checks only, no I/O."""
+
+    ORIG = BASE + 'students/orig-fallback.jpg'
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = create_app('testing')
+
+    def setUp(self):
+        # Any Storage or HTTP call while deciding the fallback fails the test.
+        boom = AssertionError('network/Storage used to decide the display fallback')
+        for target in ('app.utils.helpers._supabase_fetch', 'app.utils.helpers._supabase_sign',
+                       'app.utils.helpers._supabase_upload', 'requests.sessions.Session.request'):
+            mock.patch(target, side_effect=boom).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def _resolve(self, display):
+        from types import SimpleNamespace
+        st = SimpleNamespace(photo=self.ORIG, photo_display=display)
+        out = {}
+        for flag in (False, True):
+            with mock.patch.dict(self.app.config, {'PRIVATE_UPLOADS_ENABLED': flag}), \
+                    self.app.test_request_context('/'):
+                out[flag] = (sdp.student_display_value(st), sdp.student_photo_url(st))
+        return out
+
+    def _assert_original(self, display):
+        for flag, (value, url) in self._resolve(display).items():
+            self.assertEqual(value, self.ORIG, (display, flag))
+            self.assertIn('orig-fallback.jpg', url, (display, flag))
+
+    def test_null_or_empty_display_falls_back_to_original(self):
+        for display in (None, '', '   '):
+            with self.subTest(display=display):
+                self._assert_original(display)
+
+    def test_missing_local_display_falls_back_to_original(self):
+        gone = f'gone-{uuid4().hex}.webp'
+        for display in (f'uploads/students/display/{gone}', f'/static/uploads/students/display/{gone}',
+                        gone, '../../config/settings.py', 'uploads/../../run.py'):
+            with self.subTest(display=display):
+                self._assert_original(display)
+
+    def test_existing_local_display_is_used(self):
+        name = f'kept-{uuid4().hex}.webp'
+        rel = f'uploads/students/display/{name}'
+        path = pathlib.Path(self.app.root_path, 'static', *rel.split('/'))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(make_display_photo(_enc(_portrait(300, 400), 'JPEG')))
+        try:
+            for flag, (value, url) in self._resolve(rel).items():
+                self.assertEqual(value, rel, flag)
+                self.assertIn(name, url, flag)
+        finally:
+            path.unlink()
+
+    def test_remote_display_used_without_network(self):
+        display = BASE + 'students/display/remote-ok.webp'
+        for flag, (value, url) in self._resolve(display).items():
+            self.assertEqual(value, display, flag)
+            self.assertIn('remote-ok.webp', url, flag)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Routes, serializers, AI Face, failure safety
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -417,6 +485,27 @@ class StudentDisplayPhotoTest(unittest.TestCase):
         raw_by_id = {x['id']: x['photo'] for x in legacy['children']}
         orig, _ = self._row('derived_a')
         self.assertEqual(raw_by_id[self.ids['derived_a']], orig)
+
+    def test_missing_local_display_copy_shows_original_web_and_mobile(self):
+        gone = f'gone-{self.sfx}.webp'
+        with self.app.app_context():
+            st = db.session.get(Student, self.ids['derived_a'], execution_options=OPTS)
+            st.photo_display = f'uploads/students/display/{gone}'   # file absent on disk
+            db.session.commit()
+        d_orig, _ = self._paths('derived_a')
+        client = self._web('admin_a')
+        for page in ('/students/', f"/students/{self.ids['derived_a']}"):
+            body = client.get(page).get_data(as_text=True)
+            self.assertIn(d_orig, body, page)
+            self.assertNotIn(gone, body, page)
+        children = self.app.test_client().get(
+            '/api/mobile/v1/parent/children',
+            headers=self._jwt(self.ids['parent_id_a'])).get_json()['children']
+        photo = {c['id']: c['photo'] for c in children}[self.ids['derived_a']]
+        self.assertIn(d_orig, photo)
+        self.assertNotIn(gone, photo)
+        self.fetch.assert_not_called()
+        self.storage.assert_not_called()
 
     # ── 16, 17. edit ─────────────────────────────────────────────────────────
 
