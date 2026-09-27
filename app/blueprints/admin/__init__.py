@@ -3076,6 +3076,30 @@ VIDEO_MEDIA_TYPES = {
     'image': 'صورة',
 }
 
+# New school-board VIDEO content is disabled. Existing video rows stay
+# listable, readable, metadata-editable, toggleable and deletable; image posts
+# are unaffected. Rejection happens before any Storage write or DB change.
+BOARD_VIDEO_DISABLED_MSG = 'رفع الفيديو غير متاح حالياً.'
+
+# ISO-BMFF brands that are still images (HEIF/AVIF), not video.
+_ISOBMFF_IMAGE_BRANDS = {b'heic', b'heix', b'hevc', b'heim', b'heis',
+                         b'mif1', b'msf1', b'avif', b'avis'}
+
+
+def _is_video_upload(upload_file, head: bytes) -> bool:
+    """True if an uploaded board file is a video, whatever its extension:
+    a video/* content type, or MP4/MOV/3GP (ISO-BMFF / QuickTime atoms),
+    WebM/MKV (EBML) or AVI bytes. JPEG/PNG/WEBP never match."""
+    if (upload_file.mimetype or '').lower().startswith('video/'):
+        return True
+    if head[:4] == b'\x1a\x45\xdf\xa3':
+        return True
+    if head[4:8] == b'ftyp':
+        return head[8:12] not in _ISOBMFF_IMAGE_BRANDS
+    if head[4:8] in (b'moov', b'mdat', b'wide'):
+        return True
+    return head[:4] == b'RIFF' and head[8:12] == b'AVI '
+
 
 def _push_school_board(school_id, audience, *, content_type, content_id,
                        title, body, publish_at=None, is_active=True):
@@ -3243,6 +3267,13 @@ def school_board_video_create():
         max_bytes   = BOARD_IMAGE_MAX_BYTES           if is_image else BOARD_VIDEO_MAX_BYTES
         type_label  = 'الصورة' if is_image else 'الفيديو'
 
+        # New video posts are disabled — upload or external link alike.
+        if media_type == 'video':
+            flash(BOARD_VIDEO_DISABLED_MSG, 'danger')
+            return render_template('admin/school_board_video_form.html',
+                                   video=None, audience_labels=BOARD_AUDIENCES,
+                                   media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
+
         final_url = None
         upload_file = request.files.get('media_file')
 
@@ -3255,6 +3286,11 @@ def school_board_video_create():
                                        video=None, audience_labels=BOARD_AUDIENCES,
                                        media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
             raw = upload_file.read()
+            if _is_video_upload(upload_file, raw[:16]):     # video renamed as an image
+                flash(BOARD_VIDEO_DISABLED_MSG, 'danger')
+                return render_template('admin/school_board_video_form.html',
+                                       video=None, audience_labels=BOARD_AUDIENCES,
+                                       media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
             if len(raw) > max_bytes:
                 flash(f'حجم {type_label} أكبر من الحد المسموح ({max_bytes // (1024 * 1024)} MB).', 'danger')
                 return render_template('admin/school_board_video_form.html',
@@ -3364,6 +3400,20 @@ def school_board_video_edit(video_id):
         final_url   = video.video_url  # keep existing unless replaced
         upload_file = request.files.get('media_file')
 
+        # No NEW video content: a video file, turning an image post into a
+        # video, or a different video link. Editing an existing video's
+        # details (title, audience, dates, flags) with its media unchanged
+        # stays allowed.
+        if media_type == 'video' and (
+                (upload_file and upload_file.filename)
+                or video.media_type != 'video'
+                or (fallback_url.startswith(('http://', 'https://'))
+                    and fallback_url != video.video_url)):
+            flash(BOARD_VIDEO_DISABLED_MSG, 'danger')
+            return render_template('admin/school_board_video_form.html',
+                                   video=video, audience_labels=BOARD_AUDIENCES,
+                                   media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
+
         if upload_file and upload_file.filename:
             ext = (upload_file.filename.rsplit('.', 1)[-1].lower()
                    if '.' in upload_file.filename else '')
@@ -3373,6 +3423,11 @@ def school_board_video_edit(video_id):
                                        video=video, audience_labels=BOARD_AUDIENCES,
                                        media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
             raw = upload_file.read()
+            if _is_video_upload(upload_file, raw[:16]):     # video renamed as an image
+                flash(BOARD_VIDEO_DISABLED_MSG, 'danger')
+                return render_template('admin/school_board_video_form.html',
+                                       video=video, audience_labels=BOARD_AUDIENCES,
+                                       media_labels=VIDEO_MEDIA_TYPES, form_data=request.form)
             if len(raw) > max_bytes:
                 flash(f'حجم {type_label} أكبر من الحد المسموح ({max_bytes // (1024 * 1024)} MB).', 'danger')
                 return render_template('admin/school_board_video_form.html',

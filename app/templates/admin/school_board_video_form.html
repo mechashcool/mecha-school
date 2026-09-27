@@ -24,7 +24,11 @@
 {% endif %}
 {% endwith %}
 
-{% set sel_type = form_data.get('media_type', video.media_type if is_edit else 'video') %}
+{# New video posts are disabled server-side; the video option is only kept
+   when editing the details of an existing video post. #}
+{% set allow_video = is_edit and video.media_type == 'video' %}
+{% set _req_type = form_data.get('media_type', video.media_type if is_edit else 'image') %}
+{% set sel_type = _req_type if (_req_type != 'video' or allow_video) else 'image' %}
 
 <div class="card" style="max-width:720px">
   <div class="card-body p-4">
@@ -48,7 +52,7 @@
       <div class="mb-3">
         <label class="form-label">نوع الوسائط <span class="text-danger">*</span></label>
         <div class="d-flex gap-4">
-          {% for val, lbl in media_labels.items() %}
+          {% for val, lbl in media_labels.items() if val != 'video' or allow_video %}
           <div class="form-check">
             <input class="form-check-input" type="radio" name="media_type"
                    id="type_{{ val }}" value="{{ val }}"
@@ -89,7 +93,7 @@
         <input type="file" name="media_file" class="form-control" id="media-file-input"
                accept="video/mp4,video/quicktime,video/webm">
         <div class="form-text" id="file-hint">
-          <span id="hint-video">الأنواع المقبولة: mp4، mov، webm — الحد الأقصى: 50 MB</span>
+          <span id="hint-video">رفع الفيديو غير متاح حالياً — يمكن تعديل بيانات الفيديو الحالي فقط.</span>
           <span id="hint-image" style="display:none">الأنواع المقبولة: jpg، jpeg، png، webp — الحد الأقصى: 5 MB</span>
         </div>
       </div>
