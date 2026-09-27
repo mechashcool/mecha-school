@@ -18,6 +18,10 @@ from app.utils.employee_photo import (EMPLOYEE_PHOTO_MAX_BYTES, MSG_TOO_BIG,
 from app.utils.employee_display_photo import (employee_display_value, employee_photo_url,
                                               prepare_employee_display_photo,
                                               save_employee_display_photo)
+from app.utils.employee_documents import (EMPLOYEE_DOC_MAX_BYTES, EMPLOYEE_DOC_TITLE_MAX,
+                                          MSG_SAVE_FAILED as _MSG_DOC_SAVE_FAILED,
+                                          prepare_employee_document, save_employee_document,
+                                          validate_document_meta)
 from app.utils import code_generator
 from app.utils.audit import log_action
 
@@ -53,43 +57,17 @@ MAX_EMPLOYEE_DOCUMENTS = 5
 # documents, so the global MAX_CONTENT_LENGTH (16 MB) is deliberately left
 # untouched — lowering it would reject legitimate submissions.
 MAX_EMPLOYEE_PHOTO_BYTES    = EMPLOYEE_PHOTO_MAX_BYTES   # 2 MB, create AND edit
-MAX_EMPLOYEE_DOCUMENT_BYTES = 2 * 1024 * 1024   # 2 MB per employee document
+MAX_EMPLOYEE_DOCUMENT_BYTES = EMPLOYEE_DOC_MAX_BYTES     # 5 MB, wizard AND documents page
 MAX_EMPLOYEE_NOTES_CHARS    = 300               # characters, Python len()
 
 # Arabic validation messages for the limits above (kept generic on purpose —
 # they never echo a filename, path, byte count, or internal detail).
 _MSG_PHOTO_TOO_BIG = MSG_TOO_BIG
-_MSG_DOC_TOO_BIG   = 'حجم كل مستند يجب ألا يتجاوز 2 ميجابايت.'
 _MSG_NOTES_TOO_LONG = f'يجب ألا تتجاوز الملاحظات {MAX_EMPLOYEE_NOTES_CHARS} حرف.'
 _MSG_PHOTO_REJECTED = ('تعذّر حفظ صورة الموظف — تأكد من أن الصيغة مقبولة '
                        'وأن الحجم لا يتجاوز 2 ميجابايت.')
 _MSG_PHOTO_REPLACE_FAILED = ('تعذّر حفظ صورة الموظف الجديدة. لم يتم حفظ التعديلات '
                              'وبقيت الصورة الحالية كما هي. يرجى المحاولة مرة أخرى.')
-
-
-def _uploaded_size(file_storage):
-    """Real byte length of an uploaded file, measured from its own stream.
-
-    Never trusts a client-supplied size, the Content-Length header, the MIME
-    type, or the filename: the stream itself is measured. The position is
-    restored before returning so the existing ``save_uploaded_file`` helper can
-    still read the file normally afterwards.
-
-    Returns the size in bytes, or ``None`` when it cannot be measured — callers
-    treat ``None`` as a failure (fail closed) rather than letting an unmeasured
-    upload through.
-    """
-    stream = getattr(file_storage, 'stream', None)
-    if stream is None:
-        return None
-    try:
-        pos = stream.tell()
-        stream.seek(0, 2)          # SEEK_END
-        size = stream.tell()
-        stream.seek(pos)           # restore for save_uploaded_file()
-        return size
-    except (AttributeError, OSError, ValueError):
-        return None
 
 
 def _available_roles():
@@ -683,21 +661,36 @@ def _handle_employee_post(employee):
             return render_template(_tmpl, error_step='documents',
                                    **_form_context(employee))
 
+    # Documents (create wizard): EVERY selected document is validated AND
+    # prepared here — type length, extension, 5 MB, magic bytes, real image
+    # decode + 40 MP ceiling, image optimisation — before the photo, the
+    # employee row, the linked account or any document touches Storage/DB.
+    # One invalid document rejects the whole create (no partial success).
+    _prepared_docs = []           # [(title, doc_type, prepared FileStorage)]
     if is_create:
-        _submitted_doc_files = [f for f in request.files.getlist('doc_file[]')
-                                if f and f.filename]
-        if len(_submitted_doc_files) > MAX_EMPLOYEE_DOCUMENTS:
+        _doc_types = request.form.getlist('doc_type[]')
+        _doc_files = request.files.getlist('doc_file[]')
+        _selected = [(i, f) for i, f in enumerate(_doc_files) if f and f.filename]
+        if len(_selected) > MAX_EMPLOYEE_DOCUMENTS:
             flash(f'يمكن إضافة {MAX_EMPLOYEE_DOCUMENTS} مستندات كحد أقصى.', 'danger')
             return render_template(_tmpl, error_step='documents',
                                    **_form_context(employee))
-        # Every document is checked before ANY of them is saved, so an oversized
-        # file never results in the other documents being partially uploaded.
-        for _doc_file in _submitted_doc_files:
-            _doc_size = _uploaded_size(_doc_file)
-            if _doc_size is None or _doc_size > MAX_EMPLOYEE_DOCUMENT_BYTES:
-                flash(_MSG_DOC_TOO_BIG, 'danger')
+        for _n, (i, f) in enumerate(_selected, start=1):
+            _doc_type = _doc_types[i].strip() if i < len(_doc_types) else ''
+            _doc_err = validate_document_meta('', _doc_type, title_required=False)
+            _upload = None
+            if not _doc_err:
+                _upload, _doc_err = prepare_employee_document(f)
+            if _doc_err:
+                flash(f'المستند رقم {_n}: {_doc_err}', 'danger')
                 return render_template(_tmpl, error_step='documents',
                                        **_form_context(employee))
+            # Title: the type, else the client filename's stem (display text
+            # only — never used for storage), capped to the column length.
+            _raw = f.filename.rsplit('/', 1)[-1].rsplit('\\', 1)[-1]
+            _title = (_doc_type or _raw.rsplit('.', 1)[0].strip()
+                      or 'مستند')[:EMPLOYEE_DOC_TITLE_MAX]
+            _prepared_docs.append((_title, _doc_type, _upload))
 
     photo_path = None
     if _has_new_photo:
@@ -872,35 +865,26 @@ def _handle_employee_post(employee):
     # request is rolled back: no partial employee, no orphan user account, no
     # half-written assignments. employee.id is already available from the flush.
     _doc_saved     = 0
-    _doc_warnings  = []
     _ta_no_subject = False
     _inst_created  = []           # institute groups created from this page
     if is_create:
         from app.models import EmployeeDocument
-        _ALLOWED_DOC_EXTS = {'pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'}
-        doc_types = request.form.getlist('doc_type[]')
-        doc_files = request.files.getlist('doc_file[]')
-        for i, f in enumerate(doc_files):
-            if not f or not f.filename:
-                continue
-            doc_type = doc_types[i].strip() if i < len(doc_types) else ''
-            _raw = f.filename.rsplit('/', 1)[-1].rsplit('\\', 1)[-1]
-            title = doc_type or _raw.rsplit('.', 1)[0] or 'مستند'
-            file_path = save_uploaded_file(
-                f, 'employee_docs',
-                allowed_exts=_ALLOWED_DOC_EXTS,
-                max_size=MAX_EMPLOYEE_DOCUMENT_BYTES,
-            )
+        # Every document was validated and prepared above; only the prepared
+        # bytes (PDF as-is, images optimised) are stored. A storage failure
+        # rejects the whole create — never a silently skipped document.
+        for _title, _doc_type, _upload in _prepared_docs:
+            file_path = save_employee_document(_upload)
             if not file_path:
-                _doc_warnings.append(
-                    f'تعذّر رفع المستند "{title}" — تأكد من أن صيغة الملف مقبولة.')
-                continue
+                db.session.rollback()
+                flash(_MSG_DOC_SAVE_FAILED, 'danger')
+                return render_template(_tmpl, error_step='documents',
+                                       **_form_context(None))
             db.session.add(EmployeeDocument(
                 employee_id=employee.id,
                 school_id=school.id if school else None,
-                title=title,
+                title=_title,
                 file_path=file_path,
-                doc_type=doc_type or None,
+                doc_type=_doc_type or None,
             ))
             _doc_saved += 1
 
@@ -945,8 +929,6 @@ def _handle_employee_post(employee):
     # ── Wizard documents / teacher assignments outcome (create only) ─────────
     # The rows themselves were already staged and committed atomically above.
     if is_create:
-        for _w in _doc_warnings:
-            flash_msgs.append(('warning', _w))
         if _doc_saved:
             flash_msgs.append(('success', f'تم رفع {_doc_saved} مستند(ات) بنجاح.'))
         if _ta_no_subject:
@@ -1331,21 +1313,26 @@ def documents(emp_id):
     if request.method == 'POST':
         title     = request.form.get('title', '').strip()
         doc_type  = request.form.get('doc_type', '').strip()
-        file_path = None
-        if 'file' in request.files and request.files['file'].filename:
-            file_path = save_uploaded_file(
-                request.files['file'], 'employee_docs',
-                allowed_exts={'pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'},
-            )
-        if title and file_path:
-            doc = EmployeeDocument(
-                employee_id=emp_id, title=title,
-                file_path=file_path, doc_type=doc_type)
-            db.session.add(doc)
-            db.session.commit()
-            flash('تم رفع المستند.', 'success')
-        else:
-            flash('يرجى إدخال العنوان واختيار ملف.', 'danger')
+        # Everything is validated — title, type, file, extension, 5 MB, magic
+        # bytes, real image decode + 40 MP ceiling — and the image optimised
+        # BEFORE anything is written, so a refused request leaves no orphan.
+        err = validate_document_meta(title, doc_type)
+        upload = None
+        if not err:
+            upload, err = prepare_employee_document(request.files.get('file'))
+        if err:
+            flash(err, 'danger')
+            return redirect(url_for('employees.documents', emp_id=emp_id))
+        file_path = save_employee_document(upload)
+        if not file_path:
+            flash(_MSG_DOC_SAVE_FAILED, 'danger')
+            return redirect(url_for('employees.documents', emp_id=emp_id))
+        doc = EmployeeDocument(
+            employee_id=emp_id, title=title,
+            file_path=file_path, doc_type=doc_type)
+        db.session.add(doc)
+        db.session.commit()
+        flash('تم رفع المستند.', 'success')
         return redirect(url_for('employees.documents', emp_id=emp_id))
     docs = (EmployeeDocument.query
             .filter_by(employee_id=emp_id)

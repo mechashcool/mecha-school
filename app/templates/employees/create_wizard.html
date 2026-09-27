@@ -596,7 +596,7 @@
         <p class="text-muted small mb-3">
           <i class="bi bi-info-circle me-1"></i>
           يمكنك رفع مستندات الموظف الآن أو تركها فارغة وإضافتها لاحقاً.
-          الصيغ المسموحة: PDF, JPG, PNG, DOC, DOCX — بحد أقصى 2 ميجابايت لكل مستند.
+          الصيغ المسموحة: PDF, JPG, JPEG, PNG — بحد أقصى 5 ميجابايت لكل مستند.
         </p>
 
         <div class="emp-doc-table">
@@ -621,7 +621,7 @@
               <div>
                 <label class="form-label d-md-none">الملف</label>
                 <input type="file" name="doc_file[]" class="form-control form-control-sm"
-                       accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+                       accept=".pdf,.jpg,.jpeg,.png">
                 <div class="emp-err d-none"></div>
               </div>
               <div class="emp-doc-actions">
@@ -948,7 +948,7 @@ function empClearErr(el) {
       <div>
         <label class="form-label d-md-none">الملف</label>
         <input type="file" name="doc_file[]" class="form-control form-control-sm"
-               accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+               accept=".pdf,.jpg,.jpeg,.png">
         <div class="emp-err d-none"></div>
       </div>
       <div class="emp-doc-actions">
@@ -982,7 +982,7 @@ function empClearErr(el) {
       // Clear ONLY this file input — the row's نوع المستند selection and every
       // other document row are left exactly as they were.
       fi.value = '';
-      empShowErr(errEl, 'حجم كل مستند يجب ألا يتجاوز 2 ميجابايت.');
+      empShowErr(errEl, 'حجم كل مستند يجب ألا يتجاوز 5 ميجابايت.');
       return;
     }
     empClearErr(errEl);
