@@ -903,6 +903,11 @@ class HolidayAudienceScopeTest(unittest.TestCase):
             # Future holiday: its delete action (the former XSS sink) is rendered.
             future = get_local_date(self._school('a')) + timedelta(days=3)
             self._holiday('a', future, name='x\');alert(1);//"<b>', applies_to='students')
+            # Stored schedule history (past, fixed date, future) — must stay in
+            # the DB and in effect, but is no longer shown on the page.
+            sched_ids = [self._schedule('a', 'employees', '5', date(2026, 9, 1)),
+                         self._schedule('a', 'employees', '4', date(2026, 9, 28)),
+                         self._schedule('a', 'students', '0', future)]
         self._login(self.ids['admin_a'])
         resp = self.client.get('/school-calendar/')
         self.assertEqual(resp.status_code, 200)
@@ -913,8 +918,25 @@ class HolidayAudienceScopeTest(unittest.TestCase):
         for removed in ('موروث من الإعداد المشترك',
                         'لا توجد أيام عطلة أسبوعية لهذه الفئة (مطلوب عند عدم اختيار أي يوم)',
                         'confirm_no_days', 'name="effective_from"', 'تاريخ السريان',
-                        'يسري التغيير من تاريخ السريان'):
+                        'يسري التغيير من تاريخ السريان',
+                        # Weekly schedule history section (removed from both cards).
+                        'سجل التغييرات', '<details', '<th>الأيام</th>',
+                        'قبل أول تاريخ', 'الإعداد المشترك القديم', '>مستقبلي<',
+                        '/school-calendar/weekly/'):
             self.assertNotIn(removed, html)
+        with self.app.app_context():
+            # Display-only change: history rows are still stored and resolved.
+            self.assertEqual(
+                len(SchoolWeeklyOffSchedule.query.execution_options(
+                    bypass_tenant_scope=True).filter(
+                    SchoolWeeklyOffSchedule.id.in_(sched_ids)).all()), 3)
+            school = self._school('a')
+            self.assertEqual(resolve_weekly_off_days(school, 'employees',
+                                                     date(2026, 9, 15)), frozenset({5}))
+            self.assertEqual(resolve_weekly_off_days(school, 'employees',
+                                                     date(2026, 9, 29)), frozenset({4}))
+            self.assertEqual(resolve_weekly_off_days(school, 'students', future),
+                             frozenset({0}))
         self.assertIn(
             'ملاحظة: العطلة التي تشمل الطلاب (أو يوم عطلة أسبوعية للطلاب) لا يُسجَّل فيها '
             'غياب تلقائي للطلاب. العطلة التي تشمل الموظفين (أو يوم عطلة أسبوعية للموظفين) '

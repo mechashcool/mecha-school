@@ -69,54 +69,6 @@
             <i class="bi bi-save me-1"></i>حفظ الإعداد
           </button>
         </form>
-
-        {% if w.history %}
-        <details class="mt-3">
-          <summary class="small text-muted">سجل التغييرات ({{ w.history|length }})</summary>
-          <table class="table table-sm small mb-1 mt-2">
-            <thead>
-              <tr><th>من تاريخ</th><th>الأيام</th><th></th></tr>
-            </thead>
-            <tbody>
-              {% for h in w.history %}
-              <tr>
-                <td class="text-nowrap">
-                  {{ h.row.effective_from.isoformat() }}
-                  {% if h.is_in_force %}<span class="badge bg-success">ساري</span>
-                  {% elif h.is_future %}<span class="badge bg-warning text-dark">مستقبلي</span>{% endif %}
-                </td>
-                <td>
-                  {% for d in h.days %}
-                  <span class="badge bg-secondary">{{ weekday_labels[d] }}</span>
-                  {% else %}
-                  <span class="text-muted">لا توجد</span>
-                  {% endfor %}
-                </td>
-                <td class="text-nowrap">
-                  {% if h.is_future %}
-                  <form method="POST" class="d-inline"
-                        action="{{ url_for('school_calendar.delete_weekly', schedule_id=h.row.id) }}">
-                    <button type="submit" class="btn btn-sm btn-outline-danger" title="حذف"
-                            data-confirm="حذف الإعداد المستقبلي؟">
-                      <i class="bi bi-trash"></i>
-                    </button>
-                  </form>
-                  {% endif %}
-                </td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-          <div class="text-muted small">
-            قبل أول تاريخ سريان يُطبَّق الإعداد المشترك القديم:
-            {% for d in weekly.legacy %}
-            <span class="badge bg-light text-dark border">{{ weekday_labels[d] }}</span>
-            {% else %}
-            لا توجد أيام.
-            {% endfor %}
-          </div>
-        </details>
-        {% endif %}
       </div>
     </div>
     {% endfor %}
