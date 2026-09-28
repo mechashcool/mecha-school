@@ -30,9 +30,6 @@
     <div class="card mb-4">
       <div class="card-header fw-bold d-flex justify-content-between align-items-center">
         <span><i class="bi bi-calendar-week me-1"></i>{{ w.label }}</span>
-        {% if w.inherited %}
-        <span class="badge bg-light text-dark border">موروث من الإعداد المشترك</span>
-        {% endif %}
       </div>
       <div class="card-body">
         <p class="text-muted small mb-2">
@@ -68,33 +65,6 @@
             </div>
             {% endfor %}
           </div>
-          <div class="form-check mb-2">
-            <input class="form-check-input" type="checkbox" name="confirm_no_days"
-                   id="{{ aud }}_confirm_no_days" value="1">
-            <label class="form-check-label small" for="{{ aud }}_confirm_no_days">
-              لا توجد أيام عطلة أسبوعية لهذه الفئة (مطلوب عند عدم اختيار أي يوم)
-            </label>
-          </div>
-          <div class="mb-2">
-            <label class="form-label small mb-1" for="{{ aud }}_effective_from">
-              تاريخ السريان <span class="text-danger">*</span>
-            </label>
-            <input type="date" name="effective_from" id="{{ aud }}_effective_from"
-                   class="form-control form-control-sm" required
-                   value="{{ local_today.isoformat() }}" min="{{ local_today.isoformat() }}">
-          </div>
-          {% if aud == 'employees' %}
-          <div class="alert alert-warning small py-2 mb-2">
-            <i class="bi bi-exclamation-triangle me-1"></i>
-            يسري التغيير من تاريخ السريان فقط؛ الأيام السابقة تبقى وفق الجدول القديم.
-            مسودات الرواتب التي تشمل تاريخ السريان ستتغير عند إعادة حسابها، أما الرواتب المعتمدة والمدفوعة فلا تتغير.
-          </div>
-          {% else %}
-          <div class="alert alert-info small py-2 mb-2">
-            <i class="bi bi-info-circle me-1"></i>
-            يسري التغيير من تاريخ السريان فقط؛ سجلات الحضور السابقة لا تتغير.
-          </div>
-          {% endif %}
           <button type="submit" class="btn btn-primary btn-sm">
             <i class="bi bi-save me-1"></i>حفظ الإعداد
           </button>
@@ -292,12 +262,11 @@
                 <span class="badge bg-secondary">معطّلة</span>
                 {% endif %}
               </td>
-              {# A started holiday (start_date <= school-local today) is frozen:
-                 no toggle / delete, and only name + notes are editable.  The
-                 server enforces the same rule against forged requests. #}
+              {# A started holiday (start_date <= school-local today) cannot be
+                 deleted and only name + notes are editable; it can still be
+                 activated / deactivated.  The server enforces the same rule. #}
               {% set h_started = h.start_date <= local_today %}
               <td class="text-nowrap">
-                {% if not h_started %}
                 {# Toggle active #}
                 <form method="POST"
                       action="{{ url_for('school_calendar.toggle', holiday_id=h.id) }}"
@@ -308,12 +277,6 @@
                     <i class="bi {{ 'bi-pause-circle' if h.is_active else 'bi-play-circle' }}"></i>
                   </button>
                 </form>
-                {% else %}
-                <span class="btn btn-sm btn-outline-secondary disabled" aria-disabled="true"
-                      title="عطلة بدأت أو انتهت: يمكن تعديل الاسم والملاحظات فقط">
-                  <i class="bi bi-lock"></i>
-                </span>
-                {% endif %}
 
                 {# Edit — open modal #}
                 <button type="button"
@@ -364,10 +327,7 @@
     {# Info box #}
     <div class="alert alert-info mt-3 small">
       <i class="bi bi-info-circle me-1"></i>
-      <strong>ملاحظة:</strong> العطلة التي تشمل الطلاب (أو يوم عطلة أسبوعية للطلاب) لا يُسجَّل فيها غياب تلقائي للطلاب.
-      العطلة التي تشمل الموظفين (أو يوم عطلة أسبوعية للموظفين) لا تُحتسب يوم عمل للموظفين في التقارير والرواتب.
-      العطل السابقة التي أُضيفت قبل هذه الميزة تشمل الطلاب والموظفين معاً.
-      تسجيل الحضور اليدوي والبصمة الجهاز يعملان بشكل طبيعي في أيام العطل.
+      ملاحظة: العطلة التي تشمل الطلاب (أو يوم عطلة أسبوعية للطلاب) لا يُسجَّل فيها غياب تلقائي للطلاب. العطلة التي تشمل الموظفين (أو يوم عطلة أسبوعية للموظفين) لا تُحتسب يوم عمل للموظفين في التقارير والرواتب.
     </div>
   </div>
 
@@ -385,7 +345,7 @@
         <div class="modal-body">
           <div class="alert alert-warning small py-2" id="editStartedNote" hidden>
             <i class="bi bi-lock me-1"></i>
-            هذه العطلة بدأت أو انتهت: يمكن تعديل الاسم والملاحظات فقط.
+            هذه العطلة بدأت أو انتهت: يمكن تعديل الاسم والملاحظات، وتفعيل العطلة أو تعطيلها من زر التفعيل في القائمة. لا يمكن حذفها أو تغيير تواريخها أو نوعها أو نطاقها.
           </div>
           <div class="mb-3">
             <label class="form-label">اسم العطلة <span class="text-danger">*</span></label>

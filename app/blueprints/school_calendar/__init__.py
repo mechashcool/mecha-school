@@ -69,6 +69,12 @@ WEEKLY_AUDIENCE_LABELS = {
     'employees': 'أيام العطلة الأسبوعية للموظفين',
 }
 
+# Fixed effective date for the weekly schedules saved from this page (both
+# audiences).  Enforced server-side; the form does not send a date.
+WEEKLY_EFFECTIVE_FROM = date_type(2026, 9, 28)
+
+WEEKLY_NO_DAY_MSG = 'يجب اختيار يوم عطلة أسبوعية واحد على الأقل.'
+
 
 def _parse_date(field_name):
     raw = (request.form.get(field_name) or '').strip()
@@ -105,10 +111,11 @@ def _can_manage(holiday, school):
 
 # ── Started-holiday protection ───────────────────────────────────────────────
 # Once a holiday has started (start_date <= the school's local today) its
-# attendance-affecting definition is frozen in the normal UI: it may not be
-# deleted or toggled, and only name / notes may be edited.  Changing dates,
-# type, audience, academic year or ownership would silently reinterpret past
-# attendance, employee reports and draft payroll.
+# definition is frozen in the normal UI: it may not be deleted, and only
+# name / notes may be edited.  Changing dates, type, audience, academic year
+# or ownership would silently reinterpret past attendance, employee reports
+# and draft payroll.  Activating / deactivating stays allowed (audited) so an
+# accidentally created holiday can be stopped.
 
 STARTED_SCOPE_MSG = ('لا يمكن تغيير نطاق عطلة بدأت أو انتهت؛ لأن ذلك قد يؤثر في '
                      'تقارير الحضور ومسودات الرواتب السابقة.')
@@ -116,8 +123,6 @@ STARTED_EDIT_MSG = ('لا يمكن تغيير تواريخ أو نوع أو نط
                     'يمكن تعديل الاسم والملاحظات فقط.')
 STARTED_DELETE_MSG = ('لا يمكن حذف عطلة بدأت أو انتهت؛ حفاظًا على صحة سجلات '
                       'الحضور وتقارير الرواتب السابقة.')
-STARTED_TOGGLE_MSG = ('لا يمكن تعطيل أو تفعيل عطلة بدأت أو انتهت؛ حفاظًا على صحة '
-                      'سجلات الحضور وتقارير الرواتب السابقة.')
 
 
 def _has_started(holiday, school):
@@ -311,16 +316,18 @@ def index():
 @permission_required('manage_calendar')
 def save_weekly():
     """
-    Save the weekly days off of ONE audience from an effective date onward.
+    Save the weekly days off of ONE audience, effective from the fixed date
+    WEEKLY_EFFECTIVE_FROM (2026-09-28).
 
+    • The effective date is decided HERE only: any effective_from submitted by
+      the client is ignored.  The row for that date is created or updated;
+      other schedule rows (earlier or later) are never deleted or changed.
     • The legacy School.weekly_off_days column is never written here; it stays
       the fallback for dates before the audience's first schedule row.
     • A submission without the weekly_form marker or a valid audience (e.g. an
       old cached form) changes nothing.
-    • effective_from is required and may not be before the school's local
-      today — past dates are never reinterpreted from the normal UI.
-    • Saving with no day ticked requires the explicit "no weekly days off"
-      confirmation; it is stored as '' (explicitly none), never as "not set".
+    • At least one weekday is required.  Existing empty ('') rows keep working
+      for the dates they cover, but this page never creates or saves one.
     """
     school = _school_or_abort()
     if not school:
@@ -335,21 +342,11 @@ def save_weekly():
 
     # Only day_0 … day_6 are read — any other key or value is ignored.
     days = [d for d in range(7) if request.form.get(f'day_{d}')]
-    if not days and not request.form.get('confirm_no_days'):
-        flash('لم يتم اختيار أي يوم. إذا كنت تريد عدم وجود عطلة أسبوعية لهذه الفئة '
-              'فحدد خيار "لا توجد أيام عطلة أسبوعية" صراحةً.', 'danger')
+    if not days:
+        flash(WEEKLY_NO_DAY_MSG, 'danger')
         return redirect(url_for('school_calendar.index'))
 
-    local_today = get_local_date(school)
-    effective_from = _parse_date('effective_from')
-    if effective_from is None:
-        flash('تاريخ السريان مطلوب.', 'danger')
-        return redirect(url_for('school_calendar.index'))
-    if effective_from < local_today:
-        flash('لا يمكن أن يكون تاريخ السريان في الماضي — التغيير يُطبَّق من اليوم '
-              'فصاعداً فقط حتى لا تتغير السجلات والتقارير والرواتب السابقة.',
-              'danger')
-        return redirect(url_for('school_calendar.index'))
+    effective_from = WEEKLY_EFFECTIVE_FROM      # fixed; client value ignored
 
     off_days = serialize_weekly_off_days(days)
     label = WEEKLY_AUDIENCE_LABELS[audience]
@@ -358,7 +355,6 @@ def save_weekly():
     same_date = next((r for r in rows if r.effective_from == effective_from), None)
 
     if same_date is not None:
-        # effective_from >= local today here, so the row is not historical.
         if same_date.off_days == off_days:
             flash('لا يوجد تغيير في الإعداد.', 'info')
             return redirect(url_for('school_calendar.index'))
@@ -617,14 +613,13 @@ def toggle(holiday_id):
     if not _can_manage(holiday, school):
         flash('لا يمكنك تعديل هذه العطلة.', 'danger')
         return redirect(url_for('school_calendar.index'))
-    if _has_started(holiday, school):
-        flash(STARTED_TOGGLE_MSG, 'danger')
-        return redirect(url_for('school_calendar.index'))
-
+    # Allowed for started holidays too, so an accidentally created holiday can
+    # be stopped; its dates, type, audience, year and ownership stay locked.
+    started = _has_started(holiday, school)
     holiday.is_active = not holiday.is_active
     db.session.commit()
     log_action('edit', 'school_holiday', holiday.id,
-               details=f'is_active={holiday.is_active}')
+               details=f'is_active={holiday.is_active} started={started}')
     state = 'مفعّلة' if holiday.is_active else 'معطّلة'
     flash(f'العطلة "{holiday.name}" أصبحت {state}.', 'success')
     return redirect(url_for('school_calendar.index'))

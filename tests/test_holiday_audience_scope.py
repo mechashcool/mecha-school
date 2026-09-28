@@ -560,8 +560,6 @@ class HolidayAudienceScopeTest(unittest.TestCase):
                      'يمكن تعديل الاسم والملاحظات فقط.')
     DELETE_LOCK_MSG = ('لا يمكن حذف عطلة بدأت أو انتهت؛ حفاظًا على صحة سجلات '
                        'الحضور وتقارير الرواتب السابقة.')
-    TOGGLE_LOCK_MSG = ('لا يمكن تعطيل أو تفعيل عطلة بدأت أو انتهت؛ حفاظًا على صحة '
-                       'سجلات الحضور وتقارير الرواتب السابقة.')
 
     def _started_pair(self):
         """(past holiday id, today holiday id) for school A."""
@@ -569,7 +567,7 @@ class HolidayAudienceScopeTest(unittest.TestCase):
         return (self._holiday('a', _d(1), _d(2), name='Past'),
                 self._holiday('a', today, today, name='Today'))
 
-    def test_started_holiday_delete_and_toggle_rejected(self):
+    def test_started_holiday_toggle_allowed_delete_rejected(self):
         with self.app.app_context():
             hids = self._started_pair()
             before = {h: self._holiday_row(h) for h in hids}
@@ -579,17 +577,26 @@ class HolidayAudienceScopeTest(unittest.TestCase):
             resp = self.client.post(f'/school-calendar/{hid}/delete',
                                     follow_redirects=True)
             self.assertIn(self.DELETE_LOCK_MSG, resp.get_data(as_text=True))
-            resp = self.client.post(f'/school-calendar/{hid}/toggle',
-                                    follow_redirects=True)
-            self.assertIn(self.TOGGLE_LOCK_MSG, resp.get_data(as_text=True))
+            self._post(f'/school-calendar/{hid}/toggle', {})               # deactivate
+        with self.app.app_context():
+            for hid in hids:
+                row = self._holiday_row(hid)
+                self.assertFalse(row[8])                                   # is_active
+                # Everything except is_active / updated_at is unchanged.
+                self.assertEqual(row[:8], before[hid][:8])
+            self.assertEqual(self._holiday_edit_logs(), logs_before + 2)   # toggles audited
+        for hid in hids:
+            self._post(f'/school-calendar/{hid}/toggle', {})               # reactivate
         self._login(self.ids['parent_a'])
         for hid in hids:
             self.assertEqual(self._post(f'/school-calendar/{hid}/delete', {}).status_code, 403)
             self.assertEqual(self._post(f'/school-calendar/{hid}/toggle', {}).status_code, 403)
         with self.app.app_context():
             for hid in hids:
-                self.assertEqual(self._holiday_row(hid), before[hid])    # exists, is_active kept
-            self.assertEqual(self._holiday_edit_logs(), logs_before)
+                row = self._holiday_row(hid)
+                self.assertTrue(row[8])                                    # still exists, active
+                self.assertEqual(row[:8], before[hid][:8])
+            self.assertEqual(self._holiday_edit_logs(), logs_before + 4)
 
     def test_started_holiday_name_and_notes_only(self):
         with self.app.app_context():
@@ -674,13 +681,13 @@ class HolidayAudienceScopeTest(unittest.TestCase):
         self._login(self.ids['admin_a'])
         html = self.client.get('/school-calendar/').get_data(as_text=True)
         for hid in (past, today_hid):
-            self.assertNotIn(f'/school-calendar/{hid}/toggle', html)
+            self.assertIn(f'/school-calendar/{hid}/toggle', html)       # toggle restored
             self.assertNotIn(f'/school-calendar/{hid}/delete', html)
             self.assertRegex(html, rf'data-holiday-id="{hid}"[^>]*data-started="1"')
         self.assertIn(f'/school-calendar/{future}/toggle', html)
         self.assertIn(f'/school-calendar/{future}/delete', html)
         self.assertRegex(html, rf'data-holiday-id="{future}"[^>]*data-started="0"')
-        self.assertIn('هذه العطلة بدأت أو انتهت: يمكن تعديل الاسم والملاحظات فقط.', html)
+        self.assertIn('يمكن تعديل الاسم والملاحظات، وتفعيل العطلة أو تعطيلها', html)
         for field in ('editStartDate', 'editEndDate', 'editType', 'editYear',
                       'editAppliesTo', 'editGlobal'):
             self.assertIn(f"'{field}'", html)
@@ -797,40 +804,48 @@ class HolidayAudienceScopeTest(unittest.TestCase):
                              ('B-only', 'students', True))
 
     def test_weekly_schedule_save_rules(self):
-        self._login(self.ids['admin_a'])
+        from app.blueprints.school_calendar import WEEKLY_EFFECTIVE_FROM, WEEKLY_NO_DAY_MSG
+        fixed = date(2026, 9, 28)
+        self.assertEqual(WEEKLY_EFFECTIVE_FROM, fixed)
+        hist = date(2026, 9, 1)
         with self.app.app_context():
-            today = get_local_date(self._school('a'))
-        base = {'weekly_form': '1', 'audience': 'employees',
-                'effective_from': today.isoformat(), 'day_4': '1'}
+            # Pre-existing historical rows, incl. an empty one, must survive.
+            hist_emp = self._schedule('a', 'employees', '5', hist)
+            hist_stu = self._schedule('a', 'students', '', hist)
+        self._login(self.ids['admin_a'])
+        base = {'weekly_form': '1', 'audience': 'employees', 'day_4': '1'}
         self._post('/school-calendar/weekly', {'day_4': '1'})                   # old form
         self._post('/school-calendar/weekly', dict(base, audience='teachers'))
-        self._post('/school-calendar/weekly',
-                   dict(base, effective_from=(today - timedelta(days=1)).isoformat()))
-        self._post('/school-calendar/weekly', dict(base, effective_from=''))
-        self._post('/school-calendar/weekly',
-                   {'weekly_form': '1', 'audience': 'students',
-                    'effective_from': today.isoformat()})                       # empty, unconfirmed
+        for empty in ({'weekly_form': '1', 'audience': 'students'},
+                      {'weekly_form': '1', 'audience': 'students',
+                       'confirm_no_days': '1'}):                               # old checkbox
+            resp = self.client.post('/school-calendar/weekly', data=empty,
+                                    follow_redirects=True)
+            self.assertIn(WEEKLY_NO_DAY_MSG, resp.get_data(as_text=True))
         with self.app.app_context():
-            self.assertEqual(self._rows(SchoolWeeklyOffSchedule,
-                                        school_id=self.ids['school_a']), [])
-        # Valid: employee Fri only from today; forged day_9 and school_id ignored.
+            self.assertEqual(
+                {r.id for r in self._rows(SchoolWeeklyOffSchedule,
+                                          school_id=self.ids['school_a'])},
+                {hist_emp, hist_stu})
+        # Forged effective dates (past, far future, garbage), forged day_9 and
+        # forged school_id are all ignored: the row is always effective 2026-09-28.
         self._post('/school-calendar/weekly',
-                   dict(base, day_9='1', school_id=str(self.ids['school_b'])))
-        # Explicitly empty student schedule from next week.
-        nxt = (today + timedelta(days=7)).isoformat()
+                   dict(base, effective_from='2020-01-01', day_9='1',
+                        school_id=str(self.ids['school_b'])))
         self._post('/school-calendar/weekly',
-                   {'weekly_form': '1', 'audience': 'students', 'effective_from': nxt,
-                    'confirm_no_days': '1'})
-        # Same-date re-save updates; identical re-save is a no-op.
-        self._post('/school-calendar/weekly', dict(base, day_5='1'))
+                   {'weekly_form': '1', 'audience': 'students', 'day_5': '1',
+                    'effective_from': '2099-12-31'})
+        # Same fixed-date row is updated; an identical re-save is a no-op.
+        self._post('/school-calendar/weekly',
+                   dict(base, day_5='1', effective_from='not-a-date'))
         self._post('/school-calendar/weekly', dict(base, day_5='1'))
         with self.app.app_context():
             rows = sorted(self._rows(SchoolWeeklyOffSchedule,
                                      school_id=self.ids['school_a']),
-                          key=lambda r: r.audience)
+                          key=lambda r: (r.audience, r.effective_from))
             self.assertEqual([(r.audience, r.off_days, r.effective_from) for r in rows],
-                             [('employees', '4,5', today),
-                              ('students', '', today + timedelta(days=7))])
+                             [('employees', '5', hist), ('employees', '4,5', fixed),
+                              ('students', '', hist), ('students', '5', fixed)])
             self.assertEqual(self._rows(SchoolWeeklyOffSchedule,
                                         school_id=self.ids['school_b']), [])
             self.assertEqual(self._school('a').weekly_off_days, '4,5')
@@ -894,8 +909,16 @@ class HolidayAudienceScopeTest(unittest.TestCase):
         html = resp.get_data(as_text=True)
         self.assertIn('أيام العطلة الأسبوعية للطلاب', html)
         self.assertIn('أيام العطلة الأسبوعية للموظفين', html)
-        self.assertIn('موروث من الإعداد المشترك', html)
         self.assertIn('الطلاب فقط', html)
+        for removed in ('موروث من الإعداد المشترك',
+                        'لا توجد أيام عطلة أسبوعية لهذه الفئة (مطلوب عند عدم اختيار أي يوم)',
+                        'confirm_no_days', 'name="effective_from"', 'تاريخ السريان',
+                        'يسري التغيير من تاريخ السريان'):
+            self.assertNotIn(removed, html)
+        self.assertIn(
+            'ملاحظة: العطلة التي تشمل الطلاب (أو يوم عطلة أسبوعية للطلاب) لا يُسجَّل فيها '
+            'غياب تلقائي للطلاب. العطلة التي تشمل الموظفين (أو يوم عطلة أسبوعية للموظفين) '
+            'لا تُحتسب يوم عمل للموظفين في التقارير والرواتب.', html)
         self.assertNotIn('onsubmit=', html)
         self.assertNotIn('"<b>', html)
         self.assertIn('data-confirm="حذف العطلة «x&#39;);alert(1);//&#34;&lt;b&gt;»؟"',
