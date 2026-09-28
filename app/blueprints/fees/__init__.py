@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify, session as flask_session, abort
 from flask_login import login_required, current_user
 from datetime import date, datetime as dt, timedelta
-from sqlalchemy import func
+from sqlalchemy import func, and_, cast, false, literal, Text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload, contains_eager
 from werkzeug.exceptions import HTTPException
@@ -19,7 +19,7 @@ from app.utils.helpers import generate_receipt_no
 from app.utils.audit import log_action
 from app.utils.buildings import (
     apply_building_scope_to_students, apply_building_scope_to_fees,
-    user_can_access_student,
+    user_can_access_student, user_is_building_restricted,
 )
 
 fees_bp = Blueprint('fees', __name__, template_folder='../../templates/fees')
@@ -27,7 +27,8 @@ _log = logging.getLogger('mecha.fees')
 
 
 def _overdue_installments_query(school, *, search='', fee_type_filter='all',
-                                installment_filter='all', rfid=''):
+                                installment_filter='all', rfid='', period_sub=None,
+                                eager=True):
     """Query yielding ONE row per *overdue* FeeInstallment.
 
     Overdue = due_date strictly before today AND an outstanding balance remains
@@ -45,16 +46,27 @@ def _overdue_installments_query(school, *, search='', fee_type_filter='all',
     and Student is school scoped, so every joined table — including the eager-
     loaded aliases — is constrained to the current school and view year. Building
     scope is applied explicitly through the Student join.
+
+    ``period_sub`` (from _period_paid_subquery, per installment) restricts the
+    rows to overdue installments that received at least one payment inside the
+    selected payment-date range. ``eager=False`` omits the eager-load options so
+    the query can be narrowed to its id column (period totals).
     """
     q = (
         FeeInstallment.query
         .join(FeeRecord, FeeInstallment.fee_record_id == FeeRecord.id)
         .join(Student, FeeRecord.student_id == Student.id)
-        .options(
+    )
+    if eager:
+        q = q.options(
             joinedload(FeeInstallment.fee_record).joinedload(FeeRecord.student),
             joinedload(FeeInstallment.fee_record).joinedload(FeeRecord.fee_type),
             joinedload(FeeInstallment.fee_record).joinedload(FeeRecord.academic_year),
         )
+    if period_sub is not None:
+        q = q.join(period_sub, FeeInstallment.id == period_sub.c.key_id)
+    q = (
+        q
         .filter(FeeInstallment.due_date < date.today())
         .filter(
             (FeeInstallment.amount - func.coalesce(FeeInstallment.received_amount, 0)) > 0
@@ -92,6 +104,289 @@ def _overdue_installments_query(school, *, search='', fee_type_filter='all',
         FeeInstallment.due_date.asc(),
         FeeInstallment.installment_no.asc(),
     )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  FEES LIST FILTERS — ONE implementation shared by the Fees page (fees.index),
+#  its Excel export (fees.export_excel) and its print view (fees.print_list)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Payment-date range ("من تاريخ / إلى تاريخ") = money ACTUALLY COLLECTED in the
+# period. There is no separate payment table: every accepted payment writes one
+# ``Revenue`` row per installment it touched (stage_installment_payment), dated
+# with the cashier-entered payment date (``Revenue.date``) and linked to that
+# installment ONLY by the installment's globally-unique ``receipt_no`` at the
+# end of the description — ``... - {receipt_no}`` or
+# ``... - {receipt_no} [TXN:{op_ref}]`` — the same exact linkage the refund
+# pathway uses. ``FeeInstallment.paid_date`` is deliberately NOT used: every
+# payment overwrites it, so it only holds the latest payment's date.
+# Refunded allocations (``refunded_at`` set) are not active income anywhere in
+# the system (finance reports exclude them too) and are excluded here.
+# Payment rows written before the receipt number was embedded in the
+# description cannot be attributed to a fee; they are reported separately by
+# period_unlinked_payments so the gap is shown, never hidden.
+
+# First capture group = the installment receipt_no (PostgreSQL SUBSTRING ... FROM).
+_PAYMENT_RECEIPT_SQL_RE = r'- (RCP-[0-9]{8}-[0-9A-Za-z]+)(?: \[TXN:[^]]*\])?$'
+_FEE_PAYMENT_DESC_PREFIX = 'دفعة رسوم للطالب'
+_ISO_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
+MSG_PAYMENT_DATE_INVALID = 'صيغة التاريخ غير صحيحة. يرجى إدخال التاريخ بالصيغة YYYY-MM-DD.'
+MSG_PAYMENT_DATE_ORDER   = 'تاريخ البداية (من تاريخ) يجب ألا يكون بعد تاريخ النهاية (إلى تاريخ).'
+
+
+class FeeListFilters:
+    """Normalized Fees-list filter state (see parse_fee_list_filters)."""
+    __slots__ = ('search', 'fee_type', 'payment_status', 'installment', 'rfid',
+                 'date_from_raw', 'date_to_raw', 'date_from', 'date_to', 'date_error')
+
+    @property
+    def date_active(self):
+        return self.date_error is None and (self.date_from is not None
+                                            or self.date_to is not None)
+
+
+def _parse_iso_date(raw):
+    """Strict YYYY-MM-DD → (date|None, is_valid)."""
+    if not raw:
+        return None, True
+    if not _ISO_DATE_RE.match(raw):
+        return None, False
+    try:
+        return date.fromisoformat(raw), True
+    except ValueError:
+        return None, False
+
+
+def parse_fee_list_filters(args):
+    """Read every Fees-list filter from request args — identical for the page,
+    the Excel export and the print view. Existing filters keep their exact raw
+    handling; the payment-date pair is validated here (never a 500)."""
+    f = FeeListFilters()
+    f.search         = args.get('q', '')
+    f.fee_type       = args.get('fee_type', 'all')
+    f.payment_status = args.get('payment_status', 'all')
+    f.installment    = args.get('installment', 'all')
+    # RFID: a STRING trimmed of the whitespace/CR/LF the CR20 reader appends,
+    # never parsed as a number (same as the /students/ page).
+    f.rfid           = args.get('rfid', '').strip()
+    f.date_from_raw  = (args.get('payment_date_from') or '').strip()[:32]
+    f.date_to_raw    = (args.get('payment_date_to') or '').strip()[:32]
+    f.date_error     = None
+    f.date_from, ok_from = _parse_iso_date(f.date_from_raw)
+    f.date_to, ok_to     = _parse_iso_date(f.date_to_raw)
+    if not (ok_from and ok_to):
+        f.date_from = f.date_to = None
+        f.date_error = MSG_PAYMENT_DATE_INVALID
+    elif f.date_from and f.date_to and f.date_from > f.date_to:
+        f.date_from = f.date_to = None
+        f.date_error = MSG_PAYMENT_DATE_ORDER
+    return f
+
+
+def _payment_receipt_expr():
+    return func.substring(Revenue.description,
+                          cast(literal(_PAYMENT_RECEIPT_SQL_RE), Text))
+
+
+def _period_paid_subquery(school, filters, *, per_installment=False):
+    """Grouped subquery (key_id, period_paid): the SUM of ACTIVE fee-payment
+    allocations whose payment date (``Revenue.date``, inclusive range) falls in
+    the selected period, keyed by fee record (default) or by installment.
+
+    Each allocation row belongs to exactly one installment (unique receipt_no),
+    so grouping can neither duplicate a fee nor double-count a payment. School
+    isolation is explicit (Revenue.school_id + same-school installment match)
+    on top of the ORM tenant scope. With an installment-number filter, only
+    payments on that installment number count (intersection of the filters).
+    """
+    key = FeeInstallment.id if per_installment else FeeInstallment.fee_record_id
+    q = (
+        db.session.query(key.label('key_id'),
+                         func.sum(Revenue.amount).label('period_paid'))
+        .select_from(Revenue)
+        .join(FeeInstallment, and_(FeeInstallment.receipt_no == _payment_receipt_expr(),
+                                   FeeInstallment.school_id == Revenue.school_id))
+        .filter(Revenue.refunded_at.is_(None))
+    )
+    if school is not None:
+        q = q.filter(Revenue.school_id == school.id)
+    if filters.date_from is not None:
+        q = q.filter(Revenue.date >= filters.date_from)
+    if filters.date_to is not None:
+        q = q.filter(Revenue.date <= filters.date_to)
+    if filters.installment != 'all':
+        q = q.filter(FeeInstallment.installment_no == int(filters.installment))
+    return q.group_by(key).subquery()
+
+
+def build_fee_records_query(school, filters):
+    """The Fees list query (one row per active FeeRecord) with every filter
+    applied. Returns ``(query, period_sub)``; ``period_sub`` is None unless a
+    valid payment-date range is set, in which case only fees with at least one
+    payment collected in the range remain (inner join on the grouped period
+    subquery → still one row per fee). A malformed/inverted range yields no rows
+    rather than a silently unfiltered list."""
+    # Subquery for total paid
+    total_paid_sub = db.session.query(
+        FeeInstallment.fee_record_id,
+        func.sum(FeeInstallment.received_amount).label('total_paid')
+    ).group_by(FeeInstallment.fee_record_id).subquery()
+
+    query = FeeRecord.query.join(Student).outerjoin(
+        total_paid_sub, FeeRecord.id == total_paid_sub.c.fee_record_id
+    )
+
+    # Cancelled fees are preserved as history (visible on the student statement)
+    # but are not active fees, outstanding balances, or collectible amounts.
+    query = query.filter(FeeRecord.cancelled_at.is_(None))
+
+    # School scoping
+    if school:
+        query = query.filter(FeeRecord.school_id == school.id)
+
+    # Building scope — restricted users only see fees of their buildings' students.
+    query = apply_building_scope_to_fees(query, current_user, school)
+
+    if filters.search:
+        query = query.filter(Student.full_name.ilike(f'%{filters.search}%') |
+                             Student.student_id.ilike(f'%{filters.search}%'))
+
+    # RFID card filter — EXACT match on the already-joined Student, identical to
+    # the /students/ page. ANDed with every other filter; the query is already
+    # school-scoped and building-scoped above, so a card from another school (or
+    # another building, for a restricted user) matches no rows.
+    if filters.rfid:
+        query = query.filter(Student.rfid_tag_id == filters.rfid)
+
+    if filters.fee_type != 'all':
+        query = query.filter(FeeRecord.fee_type_id == int(filters.fee_type))
+
+    if filters.installment != 'all':
+        query = query.join(FeeInstallment).filter(
+            FeeInstallment.installment_no == int(filters.installment))
+
+    period_sub = None
+    if filters.date_error:
+        query = query.filter(false())
+    elif filters.date_active:
+        period_sub = _period_paid_subquery(school, filters)
+        query = query.join(period_sub, FeeRecord.id == period_sub.c.key_id)
+
+    # Calculate remaining: net_amount - total_paid (existing all-time status
+    # semantics, applied AFTER the payment-date qualification).
+    net_amount_expr = FeeRecord.total_amount - func.coalesce(FeeRecord.discount, 0)
+    remaining_expr = net_amount_expr - func.coalesce(total_paid_sub.c.total_paid, 0)
+
+    if filters.payment_status == 'paid':
+        query = query.filter(remaining_expr <= 0)
+    elif filters.payment_status == 'unpaid':
+        query = query.filter(remaining_expr > 0)
+
+    return query.order_by(FeeRecord.created_at.desc()), period_sub
+
+
+def build_overdue_query(school, filters, *, eager=True):
+    """Overdue-mode counterpart of build_fee_records_query: one row per overdue
+    installment; with a payment-date range, only overdue installments that
+    received a payment inside it (per-installment period subquery)."""
+    period_sub = None
+    if filters.date_active:
+        period_sub = _period_paid_subquery(school, filters, per_installment=True)
+    q = _overdue_installments_query(
+        school,
+        search=filters.search,
+        fee_type_filter=filters.fee_type,
+        installment_filter=filters.installment,
+        rfid=filters.rfid,
+        period_sub=period_sub,
+        eager=eager,
+    )
+    if filters.date_error:
+        q = q.filter(false())
+    return q, period_sub
+
+
+def period_paid_for_keys(period_sub, keys):
+    """{key_id: Decimal period_paid} for the given fee/installment ids — ONE
+    grouped query for the whole page/export, never one per row."""
+    if period_sub is None or not keys:
+        return {}
+    rows = (db.session.query(period_sub.c.key_id, period_sub.c.period_paid)
+            .filter(period_sub.c.key_id.in_(list(keys)))
+            .all())
+    return {k: Decimal(str(v or 0)) for k, v in rows}
+
+
+def period_paid_total(period_sub, key_column_query):
+    """Total collected in the period over the DISTINCT listed rows (a
+    ``query.with_entities(<id column>)``), so a join can never multiply it."""
+    if period_sub is None:
+        return None
+    ids = key_column_query.order_by(None).distinct().subquery()
+    total = (db.session.query(func.coalesce(func.sum(period_sub.c.period_paid), 0))
+             .select_from(period_sub)
+             .join(ids, list(ids.c)[0] == period_sub.c.key_id)
+             .scalar())
+    return Decimal(str(total or 0))
+
+
+def period_unlinked_payments(school, filters):
+    """Fee-payment Revenue rows in the period that CANNOT be attributed to any
+    fee (written before the receipt number was embedded in the description).
+    Returns {'count', 'amount'} or None. Shown only to users with school-wide
+    fee scope: the rows carry no student link, so a building-restricted user
+    must not see figures that may belong to other buildings."""
+    if not filters.date_active or school is None:
+        return None
+    if user_is_building_restricted(current_user, school):
+        return None
+    linked = (db.session.query(FeeInstallment.id)
+              .filter(FeeInstallment.receipt_no == _payment_receipt_expr(),
+                      FeeInstallment.school_id == Revenue.school_id)
+              .exists())
+    q = (db.session.query(func.count(Revenue.id),
+                          func.coalesce(func.sum(Revenue.amount), 0))
+         .filter(Revenue.school_id == school.id,
+                 Revenue.refunded_at.is_(None),
+                 Revenue.description.like(f'{_FEE_PAYMENT_DESC_PREFIX}%'),
+                 ~linked))
+    if filters.date_from is not None:
+        q = q.filter(Revenue.date >= filters.date_from)
+    if filters.date_to is not None:
+        q = q.filter(Revenue.date <= filters.date_to)
+    count, amount = q.one()
+    if not count:
+        return None
+    return {'count': count, 'amount': Decimal(str(amount or 0))}
+
+
+def fee_filter_context(filters):
+    """Template variables describing the filter state (page + print)."""
+    return {
+        'search':             filters.search,
+        'fee_type_filter':    filters.fee_type,
+        'payment_status':     filters.payment_status,
+        'installment_filter': filters.installment,
+        'rfid':               filters.rfid,
+        'payment_date_from':  filters.date_from_raw,
+        'payment_date_to':    filters.date_to_raw,
+        'payment_date_error': filters.date_error,
+        'period_active':      filters.date_active,
+    }
+
+
+def _period_summary(school, filters):
+    """Export/print period header: the selected range, the unattributable-row
+    note and (filled in by the caller from the exported rows) the total."""
+    if not filters.date_active:
+        return None
+    return {
+        'date_from': filters.date_from,
+        'date_to':   filters.date_to,
+        'total':     Decimal('0'),
+        'unlinked':  period_unlinked_payments(school, filters),
+    }
 
 
 def _notify_fee_parents(student_id, title, body, screen, *, fee_record_id=None,
@@ -988,22 +1283,13 @@ def _op_refund_status(inst, op_ref):
 @login_required
 @permission_required('manage_fees')
 def index():
-    page      = request.args.get('page', 1, type=int)
-    search    = request.args.get('q', '')
-    fee_type_filter = request.args.get('fee_type', 'all')
-    payment_status = request.args.get('payment_status', 'all')
-    installment_filter = request.args.get('installment', 'all')
-    # RFID card filter — same handling as the /students/ page: a STRING that is
-    # only trimmed of the whitespace/CR/LF the CR20 reader appends, so
-    # "0006110011" never degrades to "6110011". Never parsed as a number.
-    rfid      = request.args.get('rfid', '').strip()
+    page    = request.args.get('page', 1, type=int)
+    # Every filter (incl. the payment-date range) is parsed ONCE by the helper
+    # shared with the Excel export and print view, so all three always show the
+    # same data set.
+    filters = parse_fee_list_filters(request.args)
+    rfid    = filters.rfid
 
-    # Subquery for total paid
-    total_paid_sub = db.session.query(
-        FeeInstallment.fee_record_id,
-        func.sum(FeeInstallment.received_amount).label('total_paid')
-    ).group_by(FeeInstallment.fee_record_id).subquery()
-    
     school = get_current_school()
     year   = get_view_year(school.id) if school else None
 
@@ -1027,75 +1313,40 @@ def index():
         _rfid_q = apply_building_scope_to_students(_rfid_q, current_user, school)
         rfid_no_student = not db.session.query(_rfid_q.exists()).scalar()
 
+    # Payment-date period figures (None when no valid range is selected).
+    unlinked = period_unlinked_payments(school, filters)
+
     # ── "متأخر التسديد" — one visible row per overdue installment ──────────
     # This mode intentionally does NOT group by fee record: a student with
     # several overdue installments appears once per overdue installment, each
     # row carrying that installment's own number/amount/received/remaining/
     # due date. School, building and academic-year isolation are enforced by
     # _overdue_installments_query (see its docstring).
-    if payment_status == 'overdue':
-        overdue_page = _overdue_installments_query(
-            school,
-            search=search,
-            fee_type_filter=fee_type_filter,
-            installment_filter=installment_filter,
-            rfid=rfid,
-        ).paginate(page=page, per_page=20, error_out=False)
+    if filters.payment_status == 'overdue':
+        overdue_q, period_sub = build_overdue_query(school, filters)
+        overdue_page = overdue_q.paginate(page=page, per_page=20, error_out=False)
+        period_paid = None
+        period_total = None
+        if period_sub is not None:
+            period_paid = period_paid_for_keys(period_sub, [i.id for i in overdue_page.items])
+            period_total = period_paid_total(
+                period_sub,
+                build_overdue_query(school, filters, eager=False)[0]
+                .with_entities(FeeInstallment.id))
         return render_template(
             'fees/index.html',
             records=overdue_page, fee_entries=[],
             overdue_mode=True, overdue_installments=overdue_page.items,
             fee_types=fee_types,
-            years=years, search=search,
-            fee_type_filter=fee_type_filter,
-            payment_status=payment_status,
-            installment_filter=installment_filter,
-            rfid=rfid, rfid_no_student=rfid_no_student,
+            years=years,
+            rfid_no_student=rfid_no_student,
+            period_paid=period_paid, period_total=period_total,
+            period_unlinked=unlinked,
+            **fee_filter_context(filters),
         )
 
-    query = FeeRecord.query.join(Student).outerjoin(
-        total_paid_sub, FeeRecord.id == total_paid_sub.c.fee_record_id
-    )
-
-    # Cancelled fees are preserved as history (visible on the student statement)
-    # but are not active fees, outstanding balances, or collectible amounts.
-    query = query.filter(FeeRecord.cancelled_at.is_(None))
-
-    # School scoping
-    if school:
-        query = query.filter(FeeRecord.school_id == school.id)
-
-    # Building scope — restricted users only see fees of their buildings' students.
-    query = apply_building_scope_to_fees(query, current_user, school)
-
-    if search:
-        query = query.filter(Student.full_name.ilike(f'%{search}%') |
-                             Student.student_id.ilike(f'%{search}%'))
-
-    # RFID card filter — EXACT match on the already-joined Student, identical to
-    # the /students/ page. ANDed with every other filter; the query is already
-    # school-scoped and building-scoped above, so a card from another school (or
-    # another building, for a restricted user) matches no rows.
-    if rfid:
-        query = query.filter(Student.rfid_tag_id == rfid)
-
-    if fee_type_filter != 'all':
-        query = query.filter(FeeRecord.fee_type_id == int(fee_type_filter))
-
-    if installment_filter != 'all':
-        query = query.join(FeeInstallment).filter(FeeInstallment.installment_no == int(installment_filter))
-    
-    # Calculate remaining: net_amount - total_paid
-    net_amount_expr = FeeRecord.total_amount - func.coalesce(FeeRecord.discount, 0)
-    remaining_expr = net_amount_expr - func.coalesce(total_paid_sub.c.total_paid, 0)
-    
-    if payment_status == 'paid':
-        query = query.filter(remaining_expr <= 0)
-    elif payment_status == 'unpaid':
-        query = query.filter(remaining_expr > 0)
-
-    records   = query.order_by(FeeRecord.created_at.desc())\
-                     .paginate(page=page, per_page=20, error_out=False)
+    query, period_sub = build_fee_records_query(school, filters)
+    records = query.paginate(page=page, per_page=20, error_out=False)
 
     # Batch-fetch installments for the current page to avoid N+1 queries.
     _page_ids = [r.id for r in records.items]
@@ -1112,15 +1363,23 @@ def index():
         _inst_map.setdefault(_i.fee_record_id, []).append(_i)
     fee_entries = [(r, _inst_map.get(r.id, [])) for r in records.items]
 
+    # Period amounts: one grouped query for the page + one aggregate for the
+    # whole filtered set (never one query per row).
+    period_paid = None
+    period_total = None
+    if period_sub is not None:
+        period_paid = period_paid_for_keys(period_sub, _page_ids)
+        period_total = period_paid_total(period_sub, query.with_entities(FeeRecord.id))
+
     return render_template('fees/index.html',
                            records=records, fee_entries=fee_entries,
                            overdue_mode=False, overdue_installments=[],
                            fee_types=fee_types,
-                           years=years, search=search,
-                           fee_type_filter=fee_type_filter,
-                           payment_status=payment_status,
-                           installment_filter=installment_filter,
-                           rfid=rfid, rfid_no_student=rfid_no_student)
+                           years=years,
+                           rfid_no_student=rfid_no_student,
+                           period_paid=period_paid, period_total=period_total,
+                           period_unlinked=unlinked,
+                           **fee_filter_context(filters))
 
 
 @fees_bp.route('/create', methods=['GET', 'POST'])
@@ -2281,21 +2540,26 @@ def export_excel():
     from flask import Response
     from app.utils.excel_export import export_fees, export_overdue_installments
 
-    search            = request.args.get('q', '')
-    fee_type_filter   = request.args.get('fee_type', 'all')
-    payment_status    = request.args.get('payment_status', 'all')
-    installment_filter = request.args.get('installment', 'all')
+    # Same parser + query builders as the Fees page → the export is exactly the
+    # on-screen data set (all filters, incl. RFID and the payment-date range).
+    filters = parse_fee_list_filters(request.args)
+    if filters.date_error:
+        # fees.index renders the validation message from the same args.
+        return redirect(url_for('fees.index', **request.args.to_dict()))
+    school = get_current_school()
+    period_summary = _period_summary(school, filters)
 
     # "متأخر التسديد" — export one row per overdue installment (no grouping),
     # mirroring the on-screen overdue meaning. Same shared filters + isolation.
-    if payment_status == 'overdue':
-        overdue_insts = _overdue_installments_query(
-            get_current_school(),
-            search=search,
-            fee_type_filter=fee_type_filter,
-            installment_filter=installment_filter,
-        ).all()
-        data = export_overdue_installments(overdue_insts)
+    if filters.payment_status == 'overdue':
+        overdue_q, period_sub = build_overdue_query(school, filters)
+        overdue_insts = overdue_q.all()
+        period_paid = None
+        if period_sub is not None:
+            period_paid = period_paid_for_keys(period_sub, [i.id for i in overdue_insts])
+            period_summary['total'] = sum(period_paid.values(), Decimal('0'))
+        data = export_overdue_installments(overdue_insts, period_paid=period_paid,
+                                           period_summary=period_summary)
         if not data:
             flash('مكتبة Excel غير متاحة.', 'warning')
             return redirect(url_for('fees.index', payment_status='overdue'))
@@ -2305,40 +2569,13 @@ def export_excel():
             headers={'Content-Disposition': 'attachment; filename=fees_overdue.xlsx'}
         )
 
-    total_paid_sub = db.session.query(
-        FeeInstallment.fee_record_id,
-        func.sum(FeeInstallment.received_amount).label('total_paid')
-    ).group_by(FeeInstallment.fee_record_id).subquery()
-
-    query = FeeRecord.query.join(Student).outerjoin(
-        total_paid_sub, FeeRecord.id == total_paid_sub.c.fee_record_id
-    )
-
-    # Cancelled fees are excluded from the active fees export.
-    query = query.filter(FeeRecord.cancelled_at.is_(None))
-
-    # Building scope — restricted users only export their buildings' fees.
-    query = apply_building_scope_to_fees(query, current_user, get_current_school())
-
-    if search:
-        query = query.filter(Student.full_name.ilike(f'%{search}%') |
-                             Student.student_id.ilike(f'%{search}%'))
-
-    if fee_type_filter != 'all':
-        query = query.filter(FeeRecord.fee_type_id == int(fee_type_filter))
-
-    if installment_filter != 'all':
-        query = query.join(FeeInstallment).filter(FeeInstallment.installment_no == int(installment_filter))
-
-    net_amount_expr = FeeRecord.total_amount - func.coalesce(FeeRecord.discount, 0)
-    remaining_expr = net_amount_expr - func.coalesce(total_paid_sub.c.total_paid, 0)
-    if payment_status == 'paid':
-        query = query.filter(remaining_expr <= 0)
-    elif payment_status == 'unpaid':
-        query = query.filter(remaining_expr > 0)
-
-    records = query.order_by(FeeRecord.created_at.desc()).all()
-    data = export_fees(records)
+    query, period_sub = build_fee_records_query(school, filters)
+    records = query.all()
+    period_paid = None
+    if period_sub is not None:
+        period_paid = period_paid_for_keys(period_sub, [r.id for r in records])
+        period_summary['total'] = sum(period_paid.values(), Decimal('0'))
+    data = export_fees(records, period_paid=period_paid, period_summary=period_summary)
     if not data:
         flash('مكتبة Excel غير متاحة.', 'warning')
         return redirect(url_for('fees.index'))
@@ -2384,18 +2621,14 @@ def fee_types():
 @permission_required('manage_fees')
 def print_list():
     """Print view of current fee records — same filters as index, no pagination."""
-    search             = request.args.get('q', '')
-    fee_type_filter    = request.args.get('fee_type', 'all')
-    payment_status     = request.args.get('payment_status', 'all')
-    installment_filter = request.args.get('installment', 'all')
-
-    total_paid_sub = db.session.query(
-        FeeInstallment.fee_record_id,
-        func.sum(FeeInstallment.received_amount).label('total_paid')
-    ).group_by(FeeInstallment.fee_record_id).subquery()
+    filters = parse_fee_list_filters(request.args)
+    if filters.date_error:
+        # fees.index renders the validation message from the same args.
+        return redirect(url_for('fees.index', **request.args.to_dict()))
 
     school = get_current_school()
     year   = get_view_year(school.id) if school else None
+    period_summary = _period_summary(school, filters)
 
     logo_url = None
     if school and getattr(school, 'logo_path', None):
@@ -2404,17 +2637,17 @@ def print_list():
 
     fee_types     = FeeType.query.all()
     fee_type_name = next(
-        (ft.name for ft in fee_types if str(ft.id) == fee_type_filter), None)
+        (ft.name for ft in fee_types if str(ft.id) == filters.fee_type), None)
 
     # "متأخر التسديد" — print one row per overdue installment (no grouping),
     # mirroring the on-screen overdue meaning. Same shared filters + isolation.
-    if payment_status == 'overdue':
-        overdue_insts = _overdue_installments_query(
-            school,
-            search=search,
-            fee_type_filter=fee_type_filter,
-            installment_filter=installment_filter,
-        ).all()
+    if filters.payment_status == 'overdue':
+        overdue_q, period_sub = build_overdue_query(school, filters)
+        overdue_insts = overdue_q.all()
+        period_paid = None
+        if period_sub is not None:
+            period_paid = period_paid_for_keys(period_sub, [i.id for i in overdue_insts])
+            period_summary['total'] = sum(period_paid.values(), Decimal('0'))
 
         grand_amount = sum(float(i.amount or 0) for i in overdue_insts)
         grand_paid   = sum(float(i.received_amount or 0) for i in overdue_insts)
@@ -2428,54 +2661,19 @@ def print_list():
             row_count=len(overdue_insts),
             school=school,
             year=year,
-            search=search,
-            fee_type_filter=fee_type_filter,
             fee_type_name=fee_type_name,
-            payment_status=payment_status,
-            installment_filter=installment_filter,
             grand_amount=grand_amount,
             grand_paid=grand_paid,
             grand_rem=grand_rem,
+            period_paid=period_paid,
+            period_summary=period_summary,
             print_date=date.today(),
             logo_url=logo_url,
+            **fee_filter_context(filters),
         )
 
-    query = (
-        FeeRecord.query
-        .join(Student)
-        .outerjoin(total_paid_sub, FeeRecord.id == total_paid_sub.c.fee_record_id)
-    )
-
-    # Cancelled fees are excluded from the active fees print list.
-    query = query.filter(FeeRecord.cancelled_at.is_(None))
-
-    if school:
-        query = query.filter(FeeRecord.school_id == school.id)
-
-    query = apply_building_scope_to_fees(query, current_user, school)
-
-    if search:
-        query = query.filter(
-            Student.full_name.ilike(f'%{search}%') |
-            Student.student_id.ilike(f'%{search}%')
-        )
-
-    if fee_type_filter != 'all':
-        query = query.filter(FeeRecord.fee_type_id == int(fee_type_filter))
-
-    if installment_filter != 'all':
-        query = query.join(FeeInstallment).filter(
-            FeeInstallment.installment_no == int(installment_filter))
-
-    net_amount_expr = FeeRecord.total_amount - func.coalesce(FeeRecord.discount, 0)
-    remaining_expr  = net_amount_expr - func.coalesce(total_paid_sub.c.total_paid, 0)
-
-    if payment_status == 'paid':
-        query = query.filter(remaining_expr <= 0)
-    elif payment_status == 'unpaid':
-        query = query.filter(remaining_expr > 0)
-
-    records = query.order_by(FeeRecord.created_at.desc()).all()
+    query, period_sub = build_fee_records_query(school, filters)
+    records = query.all()
 
     _inst_map = {}
     if records:
@@ -2490,6 +2688,11 @@ def print_list():
             _inst_map.setdefault(_i.fee_record_id, []).append(_i)
 
     fee_entries = [(r, _inst_map.get(r.id, [])) for r in records]
+
+    period_paid = None
+    if period_sub is not None:
+        period_paid = period_paid_for_keys(period_sub, [r.id for r in records])
+        period_summary['total'] = sum(period_paid.values(), Decimal('0'))
 
     grand_total = sum(float(r.total_amount) for r in records)
     grand_disc  = sum(float(r.discount or 0) for r in records)
@@ -2507,17 +2710,16 @@ def print_list():
         row_count=len(fee_entries),
         school=school,
         year=year,
-        search=search,
-        fee_type_filter=fee_type_filter,
         fee_type_name=fee_type_name,
-        payment_status=payment_status,
-        installment_filter=installment_filter,
         grand_total=grand_total,
         grand_disc=grand_disc,
         grand_paid=grand_paid,
         grand_rem=grand_rem,
+        period_paid=period_paid,
+        period_summary=period_summary,
         print_date=date.today(),
         logo_url=logo_url,
+        **fee_filter_context(filters),
     )
 
 

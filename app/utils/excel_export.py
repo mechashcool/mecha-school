@@ -272,7 +272,41 @@ def export_attendance(rows, section_name: str, start: str, end: str) -> bytes | 
     return buf.getvalue()
 
 
-def export_fees(records) -> bytes | None:
+def _period_range_label(summary) -> str:
+    frm, to = summary.get('date_from'), summary.get('date_to')
+    if frm and to:
+        return f"من {frm.isoformat()} إلى {to.isoformat()}"
+    if frm:
+        return f"من {frm.isoformat()}"
+    return f"حتى {to.isoformat()}"
+
+
+def _write_period_summary(ws, start_row, summary):
+    """Append the payment-date period summary under the data rows."""
+    from openpyxl.styles import Font
+    bold = Font(bold=True)
+    rows = [
+        ('الفترة (حسب تاريخ الدفع)', _period_range_label(summary)),
+        ('إجمالي المقبوض ضمن الفترة', float(summary.get('total') or 0)),
+    ]
+    unlinked = summary.get('unlinked')
+    if unlinked:
+        rows.append((
+            'دفعات غير منسوبة لسجل رسوم',
+            f"{unlinked['count']} دفعة بمبلغ {float(unlinked['amount']):,.0f} "
+            'مسجلة قبل ربط الإيصالات بالأقساط — غير مشمولة في هذا الكشف',
+        ))
+    for offset, (label, value) in enumerate(rows):
+        ws.cell(row=start_row + offset, column=2, value=label).font = bold
+        ws.cell(row=start_row + offset, column=3, value=value).font = bold
+
+
+def export_fees(records, period_paid=None, period_summary=None) -> bytes | None:
+    """Fees list export. ``period_paid`` ({fee_record_id: amount}) is given
+    only when a payment-date range is active: it adds the "المدفوع ضمن الفترة"
+    column (the all-time column is then labelled "المدفوع الكلي") and
+    ``period_summary`` appends the period total. Without them the output is
+    unchanged."""
     wb = _wb()
     if not wb:
         return None
@@ -282,8 +316,12 @@ def export_fees(records) -> bytes | None:
     ws.title = 'الرسوم'
     ws.sheet_view.rightToLeft = True
 
+    period = period_paid is not None
     headers = ['#', 'كود الطالب', 'اسم الطالب', 'نوع الرسم', 'المبلغ الإجمالي',
-               'الخصم', 'المدفوع', 'المتبقي', 'الأقساط', 'السنة الدراسية']
+               'الخصم', 'المدفوع الكلي' if period else 'المدفوع']
+    if period:
+        headers.append('المدفوع ضمن الفترة')
+    headers += ['المتبقي', 'الأقساط', 'السنة الدراسية']
     hs = _header_style()
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
@@ -299,6 +337,10 @@ def export_fees(records) -> bytes | None:
             float(rec.total_amount or 0),
             float(rec.discount or 0),
             float(rec.total_paid),
+        ]
+        if period:
+            row.append(float(period_paid.get(rec.id, 0)))
+        row += [
             float(rec.remaining),
             rec.installments.count() if hasattr(rec.installments, 'count') else len(rec.installments),
             rec.academic_year.name if rec.academic_year else '',
@@ -309,13 +351,17 @@ def export_fees(records) -> bytes | None:
             if i % 2 == 0:
                 cell.fill = PatternFill('solid', fgColor='F0F4F8')
 
+    if period_summary:
+        _write_period_summary(ws, len(records) + 3, period_summary)
+
     _autowidth(ws)
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
 
 
-def export_overdue_installments(installments) -> bytes | None:
+def export_overdue_installments(installments, period_paid=None,
+                                period_summary=None) -> bytes | None:
     """Export overdue installments — ONE row per overdue installment.
 
     ``installments`` must already be scoped/ordered/filtered by the caller
@@ -323,6 +369,8 @@ def export_overdue_installments(installments) -> bytes | None:
     expected to have its fee_record → student / fee_type / academic_year
     eagerly loaded. The same student may legitimately appear on several rows,
     one per overdue installment; rows are NOT grouped or de-duplicated.
+    ``period_paid`` ({installment_id: amount}) / ``period_summary`` are given
+    only with an active payment-date range (see export_fees).
     """
     wb = _wb()
     if not wb:
@@ -333,8 +381,12 @@ def export_overdue_installments(installments) -> bytes | None:
     ws.title = 'الأقساط المتأخرة'
     ws.sheet_view.rightToLeft = True
 
+    period = period_paid is not None
     headers = ['#', 'كود الطالب', 'اسم الطالب', 'نوع الرسم', 'رقم القسط',
-               'مبلغ القسط', 'المستلم', 'المتبقي', 'تاريخ الاستحقاق', 'السنة الدراسية']
+               'مبلغ القسط', 'المستلم الكلي' if period else 'المستلم']
+    if period:
+        headers.append('المدفوع ضمن الفترة')
+    headers += ['المتبقي', 'تاريخ الاستحقاق', 'السنة الدراسية']
     hs = _header_style()
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
@@ -355,6 +407,10 @@ def export_overdue_installments(installments) -> bytes | None:
             inst.installment_no,
             amount,
             received,
+        ]
+        if period:
+            row.append(float(period_paid.get(inst.id, 0)))
+        row += [
             remaining,
             inst.due_date.strftime('%Y-%m-%d') if inst.due_date else '',
             rec.academic_year.name if rec and rec.academic_year else '',
@@ -364,6 +420,9 @@ def export_overdue_installments(installments) -> bytes | None:
             cell.alignment = Alignment(vertical='center')
             if i % 2 == 0:
                 cell.fill = PatternFill('solid', fgColor='F0F4F8')
+
+    if period_summary:
+        _write_period_summary(ws, len(installments) + 3, period_summary)
 
     _autowidth(ws)
     buf = BytesIO()

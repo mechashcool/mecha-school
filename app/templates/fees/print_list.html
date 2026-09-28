@@ -407,6 +407,7 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
   .col-disc  { width: 44pt; }
   .col-net   { width: 52pt; }
   .col-paid  { width: 52pt; }
+  .col-period { width: 56pt; }
   .col-rem   { width: 60pt; }
   .col-year  { width: 52pt; }
 
@@ -438,6 +439,8 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
     {% elif payment_status == 'overdue' %}<span>الحالة: متأخر التسديد</span>{% endif %}
     {% if installment_filter != 'all' %}<span>القسط: {{ installment_filter }}</span>{% endif %}
     {% if search %}<span>بحث: {{ search }}</span>{% endif %}
+    {% if rfid %}<span>البطاقة: {{ rfid }}</span>{% endif %}
+    {% if period_summary %}<span>تاريخ الدفع: {% if payment_date_from %}من {{ payment_date_from }}{% endif %}{% if payment_date_to %} إلى {{ payment_date_to }}{% endif %}</span>{% endif %}
     <span>عدد السجلات: {{ row_count }}</span>
     <span>تاريخ الطباعة: <span class="js-print-date"></span></span>
   </div>
@@ -496,6 +499,8 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
     {% elif payment_status == 'overdue' %}<span class="chip">الحالة: متأخر التسديد</span>{% endif %}
     {% if installment_filter != 'all' %}<span class="chip">القسط رقم: {{ installment_filter }}</span>{% endif %}
     {% if search %}<span class="chip">بحث: {{ search }}</span>{% endif %}
+    {% if rfid %}<span class="chip">البطاقة: {{ rfid }}</span>{% endif %}
+    {% if period_summary %}<span class="chip">تاريخ الدفع: {% if payment_date_from %}من {{ payment_date_from }}{% endif %}{% if payment_date_to %} إلى {{ payment_date_to }}{% endif %}</span>{% endif %}
   </div>
 
   <!-- Table -->
@@ -509,6 +514,7 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
         <col class="col-disc">
         <col class="col-net">
         <col class="col-paid">
+        {% if period_paid is not none %}<col class="col-period">{% endif %}
         <col class="col-rem">
         <col class="col-year">
       </colgroup>
@@ -521,7 +527,12 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
           <th class="col-type">نوع الرسم</th>
           <th class="col-total th-center">رقم القسط</th>
           <th class="col-net   td-net">مبلغ القسط</th>
+          {% if period_paid is not none %}
+          <th class="col-paid  td-paid">المستلم الكلي</th>
+          <th class="col-period td-paid">المدفوع ضمن الفترة</th>
+          {% else %}
           <th class="col-paid  td-paid">المستلم</th>
+          {% endif %}
           <th class="col-rem">المتبقي</th>
           <th class="col-disc th-center">تاريخ الاستحقاق</th>
           <th class="col-year th-center">السنة الدراسية</th>
@@ -542,6 +553,9 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
           <td class="td-year">القسط {{ inst.installment_no }}</td>
           <td class="td-net">{{ '{:,.0f}'.format(inst.amount) }}</td>
           <td class="td-paid">{{ '{:,.0f}'.format(inst_received) }}</td>
+          {% if period_paid is not none %}
+          <td class="td-paid">{{ '{:,.0f}'.format(period_paid.get(inst.id, 0)) }}</td>
+          {% endif %}
           <td>
             <span class="badge-due">{{ '{:,.0f}'.format(inst_remaining) }}</span>
           </td>
@@ -552,7 +566,7 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
       {% else %}
       <tbody>
         <tr class="empty-row">
-          <td colspan="9">لا توجد أقساط متأخرة السداد مطابقة للفلاتر المحددة</td>
+          <td colspan="{{ 10 if period_paid is not none else 9 }}">لا توجد أقساط متأخرة السداد مطابقة للفلاتر المحددة</td>
         </tr>
       </tbody>
       {% endfor %}
@@ -566,7 +580,12 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
           <th class="col-total td-amount">الإجمالي</th>
           <th class="col-disc  td-disc">الخصم</th>
           <th class="col-net   td-net">الصافي</th>
+          {% if period_paid is not none %}
+          <th class="col-paid  td-paid">المدفوع الكلي</th>
+          <th class="col-period td-paid">المدفوع ضمن الفترة</th>
+          {% else %}
           <th class="col-paid  td-paid">المدفوع</th>
+          {% endif %}
           <th class="col-rem">المتبقي</th>
           <th class="col-year th-center">السنة الدراسية</th>
         </tr>
@@ -592,6 +611,9 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
           </td>
           <td class="td-net">{{ '{:,.0f}'.format(net) }}</td>
           <td class="td-paid">{{ '{:,.0f}'.format(paid_ns.v) }}</td>
+          {% if period_paid is not none %}
+          <td class="td-paid">{{ '{:,.0f}'.format(period_paid.get(rec.id, 0)) }}</td>
+          {% endif %}
           <td>
             {% if rem <= 0 %}
             <span class="badge-settled">مسدّد</span>
@@ -605,7 +627,7 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
       {% else %}
       <tbody>
         <tr class="empty-row">
-          <td colspan="9">لا توجد سجلات رسوم مطابقة للفلاتر المحددة</td>
+          <td colspan="{{ 10 if period_paid is not none else 9 }}">لا توجد سجلات رسوم مطابقة للفلاتر المحددة</td>
         </tr>
       </tbody>
       {% endfor %}
@@ -665,6 +687,32 @@ table.fee-tbl tbody tr:hover td { background: #eef4ff; }
     </div>
   </div>
   {% endif %}
+  {% endif %}
+
+  {% if period_summary %}
+  <!-- Period collection summary — SUM of payment transactions dated inside the
+       selected range for the printed rows (not fee values / all-time paid). -->
+  <div class="grand-totals">
+    <div class="gt-header">ملخص الفترة حسب تاريخ الدفع</div>
+    <div class="gt-grid" style="grid-template-columns: repeat(2, 1fr)">
+      <div class="gt-cell">
+        <label>الفترة</label>
+        <div class="val" style="font-size:14px">
+          {% if payment_date_from %}من {{ payment_date_from }}{% endif %}{% if payment_date_to %} إلى {{ payment_date_to }}{% endif %}
+        </div>
+      </div>
+      <div class="gt-cell">
+        <label>إجمالي المقبوض ضمن الفترة</label>
+        <div class="val v-paid">{{ '{:,.0f}'.format(period_summary.total) }}</div>
+      </div>
+    </div>
+    {% if period_summary.unlinked %}
+    <div style="padding:8px 20px;font-size:11.5px;color:#8a5a00">
+      يوجد {{ period_summary.unlinked.count }} دفعة بمبلغ {{ '{:,.0f}'.format(period_summary.unlinked.amount) }}
+      ضمن هذه الفترة سُجّلت قبل ربط الإيصالات بالأقساط ولا يمكن نسبها إلى سجل رسوم محدد، لذلك لا تدخل في هذا الكشف.
+    </div>
+    {% endif %}
+  </div>
   {% endif %}
 
 </div><!-- /.screen-card -->

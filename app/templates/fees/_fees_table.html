@@ -1,18 +1,22 @@
 {#
   Shared fees-table macros — imported by fees/index.html and students/view.html.
 
-  fees_table_body(fee_entries, show_student_col, installment_filter)
+  fees_table_body(fee_entries, show_student_col, installment_filter, period_paid)
     fee_entries        : list of (FeeRecord, [FeeInstallment]) tuples
     show_student_col   : True on fees index, False on student profile
     installment_filter : 'all' or installment number string (fees index filter only)
+    period_paid        : None, or {fee_record_id: amount collected in the selected
+                         payment-date range} (fees index only) — adds the
+                         "المدفوع ضمن الفترة" column
 
   fees_modal_and_js()
     Renders the pay modal and all supporting JS (toggle, pay, print, AJAX).
     Call once per page, outside any card wrapper.
 #}
 
-{% macro fees_table_body(fee_entries, show_student_col=True, installment_filter='all') %}
-{% set _cols = 8 if show_student_col else 7 %}
+{% macro fees_table_body(fee_entries, show_student_col=True, installment_filter='all', period_paid=None) %}
+{% set _period = period_paid is not none %}
+{% set _cols = (8 if show_student_col else 7) + (1 if _period else 0) %}
 <div class="table-wrapper">
   <table class="table table-hover">
     <thead>
@@ -21,7 +25,12 @@
         <th>نوع الرسم</th>
         <th>المبلغ الإجمالي</th>
         <th>الخصم</th>
+        {% if _period %}
+        <th>المدفوع الكلي</th>
+        <th>المدفوع ضمن الفترة</th>
+        {% else %}
         <th>المدفوع</th>
+        {% endif %}
         <th>المتبقي</th>
         <th>العام الدراسي</th>
         <th>الإجراءات</th>
@@ -50,6 +59,9 @@
           {% if rec.discount %}{{ '{:,.0f}'.format(rec.discount) }}{% else %}—{% endif %}
         </td>
         <td class="text-success fw-600">{{ '{:,.0f}'.format(paid) }}</td>
+        {% if _period %}
+        <td class="fw-600" style="color:#0f5e9c">{{ '{:,.0f}'.format(period_paid.get(rec.id, 0)) }}</td>
+        {% endif %}
         <td>
           <span class="badge-status {{ 'badge-paid' if remaining <= 0 else 'badge-overdue' }}">
             {{ '{:,.0f}'.format(remaining) if remaining > 0 else 'مسدّد' }}
@@ -184,7 +196,7 @@
 {% endmacro %}
 
 
-{% macro overdue_table_body(overdue_installments, show_student_col=True) %}
+{% macro overdue_table_body(overdue_installments, show_student_col=True, period_paid=None) %}
 {#
   Overdue mode — ONE visible row per overdue installment. The same student may
   appear on several rows (one per overdue installment); rows are never grouped
@@ -195,6 +207,7 @@
 {% set _can_pay    = current_user.has_permission('record_payments') %}
 {% set _can_refund = current_user.has_permission('refund_payments') %}
 {% set _has_actions = _can_pay or _can_refund %}
+{% set _period = period_paid is not none %}
 <div class="table-wrapper">
   <table class="table table-hover">
     <thead>
@@ -203,7 +216,12 @@
         <th>نوع الرسم</th>
         <th>القسط</th>
         <th>مبلغ القسط</th>
+        {% if _period %}
+        <th>المستلم الكلي</th>
+        <th>المدفوع ضمن الفترة</th>
+        {% else %}
         <th>المستلم</th>
+        {% endif %}
         <th>المتبقي</th>
         <th>الاستحقاق</th>
         <th>العام الدراسي</th>
@@ -227,6 +245,9 @@
         <td>القسط {{ inst.installment_no }}</td>
         <td class="fw-600">{{ '{:,.0f}'.format(inst.amount) }}</td>
         <td class="text-success">{{ '{:,.0f}'.format(inst_received) }}</td>
+        {% if _period %}
+        <td class="fw-600" style="color:#0f5e9c">{{ '{:,.0f}'.format(period_paid.get(inst.id, 0)) }}</td>
+        {% endif %}
         <td>
           <span class="badge-status badge-overdue">{{ '{:,.0f}'.format(inst_remaining) }}</span>
         </td>
@@ -263,7 +284,7 @@
       </tr>
       {% else %}
       <tr>
-        <td colspan="{{ 9 if show_student_col else 8 }}" class="text-center text-muted py-5">
+        <td colspan="{{ (9 if show_student_col else 8) + (1 if _period else 0) }}" class="text-center text-muted py-5">
           <i class="bi bi-check2-circle" style="font-size:36px;opacity:.3;display:block;margin-bottom:8px"></i>
           لا توجد أقساط متأخرة السداد مطابقة للفلاتر المحددة
         </td>

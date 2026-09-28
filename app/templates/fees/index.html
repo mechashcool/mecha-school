@@ -473,12 +473,70 @@
           </button>
         </div>
       </div>
-      <div class="col-md-1 d-grid">
+      {# Payment-date range — money ACTUALLY COLLECTED in the period (the
+         payment's own date), ANDed with every filter above. #}
+      <div class="col-6 col-md-2">
+        <label for="payment_date_from" class="form-label">من تاريخ</label>
+        <input type="date" name="payment_date_from" id="payment_date_from"
+               class="form-control{% if payment_date_error %} is-invalid{% endif %}"
+               value="{{ payment_date_from }}">
+      </div>
+      <div class="col-6 col-md-2">
+        <label for="payment_date_to" class="form-label">إلى تاريخ</label>
+        <input type="date" name="payment_date_to" id="payment_date_to"
+               class="form-control{% if payment_date_error %} is-invalid{% endif %}"
+               value="{{ payment_date_to }}">
+      </div>
+      <div class="col-md-2 d-flex align-items-end pb-2">
+        <small class="text-muted"><i class="bi bi-info-circle me-1"></i>حسب تاريخ الدفع</small>
+      </div>
+      <div class="col-6 col-md-1 d-grid">
         <button class="btn btn-primary w-100"><i class="bi bi-search me-1"></i>بحث</button>
+      </div>
+      <div class="col-6 col-md-1 d-grid">
+        <a href="{{ url_for('fees.index') }}" class="btn btn-outline-secondary w-100"
+           title="مسح جميع الفلاتر بما فيها التواريخ">
+          <i class="bi bi-arrow-counterclockwise me-1"></i>إعادة تعيين
+        </a>
       </div>
     </form>
   </div>
 </div>
+{% if payment_date_error %}
+<div class="alert alert-danger d-flex align-items-center gap-2 mb-4" role="alert">
+  <i class="bi bi-exclamation-triangle-fill"></i>
+  <div>{{ payment_date_error }}</div>
+</div>
+{% endif %}
+{% if period_active %}
+{# Period collection summary — SUM of payment transactions dated inside the
+   selected range for the listed rows (all pages), never fee face values,
+   all-time paid amounts or balances. #}
+<div class="alert alert-info mb-4" role="status" style="border-radius:12px">
+  <div class="d-flex flex-wrap align-items-center gap-3">
+    <div>
+      <i class="bi bi-calendar-range me-1"></i>
+      <strong>الفترة حسب تاريخ الدفع:</strong>
+      {% if payment_date_from %}من {{ payment_date_from }}{% endif %}
+      {% if payment_date_to %} إلى {{ payment_date_to }}{% endif %}
+    </div>
+    <div class="ms-md-auto">
+      إجمالي المبالغ المستلمة ضمن الفترة:
+      <strong style="font-size:17px">{{ '{:,.0f}'.format(period_total or 0) }}</strong>
+    </div>
+  </div>
+  <div style="font-size:12.5px;margin-top:4px">
+    تُعرض فقط السجلات التي استُلمت لها دفعة ضمن الفترة، وعمود "المدفوع ضمن الفترة" يبيّن ما استُلم خلالها فقط.
+  </div>
+  {% if period_unlinked %}
+  <div class="text-warning-emphasis" style="font-size:12.5px;margin-top:6px">
+    <i class="bi bi-exclamation-circle me-1"></i>
+    يوجد {{ period_unlinked.count }} دفعة بمبلغ {{ '{:,.0f}'.format(period_unlinked.amount) }}
+    ضمن هذه الفترة سُجّلت قبل ربط الإيصالات بالأقساط ولا يمكن نسبها إلى سجل رسوم محدد، لذلك لا تدخل في هذا الكشف.
+  </div>
+  {% endif %}
+</div>
+{% endif %}
 
 {# Scanned card matched no student reachable in this school → say so explicitly,
    so it is not confused with "this student has no fees". The filters bar and the
@@ -495,9 +553,9 @@
 
 <div class="card">
   {% if overdue_mode %}
-  {{ overdue_table_body(overdue_installments, show_student_col=True) }}
+  {{ overdue_table_body(overdue_installments, show_student_col=True, period_paid=period_paid) }}
   {% else %}
-  {{ fees_table_body(fee_entries, show_student_col=True, installment_filter=installment_filter) }}
+  {{ fees_table_body(fee_entries, show_student_col=True, installment_filter=installment_filter, period_paid=period_paid) }}
   {% endif %}
 
   {#  ── Pagination ────────────────────────────────────────────────────────────
