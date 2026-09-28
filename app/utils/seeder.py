@@ -1130,7 +1130,7 @@ def register_commands(app):
             click.echo(f'Cutoff        : {cutoff}  '
                        f'(passed as of local_now: {same_day_passed or past_day})')
 
-        if is_holiday_date(target_date, school_id, school):
+        if is_holiday_date(target_date, school_id, school, audience='students'):
             click.echo('⚠ HOLIDAY (weekly off-day or school_holidays entry) — auto-absence '
                        'would be skipped entirely for this date.')
 

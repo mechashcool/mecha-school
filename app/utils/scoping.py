@@ -39,6 +39,7 @@ def _models():
         SchoolBuilding, UserBuildingAccess,
         ResidentialArea,
         StudentRegistrationRequest, StudentRegistrationRequestDocument,
+        SchoolWeeklyOffSchedule,
     )
 
     school_scoped = (
@@ -69,6 +70,9 @@ def _models():
         # Institute teacher lesson attendance — school-scoped ONLY, like
         # InstituteAttendanceRecord: its year comes from the session.
         InstituteInstructorAttendance,
+        # Effective-dated weekly days off (students / employees) — school-scoped
+        # only: a weekly schedule is not tied to an academic year.
+        SchoolWeeklyOffSchedule,
     )
     # Student, StudentDocument, StudentSuspension are school-scoped only —
     # they persist across academic years so that a year rollover does not

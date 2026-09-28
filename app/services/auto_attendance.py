@@ -225,7 +225,7 @@ def _check_school_shifts(school, school_name: str, local_now, local_date) -> Non
 
     now_time = local_now.time()
 
-    if is_holiday_date(local_date, school.id, school):
+    if is_holiday_date(local_date, school.id, school, audience='students'):
         _log.warning('[attendance-shift] school_id=%s "%s" date=%s — holiday, skip all shifts',
                      school.id, school_name, local_date)
         _catchup_previous_day_shifts(school, school_name, local_now, local_date)
@@ -788,7 +788,7 @@ def run_school_shift_auto_absent_now(school, year, settings) -> dict:
                   'mode, automatic absence skipped', school.id, local_date)
         return {'holiday': False, 'count': 0, 'institute': True}
 
-    if is_holiday_date(local_date, school.id, school):
+    if is_holiday_date(local_date, school.id, school, audience='students'):
         _log.info('[attendance-shift] web-trigger school_id=%s date=%s — holiday, skip',
                   school.id, local_date)
         return {'holiday': True, 'count': 0}
@@ -859,7 +859,7 @@ def _catchup_previous_day_shifts(school, school_name: str, local_now, local_date
     yesterday = local_date - timedelta(days=1)
 
     try:
-        if is_holiday_date(yesterday, school.id, school):
+        if is_holiday_date(yesterday, school.id, school, audience='students'):
             _log.info('[attendance-shift] catch-up school_id=%s date=%s — holiday, skip',
                       school.id, yesterday)
             return
@@ -930,7 +930,7 @@ def _catchup_previous_day(school, school_name: str, local_now, local_date) -> No
     yesterday = local_date - timedelta(days=1)
 
     try:
-        if is_holiday_date(yesterday, school.id, school):
+        if is_holiday_date(yesterday, school.id, school, audience='students'):
             _log.info('[attendance] catch-up school_id=%s date=%s — skipped_reason=holiday',
                       school.id, yesterday)
             return

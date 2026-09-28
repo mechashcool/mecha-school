@@ -32,30 +32,25 @@ def _clean_employee_notes(raw: str | None) -> str | None:
 
 def get_working_days(date_from: date, date_to: date, school) -> List[date]:
     """
-    Returns all calendar days in [date_from, date_to] that are not:
-      - School weekly off days  (school.weekly_off_days, e.g. "4,5" = Fri+Sat)
-      - Named SchoolHoliday entries for this school or global holidays
-    Delegates to the existing is_holiday_date() helper so logic stays in one place.
+    Returns all calendar days in [date_from, date_to] that are not days off for
+    EMPLOYEES:
+      - Employee weekly days off in force on that date (effective-dated
+        SchoolWeeklyOffSchedule, else the legacy school.weekly_off_days)
+      - Named SchoolHoliday entries (this school or global) whose applies_to
+        is 'both' or 'employees' — student-only holidays stay working days
+    Uses the same rules as is_holiday_date(..., audience='employees'); there is
+    deliberately NO separate weekly check here, so the shared legacy value can
+    never override the employee schedule.
     """
-    from app.utils.attendance_helpers import is_holiday_date
+    from app.utils.attendance_helpers import get_off_dates
 
-    weekly_off: set[int] = set()
-    if school and school.weekly_off_days:
-        try:
-            weekly_off = {
-                int(d.strip())
-                for d in school.weekly_off_days.split(',')
-                if d.strip().isdigit()
-            }
-        except (ValueError, AttributeError):
-            pass
+    off = get_off_dates(date_from, date_to, school, audience='employees')
 
     working: List[date] = []
     current = date_from
     while current <= date_to:
-        if current.weekday() not in weekly_off:
-            if not is_holiday_date(current, school.id if school else None, school=school):
-                working.append(current)
+        if current not in off:
+            working.append(current)
         current += timedelta(days=1)
     return working
 

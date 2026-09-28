@@ -1425,6 +1425,10 @@ def attendance_report():
 
     alerts = get_absence_alerts(rows, school)
     working_days_count = len(get_working_days(f['date_from'], f['date_to'], school))
+    # Drives the "no employee weekly days off configured" hint only.
+    from app.utils.attendance_helpers import resolve_weekly_off_days
+    employee_weekly_off_set = bool(
+        resolve_weekly_off_days(school, 'employees', f['date_to']))
 
     # Aggregate summary totals across all rows
     total_present  = sum(r['present'] for r in rows)
@@ -1439,6 +1443,7 @@ def attendance_report():
         all_employees     = employees,
         departments       = departments,
         working_days_count= working_days_count,
+        employee_weekly_off_set = employee_weekly_off_set,
         date_from         = f['date_from_str'],
         date_to           = f['date_to_str'],
         employee_id       = sel_emp_id,

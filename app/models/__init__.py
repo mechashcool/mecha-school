@@ -85,6 +85,9 @@ class School(db.Model):
 
     # Calendar: comma-separated weekday numbers (0=Mon … 6=Sun) that are off,
     # e.g. "4,5" for Friday+Saturday.  NULL means no weekly holidays configured.
+    # LEGACY shared value: it is the fallback for BOTH students and employees on
+    # any date not covered by a SchoolWeeklyOffSchedule row for that audience.
+    # No longer written by the UI (see school_calendar.save_weekly).
     weekly_off_days   = db.Column(db.String(20), nullable=True)
 
     # HR: employee absence limit alerts
@@ -3655,10 +3658,20 @@ class SchoolHoliday(db.Model):
     NOT __school_scoped__: school_id is intentionally nullable here, so the
     automatic tenant filter would hide global rows.  Queries must be written
     explicitly (bypass_tenant_scope + OR school_id IS NULL).
+
+    applies_to selects the attendance audience the holiday exempts:
+      'both'      → students AND employees (every pre-existing row; the default)
+      'students'  → students only — employees keep their normal working day
+      'employees' → employees only — students keep their normal school day
     """
     __tablename__ = 'school_holidays'
+    __table_args__ = (
+        db.CheckConstraint("applies_to IN ('both', 'students', 'employees')",
+                           name='ck_school_holidays_applies_to'),
+    )
 
     HOLIDAY_TYPES = ('official', 'summer', 'emergency', 'custom')
+    APPLIES_TO_CHOICES = ('both', 'students', 'employees')
 
     id               = db.Column(db.Integer, primary_key=True)
     school_id        = db.Column(db.Integer, db.ForeignKey('schools.id', ondelete='CASCADE'),
@@ -3669,6 +3682,8 @@ class SchoolHoliday(db.Model):
     start_date       = db.Column(db.Date, nullable=False, index=True)
     end_date         = db.Column(db.Date, nullable=False)
     holiday_type     = db.Column(db.String(20), nullable=False, default='official')
+    applies_to       = db.Column(db.String(20), nullable=False, default='both',
+                                 server_default='both')
     notes            = db.Column(db.Text, nullable=True)
     is_active        = db.Column(db.Boolean, nullable=False, default=True)
     created_by       = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
@@ -3690,6 +3705,56 @@ class SchoolHoliday(db.Model):
     def __repr__(self):
         scope = f'school={self.school_id}' if self.school_id else 'global'
         return f'<SchoolHoliday {self.name} {self.start_date}–{self.end_date} {scope}>'
+
+
+class SchoolWeeklyOffSchedule(db.Model):
+    """
+    Effective-dated weekly days off for ONE audience of ONE school.
+
+    Resolution for a date D and an audience: the row with the greatest
+    effective_from <= D wins.  When no such row exists the legacy shared
+    School.weekly_off_days applies — so a school with no rows behaves exactly
+    as before, and dates before a school's first row keep their original
+    meaning after any number of later changes.
+
+    off_days uses Python date.weekday() numbering (Mon=0 … Sun=6), the SAME
+    convention as School.weekly_off_days — NOT the Sun=0 convention of
+    Schedule.day_of_week / InstituteGroupSchedule.day_of_week.
+      ''     → explicitly configured with no weekly days off
+      '4,5'  → Friday + Saturday
+    (A missing row, not an empty string, means "inherit the legacy value".)
+
+    Rows are append-only from the normal UI: rows whose effective_from is in the
+    past (school-local) are never edited or deleted.
+    """
+    __tablename__ = 'school_weekly_off_schedules'
+    __school_scoped__ = True
+
+    AUDIENCES = ('students', 'employees')
+
+    id             = db.Column(db.Integer, primary_key=True)
+    school_id      = db.Column(db.Integer, db.ForeignKey('schools.id', ondelete='CASCADE'),
+                               nullable=False, index=True)
+    audience       = db.Column(db.String(20), nullable=False)
+    off_days       = db.Column(db.String(20), nullable=False, default='',
+                               server_default='')
+    effective_from = db.Column(db.Date, nullable=False)
+    created_by     = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
+                               nullable=True)
+    created_at     = db.Column(db.DateTime, default=datetime.utcnow)
+
+    creator = db.relationship('User', foreign_keys=[created_by])
+
+    __table_args__ = (
+        db.UniqueConstraint('school_id', 'audience', 'effective_from',
+                            name='uq_weekly_off_school_audience_from'),
+        db.CheckConstraint("audience IN ('students', 'employees')",
+                           name='ck_weekly_off_audience'),
+    )
+
+    def __repr__(self):
+        return (f'<SchoolWeeklyOffSchedule school={self.school_id} '
+                f'{self.audience} from={self.effective_from} days={self.off_days!r}>')
 
 
 # ═════════════════════════════════════════════════════════════════════════════

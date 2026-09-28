@@ -8,7 +8,8 @@ from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    historical_guard)
 from app.utils.attendance_helpers import (determine_check_in_status,
                                            get_local_now, get_local_date,
-                                           is_holiday_date, get_student_shift)
+                                           is_holiday_date, get_off_dates,
+                                           get_student_shift)
 from app.services.notifications import NotificationService
 from app.services import notification_outbox as outbox
 from sqlalchemy.exc import IntegrityError
@@ -325,7 +326,8 @@ def _run_auto_absent(school, year, settings, recorded_by_id=None, target_date=No
                   '(now=%s < cutoff=%s) — skipped', school_id, now_time, cutoff)
         return {'too_early': True, 'holiday': False, 'count': 0, 'students': []}
 
-    if school and is_holiday_date(today, school_id, school):
+    if school and is_holiday_date(today, school_id, school,
+                                       audience='students'):
         _log.warning('[attendance] school_id=%s "%s" date=%s — holiday detected — absent skipped',
                      school_id, school_name, today)
         return {'too_early': False, 'holiday': True, 'count': 0, 'students': []}
@@ -546,7 +548,8 @@ def index():
             for stu in matching_students:
                 students_found.append({'student': stu, 'record': att_map.get(stu.id)})
 
-    is_holiday_sel = is_holiday_date(sel_date, school.id, school) if school else False
+    is_holiday_sel = is_holiday_date(sel_date, school.id, school,
+                                     audience='students') if school else False
     auto_absent_count_sel = 0
     if is_holiday_sel and school:
         auto_absent_count_sel = (
@@ -1266,10 +1269,12 @@ def _daily_detail_rows(atts, start_date, end_date, school, local_today,
     if fill_gaps:
         seen  = {a.date for a in atts if a.date}
         limit = min(end_date, local_today)
+        # Same rule as is_holiday_date(..., audience='students'), resolved for
+        # the whole range at once instead of one lookup per day.
+        off   = get_off_dates(start_date, limit, school, audience='students')
         day   = start_date
         while day <= limit:
-            if day not in seen and not is_holiday_date(
-                    day, school.id if school else None, school):
+            if day not in seen and day not in off:
                 rows.append(_row(day, None))
             day += timedelta(days=1)
 
@@ -1950,7 +1955,8 @@ def cleanup_holiday_absences():
         flash('تاريخ غير صحيح.', 'danger')
         return redirect(url_for('attendance.index'))
 
-    if not is_holiday_date(cleanup_date, school.id if school else None):
+    if not is_holiday_date(cleanup_date, school.id if school else None,
+                           school, audience='students'):
         flash('هذا اليوم ليس عطلة — لا يمكن تنظيف سجلات الغياب التلقائي.', 'danger')
         return redirect(url_for('attendance.index', date=date_str))
 
