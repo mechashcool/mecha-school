@@ -35,8 +35,12 @@
   {% if (form_cfg.public_section_visible('student_photo') and 'students.photo_upload' in enabled_features)
         or (form_cfg.public_section_visible('student_documents') and 'students.documents_upload' in enabled_features) %}
   <div class="row g-4">
-    {{ sfields.student_photo_card(form_cfg, enabled_features) }}
-    {{ sfields.student_documents_card(form_cfg, enabled_features) }}
+    {{ sfields.student_photo_card(form_cfg, enabled_features,
+                                  accept='.jpg,.jpeg,.png',
+                                  hint='الصيغ المسموح بها: JPG أو JPEG أو PNG — الحد الأقصى 5 ميغابايت.') }}
+    {{ sfields.student_documents_card(form_cfg, enabled_features,
+                                      accept='.pdf,.jpg,.jpeg,.png',
+                                      hint='الصيغ المسموح بها: PDF أو JPG أو JPEG أو PNG — حتى 4 مستندات، والحد الأقصى 5 ميغابايت لكل ملف.') }}
   </div>
   {% endif %}
 
@@ -76,10 +80,55 @@
       if(rows.length >= MAX_DOCS){ return; }
       var clone = rows[0].cloneNode(true);
       clone.querySelectorAll('select, input').forEach(function(el){ el.value = ''; });
+      clone.querySelectorAll('.reg-file-error').forEach(function(el){ el.parentNode.removeChild(el); });
       host.appendChild(clone);
       syncAddBtn();
     });
     syncAddBtn();
+  })();
+
+  // File checks — convenience only; the server validates every upload again.
+  (function(){
+    var MAX_BYTES = 5 * 1024 * 1024;
+    var PHOTO_EXTS = ['jpg', 'jpeg', 'png'];
+    var DOC_EXTS = ['pdf', 'jpg', 'jpeg', 'png'];
+    function extOf(name){
+      var i = name.lastIndexOf('.');
+      return i < 0 ? '' : name.slice(i + 1).toLowerCase();
+    }
+    function showError(input, msg){
+      var box = input.parentNode.querySelector('.reg-file-error');
+      if(!box){
+        box = document.createElement('div');
+        box.className = 'reg-file-error text-danger mt-1';
+        box.style.fontSize = '12px';
+        input.parentNode.appendChild(box);
+      }
+      box.textContent = msg || '';
+    }
+    function check(input, exts, typeMsg){
+      var file = input.files && input.files[0];
+      if(!file){ showError(input, ''); return; }
+      var msg = '';
+      if(exts.indexOf(extOf(file.name)) < 0){ msg = typeMsg; }
+      else if(file.size > MAX_BYTES){ msg = 'حجم الملف أكبر من الحد المسموح (5 ميغابايت).'; }
+      if(msg){ input.value = ''; }
+      showError(input, msg);
+    }
+    var photo = document.getElementById('photoInput');
+    if(photo){
+      photo.addEventListener('change', function(){
+        check(photo, PHOTO_EXTS, 'صيغة الصورة غير مدعومة. الصيغ المسموح بها: JPG أو JPEG أو PNG.');
+      });
+    }
+    var rows = document.getElementById('document-rows');
+    if(rows){
+      rows.addEventListener('change', function(e){
+        if(e.target && e.target.name === 'document_file[]'){
+          check(e.target, DOC_EXTS, 'نوع الملف غير مدعوم. الصيغ المسموح بها: PDF أو JPG أو JPEG أو PNG.');
+        }
+      });
+    }
   })();
 </script>
 {% endblock %}

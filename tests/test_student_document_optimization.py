@@ -550,8 +550,11 @@ class StudentDocumentRouteTest(unittest.TestCase):
 
     def test_25_aiface_and_other_features_do_not_use_document_processing(self):
         root = pathlib.Path(__file__).resolve().parent.parent
+        # The public registration intake reuses this policy on purpose (NEW v2
+        # registration documents, see tests/test_registration_media.py), so it is
+        # no longer in this list; approval still never processes documents.
         for rel in ('app/services/aiface_sync.py', 'app/blueprints/attendance_devices/__init__.py',
-                    'app/blueprints/registration/__init__.py', 'app/services/admission_approval.py',
+                    'app/services/admission_approval.py',
                     'app/blueprints/employees/__init__.py', 'app/utils/helpers.py',
                     'app/utils/student_photo.py', 'app/utils/student_display_photo.py'):
             src = (root / rel).read_text(encoding='utf-8')

@@ -14,13 +14,18 @@ Security posture (this is a hostile public surface):
   * Strict server-side field allow-list — unexpected / financial / account /
     device / internal fields are rejected.
   * Uploads: approved types only, magic-byte content check, private storage,
-    server-generated filenames, per-file size cap.
+    server-generated filenames, per-file size cap. Every file (and every field
+    length) is validated/prepared BEFORE the first Storage write. The photo gets
+    the Student photo validation and is stored byte-identical (AI Face source);
+    document images get the Student Document optimisation; PDFs are unchanged.
+    New objects live under a versioned ``v2`` prefix (app/utils/registration_media).
   * Rate limited per (IP + token). Idempotent on (school_id, submission_nonce).
   * Responses are no-store; no credentials are ever shown here.
 """
 from __future__ import annotations
 
 import hashlib
+import os
 import secrets
 from datetime import datetime
 
@@ -34,10 +39,15 @@ from app.utils.ratelimit import limiter
 from app.utils.student_form_config import (get_student_form_config,
                                            PUBLIC_ALLOWED_FIELDS)
 from app.utils.features import get_enabled_features
-from app.utils.helpers import save_uploaded_file, ALLOWED_IMAGE_EXTENSIONS
+from app.utils.helpers import save_uploaded_file
+from app.utils.registration_media import (REGISTRATION_UPLOAD_MAX_BYTES,
+                                          registration_document_subfolder,
+                                          registration_photo_subfolder)
 from app.utils.registration_tokens import (hash_token, verify_token,
                                            generate_token, normalize_name,
                                            normalize_text)
+from app.utils.student_photo import MSG_TOO_LARGE as _MSG_PHOTO_DIMENSIONS
+from app.utils.student_photo import validate_student_photo
 # Same whitespace normalization used when the standard Iraqi grades are created,
 # so display ordering matches stored names regardless of spacing variations.
 from app.utils.iraqi_grades import _normalize as _normalize_grade_name
@@ -49,6 +59,11 @@ from app.utils.school_stages import (InvalidStageConfiguration,
 # Student form (single source of truth for loading + fail-closed validation).
 from app.blueprints.students import (_school_residential_areas,
                                      _validate_residential_area_for_school)
+# Same Student Document policy (validation + image optimisation) and the same
+# guarded "remove only what nothing references" cleanup as the student forms.
+from app.blueprints.students import (STUDENT_DOC_STORED_EXTS,
+                                     _discard_unreferenced_upload,
+                                     prepare_student_document_upload)
 
 registration_bp = Blueprint(
     'registration', __name__,
@@ -87,19 +102,33 @@ _FORBIDDEN_KEYS = {
     'building_id', 'rfid_tag_id', 'student_id', 'status',
 }
 
-_ALLOWED_DOC_EXTS = {'pdf', 'jpg', 'jpeg', 'png'}
-_MAX_UPLOAD_BYTES = 5 * 1024 * 1024      # 5 MB per file
+_PHOTO_EXTS = {'jpg', 'jpeg', 'png'}
+_MAX_UPLOAD_BYTES = REGISTRATION_UPLOAD_MAX_BYTES   # 5 MB per file
 _MAX_DOCS = 4
 _MAX_TEXT_LEN = 255
 
-# Magic-byte signatures for the approved upload types — actual content, not the
+# The stored (normalized) value must also fit its database column, so a value
+# the database would refuse is rejected with a message — before any upload —
+# instead of failing the INSERT after the files were already stored.
+_LENGTH_CHECKED_FIELDS = ('full_name', 'nationality', 'phone', 'guardian_name',
+                          'guardian_phone', 'guardian_email', 'guardian_relation')
+_COLUMN_MAX = {key: StudentRegistrationRequest.__table__.c[key].type.length
+               for key in _LENGTH_CHECKED_FIELDS}
+_DOC_TYPE_MAX = StudentRegistrationRequestDocument.__table__.c.document_type.type.length
+
+# Magic-byte signatures for the approved photo types — actual content, not the
 # client-supplied extension / MIME type, decides acceptance.
 _MAGIC = {
-    'pdf':  (b'%PDF',),
     'png':  (b'\x89PNG\r\n\x1a\n',),
     'jpg':  (b'\xff\xd8\xff',),
     'jpeg': (b'\xff\xd8\xff',),
 }
+
+_MSG_TOO_LONG = 'أحد الحقول يتجاوز الطول المسموح.'
+_MSG_PHOTO_TYPE = 'صيغة الصورة غير مدعومة. الصيغ المسموح بها: JPG أو JPEG أو PNG.'
+_MSG_PHOTO_SIZE = 'حجم الصورة أكبر من الحد المسموح (5 ميغابايت).'
+_MSG_PHOTO_INVALID = 'تعذّر قراءة صورة الطالب. يرجى رفع صورة صالحة بصيغة JPG أو JPEG أو PNG.'
+_MSG_DOC_SIZE = 'حجم الملف أكبر من الحد المسموح (5 ميغابايت).'
 
 
 # ── Rate-limit key: IP + token (so one school never blocks another) ─────────────
@@ -225,6 +254,70 @@ def _ext_of(filename: str) -> str:
     return filename.rsplit('.', 1)[1].lower() if '.' in (filename or '') else ''
 
 
+def _stream_size(file_storage) -> int | None:
+    """Byte size measured from the stream itself (never the client's header);
+    the position is restored. None when the stream cannot be read."""
+    try:
+        stream = file_storage.stream
+        pos = stream.tell()
+        stream.seek(0, os.SEEK_END)
+        size = stream.tell()
+        stream.seek(pos)
+        return size
+    except Exception:
+        return None
+
+
+def _prepare_photo(file_storage):
+    """Validate the public student photo BEFORE any Storage write.
+
+    Returns ``(upload, None)`` or ``(None, message)``. Inspection only: the SAME
+    FileStorage (rewound) is returned, so the stored original keeps its exact
+    bytes, extension and metadata — it becomes Student.photo, the AI Face source,
+    on approval. Checks: JPG/JPEG/PNG extension, <= 5 MB, magic bytes matching
+    the extension, then the Student photo validator (real Pillow decode/verify,
+    40 MP ceiling, corrupt/truncated refused).
+    """
+    ext = _ext_of(file_storage.filename)
+    if ext not in _PHOTO_EXTS:
+        return None, _MSG_PHOTO_TYPE
+    size = _stream_size(file_storage)
+    if not size:
+        return None, _MSG_PHOTO_INVALID
+    if size > _MAX_UPLOAD_BYTES:
+        return None, _MSG_PHOTO_SIZE
+    if not _content_matches_ext(file_storage, ext):
+        return None, _MSG_PHOTO_INVALID
+    err = validate_student_photo(file_storage)
+    if err:
+        return None, (err if err == _MSG_PHOTO_DIMENSIONS else _MSG_PHOTO_INVALID)
+    return file_storage, None
+
+
+def _prepare_document(file_storage):
+    """Validate and prepare ONE registration document BEFORE any Storage write,
+    with the Student Document policy: PDF/JPG/JPEG/PNG, <= 5 MB, magic bytes;
+    a PDF is returned unchanged (stored byte-for-byte), an image is decoded and
+    optimised (<= 1600 px, WebP q88, metadata stripped) and only that result is
+    stored. Returns ``(upload, None)`` or ``(None, message)``."""
+    upload, err = prepare_student_document_upload(file_storage)
+    if err:
+        return None, err
+    # The prepared bytes must fit the per-file cap Storage enforces, so a (rare)
+    # larger re-encode is refused here rather than failing mid-upload.
+    size = _stream_size(upload)
+    if size is None or size > _MAX_UPLOAD_BYTES:
+        return None, _MSG_DOC_SIZE
+    return upload, None
+
+
+def _discard_uploads(stored_values):
+    """Remove objects THIS request stored when the submission is not recorded.
+    Each value is deleted only if no database row references it."""
+    for value in stored_values:
+        _discard_unreferenced_upload(value)
+
+
 # ── Routes ──────────────────────────────────────────────────────────────────────
 
 @registration_bp.route('/register/<token>', methods=['GET', 'POST'])
@@ -302,11 +395,13 @@ def form(token):
     if gender and gender not in ('male', 'female'):
         return _render(request.form, 'قيمة الجنس غير صالحة.', nonce=nonce)
 
-    # Length caps (reject rather than silently truncate).
-    for key in ('full_name', 'nationality', 'phone', 'guardian_name',
-                'guardian_phone', 'guardian_email', 'guardian_relation'):
-        if len((request.form.get(key) or '')) > _MAX_TEXT_LEN:
-            return _render(request.form, 'أحد الحقول يتجاوز الطول المسموح.', nonce=nonce)
+    # Length caps (reject rather than silently truncate): the submitted value
+    # and the stored (normalized) value, which must fit its database column.
+    for key in _LENGTH_CHECKED_FIELDS:
+        value = request.form.get(key) or ''
+        if (len(value) > _MAX_TEXT_LEN
+                or len(normalize_text(value)) > _COLUMN_MAX[key]):
+            return _render(request.form, _MSG_TOO_LONG, nonce=nonce)
 
     dob = None
     dob_str = (request.form.get('date_of_birth') or '').strip()
@@ -339,25 +434,14 @@ def form(token):
             # is impossible (hash-only), so show a safe "already received" page.
             return render_template('registration/received.html', school=school), 200
 
-    # ── Uploads (validated content, private storage, server filenames) ────────
-    photo_path = None
+    # ── Uploads, step 1: validate + prepare EVERY file, no Storage write yet ──
+    # A submission that fails any deterministic check stores nothing at all.
     photo_file = request.files.get('photo')
-    if (photo_file and photo_file.filename
-            and form_cfg.public_section_visible('student_photo')
-            and 'students.photo_upload' in enabled_features):
-        ext = _ext_of(photo_file.filename)
-        if ext not in ALLOWED_IMAGE_EXTENSIONS or ext not in _MAGIC:
-            return _render(request.form, 'صيغة الصورة غير مدعومة.', nonce=nonce)
-        if not _content_matches_ext(photo_file, ext):
-            return _render(request.form, 'محتوى ملف الصورة غير صالح.', nonce=nonce)
-        photo_path = save_uploaded_file(
-            photo_file, f'registration/{school.id}/photos',
-            bucket=current_app.config.get('SUPABASE_STORAGE_BUCKET_MEDIA'),
-            allowed_exts=_ALLOWED_DOC_EXTS, max_size=_MAX_UPLOAD_BYTES)
-        if photo_path is None:
-            return _render(request.form, 'تعذّر رفع الصورة.', nonce=nonce)
+    want_photo = bool(photo_file and photo_file.filename
+                      and form_cfg.public_section_visible('student_photo')
+                      and 'students.photo_upload' in enabled_features)
 
-    doc_saves = []  # (document_type, file_path) collected before DB write
+    doc_rows = []  # (document_type, FileStorage)
     if (form_cfg.public_section_visible('student_documents')
             and 'students.documents_upload' in enabled_features):
         doc_types = request.form.getlist('document_type[]')
@@ -367,18 +451,48 @@ def form(token):
         for doc_type, doc_file in zip(doc_types, doc_files):
             if not (doc_file and doc_file.filename):
                 continue
-            ext = _ext_of(doc_file.filename)
-            if ext not in _ALLOWED_DOC_EXTS:
-                return _render(request.form, 'نوع أحد الملفات غير مدعوم.', nonce=nonce)
-            if not _content_matches_ext(doc_file, ext):
-                return _render(request.form, 'محتوى أحد الملفات غير صالح.', nonce=nonce)
-            saved = save_uploaded_file(
-                doc_file, f'registration/{school.id}/documents',
-                bucket=current_app.config.get('SUPABASE_STORAGE_BUCKET_MEDIA'),
-                allowed_exts=_ALLOWED_DOC_EXTS, max_size=_MAX_UPLOAD_BYTES)
-            if saved is None:
-                return _render(request.form, 'تعذّر رفع أحد الملفات.', nonce=nonce)
-            doc_saves.append((normalize_text(doc_type) or 'وثيقة', saved))
+            doc_type = normalize_text(doc_type) or 'وثيقة'
+            if len(doc_type) > _DOC_TYPE_MAX:
+                return _render(request.form, _MSG_TOO_LONG, nonce=nonce)
+            doc_rows.append((doc_type, doc_file))
+
+    photo_upload = None
+    if want_photo:
+        photo_upload, err = _prepare_photo(photo_file)
+        if err:
+            return _render(request.form, err, nonce=nonce)
+
+    doc_uploads = []  # (document_type, prepared upload) — processed one at a time
+    for doc_type, doc_file in doc_rows:
+        upload, err = _prepare_document(doc_file)
+        if err:
+            return _render(request.form, err, nonce=nonce)
+        doc_uploads.append((doc_type, upload))
+
+    # ── Uploads, step 2: store (private bucket, server filenames, v2 prefix) ──
+    media_bucket = current_app.config.get('SUPABASE_STORAGE_BUCKET_MEDIA')
+    stored = []  # every object written by this request
+    photo_path = None
+    if photo_upload is not None:
+        photo_path = save_uploaded_file(
+            photo_upload, registration_photo_subfolder(school.id),
+            bucket=media_bucket, allowed_exts=_PHOTO_EXTS,
+            max_size=_MAX_UPLOAD_BYTES)
+        if photo_path is None:
+            return _render(request.form, 'تعذّر رفع الصورة.', nonce=nonce)
+        stored.append(photo_path)
+
+    doc_saves = []  # (document_type, file_path) collected before DB write
+    for doc_type, upload in doc_uploads:
+        saved = save_uploaded_file(
+            upload, registration_document_subfolder(school.id),
+            bucket=media_bucket, allowed_exts=STUDENT_DOC_STORED_EXTS,
+            max_size=_MAX_UPLOAD_BYTES)
+        if saved is None:
+            _discard_uploads(stored)
+            return _render(request.form, 'تعذّر رفع أحد الملفات.', nonce=nonce)
+        stored.append(saved)
+        doc_saves.append((doc_type, saved))
 
     # ── Create the request (+ documents + staff notification) atomically ──────
     raw_tracking = generate_token()
@@ -409,8 +523,10 @@ def form(token):
         db.session.flush()
     except IntegrityError:
         # Concurrent duplicate on (school_id, submission_nonce) — safe idempotent
-        # outcome: the other request already recorded it.
+        # outcome: the other request already recorded it. This request's copies
+        # were never referenced (nothing was committed), so they are removed.
         db.session.rollback()
+        _discard_uploads(stored)
         return render_template('registration/received.html', school=school), 200
 
     for doc_type, file_path in doc_saves:

@@ -227,8 +227,10 @@
 {% endmacro %}
 
 
-{# student photo — full col+card (self-guards section + feature flag). #}
-{% macro student_photo_card(form_cfg, enabled_features) %}
+{# student photo — full col+card (self-guards section + feature flag).
+   accept/hint are optional: the defaults render exactly what the internal
+   wizard always rendered; the public registration form passes its own. #}
+{% macro student_photo_card(form_cfg, enabled_features, accept='image/*', hint=None) %}
       {% if form_cfg.section_visible('student_photo') and 'students.photo_upload' in enabled_features %}
       <div class="col-lg-5">
         <div class="card mb-4">
@@ -242,7 +244,10 @@
                    style="width:120px;height:120px;object-fit:cover" alt="">
             </div>
             <input type="file" name="photo" id="photoInput"
-                   class="form-control form-control-sm" accept="image/*">
+                   class="form-control form-control-sm" accept="{{ accept }}">
+            {%- if hint %}
+            <div class="text-muted mt-2" style="font-size:12px">{{ hint }}</div>
+            {%- endif %}
           </div>
         </div>
       </div>
@@ -252,7 +257,9 @@
 
 {# student documents — full col+card with the first dynamic row + add button
    (self-guards section + feature flag). JS in each host page clones .document-row. #}
-{% macro student_documents_card(form_cfg, enabled_features) %}
+{% macro student_documents_card(form_cfg, enabled_features,
+                                accept='.pdf,.jpg,.jpeg,.png,.doc,.docx',
+                                hint='يمكنك رفع أكثر من مستند في نفس الوقت.') %}
       {% if form_cfg.section_visible('student_documents') and 'students.documents_upload' in enabled_features %}
       <div class="col-lg-7">
         <div class="card mb-4">
@@ -273,14 +280,14 @@
                 <div class="col-6">
                   <label class="form-label">اختر الملف</label>
                   <input type="file" name="document_file[]" class="form-control"
-                         accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+                         accept="{{ accept }}">
                 </div>
               </div>
             </div>
             <button type="button" id="add-document-row" class="btn btn-sm btn-outline-primary">
               <i class="bi bi-plus-lg"></i> إضافة مستند آخر
             </button>
-            <div class="text-muted mt-2" style="font-size:12px">يمكنك رفع أكثر من مستند في نفس الوقت.</div>
+            <div class="text-muted mt-2" style="font-size:12px">{{ hint }}</div>
           </div>
         </div>
       </div>

@@ -18,6 +18,7 @@ from app.utils.decorators import (permission_required, any_permission_required,
                                    historical_guard)
 from app.services.admission_approval import (approve_request, reject_request,
                                              find_matching_parent, ApprovalError)
+from app.utils.registration_media import create_registration_display_photo
 
 admissions_bp = Blueprint(
     'admissions', __name__,
@@ -138,6 +139,13 @@ def approve(request_id):
         # already exists and the one-time plaintext is gone — never re-derivable.
         flash('تم اعتماد هذا الطلب مسبقاً.', 'info')
         return redirect(url_for('admissions.detail', request_id=request_id))
+
+    # The approval above has committed (and released its row lock). Only now,
+    # outside that transaction, a NEW (v2) registration photo gets its display
+    # copy. Best effort: a failure leaves photo_display NULL (display falls back
+    # to Student.photo) and never affects the approved student. Legacy photos
+    # are not touched.
+    create_registration_display_photo(result['student_id'], school.id)
 
     if result.get('parent_created') and result.get('parent_password'):
         # New parent account: render a PERSISTENT one-time credential panel

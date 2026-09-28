@@ -211,13 +211,18 @@ def resolve_upload_owner(value: str | None) -> dict | None:
     if row:
         return owner(row, kind='registration_document')
 
-    row = first('StudentRegistrationRequest', 'student_photo_path')
-    if row:
-        return owner(row, kind='registration_photo')
-
+    # Student.photo BEFORE the registration photo: an approved registration
+    # shares its photo object with the created Student, and once a Student holds
+    # it the normal student rules apply (parent of that child, teacher scope,
+    # staff building scope). A photo no Student references (pending/rejected
+    # request) still resolves to the registration below — staff of that school.
     row = first('Student', 'photo')
     if row:
         return owner(row, student_id=getattr(row, 'id', None), kind='student_photo')
+
+    row = first('StudentRegistrationRequest', 'student_photo_path')
+    if row:
+        return owner(row, kind='registration_photo')
 
     row = first('Employee', 'photo')
     if row:
