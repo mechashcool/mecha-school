@@ -25,6 +25,12 @@ POST /teacher/institute/sessions/<id>/attendance   submit/correct attendance
 GET  /teacher/institute/groups         my institute study groups + weekly slots
 GET  /teacher/institute/groups/<id>/students   active roster of one of my groups
 GET  /teacher/institute/students/<id>  student profile (only my groups' students)
+GET  /teacher/institute/exams          exams of my institute groups (paginated)
+POST /teacher/institute/exams          create an exam for one of my groups
+GET  /teacher/institute/exams/<id>     exam + editable roster + historical results
+POST /teacher/institute/exams/<id>/results   atomic batch grade entry
+POST /teacher/institute/homework       create homework for one of my groups
+PUT  /teacher/institute/homework/<id>  update my institute homework (PATCH too)
 GET    /teacher/homework                 homework list (subject_id, section_id, grade_name)
 POST   /teacher/homework                 create homework — subject_id required
 PUT    /teacher/homework/<id>            update homework — all core fields required
@@ -47,6 +53,7 @@ from decimal import Decimal, InvalidOperation
 
 from flask import abort, g, jsonify, request
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
 from app.models import (
@@ -56,6 +63,7 @@ from app.models import (
     EmployeeAttendance,
     Exam,
     ExamResult,
+    ExamType,
     Homework,
     InstituteAttendanceRecord,
     InstituteAttendanceSession,
@@ -82,7 +90,11 @@ from app.utils.student_display_photo import student_display_value
 from app.utils.employee_display_photo import employee_display_value
 from app.services import institute_attendance as inst_att
 from app.utils.institute_groups import (active_enrollment_count_map, active_roster,
-                                        instructor_can_access_student)
+                                        active_roster_students,
+                                        eligible_groups_for_user,
+                                        historical_result_rows, instructor_groups,
+                                        instructor_can_access_student,
+                                        resolve_eligible_group)
 
 
 # ─── Shared helpers ───────────────────────────────────────────────────────────
@@ -2325,6 +2337,13 @@ def teacher_homework_update(homework_id):
         db.session.commit()
         return ok(message='homework_deleted')
 
+    # Single-target guard: this is the SECTION edit path. An institute row
+    # (institute_group_id set) must never be given a section here, which would
+    # make it target both and reach that section's parents. Institute homework
+    # is edited only through PUT /teacher/institute/homework/<id>.
+    if hw.institute_group_id is not None:
+        return err('institute_homework_use_institute_endpoint', 409)
+
     # ── PUT / PATCH ────────────────────────────────────────────────────────
     is_multipart = bool(
         request.content_type and 'multipart/form-data' in request.content_type
@@ -2918,3 +2937,700 @@ def teacher_institute_student_profile(student_id):
             for res, exam in results
         ],
     )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  INSTITUTE WRITE APIS — exams, grade entry, homework
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Group-targeted content only: every row written here carries
+# institute_group_id and a NULL section_id, and its subject is copied from the
+# group — never taken from the request. The same rules as the web institute
+# branches (grades.create_exam / grades.enter_results / homework.create /
+# homework.edit), resolved through the same shared helpers:
+#
+#   * resolve_eligible_group(is_manager=False) — the ACTIVE group of THIS
+#     institute and current year whose instructor is the JWT user's Employee;
+#   * active_roster_students()  — who may receive a NEW grade;
+#   * historical_result_rows()  — stored results shown read-only.
+#
+# Exams and grade entry additionally require the existing 'enter_grades'
+# permission, exactly as the web routes do. A group, exam or homework outside
+# the caller's scope is a 404 that discloses nothing about whether it exists.
+# Every write is validated completely before anything is added to the session
+# and committed ONCE; notifications run only after that commit.
+
+_MAX_RESULT_ENTRIES = 500
+
+import logging as _inst_logging  # noqa: E402
+_inst_log = _inst_logging.getLogger('mecha.mobile.institute')
+
+
+def _text(data, key) -> str:
+    """A stripped string field; non-string JSON values are coerced, None -> ''."""
+    raw = data.get(key)
+    if raw is None:
+        return ''
+    return (raw if isinstance(raw, str) else str(raw)).strip()
+
+
+def _can_enter_grades() -> bool:
+    return bool(g.mobile_user.has_permission('enter_grades'))
+
+
+def _json_or_form():
+    """(data, attachment) — multipart form with optional file, or JSON."""
+    if request.content_type and 'multipart/form-data' in request.content_type:
+        return request.form, request.files.get('attachment')
+    return (request.get_json(silent=True) or {}), None
+
+
+def _opt_int(raw):
+    """(value, ok): None when absent/blank; ok=False when present but not an int."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, True
+    if isinstance(raw, bool):
+        return None, False
+    try:
+        return int(raw), True
+    except (TypeError, ValueError):
+        return None, False
+
+
+def _refuse_foreign_target(data, group):
+    """Error response when the client tries to steer the target or subject.
+
+    section_id must be absent/null: an institute row never carries a section.
+    subject_id, when sent, must equal the group's own subject.
+    """
+    section_id, ok_sec = _opt_int(data.get('section_id'))
+    if not ok_sec or section_id is not None:
+        return err('section_id_not_allowed_for_institute')
+    subject_id, ok_subj = _opt_int(data.get('subject_id'))
+    if not ok_subj or (subject_id is not None and subject_id != group.subject_id):
+        return err('subject_mismatch — the subject comes from the group')
+    return None
+
+
+def _institute_exam_scope(school, exam_id):
+    """(exam, group) for an institute exam this instructor may OPEN, else
+    (None, None). Mirrors grades._institute_exam_group(include_inactive=True):
+    the exam's OWN academic year, the caller's own groups, an inactive group
+    admitted for reading only."""
+    exam = (Exam.query.execution_options(**_OPTS)
+            .options(joinedload(Exam.exam_type))
+            .filter(Exam.id == exam_id, Exam.school_id == school.id,
+                    Exam.institute_group_id.isnot(None))
+            .first())
+    if exam is None:
+        return None, None
+    exam_year = (AcademicYear.query.execution_options(**_OPTS)
+                 .filter_by(id=exam.academic_year_id, school_id=school.id).first())
+    groups = eligible_groups_for_user(school, g.mobile_user, exam_year,
+                                      is_manager=False, include_inactive=True)
+    group = next((grp for grp in groups if grp.id == exam.institute_group_id), None)
+    return (exam, group) if group is not None else (None, None)
+
+
+def _institute_exam_item(exam, group_name, subjects, today, result_count=None):
+    item = {
+        'id':               exam.id,
+        'name':             exam.display_name,
+        'title':            exam.display_name,
+        'exam_type_id':     exam.exam_type_id,
+        'exam_date':        exam.exam_date.isoformat() if exam.exam_date else None,
+        'max_score':        float(exam.max_marks),
+        'pass_marks':       float(exam.pass_marks),
+        'is_upcoming':      exam.exam_date >= today if exam.exam_date else None,
+        'group_id':         exam.institute_group_id,
+        'group_name':       group_name,
+        'subject':          {'id': exam.subject_id, 'name': subjects.get(exam.subject_id)},
+        'section_id':       None,
+        'created_at':       exam.created_at.isoformat() if exam.created_at else None,
+    }
+    if result_count is not None:
+        item['result_count'] = result_count
+    return item
+
+
+# ─── Institute exams: list / create ───────────────────────────────────────────
+
+@mobile_api_bp.route('/teacher/institute/exams', methods=['GET'])
+@jwt_required()
+@role_required('teacher')
+def teacher_institute_exams():
+    """Exams of MY active groups in the current academic year, newest first.
+
+    ?group_id only narrows my own set — an unassigned id yields an empty page,
+    the /sessions convention. ?limit (default 50, max 100) & ?offset.
+    """
+    emp, school, year = _institute_context()
+    if school is None:
+        return err('institute_not_available', 404)
+
+    groups = {grp.id: grp for grp in _my_institute_groups(school, year, emp)}
+    group_id, ok_gid = _opt_int(request.args.get('group_id'))
+    if not ok_gid:
+        return err('invalid group_id')
+    group_ids = ([group_id] if group_id in groups else []) if group_id else list(groups)
+    limit, offset = page_args(default_limit=50, max_limit=100)
+    if not group_ids:
+        return ok(total=0, limit=limit, offset=offset, exams=[])
+
+    q = (Exam.query.execution_options(**_OPTS)
+         .filter(Exam.school_id == school.id,
+                 Exam.academic_year_id == year.id,
+                 Exam.institute_group_id.in_(group_ids)))
+    total = q.count()
+    exams = (q.options(joinedload(Exam.exam_type))
+             .order_by(Exam.exam_date.desc(), Exam.id.desc())
+             .offset(offset).limit(limit).all())
+    exam_ids = [e.id for e in exams]
+    counts = dict(db.session.query(ExamResult.exam_id, func.count(ExamResult.id))
+                  .filter(ExamResult.school_id == school.id,
+                          ExamResult.exam_id.in_(exam_ids))
+                  .execution_options(**_OPTS)
+                  .group_by(ExamResult.exam_id).all()) if exam_ids else {}
+    subjects = _subject_map(school.id, (e.subject_id for e in exams))
+    today = date.today()
+    return ok(total=total, limit=limit, offset=offset, exams=[
+        _institute_exam_item(e, groups[e.institute_group_id].name, subjects, today,
+                             result_count=counts.get(e.id, 0))
+        for e in exams])
+
+
+@mobile_api_bp.route('/teacher/institute/exams', methods=['POST'])
+@jwt_required()
+@role_required('teacher')
+def teacher_institute_create_exam():
+    """Create ONE exam for ONE of my active groups (web grades.create_exam,
+    institute branch). Body (JSON):
+
+      group_id      int         required — must be one of my active groups
+      name          str         required (alias: title, exam_name)
+      exam_date     YYYY-MM-DD  required
+      max_score     number      optional, default 100 (alias: max_marks)
+      pass_marks    number      optional, default 50; 0 <= pass <= max
+      exam_type_id  int         optional, must exist
+
+    subject_id is taken from the group (a different value is rejected) and
+    section_id must be absent: section_id is always NULL on the stored row.
+    """
+    emp, school, year = _institute_context()
+    if school is None:
+        return err('institute_not_available', 404)
+    if not _can_enter_grades():
+        return err('forbidden', 403)
+
+    data = request.get_json(silent=True) or {}
+    name = _text(data, 'name') or _text(data, 'title') or _text(data, 'exam_name')
+    if not name:
+        return err('required_field_missing: name')
+
+    group_id, ok_gid = _opt_int(data.get('group_id'))
+    if not ok_gid or group_id is None:
+        return err('required_field_missing: group_id')
+    group, _msg = resolve_eligible_group(school, g.mobile_user, year, group_id,
+                                         is_manager=False)
+    if group is None:
+        return err('group_not_found', 404)
+    refused = _refuse_foreign_target(data, group)
+    if refused is not None:
+        return refused
+
+    try:
+        exam_date = _dt.strptime(_text(data, 'exam_date'), '%Y-%m-%d').date()
+    except ValueError:
+        return err('invalid exam_date — use YYYY-MM-DD')
+    raw_max = data.get('max_score') if data.get('max_score') is not None \
+        else data.get('max_marks', 100)
+    raw_pass = data.get('pass_marks', 50)
+    try:
+        if isinstance(raw_max, bool) or isinstance(raw_pass, bool):
+            raise ValueError
+        max_marks, pass_marks = Decimal(str(raw_max)), Decimal(str(raw_pass))
+        if not (max_marks.is_finite() and pass_marks.is_finite()):
+            raise ValueError
+    except (InvalidOperation, ValueError, TypeError):
+        return err('max_score and pass_marks must be numbers')
+    if max_marks <= 0:
+        return err('max_score must be greater than 0')
+    if pass_marks < 0 or pass_marks > max_marks:
+        return err('pass_marks must be between 0 and max_score')
+
+    exam_type_id, ok_type = _opt_int(data.get('exam_type_id'))
+    if not ok_type or (exam_type_id is not None
+                       and db.session.get(ExamType, exam_type_id) is None):
+        return err('invalid exam_type_id')
+
+    exam = Exam(
+        school_id          = school.id,
+        academic_year_id   = year.id,           # the year the group was validated in
+        exam_name          = name,
+        exam_type_id       = exam_type_id,
+        subject_id         = group.subject_id,  # derived, never posted
+        section_id         = None,              # never both targets
+        institute_group_id = group.id,
+        exam_date          = exam_date,
+        max_marks          = max_marks,
+        pass_marks         = pass_marks,
+    )
+    db.session.add(exam)
+    db.session.commit()
+
+    # Same post-commit notification path as the school mobile exam; the web
+    # _notify_new_exam() already targets a group's actively enrolled students.
+    try:
+        from app.services import async_dispatch
+        async_dispatch.submit(_notify_new_exam_bg, exam.id, school.id)
+    except Exception:
+        _inst_log.exception('[mobile-inst-exam] notify dispatch failed exam_id=%s', exam.id)
+
+    return ok(message='exam_created',
+              exam=_institute_exam_item(exam, group.name,
+                                        _subject_map(school.id, [exam.subject_id]),
+                                        date.today(), result_count=0)), 201
+
+
+# ─── Institute exam detail / grade entry ─────────────────────────────────────
+
+def _result_dict(res):
+    if res is None:
+        return None
+    return {
+        'score':   float(res.marks) if res.marks is not None else None,
+        'grade':   res.grade_letter,
+        'is_pass': res.is_pass,
+        'rank':    res.rank,
+        'notes':   res.notes,
+    }
+
+
+@mobile_api_bp.route('/teacher/institute/exams/<int:exam_id>', methods=['GET'])
+@jwt_required()
+@role_required('teacher')
+def teacher_institute_exam_detail(exam_id):
+    """Exam + the EDITABLE roster (active enrollment, active student, active
+    group) with each student's current result, plus stored results of students
+    who are no longer eligible, shown read-only (historical_result_rows).
+    Read-only request."""
+    emp, school, year = _institute_context()
+    if school is None:
+        return err('institute_not_available', 404)
+    exam, group = _institute_exam_scope(school, exam_id)
+    if exam is None:
+        return err('exam_not_found', 404)
+
+    editable = bool(group.is_active)
+    roster = active_roster_students(school.id, group.id) if editable else []
+    results = {r.student_id: r for r in
+               ExamResult.query.execution_options(**_OPTS)
+               .filter_by(exam_id=exam.id, school_id=school.id).all()}
+    historical = historical_result_rows(school.id, exam.id, group.id,
+                                        exclude_student_ids=[s.id for s in roster])
+
+    return ok(
+        exam=_institute_exam_item(exam, group.name,
+                                  _subject_map(school.id, [exam.subject_id]),
+                                  date.today(), result_count=len(results)),
+        group={'group_id': group.id, 'name': group.name, 'is_active': group.is_active},
+        editable=editable,
+        count=len(roster),
+        students=[{
+            'id':         s.id,
+            'student_id': s.student_id,
+            'name':       s.full_name,
+            'photo':      photo_url(student_display_value(s)),
+            'result':     _result_dict(results.get(s.id)),
+            'editable':   editable,
+        } for s in roster],
+        historical=[{
+            'id':         s.id,
+            'student_id': s.student_id,
+            'name':       s.full_name,
+            'label':      label,
+            'result':     _result_dict(res),
+            'editable':   False,
+        } for s, res, label in historical],
+    )
+
+
+@mobile_api_bp.route('/teacher/institute/exams/<int:exam_id>/results', methods=['POST'])
+@jwt_required()
+@role_required('teacher')
+def teacher_institute_submit_results(exam_id):
+    """Atomic batch grade entry for one of my institute exams.
+
+    Body: {"results": [{"student_id": 1, "score": 88.5, "notes": "..."}]}
+    ('marks' / 'note' accepted as aliases). A null or empty score means "not
+    entered" and is skipped, exactly as on the web form.
+
+    EVERY entry is validated before anything is written: a student outside the
+    editable roster, a duplicate student, a non-numeric score or one outside
+    0..max_score rejects the WHOLE batch and nothing is saved. Results and the
+    recomputed ranks are committed together in ONE transaction.
+    """
+    emp, school, year = _institute_context()
+    if school is None:
+        return err('institute_not_available', 404)
+    if not _can_enter_grades():
+        return err('forbidden', 403)
+    exam, group = _institute_exam_scope(school, exam_id)
+    if exam is None:
+        return err('exam_not_found', 404)
+    if not group.is_active:
+        # A deactivated group is read-only, re-decided from the stored row.
+        return err('group_inactive — results are read-only', 409)
+
+    entries = (request.get_json(silent=True) or {}).get('results')
+    if not isinstance(entries, list) or not entries:
+        return err('results must be a non-empty array')
+    if len(entries) > _MAX_RESULT_ENTRIES:
+        return err('too_many_results')
+
+    roster = {s.id: s for s in active_roster_students(school.id, group.id)}
+    max_marks = Decimal(str(exam.max_marks))
+    pass_marks = Decimal(str(exam.pass_marks))
+
+    parsed, seen = [], set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return err('invalid result entry — nothing was saved')
+        sid, ok_sid = _opt_int(entry.get('student_id'))
+        if not ok_sid or sid is None or sid not in roster:
+            return jsonify({'ok': False, 'error': 'student_not_in_group',
+                            'student_id': entry.get('student_id'),
+                            'message': 'nothing was saved'}), 400
+        if sid in seen:
+            return jsonify({'ok': False, 'error': 'duplicate_student',
+                            'student_id': sid, 'message': 'nothing was saved'}), 400
+        seen.add(sid)
+        raw = entry.get('score') if entry.get('score') is not None else entry.get('marks')
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            continue                     # not entered — existing row untouched
+        try:
+            if isinstance(raw, bool):
+                raise ValueError
+            marks = Decimal(str(raw).strip())
+            if not marks.is_finite():
+                raise ValueError
+        except (InvalidOperation, ValueError, TypeError):
+            return jsonify({'ok': False, 'error': 'invalid_score', 'student_id': sid,
+                            'message': 'nothing was saved'}), 400
+        if marks < 0 or marks > max_marks:
+            return jsonify({'ok': False, 'error': 'score_out_of_range', 'student_id': sid,
+                            'max_score': float(max_marks),
+                            'message': 'nothing was saved'}), 400
+        notes = entry.get('notes') if entry.get('notes') is not None else entry.get('note')
+        if notes is not None:
+            notes = str(notes).strip()[:1000] or None
+        parsed.append((sid, marks, notes, 'notes' in entry or 'note' in entry))
+
+    if not parsed:
+        return err('no scores were entered')
+
+    existing = {r.student_id: r for r in
+                ExamResult.query.execution_options(**_OPTS)
+                .filter_by(exam_id=exam.id, school_id=school.id).all()}
+    user_id = g.mobile_user.id
+    created = updated = unchanged = 0
+    graded = []
+    for sid, marks, notes, notes_sent in parsed:
+        grade = calculate_grade_letter(float(marks), float(max_marks))
+        is_pass = marks >= pass_marks
+        res = existing.get(sid)
+        if res is None:
+            # school / year are copied from the stored exam, never the request.
+            db.session.add(ExamResult(
+                exam_id=exam.id, student_id=sid, school_id=exam.school_id,
+                academic_year_id=exam.academic_year_id, marks=marks,
+                grade_letter=grade, is_pass=is_pass, notes=notes,
+                entered_by=user_id))
+            created += 1
+            graded.append(sid)
+            continue
+        new_notes = notes if notes_sent else res.notes
+        changed = (Decimal(str(res.marks)).quantize(Decimal('0.01'))
+                   != marks.quantize(Decimal('0.01'))) or res.notes != new_notes
+        res.marks, res.grade_letter, res.is_pass = marks, grade, is_pass
+        res.notes, res.entered_by = new_notes, user_id
+        if changed:
+            updated += 1
+            graded.append(sid)
+        else:
+            unchanged += 1
+
+    # Ranks for the whole exam, in the SAME transaction as the results (the web
+    # route commits them separately; here a failure rolls both back).
+    db.session.flush()
+    for rank, res in enumerate(ExamResult.query.execution_options(**_OPTS)
+                               .filter_by(exam_id=exam.id, school_id=school.id)
+                               .order_by(ExamResult.marks.desc(), ExamResult.id)
+                               .all(), 1):
+        res.rank = rank
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return err('results_changed_concurrently — nothing was saved, reload and retry', 409)
+
+    if graded:
+        try:
+            _notify_grade_results_mobile(exam.id, school.id, exam.subject_id,
+                                         exam.exam_name or exam.display_name,
+                                         [roster[sid] for sid in graded])
+        except Exception:
+            _inst_log.exception('[mobile-inst-grades] notify failed exam_id=%s', exam.id)
+
+    results = (ExamResult.query.execution_options(**_OPTS)
+               .filter_by(exam_id=exam.id, school_id=school.id)
+               .order_by(ExamResult.rank).all())
+    return ok(exam_id=exam.id, saved=len(parsed), created=created, updated=updated,
+              unchanged=unchanged,
+              results=[{'student_id': r.student_id, **_result_dict(r)} for r in results])
+
+
+# ─── Institute homework: create / update ─────────────────────────────────────
+
+_HOMEWORK_EXTS = {'jpg', 'jpeg', 'png', 'webp', 'pdf'}
+
+
+def _homework_gate(action=None):
+    """The existing mobile homework feature switches, or None when allowed."""
+    from app.utils.school_config import get_school_config
+    cfg = get_school_config(g.mobile_user.school_id)
+    if not cfg.action_enabled('homework', 'api_access'):
+        return err('الوصول إلى الواجبات غير مفعل لهذه المدرسة.', 403)
+    if action and not cfg.action_enabled('homework', action):
+        return err('إضافة الواجبات غير مفعلة لهذه المدرسة.', 403)
+    return None
+
+
+def _store_homework_attachment(attachment):
+    """(path, type, error_response) — the existing mobile upload pipeline."""
+    from app.utils.helpers import save_uploaded_file
+    from app.utils.homework_attachments import HomeworkImageError, prepare_homework_upload
+    try:
+        upload = prepare_homework_upload(attachment)
+    except HomeworkImageError as exc:
+        return None, None, err(str(exc))
+    stored = save_uploaded_file(upload, subfolder='homework', allowed_exts=_HOMEWORK_EXTS)
+    if stored is None:
+        return None, None, err('invalid_attachment — allowed: jpg, jpeg, png, webp, pdf')
+    ext = attachment.filename.rsplit('.', 1)[-1].lower() if '.' in attachment.filename else ''
+    return stored, ('pdf' if ext == 'pdf' else 'image'), None
+
+
+def _institute_homework_dict(hw, group_name, subjects):
+    return {
+        'id':              hw.id,
+        'title':           hw.title,
+        'description':     hw.description,
+        'group_id':        hw.institute_group_id,
+        'group_name':      group_name,
+        'subject_id':      hw.subject_id,
+        'subject_name':    subjects.get(hw.subject_id),
+        'section_id':      None,
+        'publish_date':    hw.publish_date.isoformat() if hw.publish_date else None,
+        'due_date':        hw.due_date.isoformat() if hw.due_date else None,
+        'attachment_url':  _hw_attachment_url(hw),
+        'attachment_name': (hw.attachment_path.rstrip('/').rsplit('/', 1)[-1]
+                            if hw.attachment_path else None),
+        'attachment_type': hw.attachment_type,
+    }
+
+
+def _parse_date_field(raw, field):
+    try:
+        return _dt.strptime(str(raw).strip(), '%Y-%m-%d').date(), None
+    except (TypeError, ValueError):
+        return None, err(f'invalid {field} — use YYYY-MM-DD')
+
+
+def _notify_institute_homework(hw, school_id):
+    """The web institute homework notification (in-app rows for the parents
+    of the group's actively enrolled students; FCM stays withheld there).
+    Runs after the homework commit; never fails the request."""
+    try:
+        from app.blueprints.homework import _notify_homework_parents
+        _notify_homework_parents(hw, school_id)
+    except Exception:
+        db.session.rollback()
+        _inst_log.exception('[mobile-inst-hw] notify failed hw_id=%s', hw.id)
+
+
+@mobile_api_bp.route('/teacher/institute/homework', methods=['POST'])
+@jwt_required()
+@role_required('teacher')
+def teacher_institute_create_homework():
+    """Create homework for ONE of my active groups (web homework.create,
+    institute branch). JSON or multipart (optional 'attachment'):
+
+      group_id      int         required — one of my active groups
+      title         str         required
+      due_date      YYYY-MM-DD  required, not before publish_date
+      publish_date  YYYY-MM-DD  optional, default today
+      description   str         optional
+
+    subject comes from the group; section_id must be absent. An identical
+    active assignment (same group, title, publish date) is refused (409).
+    """
+    gate = _homework_gate('create')
+    if gate is not None:
+        return gate
+    emp, school, year = _institute_context()
+    if school is None:
+        return err('institute_not_available', 404)
+
+    data, attachment = _json_or_form()
+    title = _text(data, 'title')
+    if not title:
+        return err('required_field_missing: title')
+    group_id, ok_gid = _opt_int(data.get('group_id'))
+    if not ok_gid or group_id is None:
+        return err('required_field_missing: group_id')
+    group, _msg = resolve_eligible_group(school, g.mobile_user, year, group_id,
+                                         is_manager=False)
+    if group is None:
+        return err('group_not_found', 404)
+    refused = _refuse_foreign_target(data, group)
+    if refused is not None:
+        return refused
+
+    if not _text(data, 'due_date'):
+        return err('required_field_missing: due_date')
+    due_dt, bad = _parse_date_field(data.get('due_date'), 'due_date')
+    if bad:
+        return bad
+    if _text(data, 'publish_date'):
+        pub_dt, bad = _parse_date_field(data.get('publish_date'), 'publish_date')
+        if bad:
+            return bad
+    else:
+        pub_dt = date.today()
+    if due_dt < pub_dt:
+        return err('due_date must not be before publish_date')
+    description = _text(data, 'description') or None
+
+    duplicate = (Homework.query.execution_options(**_OPTS)
+                 .filter_by(school_id=school.id, academic_year_id=year.id,
+                            teacher_id=emp.id, subject_id=group.subject_id,
+                            section_id=None, institute_group_id=group.id,
+                            title=title, publish_date=pub_dt, is_active=True)
+                 .first())
+    if duplicate is not None:
+        return err('duplicate_homework — this homework already exists for this group', 409)
+
+    att_path = att_type = None
+    if attachment is not None and attachment.filename:
+        att_path, att_type, bad = _store_homework_attachment(attachment)
+        if bad:
+            return bad
+
+    hw = Homework(
+        school_id=school.id, academic_year_id=year.id, teacher_id=emp.id,
+        subject_id=group.subject_id,     # derived, never posted
+        section_id=None,                 # never both targets
+        institute_group_id=group.id,
+        title=title, description=description, publish_date=pub_dt, due_date=due_dt,
+        attachment_path=att_path, attachment_type=att_type, is_active=True)
+    db.session.add(hw)
+    db.session.commit()
+    _notify_institute_homework(hw, school.id)
+
+    return ok(message='تم إضافة الواجب بنجاح.',
+              homework=_institute_homework_dict(
+                  hw, group.name, _subject_map(school.id, [hw.subject_id]))), 201
+
+
+@mobile_api_bp.route('/teacher/institute/homework/<int:homework_id>',
+                     methods=['PUT', 'PATCH'])
+@jwt_required()
+@role_required('teacher')
+def teacher_institute_update_homework(homework_id):
+    """Update MY institute homework (web homework.edit, institute branch).
+
+    The row must be active, mine (teacher_id), of this institute, and point at
+    a group I may still target in the homework's OWN academic year; otherwise
+    404. Body (JSON or multipart, optional 'attachment' replaces the file):
+
+      title         str         required
+      due_date      YYYY-MM-DD  required
+      publish_date  YYYY-MM-DD  optional — unchanged when absent
+      description   str         optional (absent/blank clears it)
+      group_id      int         optional — unchanged when absent; a new value
+                                must be another of my groups (web allows the
+                                move within the eligible set)
+
+    school, year and owner are never reassigned; section_id stays NULL and
+    the subject follows the group.
+    """
+    gate = _homework_gate()
+    if gate is not None:
+        return gate
+    emp, school, year = _institute_context()
+    if school is None:
+        return err('institute_not_available', 404)
+
+    hw = (Homework.query.execution_options(**_OPTS)
+          .filter(Homework.id == homework_id, Homework.school_id == school.id,
+                  Homework.teacher_id == emp.id, Homework.is_active.is_(True),
+                  Homework.institute_group_id.isnot(None))
+          .first())
+    hw_year = (AcademicYear.query.execution_options(**_OPTS)
+               .filter_by(id=hw.academic_year_id, school_id=school.id).first()
+               if hw is not None else None)
+    eligible = ({grp.id: grp for grp in instructor_groups(school, g.mobile_user, hw_year)}
+                if hw_year is not None else {})
+    if hw is None or hw.institute_group_id not in eligible:
+        return err('homework_not_found', 404)
+
+    data, attachment = _json_or_form()
+    title = _text(data, 'title')
+    if not title:
+        return err('required_field_missing: title')
+
+    group = eligible[hw.institute_group_id]
+    if 'group_id' in data:
+        group_id, ok_gid = _opt_int(data.get('group_id'))
+        if not ok_gid or group_id is None:
+            return err('invalid group_id')
+        group = eligible.get(group_id)
+        if group is None:
+            return err('group_not_found', 404)
+    refused = _refuse_foreign_target(data, group)
+    if refused is not None:
+        return refused
+
+    if not _text(data, 'due_date'):
+        return err('required_field_missing: due_date')
+    due_dt, bad = _parse_date_field(data.get('due_date'), 'due_date')
+    if bad:
+        return bad
+    pub_dt = hw.publish_date
+    if _text(data, 'publish_date'):
+        pub_dt, bad = _parse_date_field(data.get('publish_date'), 'publish_date')
+        if bad:
+            return bad
+    if pub_dt and due_dt < pub_dt:
+        return err('due_date must not be before publish_date')
+
+    new_path, new_type = hw.attachment_path, hw.attachment_type
+    if attachment is not None and attachment.filename:
+        new_path, new_type, bad = _store_homework_attachment(attachment)
+        if bad:
+            return bad
+
+    hw.title              = title
+    hw.description        = _text(data, 'description') or None
+    hw.institute_group_id = group.id
+    hw.subject_id         = group.subject_id
+    hw.section_id         = None           # an institute row never gains a section
+    hw.publish_date       = pub_dt
+    hw.due_date           = due_dt
+    hw.attachment_path    = new_path
+    hw.attachment_type    = new_type
+    db.session.commit()
+
+    return ok(homework=_institute_homework_dict(
+        hw, group.name, _subject_map(school.id, [hw.subject_id])))
