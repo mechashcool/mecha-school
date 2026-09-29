@@ -10,7 +10,8 @@ GET /parent/children/<id>                     child profile + quick stats
 GET /parent/children/<id>/attendance          attendance history (queryable range)
 GET /parent/children/<id>/fees                fee records + installments
 GET /parent/children/<id>/grades              exam results (all years)
-GET /parent/children/<id>/exams               exams for child's section (±30/60 d)
+GET /parent/children/<id>/exams               exams for child's section (±30/60 d);
+                                              ?start=&end= → one ≤30-day history window
 GET /parent/children/<id>/schedule            weekly class schedule
 GET /parent/notifications                     notifications feed (paginated)
 
@@ -406,8 +407,15 @@ def parent_child_exams(student_id):
     """
     Exams scheduled for the child's section.
     Default window: 30 days before today → 60 days ahead.
+    Query params (optional, both required together): start, end (YYYY-MM-DD) —
+    one explicit exam-history window, see _parent_exam_history().
     """
     s = _assert_owns_student(student_id)
+
+    raw_start = (request.args.get('start') or '').strip()
+    raw_end   = (request.args.get('end') or '').strip()
+    if raw_start or raw_end:
+        return _parent_exam_history(s, raw_start, raw_end)
 
     if not s.section_id:
         return ok(student_id=s.id, exams=[])
@@ -424,18 +432,87 @@ def parent_child_exams(student_id):
 
     return ok(
         student_id=s.id,
-        exams=[
-            {
-                'id':          e.id,
-                'name':        e.display_name,
-                'subject':     e.subject.name if e.subject else None,
-                'exam_date':   e.exam_date.isoformat() if e.exam_date else None,
-                'max_marks':   float(e.max_marks),
-                'pass_marks':  float(e.pass_marks),
-                'is_upcoming': e.exam_date >= today if e.exam_date else None,
-            }
-            for e in exams
-        ],
+        exams=[_parent_exam_item(e, today) for e in exams],
+    )
+
+
+# Exam history (new mobile client): the app walks back one window at a time.
+_EXAM_HISTORY_MAX_SPAN_DAYS = 30    # inclusive calendar days per window
+# The app never asks for anything older than today - 364; one extra day of
+# grace absorbs device/server clock and timezone differences around midnight.
+_EXAM_HISTORY_HORIZON_DAYS  = 365
+
+
+def _parent_exam_item(e: Exam, today: date) -> dict:
+    return {
+        'id':          e.id,
+        'name':        e.display_name,
+        'subject':     e.subject.name if e.subject else None,
+        'exam_date':   e.exam_date.isoformat() if e.exam_date else None,
+        'max_marks':   float(e.max_marks),
+        'pass_marks':  float(e.pass_marks),
+        'is_upcoming': e.exam_date >= today if e.exam_date else None,
+    }
+
+
+def _parent_exam_history(s: Student, raw_start: str, raw_end: str):
+    """
+    Exams inside one explicit window (≤30 days, within the last year) for an
+    ownership-verified student. An exam is returned only when it is
+    attributable to THIS student — a previous section is never inferred:
+
+      1. current: exams of the student's CURRENT section. The ORM active-year
+         scope stays on, exactly like the default view.
+      2. proven:  exams this student has an ExamResult for, in any academic
+         year. include_all_years is set on that one statement only; the school
+         filter stays active and is also pinned explicitly. Exam.subject and
+         Exam.exam_type are eager-loaded in the same statement: a lazy load
+         would re-apply the active-year scope and drop a previous year's
+         subject.
+    """
+    if not raw_start or not raw_end:
+        return err('start and end must be supplied together')
+    try:
+        start = _dt.strptime(raw_start, '%Y-%m-%d').date()
+        end   = _dt.strptime(raw_end, '%Y-%m-%d').date()
+    except ValueError:
+        return err('invalid date format — use YYYY-MM-DD')
+    if start > end:
+        return err('start must not be after end')
+    if (end - start).days + 1 > _EXAM_HISTORY_MAX_SPAN_DAYS:
+        return err(f'range must not exceed {_EXAM_HISTORY_MAX_SPAN_DAYS} days')
+
+    today = date.today()
+    if (start < today - timedelta(days=_EXAM_HISTORY_HORIZON_DAYS)
+            or end > today + timedelta(days=1)):
+        return err('range is outside the one-year history window')
+
+    by_id: dict[int, Exam] = {}
+
+    if s.section_id:
+        for e in (Exam.query
+                  .options(joinedload(Exam.subject), joinedload(Exam.exam_type))
+                  .filter_by(section_id=s.section_id)
+                  .filter(Exam.exam_date.between(start, end))
+                  .all()):
+            by_id[e.id] = e
+
+    school_id = g.mobile_user.school_id
+    for e in (Exam.query
+              .execution_options(include_all_years=True)
+              .join(ExamResult, ExamResult.exam_id == Exam.id)
+              .options(joinedload(Exam.subject), joinedload(Exam.exam_type))
+              .filter(ExamResult.student_id == s.id,
+                      ExamResult.school_id == school_id,
+                      Exam.school_id == school_id,
+                      Exam.exam_date.between(start, end))
+              .all()):
+        by_id.setdefault(e.id, e)
+
+    exams = sorted(by_id.values(), key=lambda e: (e.exam_date, e.id))
+    return ok(
+        student_id=s.id,
+        exams=[_parent_exam_item(e, today) for e in exams],
     )
 
 
