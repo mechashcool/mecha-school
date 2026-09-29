@@ -1,8 +1,12 @@
 """
 Institute external admissions — focused guarantees.
 
-The public registration flow (/register/<token>) is unchanged for every
-institution. What this covers is the staff side for an institute:
+Public side: an institute's /register/<token> form asks for NO grade (no
+replacement field, no study groups) and its requests are stored with
+desired_grade_id NULL; a posted grade is discarded. A school's form still shows
+and requires its grade exactly as before.
+
+Staff side for an institute:
 
   * the "طلبات التسجيل الخارجي" sidebar item is shown again for institutes,
     while the other school-only items stay hidden;
@@ -35,6 +39,7 @@ PASSWORD = 'Test1234!'
 OPTS = {'bypass_tenant_scope': True}
 PUBLIC = 'https://storage.test/storage/v1/object/public/'
 ADMISSIONS_LABEL = 'طلبات التسجيل الخارجي'
+GRADE_LABEL = 'الصف الدراسي المطلوب'
 
 PDF = (b'%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n'
        b'2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n')
@@ -212,12 +217,20 @@ class InstituteExternalAdmissionsTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 302)
         return client
 
-    def _submit(self, key, photo=None, docs=()):
-        """POST the unchanged public form; return the created request id."""
+    DEFAULT = object()
+
+    def _post_public(self, key, grade=DEFAULT, photo=None, docs=()):
+        """POST the public form. By default a school sends its own grade and an
+        institute sends none (its form has no grade field); pass an id to send
+        one explicitly, or None to omit it."""
         self.ip += 1
         nonce = uuid4().hex
         data = {'full_name': f'Applicant {uuid4().hex[:6]}', 'gender': 'male',
-                'desired_grade_id': str(self.ids[key]['grade']), 'submission_nonce': nonce}
+                'submission_nonce': nonce}
+        if grade is self.DEFAULT:
+            grade = self.ids[key]['grade'] if key == 'sc' else None
+        if grade is not None:
+            data['desired_grade_id'] = str(grade)
         if photo is not None:
             data['photo'] = (io.BytesIO(photo), 'p.jpg', 'application/octet-stream')
         if docs:
@@ -228,6 +241,17 @@ class InstituteExternalAdmissionsTest(unittest.TestCase):
             f"/register/{self.ids[key]['token']}", data=data,
             content_type='multipart/form-data',
             environ_base={'REMOTE_ADDR': f'10.8.{self.ip // 250}.{self.ip % 250 + 1}'})
+        return resp, nonce
+
+    def _find_request(self, key, nonce):
+        with self.app.app_context():
+            return (StudentRegistrationRequest.query.execution_options(**OPTS)
+                    .filter_by(school_id=self.ids[key]['school'], submission_nonce=nonce)
+                    .first())
+
+    def _submit(self, key, grade=DEFAULT, photo=None, docs=()):
+        """POST the public form and assert it was accepted; return the request id."""
+        resp, nonce = self._post_public(key, grade=grade, photo=photo, docs=docs)
         self.assertEqual(resp.status_code, 302, resp.get_data(as_text=True)[:400])
         self.assertIn('/register/track/', resp.headers['Location'])
         with self.app.app_context():
@@ -263,6 +287,7 @@ class InstituteExternalAdmissionsTest(unittest.TestCase):
                 'enrollments': sorted((e.group_id, e.student_id, e.status)
                                       for e in enrollments),
                 'photo_path': req.student_photo_path,
+                'desired_grade_id': req.desired_grade_id,
             }
 
     def _assert_nothing_written(self, key, req_id):
@@ -426,7 +451,8 @@ class InstituteExternalAdmissionsTest(unittest.TestCase):
         get = self.app.test_client().get(f"/register/{self.ids['ia']['token']}")
         self.assertEqual(get.status_code, 200)
         html = get.get_data(as_text=True)
-        self.assertIn('name="desired_grade_id"', html)
+        self.assertNotIn('desired_grade_id', html)
+        self.assertNotIn(GRADE_LABEL, html)
         self.assertNotIn('institute_group_ids', html)
         self.assertNotIn('Alpha ia', html)
         self.assertNotIn('Subj ia', html)
@@ -448,6 +474,72 @@ class InstituteExternalAdmissionsTest(unittest.TestCase):
                         .filter_by(student_id=st['student']['id'])]
         self.assertEqual(sorted(stu_docs), sorted(req_docs))
         self.assertEqual(len(stu_docs), 1)
+        self.assertIsNone(st['desired_grade_id'])
+        self.assertIsNone(st['student']['section_id'])
+
+    # ── Public form: no grade for institutes, unchanged for schools ───────────
+
+    def test_g1_g2_g7_institute_public_form_has_no_grade_or_groups(self):
+        html = self.app.test_client().get(
+            f"/register/{self.ids['ia']['token']}").get_data(as_text=True)
+        self.assertNotIn(GRADE_LABEL, html)
+        self.assertNotIn('desired_grade_id', html)
+        self.assertNotIn(f'>G{"ia"}<', html)
+        for leak in ('institute_group_ids', 'Alpha ia', 'Beta ia', 'Subj ia', 'Inst ia'):
+            self.assertNotIn(leak, html)
+        self.assertIn('name="full_name"', html)          # rest of the form intact
+
+    def test_g3_g4_institute_submits_without_grade_and_stores_null(self):
+        req_id = self._submit('ia')
+        self.assertIsNone(self._state('ia', req_id)['desired_grade_id'])
+
+    def test_institute_forged_grade_is_discarded_not_stored(self):
+        # A stale/forged grade id — own or another school's — is never stored.
+        for grade in (self.ids['ia']['grade'], self.ids['sc']['grade']):
+            with self.subTest(grade=grade):
+                req_id = self._submit('ia', grade=grade)
+                self.assertIsNone(self._state('ia', req_id)['desired_grade_id'])
+
+    def test_g5_school_public_form_still_shows_required_grade(self):
+        html = self.app.test_client().get(
+            f"/register/{self.ids['sc']['token']}").get_data(as_text=True)
+        self.assertIn(GRADE_LABEL, html)
+        self.assertIn('<select name="desired_grade_id" class="form-select" required>', html)
+        self.assertIn(f'value="{self.ids["sc"]["grade"]}"', html)
+
+    def test_g6_school_submission_without_grade_still_rejected(self):
+        writes = len(self.fs.writes)
+        resp, nonce = self._post_public('sc', grade=None, photo=_jpeg())
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('يرجى اختيار الصف الدراسي.', resp.get_data(as_text=True))
+        self.assertIsNone(self._find_request('sc', nonce))
+        self.assertEqual(len(self.fs.writes), writes, 'a refused submission stores nothing')
+
+    def test_school_submission_with_grade_stores_it(self):
+        req_id = self._submit('sc')
+        self.assertEqual(self._state('sc', req_id)['desired_grade_id'], self.ids['sc']['grade'])
+
+    def test_g11_school_cannot_use_another_schools_grade(self):
+        resp, nonce = self._post_public('sc', grade=self.ids['ia']['grade'])
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('يرجى اختيار الصف الدراسي.', resp.get_data(as_text=True))
+        self.assertIsNone(self._find_request('sc', nonce))
+
+    def test_g8_g9_no_grade_request_detail_and_group_approval(self):
+        req_id = self._submit('ia')
+        client = self._web('ia')
+        detail = client.get(f'/admissions/{req_id}')
+        self.assertEqual(detail.status_code, 200)
+        self.assertIn('name="institute_group_ids"', detail.get_data(as_text=True))
+        g = self.ids['ia']['groups']
+        self._approve('ia', req_id, groups=[g['g1'], g['g2']], client=client)
+        st = self._state('ia', req_id)
+        self.assertEqual(st['status'], 'approved')
+        self.assertIsNone(st['student']['section_id'])
+        self.assertIsNone(st['desired_grade_id'])
+        sid = st['student']['id']
+        self.assertEqual(st['enrollments'],
+                         sorted([(g['g1'], sid, 'active'), (g['g2'], sid, 'active')]))
 
     # ── 16. Permissions unchanged ─────────────────────────────────────────────
 

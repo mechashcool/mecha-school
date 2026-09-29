@@ -40,6 +40,7 @@ from app.utils.student_form_config import (get_student_form_config,
                                            PUBLIC_ALLOWED_FIELDS)
 from app.utils.features import get_enabled_features
 from app.utils.helpers import save_uploaded_file
+from app.utils.institute_groups import institute_enabled
 from app.utils.registration_media import (REGISTRATION_UPLOAD_MAX_BYTES,
                                           registration_document_subfolder,
                                           registration_photo_subfolder)
@@ -333,12 +334,20 @@ def form(token):
         # Cannot register without an active academic year — same generic page.
         return _generic_unavailable()
 
-    try:
-        grades = _active_grades(school, year)
-    except InvalidStageConfiguration:
-        # Fail closed: a corrupt stage configuration must not expose grades the
-        # school no longer offers. Same generic page as every other failure.
-        return _generic_unavailable()
+    # INSTITUTE MODE — the applicant is not asked for any academic placement:
+    # no grade is offered or accepted, and the request is stored with
+    # desired_grade_id NULL. Staff place the student in study groups at
+    # approval. Schools keep the grade requirement below exactly as before.
+    is_institute = institute_enabled(school)
+    if is_institute:
+        grades = []
+    else:
+        try:
+            grades = _active_grades(school, year)
+        except InvalidStageConfiguration:
+            # Fail closed: a corrupt stage configuration must not expose grades the
+            # school no longer offers. Same generic page as every other failure.
+            return _generic_unavailable()
 
     form_cfg = get_student_form_config(school.id)
     enabled_features = get_enabled_features(school.id)
@@ -351,7 +360,8 @@ def form(token):
             flash(error, 'danger')
         return render_template(
             'registration/form.html',
-            school=school, grades=grades, form_cfg=form_cfg,
+            school=school, grades=grades, is_institute=is_institute,
+            form_cfg=form_cfg,
             enabled_features=enabled_features, token=token,
             residential_areas=residential_areas,
             sf=values or {},
@@ -377,10 +387,14 @@ def form(token):
     # one of its selected stages. Validated server-side against the same list
     # that was rendered: a grade id from another tenant, another year, or an
     # unselected stage matches nothing and is rejected.
-    grade_id = request.form.get('desired_grade_id', type=int)
-    grade = next((g for g in grades if g.id == grade_id), None)
-    if grade is None:
-        return _render(request.form, 'يرجى اختيار الصف الدراسي.', nonce=nonce)
+    # An institute never reads a posted desired_grade_id (e.g. from a form
+    # rendered before this change): it is discarded, never trusted or stored.
+    grade = None
+    if not is_institute:
+        grade_id = request.form.get('desired_grade_id', type=int)
+        grade = next((g for g in grades if g.id == grade_id), None)
+        if grade is None:
+            return _render(request.form, 'يرجى اختيار الصف الدراسي.', nonce=nonce)
 
     full_name = normalize_name(request.form.get('full_name'))
     if not full_name:
@@ -499,7 +513,7 @@ def form(token):
     req = StudentRegistrationRequest(
         school_id=school.id,
         academic_year_id=year.id,
-        desired_grade_id=grade.id,
+        desired_grade_id=grade.id if grade is not None else None,
         full_name=full_name,
         date_of_birth=dob,
         gender=gender,

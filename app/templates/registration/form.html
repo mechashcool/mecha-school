@@ -15,6 +15,9 @@
       <div class="row g-3">
         {{ sfields.student_identity_fields(form_cfg, sf) }}
 
+        {# Institutes are not asked for a grade: staff choose study groups at
+           approval. Schools render this field exactly as before. #}
+        {% if not is_institute %}
         <div class="col-md-6">
           <label class="form-label">الصف الدراسي المطلوب <span class="text-danger">*</span></label>
           <select name="desired_grade_id" class="form-select" required>
@@ -24,6 +27,7 @@
             {% endfor %}
           </select>
         </div>
+        {% endif %}
 
         {{ sfields.residential_area_field(residential_areas, sf) }}
         {{ sfields.student_address_field(form_cfg, sf) }}
