@@ -173,6 +173,28 @@ def photo_url(photo: str | None, *, want_video: bool = False) -> str | None:
         return None
 
 
+# ─── Institution identity ─────────────────────────────────────────────────────
+
+def institution_identity(school) -> dict:
+    """Normalized institution type of a server-side School row, for the mobile
+    ``school`` block (login and /me).
+
+    Derived ONLY from School.is_institute, the single authoritative rule:
+    'institute' is returned exclusively for an explicit institute; NULL, empty,
+    'school' and any unrecognised legacy value are 'school'. Never read from the
+    request or the JWT, and deliberately not a token claim — the Super Admin
+    can change it while tokens remain valid.
+    """
+    from app.models import School
+
+    is_institute = bool(getattr(school, 'is_institute', False))
+    return {
+        'institution_type': (School.INSTITUTION_INSTITUTE if is_institute
+                             else School.INSTITUTION_SCHOOL),
+        'is_institute': is_institute,
+    }
+
+
 # ─── Pagination helper (P3) ───────────────────────────────────────────────────
 
 def page_args(default_limit: int = 50, max_limit: int = 100):

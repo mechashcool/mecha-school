@@ -68,7 +68,7 @@ def get_active_year_id(school_id: int | None):
 
 def _load_school_branding(school_id: int):
     from app.models import School
-    from app.blueprints.mobile_api.utils import photo_url
+    from app.blueprints.mobile_api.utils import institution_identity, photo_url
 
     school = (School.query
               .execution_options(bypass_tenant_scope=True)
@@ -87,6 +87,10 @@ def _load_school_branding(school_id: int):
         'phone':         school.phone,
         'email':         school.email,
         'address':       school.address,
+        # Same helper as the login payload, so login and /me never disagree.
+        # Cached with the rest of the block; the school-edit route (the only
+        # writer of institution_type) already calls invalidate_school_context.
+        **institution_identity(school),
     }
 
 

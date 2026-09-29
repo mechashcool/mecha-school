@@ -12,7 +12,7 @@ from flask import g, jsonify, request
 from app.models import db, User, Employee, MobileDeviceToken
 from app.utils.login_throttle import check_lockout, record_failed_attempt, reset_attempts, format_wait_ar
 from app.utils.ratelimit import limiter, LOGIN_RATE_LIMIT
-from .utils import encode_token, jwt_required, ok, err, photo_url
+from .utils import encode_token, institution_identity, jwt_required, ok, err, photo_url
 from app.utils.student_display_photo import student_display_value
 from app.utils.employee_display_photo import employee_display_value
 
@@ -58,6 +58,7 @@ def _school_payload(school) -> dict | None:
         'phone':         school.phone,
         'email':         school.email,
         'address':       school.address,
+        **institution_identity(school),
     }
 
 
