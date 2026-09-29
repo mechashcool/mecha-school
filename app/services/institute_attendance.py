@@ -932,6 +932,121 @@ def _enrollment_covers(enrollment, occurrence, school) -> bool:
     return True
 
 
+def enrollment_covers_date(enrollment, on_date: date_type, school) -> bool:
+    """Day-level counterpart of _enrollment_covers(), for dated items without
+    a lesson time (an exam date).
+
+    True when the membership existed on that LOCAL date: joined on or before
+    it, and not ended before it. Same UTC -> local conversion as the lesson
+    rule, so both answer consistently for the same membership.
+    """
+    joined = to_local(enrollment.enrolled_at, school)
+    if joined is not None and joined.date() > on_date:
+        return False
+    if enrollment.ended_at is not None:
+        if to_local(enrollment.ended_at, school).date() < on_date:
+            return False
+    return True
+
+
+def student_lesson_attendance(school, student_id, academic_year_id,
+                              start: date_type, end: date_type, *,
+                              now=None) -> list:
+    """Per-lesson attendance of ONE student between start and end. READ-ONLY.
+
+    The single-student counterpart of attendance_report(): it never loads any
+    other student's enrollment or record, and nothing is created — a lesson
+    that was never opened is computed, not materialized.
+
+    Two sources, merged by the (group, date, start_time) lesson key that the
+    session unique constraint uses:
+
+      * scheduled lessons of the student's CURRENT-YEAR, ACTIVE groups, kept
+        only when one of the student's memberships overlapped the lesson
+        (_enrollment_covers, the report's own rule) and the lesson has already
+        started — a future lesson is not "unrecorded", it simply has not
+        happened. A future lesson that was nevertheless RECORDED is kept,
+        exactly as attendance_report() keeps it.
+      * every InstituteAttendanceRecord this student holds in the window, in
+        any group of this institute. A record is proof of participation, so
+        recorded history survives an ended membership, a deactivated group or
+        an academic-year rollover — mirroring session_roster().
+
+    Returns dicts ordered newest first. `record` is None for a lesson with no
+    status for this student, which callers must present as NOT RECORDED —
+    never as absent.
+    """
+    if school is None or not student_id or start > end:
+        return []
+    now = now or local_now(school)
+    today, now_time = now.date(), now.time()
+
+    lessons = {}
+
+    groups, enrollments_by_group = {}, {}
+    if academic_year_id:
+        for enr, grp in (db.session.query(InstituteGroupEnrollment,
+                                          InstituteStudyGroup)
+                         .join(InstituteStudyGroup,
+                               InstituteStudyGroup.id
+                               == InstituteGroupEnrollment.group_id)
+                         .filter(InstituteGroupEnrollment.school_id == school.id,
+                                 InstituteGroupEnrollment.student_id == student_id,
+                                 InstituteStudyGroup.school_id == school.id,
+                                 InstituteStudyGroup.academic_year_id
+                                 == academic_year_id,
+                                 InstituteStudyGroup.is_active.is_(True))
+                         .execution_options(**OPTS)
+                         .all()):
+            groups[grp.id] = grp
+            enrollments_by_group.setdefault(grp.id, []).append(enr)
+
+    for occ in occurrences_for_range(school, list(groups.values()), start, end):
+        started = (occ.date < today
+                   or (occ.date == today and occ.start_time is not None
+                       and occ.start_time <= now_time))
+        if not (started or occ.is_recorded):
+            continue
+        if not any(_enrollment_covers(enr, occ, school)
+                   for enr in enrollments_by_group.get(occ.group.id, ())):
+            continue
+        lessons[(occ.group.id, occ.date, occ.start_time)] = {
+            'group': occ.group, 'session': occ.session, 'date': occ.date,
+            'start_time': occ.start_time, 'end_time': occ.end_time,
+            'record': None}
+
+    for rec, sess, grp in (db.session.query(InstituteAttendanceRecord,
+                                            InstituteAttendanceSession,
+                                            InstituteStudyGroup)
+                           .join(InstituteAttendanceSession,
+                                 InstituteAttendanceSession.id
+                                 == InstituteAttendanceRecord.session_id)
+                           .join(InstituteStudyGroup,
+                                 InstituteStudyGroup.id
+                                 == InstituteAttendanceSession.group_id)
+                           .filter(InstituteAttendanceRecord.school_id == school.id,
+                                   InstituteAttendanceRecord.student_id == student_id,
+                                   InstituteAttendanceSession.school_id == school.id,
+                                   InstituteStudyGroup.school_id == school.id,
+                                   InstituteAttendanceSession.session_date >= start,
+                                   InstituteAttendanceSession.session_date <= end)
+                           .execution_options(**OPTS)
+                           .all()):
+        key = (grp.id, sess.session_date, sess.start_time)
+        lesson = lessons.get(key)
+        if lesson is None:
+            lesson = lessons[key] = {
+                'group': grp, 'date': sess.session_date,
+                'start_time': sess.start_time, 'end_time': sess.end_time}
+        lesson['session'] = sess
+        lesson['record'] = rec
+
+    return sorted(lessons.values(),
+                  key=lambda l: (l['date'], l['start_time'] or time_type(0, 0),
+                                 l['group'].name or ''),
+                  reverse=True)
+
+
 def attendance_report(school, groups, start: date_type, end: date_type, *,
                       name_query: str | None = None, today=None) -> dict:
     """Per-student, per-lesson attendance rows for `groups`. READ-ONLY.

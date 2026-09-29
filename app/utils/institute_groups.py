@@ -89,6 +89,51 @@ def student_active_groups(school_id: int, academic_year_id: int, student_id: int
             .all())
 
 
+def student_current_enrollments(school_id: int, academic_year_id: int, student_id: int):
+    """[(enrollment, group)] for this student's CURRENT memberships — one query.
+
+    The same membership rule as student_active_groups(): an ACTIVE enrollment
+    in an ACTIVE group of THIS institute and THIS academic year, ordered by
+    group name. Returned with the enrollment row so a caller can show when the
+    student joined. [] — never a wider set — when any argument is missing.
+    """
+    if not school_id or not academic_year_id or not student_id:
+        return []
+    return (db.session.query(InstituteGroupEnrollment, InstituteStudyGroup)
+            .join(InstituteStudyGroup,
+                  InstituteStudyGroup.id == InstituteGroupEnrollment.group_id)
+            .filter(InstituteGroupEnrollment.school_id == school_id,
+                    InstituteGroupEnrollment.student_id == student_id,
+                    InstituteGroupEnrollment.status
+                    == InstituteGroupEnrollment.STATUS_ACTIVE,
+                    InstituteStudyGroup.school_id == school_id,
+                    InstituteStudyGroup.academic_year_id == academic_year_id,
+                    InstituteStudyGroup.is_active.is_(True))
+            .execution_options(bypass_tenant_scope=True)
+            .order_by(InstituteStudyGroup.name, InstituteStudyGroup.id)
+            .all())
+
+
+def student_enrollment_history(school_id: int, student_id: int):
+    """[(enrollment, group)] for EVERY membership this student ever held in
+    THIS institute — active and ended, any group state, any academic year.
+
+    READ-ONLY history for date-bounded lookups: callers must still decide per
+    date whether a membership covered it (enrolled_at / ended_at). Both sides
+    are pinned to school_id, so another institute's group can never appear.
+    """
+    if not school_id or not student_id:
+        return []
+    return (db.session.query(InstituteGroupEnrollment, InstituteStudyGroup)
+            .join(InstituteStudyGroup,
+                  InstituteStudyGroup.id == InstituteGroupEnrollment.group_id)
+            .filter(InstituteGroupEnrollment.school_id == school_id,
+                    InstituteGroupEnrollment.student_id == student_id,
+                    InstituteStudyGroup.school_id == school_id)
+            .execution_options(bypass_tenant_scope=True)
+            .all())
+
+
 def parse_posted_group_ids(raw_values) -> tuple[list[int], bool]:
     """Turn posted group id strings into ints.
 

@@ -14,6 +14,16 @@ GET /parent/children/<id>/exams               exams for child's section (±30/60
                                               ?start=&end= → one ≤30-day history window
 GET /parent/children/<id>/schedule            weekly class schedule
 GET /parent/notifications                     notifications feed (paginated)
+GET /parent/children/<id>/institute/groups    INSTITUTE: current study groups
+                                              + weekly slots (the timetable)
+GET /parent/children/<id>/institute/attendance
+                                              INSTITUTE: per-lesson attendance,
+                                              ?start=&end= ≤31-day window
+
+Institutes (School.is_institute, resolved from the authenticated user's
+school — never from the client or from a NULL section_id) additionally get a
+study-group branch in /exams and /homework. School accounts run the original
+section code paths unchanged.
 
 Security rules
 ──────────────
@@ -33,22 +43,30 @@ from app.models import (
     db,
     AcademicYear,
     Complaint,
+    Employee,
     FeeInstallment,
     FeeRecord,
     Exam,
     ExamResult,
     Homework,
+    InstituteAttendanceRecord,
+    InstituteStudyGroup,
     LeaveRequest,
     Notification,
     NotificationRead,
     Schedule,
+    School,
     Section,
     Student,
     StudentAttendance,
     StudentTransport,
+    Subject,
     parent_students,
 )
+from app.services import institute_attendance as inst_att
 from app.utils.helpers import save_uploaded_file, delete_uploaded_file
+from app.utils.institute_groups import (student_current_enrollments,
+                                        student_enrollment_history)
 from app.utils.notification_visibility import notification_visible_to
 
 from . import mobile_api_bp
@@ -97,6 +115,59 @@ def _student_brief(s: Student) -> dict:
 
 def _fmt_time(t) -> str | None:
     return t.strftime('%H:%M') if t else None
+
+
+# ─── Institute context (School.is_institute only) ────────────────────────────
+
+_OPTS = {'bypass_tenant_scope': True}
+
+
+def _user_institute() -> School | None:
+    """The authenticated user's own School row when it is an institute.
+
+    Resolved from the server-side User.school_id only. A school-type
+    institution (NULL / 'school' / unknown institution_type) returns None, so
+    every school request keeps its original code path.
+    """
+    school_id = g.mobile_user.school_id
+    if not school_id:
+        return None
+    school = db.session.get(School, school_id, execution_options=_OPTS)
+    return school if school is not None and school.is_institute else None
+
+
+def _current_year_id(school_id: int) -> int | None:
+    """The school's active academic year id — the same lookup /homework uses."""
+    year = (AcademicYear.query
+            .execution_options(**_OPTS)
+            .filter_by(school_id=school_id, is_current=True)
+            .first())
+    return year.id if year else None
+
+
+def _group_names(school_id: int, group_ids) -> dict:
+    """{group_id: name} for many groups in ONE query, pinned to this school."""
+    group_ids = {gid for gid in group_ids if gid}
+    if not group_ids:
+        return {}
+    return dict(db.session.query(InstituteStudyGroup.id, InstituteStudyGroup.name)
+                .filter(InstituteStudyGroup.school_id == school_id,
+                        InstituteStudyGroup.id.in_(group_ids))
+                .execution_options(**_OPTS)
+                .all())
+
+
+def _subject_names(school_id: int, subject_ids) -> dict:
+    """{subject_id: name} in ONE query. Pinned to the school explicitly;
+    bypassing the year criteria keeps a previous year's subject resolvable."""
+    subject_ids = {sid for sid in subject_ids if sid}
+    if not subject_ids:
+        return {}
+    return dict(db.session.query(Subject.id, Subject.name)
+                .filter(Subject.school_id == school_id,
+                        Subject.id.in_(subject_ids))
+                .execution_options(**_OPTS)
+                .all())
 
 
 # ─── Children list ────────────────────────────────────────────────────────────
@@ -414,6 +485,13 @@ def parent_child_exams(student_id):
 
     raw_start = (request.args.get('start') or '').strip()
     raw_end   = (request.args.get('end') or '').strip()
+
+    # Institutes resolve exams by study group, never by section. Decided from
+    # the authenticated school, not from the student's missing section.
+    institute = _user_institute()
+    if institute is not None:
+        return _institute_parent_exams(s, institute, raw_start, raw_end)
+
     if raw_start or raw_end:
         return _parent_exam_history(s, raw_start, raw_end)
 
@@ -455,6 +533,47 @@ def _parent_exam_item(e: Exam, today: date) -> dict:
     }
 
 
+def _parse_exam_history_window(raw_start: str, raw_end: str):
+    """Validate one exam-history window: (start, end, None) or
+    (None, None, error_response). Shared by the school and institute paths so
+    both enforce the identical ≤30-day, one-year-horizon contract."""
+    if not raw_start or not raw_end:
+        return None, None, err('start and end must be supplied together')
+    try:
+        start = _dt.strptime(raw_start, '%Y-%m-%d').date()
+        end   = _dt.strptime(raw_end, '%Y-%m-%d').date()
+    except ValueError:
+        return None, None, err('invalid date format — use YYYY-MM-DD')
+    if start > end:
+        return None, None, err('start must not be after end')
+    if (end - start).days + 1 > _EXAM_HISTORY_MAX_SPAN_DAYS:
+        return None, None, err(
+            f'range must not exceed {_EXAM_HISTORY_MAX_SPAN_DAYS} days')
+
+    today = date.today()
+    if (start < today - timedelta(days=_EXAM_HISTORY_HORIZON_DAYS)
+            or end > today + timedelta(days=1)):
+        return None, None, err('range is outside the one-year history window')
+    return start, end, None
+
+
+def _result_proven_exams(s: Student, school_id: int, start: date, end: date):
+    """Exams inside [start, end] this student has an ExamResult for, in any
+    academic year. include_all_years is set on this one statement only; the
+    school filter stays active and is also pinned explicitly. Exam.subject and
+    Exam.exam_type are eager-loaded in the same statement: a lazy load would
+    re-apply the active-year scope and drop a previous year's subject."""
+    return (Exam.query
+            .execution_options(include_all_years=True)
+            .join(ExamResult, ExamResult.exam_id == Exam.id)
+            .options(joinedload(Exam.subject), joinedload(Exam.exam_type))
+            .filter(ExamResult.student_id == s.id,
+                    ExamResult.school_id == school_id,
+                    Exam.school_id == school_id,
+                    Exam.exam_date.between(start, end))
+            .all())
+
+
 def _parent_exam_history(s: Student, raw_start: str, raw_end: str):
     """
     Exams inside one explicit window (≤30 days, within the last year) for an
@@ -464,28 +583,12 @@ def _parent_exam_history(s: Student, raw_start: str, raw_end: str):
       1. current: exams of the student's CURRENT section. The ORM active-year
          scope stays on, exactly like the default view.
       2. proven:  exams this student has an ExamResult for, in any academic
-         year. include_all_years is set on that one statement only; the school
-         filter stays active and is also pinned explicitly. Exam.subject and
-         Exam.exam_type are eager-loaded in the same statement: a lazy load
-         would re-apply the active-year scope and drop a previous year's
-         subject.
+         year (_result_proven_exams).
     """
-    if not raw_start or not raw_end:
-        return err('start and end must be supplied together')
-    try:
-        start = _dt.strptime(raw_start, '%Y-%m-%d').date()
-        end   = _dt.strptime(raw_end, '%Y-%m-%d').date()
-    except ValueError:
-        return err('invalid date format — use YYYY-MM-DD')
-    if start > end:
-        return err('start must not be after end')
-    if (end - start).days + 1 > _EXAM_HISTORY_MAX_SPAN_DAYS:
-        return err(f'range must not exceed {_EXAM_HISTORY_MAX_SPAN_DAYS} days')
-
+    start, end, error = _parse_exam_history_window(raw_start, raw_end)
+    if error is not None:
+        return error
     today = date.today()
-    if (start < today - timedelta(days=_EXAM_HISTORY_HORIZON_DAYS)
-            or end > today + timedelta(days=1)):
-        return err('range is outside the one-year history window')
 
     by_id: dict[int, Exam] = {}
 
@@ -497,22 +600,92 @@ def _parent_exam_history(s: Student, raw_start: str, raw_end: str):
                   .all()):
             by_id[e.id] = e
 
-    school_id = g.mobile_user.school_id
-    for e in (Exam.query
-              .execution_options(include_all_years=True)
-              .join(ExamResult, ExamResult.exam_id == Exam.id)
-              .options(joinedload(Exam.subject), joinedload(Exam.exam_type))
-              .filter(ExamResult.student_id == s.id,
-                      ExamResult.school_id == school_id,
-                      Exam.school_id == school_id,
-                      Exam.exam_date.between(start, end))
-              .all()):
+    for e in _result_proven_exams(s, g.mobile_user.school_id, start, end):
         by_id.setdefault(e.id, e)
 
     exams = sorted(by_id.values(), key=lambda e: (e.exam_date, e.id))
     return ok(
         student_id=s.id,
         exams=[_parent_exam_item(e, today) for e in exams],
+    )
+
+
+def _institute_parent_exams(s: Student, school: School, raw_start: str, raw_end: str):
+    """
+    INSTITUTE exams for an ownership-verified student. Same contract as the
+    school path — default window (-30/+60 days) or one explicit ≤30-day
+    history window with identical validation — resolved through study groups:
+
+      default: exams of the groups the student is CURRENTLY enrolled in
+               (active enrollment, active group, active academic year) — the
+               institute counterpart of "the student's current section" —
+               excluding a past exam held before the student joined.
+      history: (1) exams of any group of this institute whose membership
+               covered the exam date (enrolled_at / ended_at, local time), in
+               any year, and (2) exams proven by the student's own ExamResult,
+               exactly as in the school path — so a result survives an ended
+               membership or a deactivated group.
+
+    No client value selects a group: the group set is derived here. Every
+    exam query pins Exam.school_id to the authenticated user's institute.
+    Items carry the school fields plus additive group_id / group_name.
+    """
+    today = date.today()
+    exam_opts = (joinedload(Exam.subject), joinedload(Exam.exam_type))
+
+    if raw_start or raw_end:
+        start, end, error = _parse_exam_history_window(raw_start, raw_end)
+        if error is not None:
+            return error
+
+        memberships: dict[int, list] = {}
+        for enr, grp in student_enrollment_history(school.id, s.id):
+            memberships.setdefault(grp.id, []).append(enr)
+
+        by_id: dict[int, Exam] = {}
+        if memberships:
+            for e in (Exam.query
+                      .execution_options(**_OPTS)
+                      .options(*exam_opts)
+                      .filter(Exam.school_id == school.id,
+                              Exam.institute_group_id.in_(list(memberships)),
+                              Exam.exam_date.between(start, end))
+                      .all()):
+                if any(inst_att.enrollment_covers_date(enr, e.exam_date, school)
+                       for enr in memberships[e.institute_group_id]):
+                    by_id[e.id] = e
+        for e in _result_proven_exams(s, school.id, start, end):
+            by_id.setdefault(e.id, e)
+        exams = sorted(by_id.values(), key=lambda e: (e.exam_date, e.id))
+    else:
+        year_id = _current_year_id(school.id)
+        current = {grp.id: enr for enr, grp in
+                   (student_current_enrollments(school.id, year_id, s.id)
+                    if year_id else [])}
+        exams = (Exam.query
+                 .execution_options(**_OPTS)
+                 .options(*exam_opts)
+                 .filter(Exam.school_id == school.id,
+                         Exam.academic_year_id == year_id,
+                         Exam.institute_group_id.in_(list(current)),
+                         Exam.exam_date.between(today - timedelta(days=30),
+                                                today + timedelta(days=60)))
+                 .order_by(Exam.exam_date.asc(), Exam.id.asc())
+                 .all()) if current else []
+        # The same membership-date rule as the history window, so one exam is
+        # never visible in one mode and hidden in the other: a past exam held
+        # before the student joined the group is not theirs. Always true for
+        # an upcoming exam of a current group.
+        exams = [e for e in exams if inst_att.enrollment_covers_date(
+            current[e.institute_group_id], e.exam_date, school)]
+
+    names = _group_names(school.id, (e.institute_group_id for e in exams))
+    return ok(
+        student_id=s.id,
+        exams=[{**_parent_exam_item(e, today),
+                'group_id':   e.institute_group_id,
+                'group_name': names.get(e.institute_group_id)}
+               for e in exams],
     )
 
 
@@ -655,6 +828,12 @@ def parent_child_homework(student_id):
         limit, offset = page_args(default_limit=20, max_limit=50)
         page_meta = {'limit': limit, 'offset': offset}
 
+    # Institutes resolve homework by study group, never by section. Decided
+    # from the authenticated school, not from the student's missing section.
+    institute = _user_institute()
+    if institute is not None:
+        return _institute_parent_homework(s, institute, page_meta)
+
     if not s.section_id:
         if page_meta:
             page_meta['total'] = 0
@@ -682,55 +861,256 @@ def parent_child_homework(student_id):
     else:
         rows = q.all()
 
-    def _hw_url(hw):
-        if not hw.attachment_path:
-            return None
-        # Always resolve through photo_url so that when PRIVATE_UPLOADS_ENABLED is
-        # on a stored full Supabase URL (private bucket) is re-signed to a
-        # /media-proxy URL the app can open. Returning it raw would 400 against
-        # the private bucket. photo_url returns http(s) values unchanged when the
-        # feature is off, so behaviour is unchanged in that mode.
-        return photo_url(hw.attachment_path)
-
-    def _hw_file_name(path):
-        if not path:
-            return None
-        import os
-        from urllib.parse import urlparse
-        if path.startswith(('http://', 'https://')):
-            return os.path.basename(urlparse(path).path) or None
-        return os.path.basename(path) or None
-
     return ok(
         student_id=s.id,
         section=s.section.name if s.section else None,
         count=len(rows),
         **page_meta,
-        homework=[
+        homework=[_parent_homework_item(hw) for hw in rows],
+    )
+
+
+def _hw_url(hw):
+    if not hw.attachment_path:
+        return None
+    # Always resolve through photo_url so that when PRIVATE_UPLOADS_ENABLED is
+    # on a stored full Supabase URL (private bucket) is re-signed to a
+    # /media-proxy URL the app can open. Returning it raw would 400 against
+    # the private bucket. photo_url returns http(s) values unchanged when the
+    # feature is off, so behaviour is unchanged in that mode.
+    return photo_url(hw.attachment_path)
+
+
+def _hw_file_name(path):
+    if not path:
+        return None
+    import os
+    from urllib.parse import urlparse
+    if path.startswith(('http://', 'https://')):
+        return os.path.basename(urlparse(path).path) or None
+    return os.path.basename(path) or None
+
+
+def _parent_homework_item(hw) -> dict:
+    """One parent homework item — the exact school contract. The institute
+    path adds group_id / group_name on top of this."""
+    return {
+        'id':              hw.id,
+        'homework_id':     hw.id,
+        'title':           hw.title,
+        'subject':         hw.subject.name if hw.subject else None,
+        'subject_name':    hw.subject.name if hw.subject else None,
+        'teacher_name':    hw.teacher.full_name if hw.teacher else None,
+        'grade_name':      (hw.section.grade.name
+                            if hw.section and hw.section.grade else None),
+        'section_name':    hw.section.name if hw.section else None,
+        'assigned_at':     hw.publish_date.isoformat() if hw.publish_date else None,
+        'publish_date':    hw.publish_date.isoformat() if hw.publish_date else None,
+        'due_date':        hw.due_date.isoformat() if hw.due_date else None,
+        'description':     hw.description,
+        'status':          'active' if hw.is_active else 'inactive',
+        'attachment_url':  _hw_url(hw),
+        'attachment_type': hw.attachment_type,
+        'file_name':       _hw_file_name(hw.attachment_path),
+        'file_size':       None,
+        'is_pdf':          hw.attachment_type == 'pdf',
+        'submitted_status': 'not_submitted',
+    }
+
+
+def _institute_parent_homework(s: Student, school: School, page_meta: dict):
+    """
+    INSTITUTE homework for an ownership-verified student: active, published
+    (publish_date <= today) homework of the ACTIVE academic year whose
+    institute_group_id is one of the student's CURRENT groups (active
+    enrollment in an active group) — the same audience the web notification
+    targets. Same ordering and the same optional limit/offset contract as the
+    school path; items carry the school fields plus group_id / group_name.
+
+    Fails closed: no active year or no current group -> an empty list, never
+    a wider audience. Nothing is read from the client except pagination.
+    """
+    year_id = _current_year_id(school.id)
+    group_ids = ([grp.id for _, grp in
+                  student_current_enrollments(school.id, year_id, s.id)]
+                 if year_id else [])
+    if not group_ids:
+        if page_meta:
+            page_meta['total'] = 0
+        return ok(student_id=s.id, section=None, count=0, **page_meta, homework=[])
+
+    q = (Homework.query
+         .execution_options(**_OPTS)
+         .options(joinedload(Homework.subject), joinedload(Homework.teacher))
+         .filter(Homework.school_id == school.id,
+                 Homework.academic_year_id == year_id,
+                 Homework.is_active.is_(True),
+                 Homework.institute_group_id.in_(group_ids),
+                 Homework.publish_date <= date.today())
+         .order_by(Homework.publish_date.desc(), Homework.id.desc()))
+    if page_meta:
+        page_meta['total'] = q.count()
+        rows = q.offset(page_meta['offset']).limit(page_meta['limit']).all()
+    else:
+        rows = q.all()
+
+    names = _group_names(school.id, (hw.institute_group_id for hw in rows))
+    return ok(
+        student_id=s.id,
+        section=None,
+        count=len(rows),
+        **page_meta,
+        homework=[{**_parent_homework_item(hw),
+                   'group_id':   hw.institute_group_id,
+                   'group_name': names.get(hw.institute_group_id)}
+                  for hw in rows],
+    )
+
+
+# ─── Institute study groups + weekly timetable ────────────────────────────────
+
+@mobile_api_bp.route('/parent/children/<int:student_id>/institute/groups', methods=['GET'])
+@jwt_required()
+@role_required('parent')
+def parent_child_institute_groups(student_id):
+    """
+    The child's CURRENT study groups with their weekly slots — also the
+    institute student's weekly timetable. Read-only.
+
+    Scope (server-side only): an ACTIVE enrollment of THIS student in an
+    ACTIVE group of the authenticated user's institute and its ACTIVE academic
+    year. Ended memberships, deactivated groups, other years and other
+    institutes never appear. Slots are the group's active weekly rules.
+
+    Queries: school, year, enrollments+groups (one join), subjects, instructor
+    names, slots — a fixed count regardless of how many groups.
+    """
+    s = _assert_owns_student(student_id)
+    school = _user_institute()
+    if school is None:
+        return err('institute_not_available', 404)
+
+    year_id = _current_year_id(school.id)
+    pairs = student_current_enrollments(school.id, year_id, s.id) if year_id else []
+    group_ids = [grp.id for _, grp in pairs]
+
+    subjects = _subject_names(school.id, (grp.subject_id for _, grp in pairs))
+    instructor_ids = {grp.instructor_id for _, grp in pairs if grp.instructor_id}
+    instructors = dict(db.session.query(Employee.id, Employee.full_name)
+                       .filter(Employee.school_id == school.id,
+                               Employee.id.in_(instructor_ids))
+                       .execution_options(**_OPTS)
+                       .all()) if instructor_ids else {}
+    slots = (inst_att.slots_by_group(school.id, year_id, group_ids, active_only=True)
+             if group_ids else {})
+
+    return ok(
+        student_id=s.id,
+        count=len(pairs),
+        groups=[
             {
-                'id':              hw.id,
-                'homework_id':     hw.id,
-                'title':           hw.title,
-                'subject':         hw.subject.name if hw.subject else None,
-                'subject_name':    hw.subject.name if hw.subject else None,
-                'teacher_name':    hw.teacher.full_name if hw.teacher else None,
-                'grade_name':      (hw.section.grade.name
-                                    if hw.section and hw.section.grade else None),
-                'section_name':    hw.section.name if hw.section else None,
-                'assigned_at':     hw.publish_date.isoformat() if hw.publish_date else None,
-                'publish_date':    hw.publish_date.isoformat() if hw.publish_date else None,
-                'due_date':        hw.due_date.isoformat() if hw.due_date else None,
-                'description':     hw.description,
-                'status':          'active' if hw.is_active else 'inactive',
-                'attachment_url':  _hw_url(hw),
-                'attachment_type': hw.attachment_type,
-                'file_name':       _hw_file_name(hw.attachment_path),
-                'file_size':       None,
-                'is_pdf':          hw.attachment_type == 'pdf',
-                'submitted_status': 'not_submitted',
+                'group_id':        grp.id,
+                'name':            grp.name,
+                'subject': {
+                    'id':   grp.subject_id,
+                    'name': subjects.get(grp.subject_id),
+                },
+                'instructor_name': instructors.get(grp.instructor_id),
+                'start_date':      grp.start_date.isoformat() if grp.start_date else None,
+                'end_date':        grp.end_date.isoformat() if grp.end_date else None,
+                'enrolled_at':     inst_att.to_local_iso(enr.enrolled_at, school),
+                'slots': [
+                    {
+                        'day_of_week': slot.day_of_week,
+                        'day_label':   inst_att.day_name(slot.day_of_week),
+                        'start_time':  _fmt_time(slot.start_time),
+                        'end_time':    _fmt_time(slot.end_time),
+                    }
+                    for slot in slots.get(grp.id, [])
+                ],
             }
-            for hw in rows
+            for enr, grp in pairs
         ],
+    )
+
+
+# ─── Institute per-lesson attendance ──────────────────────────────────────────
+
+_INSTITUTE_ATT_MAX_SPAN_DAYS = 31     # inclusive calendar days per window
+_INSTITUTE_ATT_DEFAULT_DAYS  = 30
+
+
+@mobile_api_bp.route('/parent/children/<int:student_id>/institute/attendance',
+                     methods=['GET'])
+@jwt_required()
+@role_required('parent')
+def parent_child_institute_attendance(student_id):
+    """
+    The child's per-LESSON institute attendance in one date window. Read-only:
+    listing never materializes a session or creates a record.
+
+    Query params: start, end (YYYY-MM-DD) — both or neither. Neither: the most
+    recent 30 days ending today (institute local date). Window ≤31 days.
+
+    One row per lesson (group + date + start time), so two groups on one day
+    stay two rows. status is present / absent / late / excused, or null when
+    no status exists for this student — NOT RECORDED, never an absence.
+    See inst_att.student_lesson_attendance() for which lessons are included.
+    """
+    s = _assert_owns_student(student_id)
+    school = _user_institute()
+    if school is None:
+        return err('institute_not_available', 404)
+
+    raw_start = (request.args.get('start') or '').strip()
+    raw_end   = (request.args.get('end') or '').strip()
+    if raw_start or raw_end:
+        if not raw_start or not raw_end:
+            return err('start and end must be supplied together')
+        try:
+            start = _dt.strptime(raw_start, '%Y-%m-%d').date()
+            end   = _dt.strptime(raw_end, '%Y-%m-%d').date()
+        except ValueError:
+            return err('invalid date format — use YYYY-MM-DD')
+        if start > end:
+            return err('start must not be after end')
+        if (end - start).days + 1 > _INSTITUTE_ATT_MAX_SPAN_DAYS:
+            return err(f'range must not exceed {_INSTITUTE_ATT_MAX_SPAN_DAYS} days')
+    else:
+        end = inst_att.local_today(school)
+        start = end - timedelta(days=_INSTITUTE_ATT_DEFAULT_DAYS - 1)
+
+    lessons = inst_att.student_lesson_attendance(
+        school, s.id, _current_year_id(school.id), start, end)
+
+    subjects = _subject_names(school.id, (l['group'].subject_id for l in lessons))
+    summary = {st: 0 for st in InstituteAttendanceRecord.STATUSES}
+    summary['unrecorded'] = 0
+    records = []
+    for lesson in lessons:
+        rec, sess, grp = lesson['record'], lesson.get('session'), lesson['group']
+        status = rec.status if rec is not None else None
+        summary[status or 'unrecorded'] = summary.get(status or 'unrecorded', 0) + 1
+        records.append({
+            'session_id':      sess.id if sess is not None else None,
+            'group_id':        grp.id,
+            'group_name':      grp.name,
+            'subject_name':    subjects.get(grp.subject_id),
+            'date':            lesson['date'].isoformat(),
+            'start_time':      _fmt_time(lesson['start_time']),
+            'end_time':        _fmt_time(lesson['end_time']),
+            'status':          status,
+            'lesson_recorded': bool(sess is not None and sess.is_recorded),
+            'recorded_at':     (inst_att.to_local_iso(rec.recorded_at, school)
+                                if rec is not None else None),
+        })
+
+    return ok(
+        student_id=s.id,
+        range={'start': start.isoformat(), 'end': end.isoformat()},
+        summary=summary,
+        count=len(records),
+        records=records,
     )
 
 
