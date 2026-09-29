@@ -4285,8 +4285,10 @@ class StudentRegistrationRequest(db.Model):
                                  nullable=False, index=True)
     academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'),
                                  nullable=False, index=True)
+    # NULL = no grade requested (institute requests: placement happens at staff
+    # approval through study groups). Schools still require one in the route.
     desired_grade_id = db.Column(db.Integer, db.ForeignKey('grades.id'),
-                                 nullable=False, index=True)
+                                 nullable=True, index=True)
 
     # ── Submitted student data (mirrors the public-allowed Add Student fields) ──
     full_name          = db.Column(db.String(200), nullable=False)
