@@ -22,6 +22,9 @@ GET  /teacher/notifications            notifications feed (paginated)
 GET  /teacher/institute/sessions       my institute group sessions for a date range
 GET  /teacher/institute/sessions/open  open ONE occurrence (group_id + date + start)
 POST /teacher/institute/sessions/<id>/attendance   submit/correct attendance
+GET  /teacher/institute/groups         my institute study groups + weekly slots
+GET  /teacher/institute/groups/<id>/students   active roster of one of my groups
+GET  /teacher/institute/students/<id>  student profile (only my groups' students)
 GET    /teacher/homework                 homework list (subject_id, section_id, grade_name)
 POST   /teacher/homework                 create homework — subject_id required
 PUT    /teacher/homework/<id>            update homework — all core fields required
@@ -56,6 +59,7 @@ from app.models import (
     Homework,
     InstituteAttendanceRecord,
     InstituteAttendanceSession,
+    InstituteGroupEnrollment,
     InstituteStudyGroup,
     Notification,
     NotificationRead,
@@ -77,6 +81,8 @@ from .utils import jwt_required, role_required, ok, ok_etag, err, photo_url, pag
 from app.utils.student_display_photo import student_display_value
 from app.utils.employee_display_photo import employee_display_value
 from app.services import institute_attendance as inst_att
+from app.utils.institute_groups import (active_enrollment_count_map, active_roster,
+                                        instructor_can_access_student)
 
 
 # ─── Shared helpers ───────────────────────────────────────────────────────────
@@ -2054,6 +2060,9 @@ def teacher_homework_list():
 
     total = q.count()
     rows  = q.offset(offset).limit(limit).all()
+    # Institute rows only: one batched name lookup; a school page runs none.
+    group_names = _group_names(emp.school_id,
+                               {hw.institute_group_id for hw in rows})
 
     return ok(
         total=total,
@@ -2078,6 +2087,11 @@ def teacher_homework_list():
                 'attachment_url':  _hw_attachment_url(hw),
                 'attachment_type': hw.attachment_type,
                 'created_at':      hw.created_at.isoformat() if hasattr(hw, 'created_at') and hw.created_at else None,
+                # Additive, institute homework only: a school item keeps its
+                # exact previous key set.
+                **({'group_id':   hw.institute_group_id,
+                    'group_name': group_names.get(hw.institute_group_id)}
+                   if hw.institute_group_id else {}),
             }
             for hw in rows
         ],
@@ -2709,3 +2723,198 @@ def teacher_institute_submit_attendance(session_id):
     return ok(session_id=session.id, status=session.status,
               created=result['created'], updated=result['updated'],
               unchanged=result['unchanged'], notified=result['notified'])
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  INSTITUTE READ APIS — my groups, group roster, student profile
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Same authorization as the session endpoints above: _institute_context()
+# (institute only, Employee from the JWT, current academic year) and
+# _my_institute_groups() (ACTIVE groups whose instructor_id is THIS Employee).
+# A group or student outside that set is a plain 404 — identical for another
+# instructor's, another institute's or a nonexistent id — so nothing discloses
+# whether it exists elsewhere. No client value widens the scope. Every
+# endpoint here is read-only.
+
+_OPTS = {'bypass_tenant_scope': True}
+
+
+def _group_names(school_id, group_ids) -> dict:
+    """{group_id: name} for many groups in ONE query, pinned to this school."""
+    group_ids = {gid for gid in (group_ids or ()) if gid}
+    if not school_id or not group_ids:
+        return {}
+    return dict(db.session.query(InstituteStudyGroup.id, InstituteStudyGroup.name)
+                .filter(InstituteStudyGroup.school_id == school_id,
+                        InstituteStudyGroup.id.in_(group_ids))
+                .execution_options(**_OPTS)
+                .all())
+
+
+def _subject_map(school_id, subject_ids) -> dict:
+    """{subject_id: name} in ONE query, pinned to this school."""
+    subject_ids = {sid for sid in (subject_ids or ()) if sid}
+    if not subject_ids:
+        return {}
+    return dict(db.session.query(Subject.id, Subject.name)
+                .filter(Subject.school_id == school_id,
+                        Subject.id.in_(subject_ids))
+                .execution_options(**_OPTS)
+                .all())
+
+
+def _group_brief(grp, subjects) -> dict:
+    return {
+        'group_id': grp.id,
+        'name':     grp.name,
+        'subject':  {'id': grp.subject_id, 'name': subjects.get(grp.subject_id)},
+    }
+
+
+@mobile_api_bp.route('/teacher/institute/groups', methods=['GET'])
+@jwt_required()
+@role_required('teacher')
+def teacher_institute_groups():
+    """My ACTIVE study groups in the current academic year, with the active
+    student count and the weekly slots. Fixed query count: groups, subjects,
+    counts, slots — never one per group."""
+    emp, school, year = _institute_context()
+    if school is None:
+        return err('institute_not_available', 404)
+
+    groups = _my_institute_groups(school, year, emp)
+    group_ids = [grp.id for grp in groups]
+    subjects = _subject_map(school.id, (grp.subject_id for grp in groups))
+    counts = active_enrollment_count_map(school, group_ids)
+    slots = (inst_att.slots_by_group(school.id, year.id, group_ids, active_only=True)
+             if group_ids else {})
+
+    return ok(
+        count=len(groups),
+        groups=[
+            {
+                **_group_brief(grp, subjects),
+                'student_count': counts.get(grp.id, 0),
+                'start_date':    grp.start_date.isoformat() if grp.start_date else None,
+                'end_date':      grp.end_date.isoformat() if grp.end_date else None,
+                'slots': [
+                    {
+                        'day_of_week': slot.day_of_week,
+                        'day_label':   inst_att.day_name(slot.day_of_week),
+                        'start_time':  _fmt_time(slot.start_time),
+                        'end_time':    _fmt_time(slot.end_time),
+                    }
+                    for slot in slots.get(grp.id, [])
+                ],
+            }
+            for grp in groups
+        ],
+    )
+
+
+@mobile_api_bp.route('/teacher/institute/groups/<int:group_id>/students', methods=['GET'])
+@jwt_required()
+@role_required('teacher')
+def teacher_institute_group_students(group_id):
+    """Active roster of ONE of my groups (active_roster: ACTIVE enrollments,
+    the same population student_count counts). Read-only — unlike
+    /sessions/open, nothing is materialized."""
+    emp, school, year = _institute_context()
+    if school is None:
+        return err('institute_not_available', 404)
+
+    group = next((grp for grp in _my_institute_groups(school, year, emp)
+                  if grp.id == group_id), None)
+    if group is None:
+        return err('group_not_found', 404)
+
+    students = [stu for _, stu in active_roster(school, group.id)]
+    return ok(
+        group=_group_brief(group, _subject_map(school.id, [group.subject_id])),
+        count=len(students),
+        students=[
+            {
+                'id':         stu.id,
+                'student_id': stu.student_id,
+                'name':       stu.full_name,
+                'photo':      photo_url(student_display_value(stu)),
+                'status':     stu.status,
+            }
+            for stu in students
+        ],
+    )
+
+
+_RECENT_RESULTS_LIMIT = 10
+
+
+@mobile_api_bp.route('/teacher/institute/students/<int:student_id>', methods=['GET'])
+@jwt_required()
+@role_required('teacher')
+def teacher_institute_student_profile(student_id):
+    """Compact profile of a student who holds an ACTIVE enrollment in one of
+    my groups (instructor_can_access_student). Only MY groups and results of
+    MY groups' exams are returned — never the student's memberships or results
+    with other instructors, and never school-section exams."""
+    emp, school, year = _institute_context()
+    if school is None:
+        return err('institute_not_available', 404)
+    if not instructor_can_access_student(school, g.mobile_user, year, student_id):
+        return err('student_not_found', 404)
+
+    student = (Student.query.execution_options(**_OPTS)
+               .filter_by(id=student_id, school_id=school.id).first())
+    if student is None:
+        return err('student_not_found', 404)
+
+    my_groups = {grp.id: grp for grp in _my_institute_groups(school, year, emp)}
+    shared_ids = {
+        row[0] for row in
+        db.session.query(InstituteGroupEnrollment.group_id)
+        .filter(InstituteGroupEnrollment.school_id == school.id,
+                InstituteGroupEnrollment.student_id == student.id,
+                InstituteGroupEnrollment.status
+                == InstituteGroupEnrollment.STATUS_ACTIVE,
+                InstituteGroupEnrollment.group_id.in_(list(my_groups)))
+        .execution_options(**_OPTS)
+        .all()
+    } if my_groups else set()
+    groups = sorted((my_groups[gid] for gid in shared_ids),
+                    key=lambda grp: (grp.name or '', grp.id))
+    subjects = _subject_map(school.id, (grp.subject_id for grp in groups))
+
+    results = (db.session.query(ExamResult, Exam)
+               .join(Exam, Exam.id == ExamResult.exam_id)
+               .options(joinedload(Exam.exam_type))
+               .filter(ExamResult.student_id == student.id,
+                       ExamResult.school_id == school.id,
+                       Exam.school_id == school.id,
+                       Exam.institute_group_id.in_(list(my_groups)))
+               .execution_options(**_OPTS)
+               .order_by(Exam.exam_date.desc(), ExamResult.id.desc())
+               .limit(_RECENT_RESULTS_LIMIT)
+               .all()) if my_groups else []
+
+    return ok(
+        student={
+            'id':         student.id,
+            'student_id': student.student_id,
+            'name':       student.full_name,
+            'photo':      photo_url(student_display_value(student)),
+            'status':     student.status,
+        },
+        groups=[_group_brief(grp, subjects) for grp in groups],
+        recent_results=[
+            {
+                'exam_id':    exam.id,
+                'exam_name':  exam.display_name,
+                'group_id':   exam.institute_group_id,
+                'group_name': my_groups[exam.institute_group_id].name,
+                'score':      float(res.marks) if res.marks is not None else None,
+                'max_score':  float(exam.max_marks),
+                'exam_date':  exam.exam_date.isoformat() if exam.exam_date else None,
+            }
+            for res, exam in results
+        ],
+    )
