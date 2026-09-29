@@ -18,6 +18,8 @@ from app.utils.decorators import (permission_required, any_permission_required,
                                    historical_guard)
 from app.services.admission_approval import (approve_request, reject_request,
                                              find_matching_parent, ApprovalError)
+from app.utils.institute_groups import (active_groups_for_form, institute_enabled,
+                                        parse_posted_group_ids)
 from app.utils.registration_media import create_registration_display_photo
 
 admissions_bp = Blueprint(
@@ -79,6 +81,13 @@ def detail(request_id):
     grade = Grade.query.filter_by(id=req.desired_grade_id,
                                   school_id=school.id).first()
 
+    # INSTITUTE MODE — study groups replace the stage/grade/section placement,
+    # exactly as on the internal Add Student form. Only THIS institute's active
+    # groups of the active year are offered; approval re-validates every id.
+    is_institute = institute_enabled(school)
+    institute_groups = (active_groups_for_form(school.id, year.id)
+                        if is_institute and year else [])
+
     # Complete academic hierarchy for the approval cascade — SAME source/scope as
     # the internal Add Student wizard: stage labels + active-year grades (each
     # carrying its stage) + active-year sections. All strictly school + active-year
@@ -86,7 +95,7 @@ def detail(request_id):
     stages = ['ابتدائية', 'متوسطة', 'إعدادية']
     grades = []
     sections = []
-    if year:
+    if year and not is_institute:
         grades = (Grade.query.execution_options(include_all_years=True)
                   .filter_by(school_id=school.id, academic_year_id=year.id)
                   .order_by(Grade.name).all())
@@ -110,6 +119,8 @@ def detail(request_id):
     return render_template('admissions/detail.html',
                            req=req, grade=grade, stages=stages, grades=grades,
                            sections=sections, preselect_grade_id=preselect_grade_id,
+                           is_institute=is_institute,
+                           institute_groups=institute_groups,
                            parent_match=match)
 
 
@@ -121,7 +132,19 @@ def approve(request_id):
     school = _school_or_404()
     _request_or_404(school, request_id)  # 404 cross-school before any work
 
-    section_id = request.form.get('section_id', type=int)
+    institute_group_ids = None
+    if institute_enabled(school):
+        # INSTITUTE MODE — sectionless: a posted section_id is never read. The
+        # group ids are parsed here and validated inside approve_request against
+        # THIS institute + active year before anything is written.
+        section_id = None
+        institute_group_ids, groups_ok = parse_posted_group_ids(
+            request.form.getlist('institute_group_ids'))
+        if not groups_ok:
+            flash('قائمة المجموعات الدراسية المرسلة غير صالحة.', 'danger')
+            return redirect(url_for('admissions.detail', request_id=request_id))
+    else:
+        section_id = request.form.get('section_id', type=int)
     parent_choice = request.form.get('parent_choice', 'new')
     link_parent_id = (request.form.get('link_parent_id', type=int)
                       if parent_choice == 'link' else None)
@@ -129,7 +152,8 @@ def approve(request_id):
     try:
         result = approve_request(request_id, school, current_user,
                                  section_id=section_id,
-                                 link_parent_id=link_parent_id)
+                                 link_parent_id=link_parent_id,
+                                 institute_group_ids=institute_group_ids)
     except ApprovalError as exc:
         flash(str(exc), 'danger')
         return redirect(url_for('admissions.detail', request_id=request_id))

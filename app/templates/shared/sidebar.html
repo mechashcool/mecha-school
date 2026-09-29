@@ -367,10 +367,12 @@
 
     {% if not current_user.is_super_admin %}
 
-    {#- Institutes: school-oriented student-record, external-registration and
-        attendance/calendar items are replaced by institute workflows, so they
-        are not rendered. Routes and permissions are unchanged; a school
-        (is_institute False) renders every item exactly as before. -#}
+    {#- Institutes: school-oriented student-record and attendance/calendar
+        items are replaced by institute workflows, so they are not rendered.
+        The external-registration review queue IS shown: institute approval
+        places the student in study groups instead of a section. Routes and
+        permissions are unchanged; a school (is_institute False) renders every
+        item exactly as before. -#}
     {% set _is_institute = school and school.is_institute %}
 
     {# ═══ Group: Students ═══════════════════════════════════════════════ #}
@@ -406,7 +408,7 @@
           </a>
         </li>
         {% endif %}
-        {% if not _is_institute and current_user.has_permission('view_students') %}
+        {% if current_user.has_permission('view_students') %}
         <li class="nav-item">
           <a href="{{ url_for('admissions.index') }}"
              class="{{ 'active' if request.blueprint == 'admissions' }}">

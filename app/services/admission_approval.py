@@ -28,6 +28,8 @@ from app.models import (db, Role, User, Student, StudentDocument, Section,
 from app.utils import code_generator
 from app.utils.decorators import get_active_year
 from app.utils.audit import log_action
+from app.utils.institute_groups import (institute_enabled, stage_enrollments,
+                                        validate_group_ids)
 from app.utils.registration_tokens import normalize_phone
 
 
@@ -75,9 +77,16 @@ def _link_parent_student(user_id: int, student_id: int, relation: str):
 
 def approve_request(request_id: int, school, actor, *,
                     section_id: int | None = None,
-                    link_parent_id: int | None = None) -> dict:
+                    link_parent_id: int | None = None,
+                    institute_group_ids=None) -> dict:
     """
     Approve a pending registration request for ``school``.
+
+    For an institute (``school.is_institute``) the student is sectionless: any
+    ``section_id`` is discarded and ``institute_group_ids`` (optional, may be
+    empty — same rule as the internal Add Student form) are validated against
+    THIS institute + active year and enrolled in the same single commit. For a
+    school, ``institute_group_ids`` is ignored and behaviour is unchanged.
 
     Returns a dict:
       {'ok': True, 'already': bool, 'student_id': int, 'parent_created': bool,
@@ -107,6 +116,19 @@ def approve_request(request_id: int, school, actor, *,
                 'parent_password': None}
     if req.status == 'rejected':
         raise ApprovalError('تم رفض هذا الطلب مسبقاً ولا يمكن اعتماده.')
+
+    # ── INSTITUTE MODE — mirrors the internal Add Student flow ────────────────
+    # An institute student is sectionless by definition, so a posted section_id
+    # is discarded rather than trusted. Group ids are validated (active, THIS
+    # institute, THIS active year) BEFORE the student is created; one bad id
+    # fails the whole approval, so nothing is written.
+    group_ids = []
+    if institute_enabled(school):
+        section_id = None
+        group_ids, group_error = validate_group_ids(institute_group_ids or [],
+                                                    school.id, year.id)
+        if group_error:
+            raise ApprovalError(group_error)
 
     # ── Validate optional section (must belong to this school + active year) ──
     section = None
@@ -156,6 +178,19 @@ def approve_request(request_id: int, school, actor, *,
             document_type=doc.document_type,
             file_path=doc.file_path,
         ))
+
+    # ── Institute study-group enrollments (institutes only) ───────────────────
+    # Staged in this same transaction and flushed now, so a database refusal
+    # rolls back the student too — log_action() below commits on its own and
+    # swallows errors, so nothing may be left to fail at that point.
+    if group_ids:
+        stage_enrollments(school.id, student.id, group_ids)
+        try:
+            db.session.flush()
+        except IntegrityError:
+            db.session.rollback()
+            raise ApprovalError('تعذّر تسجيل الطالب في المجموعات الدراسية. '
+                                'لم يتم حفظ أي تغيير.')
 
     # ── Parent: link existing (staff-confirmed) OR create new ─────────────────
     role = _parent_role()

@@ -86,8 +86,39 @@
           {# Complete academic placement — SAME cascade as the internal Add Student
              form (المرحلة → الصف → الشعبة). Only section_id is submitted; المرحلة/الصف
              are client-side filters. The applicant's requested grade is preselected
-             when still valid; staff may review/correct before approving. #}
-          {% if grades %}
+             when still valid; staff may review/correct before approving.
+             INSTITUTE MODE: study groups replace this cascade (same selector as
+             the internal Add Student form); no section is ever submitted. #}
+          {% if is_institute %}
+          <label class="form-label d-block">
+            <i class="bi bi-collection me-1"></i>المجموعات الدراسية
+          </label>
+          {% if institute_groups %}
+          <div class="mb-2" style="max-height:240px;overflow-y:auto;border:1px solid #e3e8ef;border-radius:8px;padding:12px">
+            {% for g in institute_groups %}
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox"
+                     name="institute_group_ids" value="{{ g.id }}"
+                     id="grp{{ g.id }}">
+              <label class="form-check-label" for="grp{{ g.id }}">
+                {{ g.name }}
+                <span class="text-muted" style="font-size:12px">
+                  — {{ g.subject.name if g.subject else 'بدون مادة' }}
+                  {%- if g.instructor %} / {{ g.instructor.full_name }}{% endif %}
+                </span>
+              </label>
+            </div>
+            {% endfor %}
+          </div>
+          <div class="text-muted small mb-3">
+            يمكن تسجيل الطالب في أكثر من مجموعة، أو عدم اختيار أي مجموعة.
+          </div>
+          {% else %}
+          <div class="alert alert-warning small py-2 mb-3">
+            لا توجد مجموعات دراسية مفعّلة للعام الدراسي الحالي — سيتم إنشاء الطالب بدون مجموعات.
+          </div>
+          {% endif %}
+          {% elif grades %}
           <label class="form-label d-block">التعيين الدراسي</label>
           <div class="row g-2 mb-2">
             <div class="col-md-4">
@@ -221,6 +252,7 @@
 {% endblock %}
 
 {% block extra_js %}
+{% if not is_institute %}
 {# Reuse the SAME Stage → Grade → Section cascade as the internal Add Student form. #}
 {% include 'shared/_class_cascade_js.html' %}
 <script>
@@ -228,4 +260,5 @@
   // preselected server-side, so on load the stage is derived and section enabled.
   initClassCascade('fStage', 'fGrade', 'fSection', { disableSectionUntilGrade: true });
 </script>
+{% endif %}
 {% endblock %}
