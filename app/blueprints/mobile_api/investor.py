@@ -4,6 +4,10 @@ Mobile API — Investor (read-only)
 GET /api/mobile/v1/investor/dashboard   full KPI dashboard for the investor's school
 GET /api/mobile/v1/investor/revenues    read-only revenue list
 GET /api/mobile/v1/investor/expenses    read-only expense list
+GET /api/mobile/v1/investor/employees/attendance
+                                        active employees + one day's attendance
+GET /api/mobile/v1/investor/employees/<id>/attendance
+                                        one employee's paginated attendance history
 
 All endpoints require:
   Authorization: Bearer <access_token>   for an `investor_viewer` account.
@@ -343,4 +347,241 @@ def investor_expenses():
         page=pagination.page, pages=pagination.pages,
         items=[_serialize_tx(e) for e in pagination.items],
         filter_options={'categories': _category_options(ExpenseCategory, sid)},
+    )
+
+
+# ─── Employee attendance (read-only) ──────────────────────────────────────────
+#
+# Data source: EmployeeAttendance — one row per (employee_id, date)
+# (uq_employee_date). check_in / check_out are naive school-local wall-clock
+# times; AI Face writes the first punch as check_in and the latest later punch
+# as check_out, manual entry and approved leave (status 'on_leave') write the
+# same row. No row = nothing recorded for that day (no virtual absence here).
+#
+# Isolation: the school comes only from the authenticated User row. Every query
+# filters school_id explicitly on top of the ORM tenant guard. The rows are
+# date-keyed, so reads use include_all_years (school criteria stay active, like
+# the web daily sheet and HR reports) instead of the view-year filter.
+
+EMP_ATT_DEFAULT_LIMIT = 30
+EMP_ATT_MAX_LIMIT = 100
+EMP_SEARCH_MAX_LEN = 100
+
+
+def _investor_school_id():
+    """The investor's own school id, or None when the account has no school.
+
+    A school-less account must fail closed: with no school the mobile ORM scope
+    applies no tenant filter at all.
+    """
+    user = g.mobile_user
+    return user.school_id if getattr(user, 'is_investor', False) else None
+
+
+def _strict_page_args():
+    """(limit, offset, error_response). limit 1..100 (larger is clamped), offset >= 0."""
+    raw_limit = (request.args.get('limit') or '').strip()
+    raw_offset = (request.args.get('offset') or '').strip()
+    try:
+        limit = int(raw_limit) if raw_limit else EMP_ATT_DEFAULT_LIMIT
+    except ValueError:
+        return None, None, err('invalid_limit')
+    try:
+        offset = int(raw_offset) if raw_offset else 0
+    except ValueError:
+        return None, None, err('invalid_offset')
+    if limit < 1:
+        return None, None, err('invalid_limit')
+    if offset < 0:
+        return None, None, err('invalid_offset')
+    return min(limit, EMP_ATT_MAX_LIMIT), offset, None
+
+
+def _page(rows, limit, offset):
+    """Trim a limit+1 fetch and build the pagination block."""
+    has_more = len(rows) > limit
+    return rows[:limit], {
+        'limit':       limit,
+        'offset':      offset,
+        'has_more':    has_more,
+        'next_offset': offset + limit if has_more else None,
+    }
+
+
+def _employee_payload(emp):
+    from app.utils.employee_display_photo import employee_display_value
+    from .utils import photo_url
+    return {
+        'id':          emp.id,
+        'employee_id': emp.employee_id,
+        'name':        emp.full_name,
+        'job_title':   emp.job_title,
+        'photo':       photo_url(employee_display_value(emp)),
+    }
+
+
+def _attendance_payload(rec):
+    """Same status normalisation and HH:MM time format as /teacher/attendance."""
+    from .teacher import _emp_att_status, _fmt_time
+    return {
+        'id':        rec.id,
+        'date':      rec.date.isoformat(),
+        'status':    _emp_att_status(rec.status),
+        'check_in':  _fmt_time(rec.check_in),
+        'check_out': _fmt_time(rec.check_out),
+        'source':    rec.source,
+    }
+
+
+def _employee_columns():
+    """Only the columns the payload needs — never salary / HR fields."""
+    from sqlalchemy.orm import load_only
+    from app.models import Employee
+    return load_only(Employee.id, Employee.employee_id, Employee.full_name,
+                     Employee.job_title, Employee.photo, Employee.photo_display,
+                     Employee.school_id, Employee.status)
+
+
+def _investor_school():
+    """(school, error_response) for the authenticated investor."""
+    from app.models import School
+    sid = _investor_school_id()
+    school = db.session.get(School, sid) if sid else None
+    if school is None:
+        return None, err('forbidden', 403)
+    return school, None
+
+
+def _school_block(school):
+    return {
+        'id':       school.id,
+        'name':     school.school_name,
+        'timezone': school.timezone or 'Asia/Baghdad',
+    }
+
+
+@mobile_api_bp.route('/investor/employees/attendance', methods=['GET'])
+@jwt_required()
+@role_required('investor_viewer')
+def investor_employees_attendance():
+    """Active employees of the investor's school with their attendance for ONE
+    date, in one page. Employees without a row for that date are included with
+    ``attendance: null``. One employees LEFT JOIN attendance query per page — no N+1.
+
+    Query: date=YYYY-MM-DD (default: school-local today), limit (default 30,
+    max 100), offset, search (name or employee code, max 100 chars).
+    """
+    from app.models import Employee, EmployeeAttendance
+    from app.utils.attendance_helpers import get_local_date, is_holiday_date
+
+    school, school_err = _investor_school()
+    if school_err:
+        return school_err
+    sid = school.id
+
+    att_date, date_err = _parse_date_arg('date')
+    if date_err:
+        return err('invalid_date')
+    if att_date is None:
+        att_date = get_local_date(school)
+
+    limit, offset, page_err = _strict_page_args()
+    if page_err:
+        return page_err
+
+    search = (request.args.get('search') or '').strip()
+    if len(search) > EMP_SEARCH_MAX_LEN:
+        return err('invalid_search')
+
+    query = (db.session.query(Employee, EmployeeAttendance)
+             .execution_options(include_all_years=True)
+             .options(_employee_columns())
+             .outerjoin(EmployeeAttendance,
+                        (EmployeeAttendance.employee_id == Employee.id)
+                        & (EmployeeAttendance.school_id == sid)
+                        & (EmployeeAttendance.date == att_date))
+             .filter(Employee.school_id == sid, Employee.status == 'active'))
+    if search:
+        query = query.filter(
+            Employee.full_name.icontains(search, autoescape=True)
+            | Employee.employee_id.icontains(search, autoescape=True))
+
+    rows = (query.order_by(Employee.full_name, Employee.id)
+            .limit(limit + 1).offset(offset).all())
+    rows, pagination = _page(rows, limit, offset)
+
+    items = []
+    for emp, rec in rows:
+        item = _employee_payload(emp)
+        item['attendance'] = _attendance_payload(rec) if rec is not None else None
+        items.append(item)
+
+    return ok(
+        school=_school_block(school),
+        date=att_date.isoformat(),
+        # Employee weekly day off / holiday for this date (same rule as the
+        # employee attendance report), so a null attendance can be told apart.
+        is_day_off=bool(is_holiday_date(att_date, sid, school=school,
+                                        audience='employees')),
+        items=items,
+        pagination=pagination,
+    )
+
+
+@mobile_api_bp.route('/investor/employees/<int:employee_id>/attendance', methods=['GET'])
+@jwt_required()
+@role_required('investor_viewer')
+def investor_employee_attendance_history(employee_id):
+    """One employee's attendance rows, newest first, paginated.
+
+    The employee must belong to the investor's school; otherwise 404 (the
+    response never reveals whether the id exists in another school).
+    Query: limit (default 30, max 100), offset, start / end (YYYY-MM-DD, inclusive).
+    """
+    from app.models import Employee, EmployeeAttendance
+
+    school, school_err = _investor_school()
+    if school_err:
+        return school_err
+    sid = school.id
+
+    start, start_err = _parse_date_arg('start')
+    if start_err:
+        return err('invalid_start')
+    end, end_err = _parse_date_arg('end')
+    if end_err:
+        return err('invalid_end')
+    if start and end and start > end:
+        return err('invalid_date_range')
+
+    limit, offset, page_err = _strict_page_args()
+    if page_err:
+        return page_err
+
+    emp = (Employee.query.options(_employee_columns())
+           .filter(Employee.id == employee_id, Employee.school_id == sid)
+           .first())
+    if emp is None:
+        return err('employee_not_found', 404)
+
+    query = (EmployeeAttendance.query
+             .execution_options(include_all_years=True)
+             .filter(EmployeeAttendance.school_id == sid,
+                     EmployeeAttendance.employee_id == emp.id))
+    if start:
+        query = query.filter(EmployeeAttendance.date >= start)
+    if end:
+        query = query.filter(EmployeeAttendance.date <= end)
+
+    rows = (query.order_by(EmployeeAttendance.date.desc(), EmployeeAttendance.id.desc())
+            .limit(limit + 1).offset(offset).all())
+    rows, pagination = _page(rows, limit, offset)
+
+    employee = _employee_payload(emp)
+    employee['status'] = emp.status
+    return ok(
+        school=_school_block(school),
+        employee=employee,
+        items=[_attendance_payload(r) for r in rows],
+        pagination=pagination,
     )
