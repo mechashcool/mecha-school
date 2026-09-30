@@ -17,6 +17,7 @@ GET  /teacher/exams/check-conflict     read-only time-overlap check (section_id,
 GET  /teacher/exams/check-day          read-only same-day exams for a section (section_id, exam_date)
 POST /teacher/exams                    create an exam — accepts title + max_score; validates subject assignment
 GET  /teacher/exams/<id>               exam detail + entered results (subject_id, section_id, title)
+GET  /teacher/grades                   /teacher/exams window + each exam's results in ONE request
 POST /teacher/exams/<id>/results       bulk-upsert grade entries (accepts score/note or marks/notes)
 GET  /teacher/notifications            notifications feed (paginated)
 GET  /teacher/institute/sessions       my institute group sessions for a date range
@@ -829,6 +830,38 @@ def teacher_my_attendance():
 
 # ─── Exams list ───────────────────────────────────────────────────────────────
 
+def _teacher_exam_window(emp: Employee, today: date) -> list[Exam] | None:
+    """The teacher's exam page, shared by /teacher/exams and /teacher/grades so
+    both always return the same exam population.
+
+    Access comes only from _teacher_exam_filter (homeroom sections + explicit
+    (section, subject) assignments) under the ORM school/year scope. Honours
+    ?upcoming / ?past and ?limit / ?offset (default 50, max 100). Returns None
+    when the teacher has no access at all.
+
+    P1: the relationships the serializers touch are eager-loaded in the same
+    statement (school criteria still applies to every joined entity).
+    """
+    exam_filter = _teacher_exam_filter(emp)
+    if exam_filter is None:
+        return None
+
+    q = Exam.query.filter(exam_filter)
+    if request.args.get('upcoming'):
+        q = q.filter(Exam.exam_date >= today)
+    elif request.args.get('past'):
+        q = q.filter(Exam.exam_date < today)
+
+    limit, offset = page_args(default_limit=50, max_limit=100)
+    return (q.options(
+                joinedload(Exam.subject),
+                joinedload(Exam.section).joinedload(Section.grade),
+                joinedload(Exam.exam_type),
+            )
+            .order_by(Exam.exam_date.desc())
+            .offset(offset).limit(limit).all())
+
+
 @mobile_api_bp.route('/teacher/exams', methods=['GET'])
 @jwt_required()
 @role_required('teacher')
@@ -845,33 +878,15 @@ def teacher_exams():
     if not emp:
         return err('employee_profile_not_found', 404)
 
-    exam_filter = _teacher_exam_filter(emp)
-    if exam_filter is None:
+    today = date.today()
+    exams = _teacher_exam_window(emp, today)
+    if exams is None:
         return ok(count=0, exams=[])
 
-    today = date.today()
-    q     = Exam.query.filter(exam_filter)
-
-    if request.args.get('upcoming'):
-        q = q.filter(Exam.exam_date >= today)
-    elif request.args.get('past'):
-        q = q.filter(Exam.exam_date < today)
-
-    limit, offset = page_args(default_limit=50, max_limit=100)
-    # P1: eager-load the relationships the serializer touches in the same
-    # statement (school criteria still applies to every joined entity), and
-    # compute all result counts in ONE grouped query instead of one COUNT per
+    # P1: all result counts in ONE grouped query instead of one COUNT per
     # exam. The grouped query runs under the same ORM tenant scope as the
     # per-exam counts it replaces, restricted to this page's exam ids — which
     # already passed the teacher's section/subject access filter.
-    exams = (q.options(
-                 joinedload(Exam.subject),
-                 joinedload(Exam.section).joinedload(Section.grade),
-                 joinedload(Exam.exam_type),
-             )
-             .order_by(Exam.exam_date.desc())
-             .offset(offset).limit(limit).all())
-
     exam_ids = [e.id for e in exams]
     result_counts = dict(
         db.session.query(ExamResult.exam_id, func.count(ExamResult.id))
@@ -1354,6 +1369,83 @@ def teacher_exam_detail(exam_id):
             for s in missing
         ],
     )
+
+
+# ─── Grades (all my exams + results in one request) ───────────────────────────
+
+@mobile_api_bp.route('/teacher/grades', methods=['GET'])
+@jwt_required()
+@role_required('teacher')
+def teacher_grades():
+    """
+    Every exam of the /teacher/exams window with its entered results, so the
+    Grades screen needs one request instead of one detail request per exam.
+    Same query params and window as /teacher/exams (upcoming, past, limit,
+    offset).
+
+    Three bounded data queries regardless of exam/student/result counts:
+      A. the exam window (same helper and access filter as /teacher/exams)
+      B. ExamResult WHERE exam_id IN (A)            — include_all_years, as in
+                                                      /teacher/exams/<id>
+      C. active Student WHERE section_id IN (A)     — name resolution only
+
+    Student names follow the detail route exactly: a result is named only from
+    the ACTIVE students of that exam's own section, otherwise '?'. Result keys
+    are deliberately explicit (student_name, never name/grade) because the
+    client merges each result over its exam map.
+    """
+    emp = _get_employee()
+    if not emp:
+        return err('employee_profile_not_found', 404)
+
+    exams = _teacher_exam_window(emp, date.today())
+    if not exams:
+        return ok(items=[])
+
+    exam_ids    = [e.id for e in exams]
+    section_ids = {e.section_id for e in exams}
+
+    results_by_exam: dict[int, list] = {}
+    for r in (ExamResult.query
+              .execution_options(include_all_years=True)
+              .with_entities(ExamResult.exam_id, ExamResult.student_id,
+                             ExamResult.marks, ExamResult.notes)
+              .filter(ExamResult.exam_id.in_(exam_ids))
+              .order_by(ExamResult.exam_id, ExamResult.marks.desc(), ExamResult.id)
+              .all()):
+        results_by_exam.setdefault(r.exam_id, []).append(r)
+
+    names = {
+        (s.section_id, s.id): s.full_name
+        for s in (Student.query
+                  .with_entities(Student.id, Student.section_id, Student.full_name)
+                  .filter(Student.section_id.in_(section_ids),
+                          Student.status == 'active')
+                  .all())
+    }
+
+    return ok(items=[
+        {
+            'exam': {
+                'exam_title':   e.display_name,
+                'subject_name': e.subject.name if e.subject else None,
+                'grade_name':   e.section.grade.name if e.section and e.section.grade else None,
+                'section_name': e.section.name if e.section else None,
+                'exam_date':    e.exam_date.isoformat() if e.exam_date else None,
+                'max_marks':    float(e.max_marks),
+            },
+            'results': [
+                {
+                    'student_id':   r.student_id,
+                    'student_name': names.get((e.section_id, r.student_id), '?'),
+                    'marks':        float(r.marks) if r.marks is not None else None,
+                    'note':         r.notes,
+                }
+                for r in results_by_exam.get(e.id, [])
+            ],
+        }
+        for e in exams
+    ])
 
 
 # ─── Background notification wrappers (P0) ────────────────────────────────────
