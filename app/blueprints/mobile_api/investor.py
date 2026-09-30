@@ -89,6 +89,13 @@ def investor_dashboard():
     """
     from app.blueprints.admin import _build_dashboard_context
 
+    # Fail closed: an investor account without a school must never reach the
+    # shared context below (with no school the ORM tenant guard applies no
+    # school filter at all).
+    investor_school, school_err = _investor_school()
+    if school_err:
+        return school_err
+
     year = request.args.get('year', date.today().year, type=int)
     sid  = _sid()
 
@@ -237,6 +244,11 @@ def investor_dashboard():
         # ── Recent lists ─────────────────────────────────────────────────────────
         recent_students      = [_serialize_student(s) for s in ctx['recent_students']],
         recent_notifications = [_serialize_notif(n)   for n in ctx['recent_notifications']],
+
+        # ── Employee attendance (school-local today) ─────────────────────────────
+        # Staff only — the attendance_today / charts.attendance fields above are
+        # STUDENT attendance and are unchanged.
+        employee_attendance_today = _employee_attendance_today(investor_school),
     )
 
 
@@ -458,6 +470,88 @@ def _school_block(school):
         'name':     school.school_name,
         'timezone': school.timezone or 'Asia/Baghdad',
     }
+
+
+def _employee_attendance_today(school):
+    """Read-only employee attendance summary for the school-local today.
+
+    Same rules as the HR attendance report (calculate_employee_stats) for one
+    day: active employees only; present + late = attended; approved leave
+    (materialised as status 'on_leave') leaves the denominator; an active
+    employee with no row counts as absent (reported separately as
+    not_recorded — nothing is written). Employee days off come from
+    is_holiday_date(audience='employees'). Institutes record instructor
+    attendance per lesson, so there is no daily figure for them (None).
+
+    One grouped employees LEFT JOIN attendance query — no per-employee reads.
+    """
+    from app.models import Employee, EmployeeAttendance
+    from app.utils.attendance_helpers import get_local_date, is_holiday_date
+
+    if school.is_institute:
+        return None
+    sid = school.id
+    today = get_local_date(school)
+    is_day_off = bool(is_holiday_date(today, sid, school=school,
+                                      audience='employees'))
+
+    rows = (db.session.query(EmployeeAttendance.status, func.count(Employee.id))
+            .select_from(Employee)
+            .execution_options(include_all_years=True)
+            .outerjoin(EmployeeAttendance,
+                       (EmployeeAttendance.employee_id == Employee.id)
+                       & (EmployeeAttendance.school_id == sid)
+                       & (EmployeeAttendance.date == today))
+            .filter(Employee.school_id == sid, Employee.status == 'active')
+            .group_by(EmployeeAttendance.status)
+            .all())
+
+    counts = {}
+    for status, n in rows:
+        # NULL group = no row for today; statuses normalised as in _emp_att_status.
+        key = None if status is None else status.strip().lower()
+        counts[key] = counts.get(key, 0) + n
+    total_active = sum(counts.values())
+
+    summary = {
+        'date':                  today.isoformat(),
+        'is_day_off':            is_day_off,
+        'total_active':          total_active,
+        'expected_to_attend':    0,
+        'attended':              0,
+        'present':               0,
+        'late':                  0,
+        'absent':                0,
+        'absent_recorded':       0,
+        'not_recorded':          0,
+        'on_leave':              0,
+        'attendance_percentage': None,
+    }
+    if is_day_off:
+        return summary
+
+    present = counts.get('present', 0)
+    late = counts.get('late', 0)
+    on_leave = counts.get('on_leave', 0)
+    absent_recorded = counts.get('absent', 0)
+    not_recorded = counts.get(None, 0)
+    # Any other stored status stays in the denominator but in no bucket,
+    # exactly like the HR report.
+    expected = total_active - on_leave
+    attended = present + late
+    summary.update({
+        'expected_to_attend':    expected,
+        'attended':              attended,
+        'present':               present,
+        'late':                  late,
+        'absent':                absent_recorded + not_recorded,
+        'absent_recorded':       absent_recorded,
+        'not_recorded':          not_recorded,
+        'on_leave':              on_leave,
+        'attendance_percentage': (round(attended / expected * 100, 1)
+                                  if expected > 0 else None),
+    })
+    return summary
 
 
 @mobile_api_bp.route('/investor/employees/attendance', methods=['GET'])
