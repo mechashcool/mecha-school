@@ -491,7 +491,7 @@ def form(token):
         photo_path = save_uploaded_file(
             photo_upload, registration_photo_subfolder(school.id),
             bucket=media_bucket, allowed_exts=_PHOTO_EXTS,
-            max_size=_MAX_UPLOAD_BYTES)
+            max_size=_MAX_UPLOAD_BYTES, local_fallback=False)   # Supabase only
         if photo_path is None:
             return _render(request.form, 'تعذّر رفع الصورة.', nonce=nonce)
         stored.append(photo_path)

@@ -745,6 +745,37 @@ class StudentDisplayPhotoTest(unittest.TestCase):
         self.storage.assert_not_called()
         self.prepare.assert_not_called()
 
+    def test_original_supabase_failure_aborts_no_local_fallback(self):
+        from app.blueprints.students import (_MSG_PHOTO_STORE_FAILED_CREATE,
+                                             _MSG_PHOTO_STORE_FAILED_EDIT)
+        self.storage.side_effect = lambda *a, **k: None                     # Supabase down
+        local = pathlib.Path(self.app.root_path, 'static', 'uploads', 'students')
+        before = sorted(local.rglob('*')) if local.exists() else []
+        client = self._web('admin_a')
+        # create: refused before anything is created — no student without its photo
+        resp, row = self._create(client, _phone_jpeg(600, 800), full_name=f'NoStore {self.sfx}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(_MSG_PHOTO_STORE_FAILED_CREATE, resp.get_data(as_text=True))
+        self.assertIsNone(row)
+        # edit: refused, nothing saved — current photo pair and other fields kept
+        old = self._row('derived_a')
+        with self.app.app_context():
+            old_name = db.session.get(Student, self.ids['derived_a'],
+                                      execution_options=OPTS).full_name
+        resp = self._edit(client, 'derived_a', 'Renamed NoStore',
+                          photo=('n.jpg', _phone_jpeg(600, 800)))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn(_MSG_PHOTO_STORE_FAILED_EDIT,
+                      client.get(resp.headers['Location']).get_data(as_text=True))
+        self.assertEqual(self._row('derived_a'), old)
+        with self.app.app_context():
+            self.assertEqual(db.session.get(Student, self.ids['derived_a'],
+                                            execution_options=OPTS).full_name, old_name)
+        # one Supabase attempt per request, no display copy, no local file
+        self.assertEqual(self.storage.call_count, 2)
+        self.prepare.assert_not_called()
+        self.assertEqual(sorted(local.rglob('*')) if local.exists() else [], before)
+
     # ── 20. existing students are never processed on view ────────────────────
 
     def test_20_viewing_legacy_student_touches_no_storage(self):

@@ -813,26 +813,16 @@ class RegistrationAuthorizationTest(_RegistrationBase):
         self.assertFalse(self._can(self.ids['staff_id_a'], photo))          # other building
         self.assertTrue(self._can(self._user_id('admin_a'), photo))         # unrestricted staff
 
-    def test_59_local_fallback_media_route_stays_fail_closed(self):
-        # Supabase unavailable -> the v2 photo lands on local disk (uploads/...).
+    def test_59_supabase_failure_refuses_photo_no_local_fallback(self):
+        # Supabase unavailable for the photo bucket -> the submission is refused:
+        # no request row, nothing stored, and nothing written to local disk.
         self.fs.fail_bucket = self.media
+        local = pathlib.Path(self.app.root_path, 'static', 'uploads', 'registration',
+                             str(self.ids['school_a']))
+        before = sorted(local.rglob('*')) if local.exists() else []
         resp, nonce = self._post(photo=('p.jpg', _jpeg(600, 800)))
-        req = self._accepted(resp, nonce)
-        value = req['photo']
-        self.assertRegex(value, r'^uploads/registration/\d+/photos/v2/[0-9a-f]{32}\.jpg$')
-        self.local_files.append(pathlib.Path(self.app.root_path, 'static', *value.split('/')))
-        self._approve(req['id'])
-        st = self._student(self._request(nonce)['student_id'])
-        self.assertEqual(st['photo'], value)
-        self.assertTrue(st['photo_display'])                               # local original read
-        with mock.patch.dict(self.app.config, {'PRIVATE_UPLOADS_ENABLED': True}):
-            url = f'/media/{value}'
-            self.assertEqual(self.app.test_client().get(url).status_code, 404)   # anonymous
-            self.assertEqual(self._web('admin_b').get(url).status_code, 404)     # other school
-            ok = self._web('admin_a').get(url)
-            self.assertEqual(ok.status_code, 302)
-            self.assertIn('/media-proxy/', ok.headers['Location'])
-
+        self._assert_refused(resp, nonce, 'تعذّر رفع الصورة.')
+        self.assertEqual(sorted(local.rglob('*')) if local.exists() else [], before)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Public route guarantees (61-63)

@@ -556,6 +556,33 @@ class EmployeeDisplayPhotoRouteTest(unittest.TestCase):
         self.fetch.assert_not_called()                                      # old objects not read
         self.delete.assert_not_called()                                     # nor deleted
 
+    def test_original_supabase_failure_no_local_fallback(self):
+        from app.blueprints.employees import _MSG_PHOTO_REJECTED, _MSG_PHOTO_REPLACE_FAILED
+        self.storage.side_effect = lambda *a, **k: None                     # Supabase down
+        local = pathlib.Path(self.app.root_path, 'static', 'uploads', 'employees')
+        before = sorted(local.rglob('*')) if local.exists() else []
+        client = self._web('admin_a')
+        # create: refused — no employee without its photo
+        resp, row = self._create(client, _phone_jpeg(1200, 1600), full_name=f'NoStore {self.sfx}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(_MSG_PHOTO_REJECTED, resp.get_data(as_text=True))
+        self.assertIsNone(row)
+        # edit: refused, current photo pair and name kept
+        old = self._row('derived_a')
+        with self.app.app_context():
+            old_name = db.session.get(Employee, self.ids['derived_a'],
+                                      execution_options=OPTS).full_name
+        resp = self._edit(client, 'derived_a', 'Renamed NoStore',
+                          photo=('n.jpg', _phone_jpeg(1200, 1600)))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(_MSG_PHOTO_REPLACE_FAILED, resp.get_data(as_text=True))
+        self.assertEqual(self._row('derived_a'), old)
+        with self.app.app_context():
+            self.assertEqual(db.session.get(Employee, self.ids['derived_a'],
+                                            execution_options=OPTS).full_name, old_name)
+        self.assertEqual(self.storage.call_count, 2)                        # no display attempt
+        self.assertEqual(sorted(local.rglob('*')) if local.exists() else [], before)
+
     def test_19_replacement_derivative_failure_clears_old_display(self):
         raw = _enc(_portrait(900, 1200), 'JPEG')
         for label, target in (('generation', 'make_employee_display_photo'),

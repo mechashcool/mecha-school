@@ -17,7 +17,7 @@ from app.models import (db, Student, Section, Grade, AcademicYear, StudentDocume
 from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    get_current_school, get_active_year, get_view_year,
                                    historical_guard)
-from app.utils.helpers import save_uploaded_file, resolve_photo_url
+from app.utils.helpers import save_uploaded_file, resolve_photo_url, ALLOWED_IMAGE_EXTENSIONS
 from app.utils.student_photo import validate_student_photo
 from app.utils.student_display_photo import (prepare_display_photo, save_display_photo,
                                              student_display_value, student_photo_url)
@@ -109,6 +109,22 @@ def validate_student_document_file(file_storage):
     if not any(head.startswith(sig) for sig in _STUDENT_DOC_MAGIC.get(ext, ())):
         return None, 'محتوى الملف لا يطابق صيغته. يرجى رفع ملف صالح.'
     return ext, None
+
+
+# A NEW original student photo is stored in Supabase only (no local fallback).
+# When that upload fails the whole create / edit is stopped with these messages.
+_MSG_PHOTO_STORE_FAILED_CREATE = ('تعذّر حفظ صورة الطالب حالياً، ولم يتم حفظ الطالب. '
+                                  'يرجى المحاولة مرة أخرى.')
+_MSG_PHOTO_STORE_FAILED_EDIT = ('تعذّر حفظ صورة الطالب الجديدة، ولم يتم حفظ التعديلات '
+                                'وبقيت الصورة الحالية كما هي. يرجى المحاولة مرة أخرى.')
+
+
+def _photo_ext_allowed(upload) -> bool:
+    """True when save_uploaded_file() would accept the photo's extension — so a
+    None result can only mean the Supabase upload failed. Disallowed extensions
+    keep their existing handling (silently not stored)."""
+    name = upload.filename or ''
+    return '.' in name and name.rsplit('.', 1)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
 
 
 # Extensions a NEW document is stored under after processing: a PDF keeps its
@@ -1158,8 +1174,14 @@ def create():
         _school_id_for_feat = school.id if school else None
         photo_path = None
         photo_display_path = None
-        if 'photo' in request.files and is_feature_enabled(_school_id_for_feat, 'students.photo_upload'):
-            photo_path = save_uploaded_file(request.files['photo'], 'students')
+        if ('photo' in request.files and request.files['photo'].filename
+                and is_feature_enabled(_school_id_for_feat, 'students.photo_upload')):
+            photo_path = save_uploaded_file(request.files['photo'], 'students',
+                                            local_fallback=False)
+            if not photo_path and _photo_ext_allowed(request.files['photo']):
+                # Supabase upload failed: nothing has been created yet — stop
+                # here rather than create the student without its photo.
+                return _re_render(_MSG_PHOTO_STORE_FAILED_CREATE)
             # Optional display copy — only once the original is stored, and
             # never at the original's expense (failure → NULL, falls back).
             if photo_path:
@@ -2085,7 +2107,14 @@ def edit(student_id):
         _edit_school_id = school.id if school else None
         if ('photo' in request.files and request.files['photo'].filename
                 and is_feature_enabled(_edit_school_id, 'students.photo_upload')):
-            photo_path = save_uploaded_file(request.files['photo'], 'students')
+            photo_path = save_uploaded_file(request.files['photo'], 'students',
+                                            local_fallback=False)
+            if not photo_path and _photo_ext_allowed(request.files['photo']):
+                # Supabase upload failed: discard every pending change of this
+                # edit (nothing is committed yet) and keep the current photo.
+                db.session.rollback()
+                flash(_MSG_PHOTO_STORE_FAILED_EDIT, 'danger')
+                return redirect(url_for('students.edit', student_id=student.id))
             if photo_path:
                 student.photo = photo_path
                 # A new original always gets its OWN display copy or NULL,

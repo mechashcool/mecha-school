@@ -285,7 +285,7 @@ def delete_uploaded_file(stored_value: str | None, bucket: str | None = None) ->
 
 
 def save_uploaded_file(file, subfolder='misc', prefix=None, bucket=None,
-                       allowed_exts=None, max_size=None):
+                       allowed_exts=None, max_size=None, local_fallback=True):
     """
     Save an uploaded FileStorage object.
 
@@ -298,6 +298,9 @@ def save_uploaded_file(file, subfolder='misc', prefix=None, bucket=None,
       bucket:       Supabase bucket name override (defaults to SUPABASE_BUCKET config).
       allowed_exts: Set of allowed lowercase extensions; defaults to ALLOWED_IMAGE_EXTENSIONS.
       max_size:     Maximum byte size; returns None if exceeded.
+      local_fallback: False → Supabase is the ONLY destination: a failed (or
+                    unconfigured) Supabase upload returns None and nothing is
+                    written to local disk. Used for new original profile photos.
     """
     if not file or file.filename == '':
         return None
@@ -326,6 +329,11 @@ def save_uploaded_file(file, subfolder='misc', prefix=None, bucket=None,
     supabase_url = _supabase_upload(file_bytes, object_path, content_type, bucket=bucket)
     if supabase_url is not None:
         return supabase_url
+    if not local_fallback:
+        current_app.logger.warning(
+            'Supabase upload failed for %s; local fallback disabled, nothing stored',
+            subfolder)
+        return None
 
     # Development / fallback: local filesystem
     upload_dir = os.path.join(current_app.root_path, 'static', 'uploads', subfolder)

@@ -698,13 +698,15 @@ def _handle_employee_post(employee):
         # (it measures the bytes it actually reads), on create and edit alike.
         if is_create:
             photo_path = save_uploaded_file(
-                _photo_file, 'employees', max_size=MAX_EMPLOYEE_PHOTO_BYTES)
+                _photo_file, 'employees', max_size=MAX_EMPLOYEE_PHOTO_BYTES,
+                local_fallback=False)                  # Supabase only
         else:
             # Edit: nothing has been changed or committed yet, so a storage
             # failure is reported and the edit stops — the current photo stays.
             try:
                 photo_path = save_uploaded_file(
-                    _photo_file, 'employees', max_size=MAX_EMPLOYEE_PHOTO_BYTES)
+                    _photo_file, 'employees', max_size=MAX_EMPLOYEE_PHOTO_BYTES,
+                    local_fallback=False)              # Supabase only
             except Exception:
                 # Module logger by name: `_log` is a local of this function
                 # (re-bound in the create branch), so it is unbound here.
