@@ -20,7 +20,8 @@ from app.services.admission_approval import (approve_request, reject_request,
                                              find_matching_parent, ApprovalError)
 from app.utils.institute_groups import (active_groups_for_form, institute_enabled,
                                         parse_posted_group_ids)
-from app.utils.registration_media import create_registration_display_photo
+from app.utils.registration_media import (create_registration_display_photo,
+                                          normalize_registration_student_photo)
 
 admissions_bp = Blueprint(
     'admissions', __name__,
@@ -170,6 +171,9 @@ def approve(request_id):
     # to Student.photo) and never affects the approved student. Legacy photos
     # are not touched.
     create_registration_display_photo(result['student_id'], school.id)
+    # Then (never before — the display copy uses the original) Student.photo is
+    # switched to the Face ID form (640 px JPEG q85). Best effort, same rules.
+    normalize_registration_student_photo(result['student_id'], school.id)
 
     if result.get('parent_created') and result.get('parent_password'):
         # New parent account: render a PERSISTENT one-time credential panel

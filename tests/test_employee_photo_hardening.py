@@ -36,6 +36,7 @@ from app import create_app
 from app.models import (db, AcademicYear, AttendanceDevice, AuditLog,
                         DeviceEmployeeMapping, Employee, Role, School, User)
 from app.utils import helpers
+from app.utils.face_photo import normalize_face_photo
 from app.utils import student_photo
 from app.utils.employee_photo import (EMPLOYEE_PHOTO_MAX_BYTES,
                                       EMPLOYEE_PHOTO_MAX_PIXELS, MSG_INVALID,
@@ -284,20 +285,20 @@ class EmployeePhotoRouteTest(unittest.TestCase):
             return db.session.get(Employee, self.ids[key], execution_options=OPTS)
 
     def _assert_stored_verbatim(self, name, raw):
-        # The first write is the original, byte-identical. A new upload may add
-        # ONE separate display-only copy (employees/display/*.webp); the
-        # original itself is never replaced by it.
+        # The first write is Employee.photo in the Face ID form (640 px JPEG q85
+        # of the validated upload). A new upload may add ONE separate
+        # display-only copy (employees/display/*.webp).
         calls = self.storage.call_args_list
         self.assertIn(len(calls), (1, 2), calls)
         call = calls[0]
         for extra in calls[1:]:
             self.assertRegex(extra.args[1], r'^employees/display/[0-9a-f]{32}\.webp$')
         data, path, ctype = call.args
-        self.assertEqual(hashlib.sha256(data).hexdigest(), hashlib.sha256(raw).hexdigest())
-        ext = name.rsplit('.', 1)[1]
-        self.assertTrue(path.startswith('employees/') and path.endswith(f'.{ext}'), path)
+        self.assertEqual(hashlib.sha256(data).hexdigest(),
+                         hashlib.sha256(normalize_face_photo(raw)).hexdigest())
+        self.assertTrue(path.startswith('employees/') and path.endswith('.jpg'), path)
         self.assertNotIn('/', path[len('employees/'):])
-        self.assertEqual(ctype, helpers._CONTENT_TYPES[ext])       # unchanged mapping
+        self.assertEqual(ctype, 'image/jpeg')
         self.assertEqual(call.kwargs, {'bucket': None})           # default bucket as before
         return data
 
@@ -325,17 +326,16 @@ class EmployeePhotoRouteTest(unittest.TestCase):
 
     # ── 13: EXIF / metadata preserved verbatim ────────────────────────────────
 
-    def test_exif_and_metadata_kept_on_replacement(self):
+    def test_replacement_stored_in_face_id_form(self):
         raw = _phone_jpeg()
         resp = self._edit(self._client(), 'emp_a', 'Replaced', photo=('new.jpg', raw))
         self.assertEqual(resp.status_code, 302, resp.get_data(as_text=True)[-800:])
         stored = self._assert_stored_verbatim('new.jpg', raw)
         img = Image.open(io.BytesIO(stored))
-        self.assertEqual(img.size, (3000, 2250))                  # not resized
-        exif = img.getexif()
-        self.assertEqual(exif[0x0112], 6)                         # orientation kept
-        self.assertEqual(exif[0x010F], 'SecretCam')               # camera tag kept
-        self.assertEqual(dict(exif.get_ifd(0x8825))[1], 'N')      # GPS kept
+        self.assertEqual((img.format, img.size), ('JPEG', (480, 640)))  # rotated, <=640
+        self.assertEqual(img.getexif().get(0x0112, 1), 1)         # orientation applied
+        for marker in (b'SecretCam', b'Exif\x00\x00MM', b'Exif\x00\x00II'):
+            self.assertNotIn(marker, stored)                      # camera/GPS metadata gone
         e = self._emp('emp_a')
         self.assertEqual((e.full_name, e.photo), ('Replaced', FAKE_URL))
         self.validate.assert_called_once()

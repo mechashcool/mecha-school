@@ -18,6 +18,7 @@ from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    get_current_school, get_active_year, get_view_year,
                                    historical_guard)
 from app.utils.helpers import save_uploaded_file, resolve_photo_url, ALLOWED_IMAGE_EXTENSIONS
+from app.utils.face_photo import normalized_face_upload
 from app.utils.student_photo import validate_student_photo
 from app.utils.student_display_photo import (prepare_display_photo, save_display_photo,
                                              student_display_value, student_photo_url)
@@ -120,11 +121,24 @@ _MSG_PHOTO_STORE_FAILED_EDIT = ('تعذّر حفظ صورة الطالب الج�
 
 
 def _photo_ext_allowed(upload) -> bool:
-    """True when save_uploaded_file() would accept the photo's extension — so a
-    None result can only mean the Supabase upload failed. Disallowed extensions
-    keep their existing handling (silently not stored)."""
+    """True when the photo's extension is an accepted image type — so a missing
+    stored value can only mean normalisation or the Supabase upload failed.
+    Disallowed extensions keep their existing handling (silently not stored)."""
     name = upload.filename or ''
     return '.' in name and name.rsplit('.', 1)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
+
+
+def _store_face_photo(upload):
+    """Stored Student.photo value for a NEW, validated upload, or None.
+
+    Student.photo is stored in the Face ID form (640 px / RGB / JPEG q85, see
+    app/utils/face_photo.py), in Supabase only. The original upload itself is
+    not stored and is left unchanged for the display-photo helpers.
+    """
+    face = normalized_face_upload(upload)
+    if face is None:
+        return None
+    return save_uploaded_file(face, 'students', local_fallback=False)
 
 
 # Extensions a NEW document is stored under after processing: a PDF keeps its
@@ -1176,11 +1190,11 @@ def create():
         photo_display_path = None
         if ('photo' in request.files and request.files['photo'].filename
                 and is_feature_enabled(_school_id_for_feat, 'students.photo_upload')):
-            photo_path = save_uploaded_file(request.files['photo'], 'students',
-                                            local_fallback=False)
-            if not photo_path and _photo_ext_allowed(request.files['photo']):
-                # Supabase upload failed: nothing has been created yet — stop
-                # here rather than create the student without its photo.
+            _photo_ok = _photo_ext_allowed(request.files['photo'])
+            photo_path = _store_face_photo(request.files['photo']) if _photo_ok else None
+            if _photo_ok and not photo_path:
+                # Normalisation or Supabase upload failed: nothing has been
+                # created yet — stop rather than create the student without it.
                 return _re_render(_MSG_PHOTO_STORE_FAILED_CREATE)
             # Optional display copy — only once the original is stored, and
             # never at the original's expense (failure → NULL, falls back).
@@ -2107,11 +2121,11 @@ def edit(student_id):
         _edit_school_id = school.id if school else None
         if ('photo' in request.files and request.files['photo'].filename
                 and is_feature_enabled(_edit_school_id, 'students.photo_upload')):
-            photo_path = save_uploaded_file(request.files['photo'], 'students',
-                                            local_fallback=False)
-            if not photo_path and _photo_ext_allowed(request.files['photo']):
-                # Supabase upload failed: discard every pending change of this
-                # edit (nothing is committed yet) and keep the current photo.
+            _photo_ok = _photo_ext_allowed(request.files['photo'])
+            photo_path = _store_face_photo(request.files['photo']) if _photo_ok else None
+            if _photo_ok and not photo_path:
+                # Normalisation or Supabase upload failed: discard every pending
+                # change of this edit (nothing is committed yet), keep the photo.
                 db.session.rollback()
                 flash(_MSG_PHOTO_STORE_FAILED_EDIT, 'danger')
                 return redirect(url_for('students.edit', student_id=student.id))

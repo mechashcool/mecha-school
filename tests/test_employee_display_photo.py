@@ -35,6 +35,7 @@ from app.models import (db, AcademicYear, AttendanceDevice, AuditLog,
                         School, Section, Student, User, parent_students)
 from app.utils import employee_display_photo as edp
 from app.utils import helpers
+from app.utils.face_photo import normalize_face_photo
 from app.utils.employee_display_photo import (EMPLOYEE_DISPLAY_MAX_SIDE,
                                               EMPLOYEE_DISPLAY_SUBFOLDER,
                                               EMPLOYEE_DISPLAY_WEBP_METHOD,
@@ -434,14 +435,16 @@ class EmployeeDisplayPhotoRouteTest(unittest.TestCase):
                 for c in self.storage.call_args_list]
 
     def _assert_pair(self, raw, name, stored):
-        """Original stored verbatim + one display WebP; row points at both."""
+        """photo stored in the Face ID form + one display WebP made from the
+        ORIGINAL upload; row points at both."""
         ups = self._uploads()
         self.assertEqual(len(ups), 2, ups)
         (osha, opath, octype), (dsha, dpath, dctype) = ups
-        ext = name.rsplit('.', 1)[1]
-        self.assertEqual(osha, hashlib.sha256(raw).hexdigest())            # original verbatim
-        self.assertRegex(opath, r'^employees/[0-9a-f]{32}\.' + ext + '$')
-        self.assertEqual(octype, helpers._CONTENT_TYPES[ext])
+        self.assertEqual(osha, hashlib.sha256(normalize_face_photo(raw)).hexdigest())
+        self.assertRegex(opath, r'^employees/[0-9a-f]{32}\.jpg$')
+        self.assertEqual(octype, 'image/jpeg')
+        self.assertEqual(self.storage.call_args_list[1].args[0],
+                         make_employee_display_photo(raw))                 # from the ORIGINAL
         self.assertRegex(dpath, r'^employees/display/[0-9a-f]{32}\.webp$')
         self.assertEqual(dctype, 'image/webp')
         self.assertEqual(stored, (BASE + opath, BASE + dpath))
@@ -470,11 +473,12 @@ class EmployeeDisplayPhotoRouteTest(unittest.TestCase):
                 if label.startswith('animated'):
                     self.assertEqual(getattr(disp, 'n_frames', 1), 1)
                     self.assertGreater(disp.convert('RGB').getpixel((96, 96))[0], 150)
-                    stored_orig = self.storage.call_args_list[0].args[0]
-                    self.assertEqual(Image.open(io.BytesIO(stored_orig)).n_frames, 2)
+                    stored = Image.open(io.BytesIO(self.storage.call_args_list[0].args[0]))
+                    self.assertEqual((stored.format, getattr(stored, 'n_frames', 1)), ('JPEG', 1))
+                    self.assertGreater(stored.convert('RGB').getpixel((10, 10))[0], 150)  # frame 0
                 if label == 'jpeg':
                     self.assertEqual(disp.size, (192, 192))                  # 3024x4032 + orientation 6
-                    self.assertIn(b'SecretCam', self.storage.call_args_list[0].args[0])
+                    self.assertNotIn(b'SecretCam', self.storage.call_args_list[0].args[0])
         self.fetch.assert_not_called()
         self.delete.assert_not_called()
 
@@ -519,7 +523,7 @@ class EmployeeDisplayPhotoRouteTest(unittest.TestCase):
             resp, stored = self._create(self._web('admin_a'), raw)
         self.assertEqual(resp.status_code, 302)
         (osha, opath, _), = self._uploads()
-        self.assertEqual(osha, hashlib.sha256(raw).hexdigest())
+        self.assertEqual(osha, hashlib.sha256(normalize_face_photo(raw)).hexdigest())
         self.assertEqual(stored, (BASE + opath, None))
 
     def test_17_display_storage_failure_original_kept_display_null(self):
@@ -539,7 +543,7 @@ class EmployeeDisplayPhotoRouteTest(unittest.TestCase):
                     resp, stored = self._create(self._web('admin_a'), raw)
                 self.assertEqual(resp.status_code, 302)
                 (osha, opath, _), = self._uploads()
-                self.assertEqual(osha, hashlib.sha256(raw).hexdigest())
+                self.assertEqual(osha, hashlib.sha256(normalize_face_photo(raw)).hexdigest())
                 self.assertEqual(stored, (BASE + opath, None))
 
     # ── 18-20: replacement invariant + metadata-only edit ─────────────────────
@@ -582,6 +586,20 @@ class EmployeeDisplayPhotoRouteTest(unittest.TestCase):
                                             execution_options=OPTS).full_name, old_name)
         self.assertEqual(self.storage.call_count, 2)                        # no display attempt
         self.assertEqual(sorted(local.rglob('*')) if local.exists() else [], before)
+
+    def test_normalization_failure_creates_nothing(self):
+        from app.blueprints.employees import _MSG_PHOTO_REJECTED, _MSG_PHOTO_REPLACE_FAILED
+        old = self._row('derived_a')
+        with mock.patch('app.blueprints.employees.normalized_face_upload', return_value=None):
+            resp, row = self._create(self._web('admin_a'), _phone_jpeg(1200, 1600),
+                                     full_name=f'NoNorm {self.sfx}')
+            self.assertEqual((resp.status_code, row), (200, None))
+            self.assertIn(_MSG_PHOTO_REJECTED, resp.get_data(as_text=True))
+            resp = self._edit(self._web('admin_a'), 'derived_a', 'NoNorm edit',
+                              photo=('n.jpg', _phone_jpeg(1200, 1600)))
+            self.assertIn(_MSG_PHOTO_REPLACE_FAILED, resp.get_data(as_text=True))
+        self.assertEqual(self._row('derived_a'), old)                       # photo pair kept
+        self.storage.assert_not_called()
 
     def test_19_replacement_derivative_failure_clears_old_display(self):
         raw = _enc(_portrait(900, 1200), 'JPEG')

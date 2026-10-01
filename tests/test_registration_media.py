@@ -36,6 +36,7 @@ from app.models import (db, AcademicYear, AuditLog, Employee, Grade, Notificatio
 from app.utils.registration_media import is_v2_registration_photo
 from app.utils.registration_tokens import generate_token, hash_token
 from app.utils.student_display_photo import make_display_photo
+from app.utils.face_photo import normalize_face_photo
 from app.utils.student_documents import (MSG_ANIMATED, MSG_INVALID as DOC_MSG_INVALID,
                                          MSG_TOO_LARGE as DOC_MSG_TOO_LARGE,
                                          optimize_document_image)
@@ -597,11 +598,17 @@ class RegistrationApprovalTest(_RegistrationBase):
         after = self._request(self._nonce_of(req['id']))
         self.assertEqual(after['status'], 'approved')
         st = self._student(after['student_id'])
-        self.assertEqual(st['photo'], req['photo'])                        # 44: the original
         self.assertEqual(after['photo'], req['photo'])                     # request unchanged
-        # 45-47: exactly ONE new object — the display copy, current Student policy
+        # 45-47: TWO new objects — the display copy (from the ORIGINAL) first,
+        # then Student.photo in the Face ID form (640 px JPEG q85)
         new = self.fs.writes[writes_before:]
-        self.assertEqual(len(new), 1)
+        self.assertEqual(len(new), 2)
+        p_bucket, p_path, p_ct, p_data = new[1]
+        self.assertEqual((p_bucket, p_ct), ('uploads', 'image/jpeg'))
+        self.assertRegex(p_path, r'^students/[0-9a-f]{32}\.jpg$')
+        self.assertEqual(st['photo'], f'{PUBLIC}uploads/{p_path}')         # 44: Face ID form
+        self.assertEqual(p_data, normalize_face_photo(raw))
+        self.assertEqual(max(_decode(p_data).size), 640)
         d_bucket, d_path, d_ct, d_data = new[0]
         self.assertEqual((d_bucket, d_ct), ('uploads', 'image/webp'))
         self.assertRegex(d_path, r'^students/display/[0-9a-f]{32}\.webp$')
@@ -609,8 +616,8 @@ class RegistrationApprovalTest(_RegistrationBase):
         self.assertEqual(d_data, make_display_photo(raw))                  # 47: 192/q45 policy
         self.assertEqual(_decode(d_data).size, (192, 192))                 # 46
         self.assertNotIn(b'SecretCam', d_data)
-        # the fetched object was the registration original, byte-identical
-        self.assertEqual(self.fs.fetches, [self._key(req['photo'])])
+        # both steps read the registration original, which stays byte-identical
+        self.assertEqual(self.fs.fetches, [self._key(req['photo'])] * 2)
         self.assertEqual(_sha(self.fs.objects[self._key(req['photo'])]), _sha(raw))
         # 50: documents reuse the very same stored objects, nothing re-uploaded
         self.assertEqual(st['docs'], sorted(v for _, v in req['docs']))
@@ -636,9 +643,13 @@ class RegistrationApprovalTest(_RegistrationBase):
                 after = self._request(self._nonce_of(req['id']))
                 self.assertEqual(after['status'], 'approved')
                 st = self._student(after['student_id'])
-                self.assertEqual(st['photo'], req['photo'])
                 self.assertIsNone(st['photo_display'])
-                self.assertEqual(len(self.fs.writes), writes_before)
+                if label == 'fetch':                     # original unreadable: nothing changes
+                    self.assertEqual(st['photo'], req['photo'])
+                    self.assertEqual(len(self.fs.writes), writes_before)
+                else:                                    # only the display copy failed
+                    self.assertRegex(st['photo'], rf'^{PUBLIC}uploads/students/[0-9a-f]{{32}}\.jpg$')
+                    self.assertEqual(len(self.fs.writes), writes_before + 1)
 
     def test_idempotent_reapproval_makes_no_second_copy(self):
         req = self._submit(_jpeg(800, 1000))
@@ -665,8 +676,8 @@ class RegistrationApprovalTest(_RegistrationBase):
         self.fs.fetches.clear()
         with self.app.app_context():
             jpeg, info = prepare_photo_for_device(st['photo'], label='t')
-        self.assertEqual(self.fs.fetches, [self._key(req['photo'])])
-        self.assertIn('/photos/v2/', self.fs.fetches[0][1])
+        self.assertEqual(self.fs.fetches, [self._key(st['photo'])])     # reads Student.photo
+        self.assertRegex(self.fs.fetches[0][1], r'^students/[0-9a-f]{32}\.jpg$')
         self.assertLessEqual(max(Image.open(io.BytesIO(jpeg)).size), 640)
 
     # ── legacy media (51-53) ──────────────────────────────────────────────────

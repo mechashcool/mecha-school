@@ -13,6 +13,7 @@ from app.utils.decorators import (permission_required, accountant_or_permission,
                                    get_current_school,
                                    historical_guard, get_active_year, action_required)
 from app.utils.helpers import save_uploaded_file
+from app.utils.face_photo import normalized_face_upload
 from app.utils.employee_photo import (EMPLOYEE_PHOTO_MAX_BYTES, MSG_TOO_BIG,
                                       validate_employee_photo)
 from app.utils.employee_display_photo import (employee_display_value, employee_photo_url,
@@ -694,18 +695,25 @@ def _handle_employee_post(employee):
 
     photo_path = None
     if _has_new_photo:
+        # Employee.photo is stored in the Face ID form (640 px / RGB / JPEG q85,
+        # app/utils/face_photo.py); the original upload is not stored and stays
+        # unchanged for the display copy below. A normalisation failure leaves
+        # photo_path None and stops the request exactly like a storage failure.
+        _face_file = normalized_face_upload(_photo_file)
         # max_size is a second, independent gate inside the shared upload helper
         # (it measures the bytes it actually reads), on create and edit alike.
-        if is_create:
+        if _face_file is None:
+            photo_path = None
+        elif is_create:
             photo_path = save_uploaded_file(
-                _photo_file, 'employees', max_size=MAX_EMPLOYEE_PHOTO_BYTES,
+                _face_file, 'employees', max_size=MAX_EMPLOYEE_PHOTO_BYTES,
                 local_fallback=False)                  # Supabase only
         else:
             # Edit: nothing has been changed or committed yet, so a storage
             # failure is reported and the edit stops — the current photo stays.
             try:
                 photo_path = save_uploaded_file(
-                    _photo_file, 'employees', max_size=MAX_EMPLOYEE_PHOTO_BYTES,
+                    _face_file, 'employees', max_size=MAX_EMPLOYEE_PHOTO_BYTES,
                     local_fallback=False)              # Supabase only
             except Exception:
                 # Module logger by name: `_log` is a local of this function

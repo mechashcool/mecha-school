@@ -23,6 +23,7 @@ student without a copy. A legacy photo is never downloaded.
 """
 from __future__ import annotations
 
+import io
 import logging
 import os
 import re
@@ -142,4 +143,68 @@ def create_registration_display_photo(student_id: int, school_id: int) -> str | 
             pass
         log.warning('[registration-photo] display derivative failed for student %s; '
                     'falling back to the original', student_id, exc_info=True)
+        return None
+
+
+def normalize_registration_student_photo(student_id: int, school_id: int) -> str | None:
+    """Store a just-approved student's Student.photo in the Face ID form.
+
+    Call only AFTER the approval has committed AND after
+    create_registration_display_photo(), so the display copy is still made from
+    the ORIGINAL registration photo. For a v2 registration photo this stores the
+    640 px / RGB / JPEG q85 copy (app/utils/face_photo.py) as a NEW object in
+    Supabase only and points Student.photo at it — only while the student still
+    holds that original. The registration request keeps its original object;
+    nothing is deleted. Best effort: on any failure Student.photo keeps the
+    (existing, valid) original. Never raises; never touches photo_display.
+    """
+    from app.models import db, Student
+    try:
+        student = (Student.query
+                   .filter_by(id=student_id, school_id=school_id)
+                   .first())
+        if student is None:
+            return None
+        original = student.photo
+        location = _v2_photo_location(original, school_id)
+        if location is None:
+            return None                             # legacy / no photo: untouched
+        raw = _read_original(location)
+        if not raw or len(raw) > REGISTRATION_UPLOAD_MAX_BYTES:
+            log.warning('[registration-photo] original unavailable for student %s; '
+                        'Student.photo keeps the original', student_id)
+            return None
+
+        from werkzeug.datastructures import FileStorage
+        from app.utils.face_photo import normalize_face_photo
+        from app.utils.helpers import save_uploaded_file
+        data = normalize_face_photo(raw)
+        stored = save_uploaded_file(
+            FileStorage(io.BytesIO(data), filename='photo.jpg', content_type='image/jpeg'),
+            'students', local_fallback=False)
+        if not stored:
+            log.warning('[registration-photo] normalised photo not stored for student %s; '
+                        'Student.photo keeps the original', student_id)
+            return None
+
+        locked = (Student.query
+                  .filter_by(id=student_id, school_id=school_id)
+                  .populate_existing()
+                  .with_for_update()
+                  .first())
+        if locked is None or locked.photo != original:
+            db.session.rollback()
+            from app.blueprints.students import _discard_unreferenced_upload
+            _discard_unreferenced_upload(stored)
+            return None
+        locked.photo = stored
+        db.session.commit()
+        return stored
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        log.warning('[registration-photo] photo normalisation failed for student %s; '
+                    'Student.photo keeps the original', student_id, exc_info=True)
         return None

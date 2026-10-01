@@ -35,6 +35,7 @@ from app.utils import student_display_photo as sdp
 from app.utils.student_display_photo import (STUDENT_DISPLAY_MAX_SIDE,
                                              STUDENT_DISPLAY_WEBP_QUALITY, make_display_photo)
 from app.utils.student_photo import MSG_INVALID
+from app.utils.face_photo import normalize_face_photo
 
 PASSWORD = 'Test1234!'
 OPTS = {'bypass_tenant_scope': True}
@@ -534,7 +535,7 @@ class StudentDisplayPhotoTest(unittest.TestCase):
         resp, (orig, disp) = self._create(self._web('admin_a'), raw)
         self.assertEqual(resp.status_code, 302)
         (o_sha, o_path, o_ct), (d_sha, d_path, d_ct) = self._uploads()
-        self.assertEqual(o_sha, hashlib.sha256(raw).hexdigest())            # 2: byte-identical
+        self.assertEqual(o_sha, hashlib.sha256(normalize_face_photo(raw)).hexdigest())  # 2: Face ID form
         self.assertTrue(o_path.startswith('students/') and o_path.endswith('.jpg'))
         self.assertEqual(o_ct, 'image/jpeg')
         self.assertTrue(d_path.startswith('students/display/') and d_path.endswith('.webp'))
@@ -544,13 +545,15 @@ class StudentDisplayPhotoTest(unittest.TestCase):
         img = _decode(data)
         self.assertEqual(img.format, 'WEBP')
         self.assertEqual(img.size, (192, 192))                              # 4
-        self.assertEqual(data, make_display_photo(raw))                     # 5: 192/q45 policy
+        self.assertEqual(data, make_display_photo(raw))                     # 5: from the ORIGINAL
+        self.assertNotEqual(data, make_display_photo(normalize_face_photo(raw)))
         self.assertEqual(len(img.getexif()), 0)                             # 6
         for marker in (b'SecretCam', b'Exif', b'EXIF'):
             self.assertNotIn(marker, data)
-        stored_orig = self.storage.call_args_list[0].args[0]                # 7: original intact
-        self.assertIn(b'SecretCam', stored_orig)
-        self.assertEqual(dict(Image.open(io.BytesIO(stored_orig)).getexif().get_ifd(0x8825))[1], 'N')
+        stored_photo = self.storage.call_args_list[0].args[0]               # 7: photo = 640 JPEG q85
+        st_img = Image.open(io.BytesIO(stored_photo))
+        self.assertEqual((st_img.format, st_img.mode, st_img.size), ('JPEG', 'RGB', (480, 640)))
+        self.assertNotIn(b'SecretCam', stored_photo)
 
     # ── 8, 9. AI Face ────────────────────────────────────────────────────────
 
@@ -692,7 +695,8 @@ class StudentDisplayPhotoTest(unittest.TestCase):
                                     photo=('new.jpg', raw)).status_code, 302)
         orig, disp = self._row('derived_a')
         (o_sha, o_path, _), (_, d_path, _) = self._uploads()
-        self.assertEqual(o_sha, hashlib.sha256(raw).hexdigest())
+        self.assertEqual(o_sha, hashlib.sha256(normalize_face_photo(raw)).hexdigest())
+        self.assertEqual(self.storage.call_args_list[1].args[0], make_display_photo(raw))
         self.assertEqual((orig, disp), (BASE + o_path, BASE + d_path))
         self.assertNotIn(orig, old)
         self.assertNotIn(disp, old)
@@ -707,7 +711,7 @@ class StudentDisplayPhotoTest(unittest.TestCase):
             resp, (orig, disp) = self._create(self._web('admin_a'), raw)
             self.assertEqual(resp.status_code, 302)
             self.assertEqual((len(self._uploads()), disp), (1, None))
-            self.assertEqual(self._uploads()[0][0], hashlib.sha256(raw).hexdigest())
+            self.assertEqual(self._uploads()[0][0], hashlib.sha256(normalize_face_photo(raw)).hexdigest())
             self.assertTrue(orig)
             # replacement with failing derivative clears the OLD display copy
             self.storage.reset_mock()
@@ -735,7 +739,7 @@ class StudentDisplayPhotoTest(unittest.TestCase):
                 self.assertEqual(resp.status_code, 302)
                 self.assertIsNone(disp)
                 self.assertEqual(orig, BASE + self._uploads()[0][1])
-                self.assertEqual(self._uploads()[0][0], hashlib.sha256(raw).hexdigest())
+                self.assertEqual(self._uploads()[0][0], hashlib.sha256(normalize_face_photo(raw)).hexdigest())
 
     def test_original_failure_behaviour_unchanged_no_derivative(self):
         # the original is refused by the existing extension check -> no display copy
@@ -775,6 +779,17 @@ class StudentDisplayPhotoTest(unittest.TestCase):
         self.assertEqual(self.storage.call_count, 2)
         self.prepare.assert_not_called()
         self.assertEqual(sorted(local.rglob('*')) if local.exists() else [], before)
+
+    def test_normalization_failure_creates_nothing(self):
+        from app.blueprints.students import _MSG_PHOTO_STORE_FAILED_CREATE
+        with mock.patch('app.blueprints.students.normalized_face_upload', return_value=None):
+            resp, row = self._create(self._web('admin_a'), _phone_jpeg(600, 800),
+                                     full_name=f'NoNorm {self.sfx}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(_MSG_PHOTO_STORE_FAILED_CREATE, resp.get_data(as_text=True))
+        self.assertIsNone(row)                                              # no student row
+        self.storage.assert_not_called()                                    # nothing stored
+        self.prepare.assert_not_called()
 
     # ── 20. existing students are never processed on view ────────────────────
 
