@@ -14,6 +14,7 @@ GET /parent/children/<id>/exams               exams for child's section (±30/60
                                               ?start=&end= → one ≤30-day history window
 GET /parent/children/<id>/schedule            weekly class schedule
 GET /parent/notifications                     notifications feed (paginated)
+GET /parent/children/<id>/transportation/live latest bus location (active trip only)
 GET /parent/children/<id>/institute/groups    INSTITUTE: current study groups
                                               + weekly slots (the timetable)
 GET /parent/children/<id>/institute/attendance
@@ -36,7 +37,7 @@ from datetime import date, timedelta, timezone
 from datetime import datetime as _dt
 
 from flask import abort, g, request
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import joinedload
 
 from app.models import (
@@ -61,6 +62,8 @@ from app.models import (
     StudentAttendance,
     StudentTransport,
     Subject,
+    TransportRoute,
+    TransportTrip,
     parent_students,
 )
 from app.services import institute_attendance as inst_att
@@ -1582,3 +1585,77 @@ def parent_child_transportation(student_id):
             'vehicle_name': route.vehicle_type,
         },
     )
+
+
+# ─── Transportation — live location (Phase 2) ─────────────────────────────────
+
+@mobile_api_bp.route('/parent/children/<int:student_id>/transportation/live', methods=['GET'])
+@jwt_required()
+@role_required('parent')
+def parent_child_transportation_live(student_id):
+    """
+    Latest bus location for the authenticated parent's child. Read-only; meant
+    to be polled (~10 s) only while the live screen is open.
+
+    Security:
+      • _assert_owns_student() — same parent-child + school check as every
+        other child endpoint (404 for a child that is not the parent's).
+      • The route and trip are reached ONLY through the child's active
+        StudentTransport link; no route_id / trip_id / school_id is read from
+        the request. Every join is pinned to the parent's school.
+      • A trip is shown only while it is active on an active route that is still
+        assigned to the trip's driver.
+      • Only coordinates + freshness are returned — no driver, user, school or
+        other-student data.
+      • More than one active route for the child → 409
+        ambiguous_transport_assignment (never guess which bus to show).
+
+    ONE joined query after authorization: StudentTransport → TransportRoute
+    (active) → LEFT JOIN active TransportTrip. No writes.
+
+    200 { "ok": true, "active": bool, "location": null |
+          {"latitude", "longitude", "accuracy", "updated_at", "age_seconds"} }
+    age_seconds is computed from the SERVER receive time (location_updated_at).
+    """
+    user    = g.mobile_user
+    student = _assert_owns_student(student_id)
+
+    rows = (db.session.query(TransportRoute.id, TransportTrip.id,
+                             TransportTrip.latitude, TransportTrip.longitude,
+                             TransportTrip.location_accuracy,
+                             TransportTrip.location_updated_at)
+            .select_from(StudentTransport)
+            .join(TransportRoute, and_(
+                TransportRoute.id == StudentTransport.route_id,
+                TransportRoute.school_id == StudentTransport.school_id,
+                TransportRoute.status == 'active'))
+            .outerjoin(TransportTrip, and_(
+                TransportTrip.route_id == TransportRoute.id,
+                TransportTrip.school_id == TransportRoute.school_id,
+                TransportTrip.driver_employee_id == TransportRoute.driver_employee_id,
+                TransportTrip.status == 'active'))
+            .filter(StudentTransport.school_id == user.school_id,
+                    StudentTransport.student_id == student.id,
+                    StudentTransport.status == 'active')
+            .execution_options(bypass_tenant_scope=True)
+            .limit(3)
+            .all())
+
+    if len({r[0] for r in rows}) > 1:
+        return err('ambiguous_transport_assignment', 409)
+    trip = rows[0] if rows else None
+    if trip is None or trip[1] is None:
+        return ok(active=False, location=None)
+
+    _route_id, _trip_id, lat, lng, accuracy, updated_at = trip
+    if lat is None or lng is None or updated_at is None:
+        return ok(active=True, location=None)
+
+    age = int((_dt.utcnow() - updated_at).total_seconds())
+    return ok(active=True, location={
+        'latitude':    lat,
+        'longitude':   lng,
+        'accuracy':    accuracy,
+        'updated_at':  updated_at.replace(tzinfo=timezone.utc).isoformat(),
+        'age_seconds': max(age, 0),
+    })

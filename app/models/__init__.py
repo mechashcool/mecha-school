@@ -3189,8 +3189,14 @@ class StudentTransport(db.Model):
 class TransportTrip(db.Model):
     """One run of a route by its driver: started → ended.
 
-    Lifecycle only (no location data). At most ONE active trip per route,
-    enforced by the partial unique index below. Timestamps are server-side UTC.
+    At most ONE active trip per route, enforced by the partial unique index
+    below. Timestamps are server-side UTC.
+
+    The LATEST GPS fix only is kept on this row (no history): every driver ping
+    UPDATEs these columns in place. They are NULL until the first fix arrives
+    and are deliberately not indexed (written every few seconds, never filtered
+    on). location_updated_at is the server receive time and the only value
+    trusted for freshness; location_recorded_at is device-supplied metadata.
     """
     __tablename__ = 'transport_trips'
     __school_scoped__ = True
@@ -3207,6 +3213,13 @@ class TransportTrip(db.Model):
     started_at         = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     ended_at           = db.Column(db.DateTime, nullable=True)
     created_at         = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # Latest location only (Phase 2) — see class docstring.
+    latitude             = db.Column(db.Float, nullable=True)
+    longitude            = db.Column(db.Float, nullable=True)
+    location_accuracy    = db.Column(db.Float, nullable=True)     # metres, device-reported
+    location_recorded_at = db.Column(db.DateTime, nullable=True)  # device clock (UTC), untrusted
+    location_updated_at  = db.Column(db.DateTime, nullable=True)  # server receive time (UTC)
 
     __table_args__ = (
         db.Index('uq_transport_trip_active_route', 'route_id', unique=True,
