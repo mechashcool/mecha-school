@@ -3,7 +3,7 @@ Employee document uploads — validation before Storage + image optimisation.
 
 NEW uploads (Add Employee wizard, employee Documents page): pdf/jpg/jpeg/png
 only, 5 MB, magic bytes, real image decode (40 MP, no animation), images stored
-ONLY as the optimised <=1200 px WebP q75 (EXIF/GPS/XMP stripped), PDFs stored
+ONLY as the optimised <=1600 px WebP q75 (EXIF/GPS/XMP stripped), PDFs stored
 byte-for-byte. Everything — title/type length included — is validated before
 the first Storage write; one bad wizard document rejects the whole create.
 
@@ -145,7 +145,7 @@ class EmployeeDocumentPolicyTest(unittest.TestCase):
         self.assertEqual(ed.EMPLOYEE_DOC_MAX_BYTES, MB5)
         self.assertEqual((ed.EMPLOYEE_DOC_TITLE_MAX, ed.EMPLOYEE_DOC_TYPE_MAX), (200, 80))
         self.assertEqual((STUDENT_DOC_IMAGE_MAX_SIDE, STUDENT_DOC_WEBP_QUALITY,
-                          STUDENT_DOC_MAX_PIXELS), (1200, 75, 40_000_000))   # shared policy
+                          STUDENT_DOC_MAX_PIXELS), (1600, 75, 40_000_000))   # shared policy
         self.assertFalse(hasattr(ed, 'EMPLOYEE_DOC_IMAGE_MAX_SIDE'))   # no second policy
 
     def test_6_15_22_23_invalid_uploads_refused(self):
@@ -188,17 +188,17 @@ class EmployeeDocumentPolicyTest(unittest.TestCase):
                 out = _decode(up.stream.getvalue())
                 self.assertIn(out.format, ('WEBP', 'PNG'))
                 self.assertEqual(up.filename, f'document.{out.format.lower()}')
-                self.assertEqual(max(out.size), min(1200, max(w, h)))   # <=1200, never upscaled
+                self.assertEqual(max(out.size), min(1600, max(w, h)))   # <=1600, never upscaled
                 self.assertAlmostEqual(out.width / out.height, w / h, delta=0.01)
 
     def test_19_webp_q75_policy_same_as_students(self):
         from app.utils.student_documents import optimize_document_image
         raw = _jpeg(2400, 1800, quality=92)
         ref = Image.open(io.BytesIO(raw))
-        ref.draft(ref.mode, (1200, 1200))
+        ref.draft(ref.mode, (1600, 1600))
         ref.load()
         ref = ref.convert('RGB')
-        ref.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+        ref.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
         expect = {q: _enc(ref, 'WEBP', quality=q, method=4) for q in (75, 70, 80, 88)}
         up, _ = ed.prepare_employee_document(_FS(raw, 'q.jpg'))
         got = up.stream.getvalue()
@@ -214,7 +214,7 @@ class EmployeeDocumentPolicyTest(unittest.TestCase):
         self.assertIsNone(err)
         data = up.stream.getvalue()
         out = _decode(data)
-        self.assertEqual(out.size, (800, 1200))                    # landscape → portrait
+        self.assertEqual(out.size, (1067, 1600))                   # landscape → portrait
         self.assertEqual(len(out.getexif()), 0)
         for marker in (b'SecretCam', b'SecretXmp', b'Exif', b'xmpmeta'):
             self.assertNotIn(marker, data)
@@ -364,7 +364,7 @@ class EmployeeDocumentRouteTest(unittest.TestCase):
         (d1, p1, c1), (d2, p2, c2), (d3, p3, c3) = [w.args for w in writes]
         self.assertRegex(p1, r'^employee_docs/[0-9a-f]{32}\.webp$')
         self.assertEqual(c1, 'image/webp')
-        self.assertLessEqual(max(_decode(d1).size), 1200)
+        self.assertLessEqual(max(_decode(d1).size), 1600)
         self.assertRegex(p2, r'^employee_docs/[0-9a-f]{32}\.(webp|png)$')
         self.assertIn(c2, ('image/webp', 'image/png'))
         self.assertNotEqual(d2, png)                               # never the original
@@ -452,7 +452,7 @@ class EmployeeDocumentRouteTest(unittest.TestCase):
         self.assertIn('تم رفع المستند.', resp.get_data(as_text=True))
         (img_w, pdf_w) = [c.args for c in self._doc_writes()]
         self.assertRegex(img_w[1], r'^employee_docs/[0-9a-f]{32}\.webp$')
-        self.assertEqual(max(_decode(img_w[0]).size), 1200)
+        self.assertEqual(max(_decode(img_w[0]).size), 1600)
         self.assertEqual(hashlib.sha256(pdf_w[0]).digest(), hashlib.sha256(pdf).digest())
         new = [r for r in self._docs() if r not in before]
         self.assertEqual([(r[2], r[3], r[4]) for r in new],

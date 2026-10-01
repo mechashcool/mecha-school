@@ -17,7 +17,7 @@ New-upload policy:
   * JPG/JPEG/PNG → app.utils.student_documents.optimize_document_image (the
     deployed, generic document-image pipeline): real decode, 40 MP ceiling,
     animated/APNG refused, EXIF orientation, EXIF/GPS/XMP stripped (RGB ICC
-    kept), <= 1200 px (never upscaled, LANCZOS), WebP q75 with the proven
+    kept), <= 1600 px (never upscaled, LANCZOS), WebP q75 with the proven
     lossless-WebP / metadata-free-PNG fallback — exactly the Student Document
     policy, from the same function. Only the processed bytes are stored; the
     original image is never stored.

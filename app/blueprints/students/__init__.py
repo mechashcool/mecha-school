@@ -128,7 +128,7 @@ def prepare_student_document_upload(file_storage):
         magic bytes, exactly as before;
       * PDF → returned unchanged (stored byte-for-byte, never converted);
       * JPG/JPEG/PNG → real decode, pixel ceiling, EXIF orientation, metadata
-        stripped, <=1200 px, WebP q75 (app/utils/student_documents.py); only
+        stripped, <=1600 px, WebP q75 (app/utils/student_documents.py); only
         the processed bytes are returned, the original is never stored.
     """
     import io

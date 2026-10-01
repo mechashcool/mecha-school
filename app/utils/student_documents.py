@@ -12,12 +12,12 @@ Pipeline for an image document (jpg/jpeg/png):
      file can declare enormous dimensions) and refuse animated images (APNG);
   3. apply EXIF orientation; EXIF/XMP/GPS are dropped (an RGB ICC profile is
      kept so colours stay right);
-  4. shrink so the longest side is <= 1200 px (never upscale), LANCZOS;
+  4. shrink so the longest side is <= 1600 px (never upscale), LANCZOS;
   5. encode WebP quality 75 (method 4). If that comes out larger than the
      upload (flat graphics / simple scans), a lossless WebP is tried, and for
      PNG sources a metadata-free PNG; the smallest valid encoding is kept.
 
-That 1200 px / q75 policy is the ONE document-image policy: Add Student,
+That 1600 px / q75 policy is the ONE document-image policy: Add Student,
 Edit → add, Replace and the public registration link (through
 prepare_student_document_upload()) and the employee documents (Add Employee
 wizard, employee Documents page — app/utils/employee_documents.py) all call
@@ -31,7 +31,7 @@ from __future__ import annotations
 import io
 from typing import NamedTuple
 
-STUDENT_DOC_IMAGE_MAX_SIDE = 1200        # longest stored side, px
+STUDENT_DOC_IMAGE_MAX_SIDE = 1600        # longest stored side, px
 STUDENT_DOC_WEBP_QUALITY = 75
 # Effort for the lossless fallback (for lossless WebP "quality" is compression
 # effort, not fidelity) — kept at its previous value for every caller.

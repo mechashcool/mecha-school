@@ -4,7 +4,7 @@ Public (external) registration media hardening — targeted tests.
 NEW public-registration uploads:
   * photo: JPG/JPEG/PNG, <= 5 MB, Student photo validation (real decode, 40 MP)
     BEFORE Storage, stored byte-identical under registration/<sid>/photos/v2/;
-  * documents: Student Document policy (images -> <=1200 px WebP q75, metadata
+  * documents: Student Document policy (images -> <=1600 px WebP q75, metadata
     stripped; PDF byte-identical) under registration/<sid>/documents/v2/;
   * every file and every field length is validated before the first write;
   * approval keeps Student.photo = the registration original (AI Face source),
@@ -456,9 +456,9 @@ class RegistrationDocumentTest(_RegistrationBase):
                 self.assertEqual(bucket, self.media)
                 self.assertRegex(key, rf'^registration/{sid}/documents/v2/[0-9a-f]{{32}}\.'
                                       + expected.ext + '$')                  # 37
-                self.assertEqual(write[3], expected.data)                   # 32: same 1200/q75 policy
+                self.assertEqual(write[3], expected.data)                   # 32: same 1600/q75 policy
                 self.assertLess(len(write[3]), len(raw))
-                self.assertLessEqual(max(_decode(write[3]).size), 1200)
+                self.assertLessEqual(max(_decode(write[3]).size), 1600)
         self.assertEqual(len(self.fs.writes), 3)                            # original never stored
 
     def test_20_38_pdf_byte_identical(self):
@@ -496,7 +496,7 @@ class RegistrationDocumentTest(_RegistrationBase):
                              ('b', 'small.jpg', _jpeg(800, 600)),
                              ('c', 'rotated.jpg', _jpeg(1200, 800, orientation=6))])
         big, small, rotated = (_decode(w[3]) for w in self.fs.writes)
-        self.assertEqual(big.size, (1200, 900))                            # 30
+        self.assertEqual(big.size, (1600, 1200))                           # 30
         self.assertEqual(small.size, (800, 600))                           # 31: never upscaled
         self.assertEqual(rotated.size, (800, 1200))                        # 33: EXIF applied
         for w in self.fs.writes:                                           # 34
@@ -513,7 +513,7 @@ class RegistrationDocumentTest(_RegistrationBase):
         resp, nonce = self._post(docs=[('a', 'anim.png', _apng())])
         self._assert_refused(resp, nonce, MSG_ANIMATED)
         req = self._docs_ok([('a', 'edge.jpg', _flat_jpeg(8000, 5000))])   # exactly 40 MP
-        self.assertLessEqual(max(_decode(self.fs.writes[0][3]).size), 1200)
+        self.assertLessEqual(max(_decode(self.fs.writes[0][3]).size), 1600)
         self.assertEqual(len(req['docs']), 1)
 
 
@@ -919,7 +919,7 @@ class RegistrationCompressionReport(unittest.TestCase):
             print(f'{label} | {src.format} {src.width}x{src.height} {len(raw):,} B | '
                   f'{out.ext.upper()} {out.width}x{out.height} {len(out.data):,} B | '
                   f'{100 - 100 * len(out.data) / len(raw):.1f}% | {ms:.0f} ms')
-            self.assertLessEqual(max(out.width, out.height), 1200)
+            self.assertLessEqual(max(out.width, out.height), 1600)
         print('\nPHOTO display copy (original stored unchanged): input | display | reduction')
         for label, raw in (('phone portrait JPEG q90', _jpeg(3024, 4032)),
                            ('PNG portrait', _enc(_scene(1200, 1600), 'PNG'))):

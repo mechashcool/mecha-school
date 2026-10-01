@@ -299,7 +299,7 @@ def _prepare_document(file_storage):
     """Validate and prepare ONE registration document BEFORE any Storage write,
     with the Student Document policy: PDF/JPG/JPEG/PNG, <= 5 MB, magic bytes;
     a PDF is returned unchanged (stored byte-for-byte), an image is decoded and
-    optimised (<= 1200 px, WebP q75, metadata stripped) and only that result is
+    optimised (<= 1600 px, WebP q75, metadata stripped) and only that result is
     stored. Returns ``(upload, None)`` or ``(None, message)``."""
     upload, err = prepare_student_document_upload(file_storage)
     if err:
