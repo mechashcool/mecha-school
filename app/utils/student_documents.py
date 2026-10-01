@@ -17,10 +17,11 @@ Pipeline for an image document (jpg/jpeg/png):
      upload (flat graphics / simple scans), a lossless WebP is tried, and for
      PNG sources a metadata-free PNG; the smallest valid encoding is kept.
 
-That 1200 px / q75 policy is the ONE Student Document policy: Add Student,
-Edit → add, Replace and the public registration link all reach this function
-through prepare_student_document_upload() with the defaults. Employee
-documents reuse the same pipeline but pass their own (unchanged) limits.
+That 1200 px / q75 policy is the ONE document-image policy: Add Student,
+Edit → add, Replace and the public registration link (through
+prepare_student_document_upload()) and the employee documents (Add Employee
+wizard, employee Documents page — app/utils/employee_documents.py) all call
+this same function.
 
 Only the processed bytes are stored; the original upload never is.
 Uses Pillow APIs available in the pinned Pillow 10.3.0.
@@ -62,13 +63,8 @@ def _has_alpha(img) -> bool:
             or (img.mode in ('P', 'L', 'RGB') and 'transparency' in img.info))
 
 
-def optimize_document_image(raw: bytes, *, max_side: int = STUDENT_DOC_IMAGE_MAX_SIDE,
-                            quality: int = STUDENT_DOC_WEBP_QUALITY) -> ProcessedDocumentImage:
-    """Validate and optimise one document image. Raises StudentDocumentImageError.
-
-    The defaults are the Student Document policy; only callers with their own
-    documented policy (employee documents) pass other limits.
-    """
+def optimize_document_image(raw: bytes) -> ProcessedDocumentImage:
+    """Validate and optimise one document image. Raises StudentDocumentImageError."""
     from PIL import Image, ImageOps
 
     try:
@@ -93,7 +89,7 @@ def optimize_document_image(raw: bytes, *, max_side: int = STUDENT_DOC_IMAGE_MAX
             if source_format == 'JPEG':
                 # libjpeg decodes at a reduced scale never below the target
                 # size: same result, far less memory for large photos.
-                img.draft(img.mode, (max_side, max_side))
+                img.draft(img.mode, (STUDENT_DOC_IMAGE_MAX_SIDE, STUDENT_DOC_IMAGE_MAX_SIDE))
             img.load()                                    # full decode: corrupt -> error
             out = img
             if img.getexif().get(0x0112, 1) != 1:
@@ -108,8 +104,8 @@ def optimize_document_image(raw: bytes, *, max_side: int = STUDENT_DOC_IMAGE_MAX
         except Exception:
             raise StudentDocumentImageError(MSG_INVALID) from None
 
-    if max(out.size) > max_side:
-        out.thumbnail((max_side, max_side),
+    if max(out.size) > STUDENT_DOC_IMAGE_MAX_SIDE:
+        out.thumbnail((STUDENT_DOC_IMAGE_MAX_SIDE, STUDENT_DOC_IMAGE_MAX_SIDE),
                       Image.Resampling.LANCZOS)          # keeps aspect, never upscales
 
     extra = {'icc_profile': icc_profile} if icc_profile else {}
@@ -119,7 +115,7 @@ def optimize_document_image(raw: bytes, *, max_side: int = STUDENT_DOC_IMAGE_MAX
         out.save(buf, format='WEBP', method=4, **extra, **kw)   # no exif/xmp -> stripped
         return buf.getvalue()
 
-    best_data, best_ext = _webp(quality=quality), 'webp'
+    best_data, best_ext = _webp(quality=STUDENT_DOC_WEBP_QUALITY), 'webp'
     if len(best_data) > len(raw):
         # Flat graphics / simple scans can grow under lossy WebP.
         alt = _webp(lossless=True, quality=_LOSSLESS_EFFORT)
