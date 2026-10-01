@@ -96,7 +96,7 @@ def login():
         "user":   { ... },
         "school": { ... },
         "children": [ ... ],   # parent only
-        "employee": { ... }    # teacher only
+        "employee": { ... }    # teacher / driver only
       }
     """
     payload    = request.get_json(silent=True) or {}
@@ -138,7 +138,7 @@ def login():
         return err('account_disabled', 401)
 
     role_name = user.role.name if user.role else None
-    if role_name not in ('parent', 'teacher', 'investor_viewer'):
+    if role_name not in ('parent', 'teacher', 'investor_viewer', 'driver'):
         return err('role_not_supported — mobile API supports parent, teacher, and investor roles only', 403)
 
     # Record last login
@@ -165,7 +165,7 @@ def login():
             for s in user.children
         ]
 
-    if role_name == 'teacher':
+    if role_name in ('teacher', 'driver'):
         emp = Employee.query.filter_by(user_id=user.id).first()
         if emp:
             employee = {

@@ -526,6 +526,38 @@ def create_app(config_name=None):
             return _redirect(_url_for('fees.index'))
         _abort(403)
 
+    # ── Driver confinement guard ───────────────────────────────────────────────
+    @app.before_request
+    def _confine_driver():
+        """Refuse every web session for transport driver accounts.
+
+        The driver role has no web portal: it is used only through the
+        JWT-authenticated, role-gated mobile /driver/* endpoints. Like the
+        investor guard this closes routes protected by @login_required alone;
+        unlike it there is no allowed surface, so the session is ended.
+        Fail-closed: logout + redirect to login (GET) or 403. Only affects the
+        driver role; mobile API paths are skipped.
+        """
+        from flask_login import current_user, logout_user
+        if not current_user.is_authenticated:
+            return None
+        if not getattr(current_user, 'is_driver', False):
+            return None
+
+        if request.path.startswith('/api/mobile/v1/'):
+            return None
+        if (request.endpoint or '') in ('static', 'media.serve'):
+            return None
+
+        from flask import (redirect as _redirect, url_for as _url_for,
+                           abort as _abort, flash as _flash)
+        logout_user()
+        if request.method == 'GET':
+            _flash('حساب السائق مخصص لتطبيق الهاتف فقط ولا يمكن استخدامه في لوحة التحكم.',
+                   'warning')
+            return _redirect(_url_for('auth.login'))
+        _abort(403)
+
     # ── Error handlers ────────────────────────────────────────────────────────
     def _render_error_page(template_name):
         try:

@@ -41,17 +41,85 @@
                      placeholder="مثال: 01">
             </div>
 
-            <div class="col-md-6">
-              <label class="form-label fw-600">اسم السائق <span class="text-danger">*</span></label>
-              <input type="text" name="driver_name" class="form-control"
-                     value="{{ fd.get('driver_name', '') }}" required>
-            </div>
+            {# ── Driver ─────────────────────────────────────────────────────── #}
+            {% set driver_mode = fd.get('driver_mode') or 'manual' %}
+            {% set selected_driver = (fd.get('driver_employee_id') or '')|string %}
+            <div class="col-12" id="driverSection">
+              <label class="form-label fw-600 d-block">السائق <span class="text-danger">*</span></label>
+              <div class="d-flex flex-wrap gap-3 mb-2">
+                <div class="form-check">
+                  <input class="form-check-input" type="radio" name="driver_mode" id="dmManual"
+                         value="manual" {% if driver_mode == 'manual' %}checked{% endif %}>
+                  <label class="form-check-label" for="dmManual">إدخال يدوي (بدون حساب)</label>
+                </div>
+                <div class="form-check">
+                  <input class="form-check-input" type="radio" name="driver_mode" id="dmExisting"
+                         value="existing" {% if driver_mode == 'existing' %}checked{% endif %}>
+                  <label class="form-check-label" for="dmExisting">اختيار سائق موجود</label>
+                </div>
+                <div class="form-check">
+                  <input class="form-check-input" type="radio" name="driver_mode" id="dmNew"
+                         value="new" {% if driver_mode == 'new' %}checked{% endif %}>
+                  <label class="form-check-label" for="dmNew">إضافة سائق جديد</label>
+                </div>
+              </div>
 
-            <div class="col-md-6">
-              <label class="form-label fw-600">رقم هاتف السائق <span class="text-danger">*</span></label>
-              <input type="tel" name="driver_phone" class="form-control"
-                     value="{{ fd.get('driver_phone', '') }}" required
-                     placeholder="07XX-XXX-XXXX">
+              <div class="row g-3" data-driver-panel="manual">
+                <div class="col-md-6">
+                  <label class="form-label fw-600">اسم السائق <span class="text-danger">*</span></label>
+                  <input type="text" name="driver_name" class="form-control"
+                         value="{{ fd.get('driver_name', '') }}" required>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label fw-600">رقم هاتف السائق <span class="text-danger">*</span></label>
+                  <input type="tel" name="driver_phone" class="form-control"
+                         value="{{ fd.get('driver_phone', '') }}" required
+                         placeholder="07XX-XXX-XXXX">
+                </div>
+                {% if route and route.driver_employee_id %}
+                <div class="col-12">
+                  <small class="text-warning">اختيار الإدخال اليدوي يلغي ربط الخط بحساب السائق الحالي.</small>
+                </div>
+                {% endif %}
+              </div>
+
+              <div class="row g-3" data-driver-panel="existing">
+                <div class="col-md-8">
+                  <select name="driver_employee_id" class="form-select" required>
+                    <option value="">— اختر سائقاً —</option>
+                    {% for d in driver_options %}
+                    <option value="{{ d.id }}" {% if selected_driver == d.id|string %}selected{% endif %}
+                            {% if d.account == 'other' %}disabled{% endif %}>
+                      {{ d.name }} ({{ d.employee_id }}){% if d.phone %} — {{ d.phone }}{% endif %}
+                      {% if d.account == 'none' %} · سيُنشأ له حساب دخول{% elif d.account == 'other' %} · مرتبط بحساب بدور آخر{% endif %}
+                    </option>
+                    {% endfor %}
+                  </select>
+                  <small class="text-muted">
+                    تظهر هنا الموظفين الفعّالين بمسمى "سائق" في هذه المدرسة فقط.
+                    {% if not driver_options %}لا يوجد سائقون مسجلون بعد.{% endif %}
+                  </small>
+                </div>
+              </div>
+
+              <div class="row g-3" data-driver-panel="new">
+                <div class="col-md-6">
+                  <label class="form-label fw-600">اسم السائق الجديد <span class="text-danger">*</span></label>
+                  <input type="text" name="new_driver_name" class="form-control" maxlength="200"
+                         value="{{ fd.get('new_driver_name', '') }}" required>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label fw-600">رقم هاتف السائق <span class="text-danger">*</span></label>
+                  <input type="tel" name="new_driver_phone" class="form-control" maxlength="30"
+                         value="{{ fd.get('new_driver_phone', '') }}" required
+                         placeholder="07XX-XXX-XXXX">
+                </div>
+                <div class="col-12">
+                  <small class="text-muted">
+                    يُنشأ موظف بمسمى "سائق" وحساب دخول لتطبيق الهاتف، وتظهر بيانات الدخول مرة واحدة بعد الحفظ.
+                  </small>
+                </div>
+              </div>
             </div>
 
             <div class="col-md-6">
@@ -129,4 +197,25 @@
     </div>
   </div>
 </form>
+<script>
+(function () {
+  // Show only the selected driver panel. Inputs in hidden panels are disabled
+  // so they are neither submitted nor blocking the form's `required` checks.
+  var section = document.getElementById('driverSection');
+  if (!section) return;
+  function sync() {
+    var checked = section.querySelector('input[name="driver_mode"]:checked');
+    var mode = checked ? checked.value : 'manual';
+    section.querySelectorAll('[data-driver-panel]').forEach(function (panel) {
+      var on = panel.getAttribute('data-driver-panel') === mode;
+      panel.style.display = on ? '' : 'none';
+      panel.querySelectorAll('input, select').forEach(function (el) { el.disabled = !on; });
+    });
+  }
+  section.querySelectorAll('input[name="driver_mode"]').forEach(function (r) {
+    r.addEventListener('change', sync);
+  });
+  sync();
+})();
+</script>
 {% endblock %}

@@ -37,6 +37,12 @@ ADMIN_ROLE_NAMES = frozenset({SUPER_ADMIN_ROLE, SCHOOL_ADMIN_ROLE})
 # exclusively by super_admin via the Super Admin portal.
 INVESTOR_ROLE = 'investor_viewer'
 
+# School-scoped transport driver account. NOT an admin role and holds no
+# permissions: it is created only from the Transport Routes page, is always
+# linked to an Employee (Employee.user_id), and is used by the mobile driver
+# endpoints only. Web sessions are refused by the driver confinement guard.
+DRIVER_ROLE = 'driver'
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  0. SCHOOL  (multi-tenant root entity)
@@ -691,6 +697,11 @@ class User(UserMixin, db.Model):
         permissions the role may carry.
         """
         return bool(self.role and self.role.name == 'accountant')
+
+    @property
+    def is_driver(self):
+        """True for a transport driver account (mobile app only, no web portal)."""
+        return bool(self.role and self.role.name == DRIVER_ROLE)
 
     def __repr__(self):
         return f'<User {self.username}>'
@@ -3119,6 +3130,14 @@ class TransportRoute(db.Model):
     vehicle_number = db.Column(db.String(30),  nullable=False)
     capacity       = db.Column(db.Integer,     nullable=False, default=1)
     status         = db.Column(db.String(20),  nullable=False, default='active')  # active|inactive
+    # Real driver identity (Employee with a linked `driver` User). NULL for
+    # legacy routes, which keep using driver_name / driver_phone only. When set,
+    # driver_name / driver_phone are kept in sync with the Employee so existing
+    # consumers of those columns keep working. Same-school is enforced in
+    # app/utils/scoping.py::_before_flush.
+    driver_employee_id = db.Column(db.Integer,
+                                   db.ForeignKey('employees.id', ondelete='SET NULL'),
+                                   nullable=True, index=True)
     created_at     = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at     = db.Column(db.DateTime, default=datetime.utcnow,
                                onupdate=datetime.utcnow)
@@ -3127,6 +3146,7 @@ class TransportRoute(db.Model):
                                      backref=db.backref('transport_routes', lazy='dynamic'))
     students_links = db.relationship('StudentTransport', backref='route',
                                      cascade='all, delete-orphan', lazy='dynamic')
+    driver_employee = db.relationship('Employee', foreign_keys=[driver_employee_id])
 
     __table_args__ = (
         db.UniqueConstraint('school_id', 'name', name='uq_transport_route_school_name'),
@@ -3164,6 +3184,37 @@ class StudentTransport(db.Model):
 
     def __repr__(self):
         return f'<StudentTransport student={self.student_id} route={self.route_id}>'
+
+
+class TransportTrip(db.Model):
+    """One run of a route by its driver: started → ended.
+
+    Lifecycle only (no location data). At most ONE active trip per route,
+    enforced by the partial unique index below. Timestamps are server-side UTC.
+    """
+    __tablename__ = 'transport_trips'
+    __school_scoped__ = True
+
+    id                 = db.Column(db.Integer, primary_key=True)
+    school_id          = db.Column(db.Integer, db.ForeignKey('schools.id', ondelete='CASCADE'),
+                                   nullable=False, index=True)
+    route_id           = db.Column(db.Integer,
+                                   db.ForeignKey('transport_routes.id', ondelete='CASCADE'),
+                                   nullable=False, index=True)
+    driver_employee_id = db.Column(db.Integer, db.ForeignKey('employees.id'),
+                                   nullable=False, index=True)
+    status             = db.Column(db.String(20), nullable=False, default='active')  # active|ended
+    started_at         = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    ended_at           = db.Column(db.DateTime, nullable=True)
+    created_at         = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.Index('uq_transport_trip_active_route', 'route_id', unique=True,
+                 postgresql_where=db.text("status = 'active'")),
+    )
+
+    def __repr__(self):
+        return f'<TransportTrip route={self.route_id} status={self.status}>'
 
 
 # ═════════════════════════════════════════════════════════════════════════════

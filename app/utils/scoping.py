@@ -40,6 +40,7 @@ def _models():
         ResidentialArea,
         StudentRegistrationRequest, StudentRegistrationRequestDocument,
         SchoolWeeklyOffSchedule,
+        TransportTrip,
     )
 
     school_scoped = (
@@ -73,6 +74,9 @@ def _models():
         # Effective-dated weekly days off (students / employees) — school-scoped
         # only: a weekly schedule is not tied to an academic year.
         SchoolWeeklyOffSchedule,
+        # Transport trip lifecycle rows — school-scoped only (a route is not
+        # tied to an academic year).
+        TransportTrip,
     )
     # Student, StudentDocument, StudentSuspension are school-scoped only —
     # they persist across academic years so that a year rollover does not
@@ -789,6 +793,34 @@ def _before_flush(session_, flush_context, instances):
                 if req is None or req.school_id != getattr(obj, 'school_id', None):
                     raise ValueError(
                         'Registration document must belong to the same school as its request')
+            # Transport driver identity — fail closed on any cross-school link,
+            # regardless of the code path that set it. A foreign key alone only
+            # proves the row exists, not that it belongs to this school.
+            elif cls_name == 'TransportRoute':
+                if getattr(obj, 'driver_employee_id', None) is not None:
+                    from app.models import Employee as _TREmployee
+                    emp = session_.get(
+                        _TREmployee, obj.driver_employee_id,
+                        execution_options={'bypass_tenant_scope': True},
+                    )
+                    if emp is None or emp.school_id != getattr(obj, 'school_id', None):
+                        raise ValueError(
+                            'Transport route driver must belong to the same school')
+            elif cls_name == 'TransportTrip':
+                from app.models import Employee as _TTEmployee, TransportRoute as _TTRoute
+                _tt_sid = getattr(obj, 'school_id', None)
+                route = session_.get(
+                    _TTRoute, obj.route_id,
+                    execution_options={'bypass_tenant_scope': True},
+                )
+                emp = session_.get(
+                    _TTEmployee, obj.driver_employee_id,
+                    execution_options={'bypass_tenant_scope': True},
+                )
+                if (route is None or route.school_id != _tt_sid
+                        or emp is None or emp.school_id != _tt_sid):
+                    raise ValueError(
+                        'Transport trip route and driver must belong to the same school')
 
 
 def register_tenant_guards(app):

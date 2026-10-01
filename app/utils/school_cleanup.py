@@ -23,7 +23,7 @@ from app.models import (
     SchoolAnnouncement, SchoolContentRead, SchoolVideo, Section,
     Student, StudentAttendance, StudentDocument, StudentRegistrationRecord,
     StudentRegistrationRequest, StudentRegistrationRequestDocument,
-    StudentSuspension, StudentTransport, Subject, TransportRoute, User,
+    StudentSuspension, StudentTransport, Subject, TransportRoute, TransportTrip, User,
     parent_students, teacher_subjects, user_permissions,
 )
 
@@ -85,6 +85,7 @@ LINKED_SCHOOL_MODELS = (
     (Schedule, 'الجداول'),
     (AuditLog, 'سجل التدقيق'),
     (StudentTransport, 'نقل الطلاب'),
+    (TransportTrip, 'رحلات النقل'),
     (TransportRoute, 'مسارات النقل'),
     (InventoryItemStock, 'مخزون المواد حسب المخزن'),
     (InventoryMovement, 'حركات المخزون'),
@@ -149,6 +150,9 @@ SCHOOL_DELETE_ORDER = (
     (StudentAttendance, 'حضور الطلاب'),
     # StudentTransport.student_id → students.id  (no ondelete)
     (StudentTransport, 'نقل الطلاب'),
+    # TransportTrip.driver_employee_id → employees.id (no ondelete) — must
+    # precede Employee.
+    (TransportTrip, 'رحلات النقل'),
     # ── Employee / finance child tables ────────────────────────────────────────
     (EmployeeAttendance, 'حضور الموظفين'),
     (EmployeeDocument, 'مستندات الموظفين'),

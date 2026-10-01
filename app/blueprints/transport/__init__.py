@@ -10,9 +10,11 @@ from flask import (Blueprint, render_template, redirect, url_for,
                    flash, request, abort)
 from flask_login import login_required, current_user
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 
 from app.models import (db, TransportRoute, StudentTransport, Student,
-                        Section, Grade)
+                        Section, Grade, Employee, User, Role, DRIVER_ROLE)
+from app.utils import code_generator
 from app.utils.decorators import (permission_required, get_current_school,
                                    historical_guard)
 from app.utils.audit import log_action
@@ -98,31 +100,36 @@ def create():
     if request.method == 'POST':
         fd = request.form
         errors = _validate_form(fd)
+        driver = None
+        if not errors:
+            driver, driver_error = _apply_driver_choice(fd, school)
+            if driver_error:
+                errors.append(driver_error)
         if not errors:
             route = TransportRoute(
                 school_id      = school.id,
                 name           = fd['name'].strip(),
                 route_number   = fd.get('route_number', '').strip() or None,
-                driver_name    = fd['driver_name'].strip(),
-                driver_phone   = fd['driver_phone'].strip(),
                 supervisor     = fd.get('supervisor', '').strip() or None,
                 vehicle_type   = fd['vehicle_type'].strip(),
                 vehicle_number = fd['vehicle_number'].strip(),
                 capacity       = int(fd['capacity']),
                 status         = fd.get('status', 'active'),
             )
+            _set_route_driver(route, driver, fd)
             db.session.add(route)
             db.session.commit()
             log_action('create', 'transport_route', route.id,
                        details=f'name={route.name}')
+            _after_driver_commit(route.id, None, driver)
             flash(f'تم إضافة خط النقل "{route.name}" بنجاح.', 'success')
             return redirect(url_for('transport.detail', route_id=route.id))
 
         for err in errors:
             flash(err, 'danger')
-        return render_template('transport/form.html', route=None, fd=fd)
+        return _render_form(None, fd, school)
 
-    return render_template('transport/form.html', route=None, fd={})
+    return _render_form(None, {}, school)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -215,11 +222,16 @@ def edit(route_id):
                     f'لا يمكن تقليل الطاقة الاستيعابية إلى أقل من عدد الطلبة المشتركين حالياً '
                     f'({active_count} طالب فعّال).'
                 )
+        driver = None
+        old_driver_id = route.driver_employee_id
+        if not errors:
+            driver, driver_error = _apply_driver_choice(fd, school)
+            if driver_error:
+                errors.append(driver_error)
         if not errors:
             route.name           = fd['name'].strip()
             route.route_number   = fd.get('route_number', '').strip() or None
-            route.driver_name    = fd['driver_name'].strip()
-            route.driver_phone   = fd['driver_phone'].strip()
+            _set_route_driver(route, driver, fd)
             route.supervisor     = fd.get('supervisor', '').strip() or None
             route.vehicle_type   = fd['vehicle_type'].strip()
             route.vehicle_number = fd['vehicle_number'].strip()
@@ -228,12 +240,13 @@ def edit(route_id):
             db.session.commit()
             log_action('edit', 'transport_route', route.id,
                        details=f'name={route.name}')
+            _after_driver_commit(route.id, old_driver_id, driver)
             flash('تم تحديث بيانات الخط بنجاح.', 'success')
             return redirect(url_for('transport.detail', route_id=route.id))
 
         for err in errors:
             flash(err, 'danger')
-        return render_template('transport/form.html', route=route, fd=fd)
+        return _render_form(route, fd, school)
 
     # Pre-fill form with existing values
     fd = {
@@ -246,8 +259,10 @@ def edit(route_id):
         'vehicle_number': route.vehicle_number,
         'capacity':       route.capacity,
         'status':         route.status,
+        'driver_mode':    'existing' if route.driver_employee_id else 'manual',
+        'driver_employee_id': route.driver_employee_id or '',
     }
-    return render_template('transport/form.html', route=route, fd=fd)
+    return _render_form(route, fd, school)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -512,10 +527,13 @@ def _validate_form(fd):
     errors = []
     if not fd.get('name', '').strip():
         errors.append('اسم الخط مطلوب.')
-    if not fd.get('driver_name', '').strip():
-        errors.append('اسم السائق مطلوب.')
-    if not fd.get('driver_phone', '').strip():
-        errors.append('رقم هاتف السائق مطلوب.')
+    # Free-text driver fields are required only in the manual (legacy) mode; a
+    # linked driver Employee supplies them instead (see _set_route_driver).
+    if _driver_mode(fd) == 'manual':
+        if not fd.get('driver_name', '').strip():
+            errors.append('اسم السائق مطلوب.')
+        if not fd.get('driver_phone', '').strip():
+            errors.append('رقم هاتف السائق مطلوب.')
     if not fd.get('vehicle_type', '').strip():
         errors.append('نوع المركبة مطلوب.')
     if not fd.get('vehicle_number', '').strip():
@@ -531,6 +549,238 @@ def _validate_form(fd):
         except ValueError:
             errors.append('الطاقة الاستيعابية يجب أن تكون رقماً صحيحاً.')
     return errors
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  DRIVER (Employee + linked `driver` User) — create / select from route form
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Same default classification the employee module already offers for drivers
+# (app/utils/employee_classification.py).
+DRIVER_JOB_TITLE  = 'سائق'
+DRIVER_DEPARTMENT = 'النقل'
+_DRIVER_MODES = ('manual', 'existing', 'new')
+_MSG_DRIVER_SAVE_FAILED = 'تعذّر حفظ بيانات السائق. لم يتم حفظ أي تغيير. يرجى المحاولة مرة أخرى.'
+
+
+def _driver_mode(fd):
+    """'manual' (legacy free text), 'existing' or 'new'. Unknown → 'invalid'."""
+    mode = (fd.get('driver_mode') or 'manual').strip()
+    return mode if mode in _DRIVER_MODES else 'invalid'
+
+
+def _driver_options(school):
+    """Same-school ACTIVE Employees classified as driver, with account state.
+
+    Two queries total (employees, then their linked accounts) — never one per
+    employee. account: 'driver' (active driver account, linkable), 'none' (an
+    account will be created) or 'other' (another role / disabled / not this
+    school — rejected on save).
+    """
+    if not school:
+        return []
+    emps = (Employee.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter(Employee.school_id == school.id,
+                    Employee.status == 'active',
+                    Employee.job_title == DRIVER_JOB_TITLE)
+            .order_by(Employee.full_name)
+            .all())
+    user_ids = [e.user_id for e in emps if e.user_id]
+    accounts = {}
+    if user_ids:
+        rows = (db.session.query(User.id, User.is_active, User.school_id, Role.name)
+                .join(Role, User.role_id == Role.id)
+                .filter(User.id.in_(user_ids), User.school_id == school.id)
+                .execution_options(bypass_tenant_scope=True)
+                .all())
+        accounts = {r[0]: r for r in rows}
+    options = []
+    for e in emps:
+        if not e.user_id:
+            state = 'none'
+        else:
+            acct = accounts.get(e.user_id)
+            state = ('driver' if acct and acct[3] == DRIVER_ROLE and acct[1]
+                     else 'other')
+        options.append({'id': e.id, 'name': e.full_name,
+                        'employee_id': e.employee_id, 'phone': e.phone or '',
+                        'account': state})
+    return options
+
+
+def _render_form(route, fd, school):
+    return render_template('transport/form.html', route=route, fd=fd,
+                           driver_options=_driver_options(school))
+
+
+def _account_creation_error(school):
+    """Creating an Employee / login account from this page needs the same
+    authority as the employee module — never manage_transport alone."""
+    if not current_user.has_permission('manage_employees'):
+        return 'إنشاء سائق جديد أو حساب دخول له يتطلب صلاحية إدارة الموظفين.'
+    if not current_user.is_super_admin:
+        from app.utils.school_config import get_school_config
+        if not get_school_config(school.id).action_enabled('employees', 'create'):
+            return 'إضافة الموظفين غير مفعلة لهذه المدرسة.'
+    return None
+
+
+def _create_driver_account(employee, school, role):
+    """Create ONE `driver` login for `employee` and link it (flush, no commit).
+
+    Reuses the existing credential generators (same as the employee wizard):
+    globally-unique short username + generated password, stored only as a
+    bcrypt hash via User.set_password. Returns (user, username, password); the
+    plaintext is shown once to the creator and never stored or logged.
+    """
+    username = code_generator.generate_parent_username()
+    password = code_generator.generate_parent_password()
+    user = User(username=username, full_name=employee.full_name,
+                phone=(employee.phone or None), role_id=role.id,
+                school_id=school.id, is_active=True)
+    user.set_password(password)
+    db.session.add(user)
+    db.session.flush()
+    employee.user_id = user.id
+    return user, username, password
+
+
+def _apply_driver_choice(fd, school):
+    """Resolve the driver section of the route form.
+
+    Returns (driver, error). driver is None for the manual (legacy) mode, else
+    {'employee', 'new_employee_id', 'new_user_id', 'credentials'}. Any rows it
+    stages (Employee / User) are flushed into the caller's transaction, which
+    commits them together with the route — or rolls everything back here on
+    error. The school always comes from the server-side current school; the
+    submitted employee id is only a lookup key, re-validated against it.
+    """
+    mode = _driver_mode(fd)
+    if mode == 'invalid':
+        return None, 'خيار السائق غير صالح.'
+    if mode == 'manual':
+        return None, None
+    if not school:
+        return None, 'يرجى اختيار مدرسة أولاً.'
+
+    try:
+        driver, error = _stage_driver(fd, school, mode)
+    except IntegrityError:
+        db.session.rollback()
+        return None, _MSG_DRIVER_SAVE_FAILED
+    if error:
+        db.session.rollback()
+        return None, error
+    driver['employee_id'] = driver['employee'].id
+    return driver, None
+
+
+def _stage_driver(fd, school, mode):
+    role = None
+    if mode == 'existing':
+        emp_id = fd.get('driver_employee_id', type=int)
+        emp = None
+        if emp_id:
+            # Row lock: two concurrent saves for an account-less driver must not
+            # create two accounts — the second waits and then sees user_id set.
+            emp = (Employee.query
+                   .execution_options(bypass_tenant_scope=True)
+                   .filter_by(id=emp_id, school_id=school.id, status='active',
+                              job_title=DRIVER_JOB_TITLE)
+                   .with_for_update()
+                   .first())
+        if emp is None:
+            return None, 'السائق المحدد غير موجود أو غير فعّال في هذه المدرسة.'
+
+        if emp.user_id:
+            user = db.session.get(User, emp.user_id,
+                                  execution_options={'bypass_tenant_scope': True})
+            if user is None or user.school_id != school.id:
+                return None, 'حساب الدخول المرتبط بهذا السائق لا يعود لهذه المدرسة.'
+            if not user.role or user.role.name != DRIVER_ROLE:
+                return None, (f'الموظف "{emp.full_name}" مرتبط مسبقاً بحساب دخول بدور آخر. '
+                              'لن يتم تغيير دور الحساب ولن يُنشأ حساب ثانٍ له. '
+                              'راجع حساب الموظف من صفحة الموظفين أو اختر سائقاً آخر.')
+            if not user.is_active:
+                return None, ('حساب السائق المرتبط بهذا الموظف معطّل. '
+                              'يرجى تفعيله من إدارة المستخدمين أولاً.')
+            return {'employee': emp, 'new_employee_id': None,
+                    'new_user_id': None, 'credentials': None}, None
+
+        error = _account_creation_error(school)
+        if error:
+            return None, error
+        role = Role.query.filter_by(name=DRIVER_ROLE).first()
+        if role is None:
+            return None, 'دور "سائق" غير موجود في النظام. يرجى مراجعة مسؤول النظام.'
+        user, username, password = _create_driver_account(emp, school, role)
+        return {'employee': emp, 'new_employee_id': None,
+                'new_user_id': user.id, 'credentials': (username, password)}, None
+
+    # mode == 'new'
+    error = _account_creation_error(school)
+    if error:
+        return None, error
+    full_name = ' '.join((fd.get('new_driver_name') or '').split())
+    phone = (fd.get('new_driver_phone') or '').strip()
+    if not full_name:
+        return None, 'اسم السائق الجديد مطلوب.'
+    if len(full_name) > 200:
+        return None, 'اسم السائق يجب ألا يتجاوز 200 حرف.'
+    if not phone:
+        return None, 'رقم هاتف السائق الجديد مطلوب.'
+    if len(phone) > 30:
+        return None, 'رقم هاتف السائق يجب ألا يتجاوز 30 حرفاً.'
+    role = Role.query.filter_by(name=DRIVER_ROLE).first()
+    if role is None:
+        return None, 'دور "سائق" غير موجود في النظام. يرجى مراجعة مسؤول النظام.'
+
+    emp = Employee(employee_id=code_generator.generate_employee_id(school.id),
+                   full_name=full_name, phone=phone,
+                   job_title=DRIVER_JOB_TITLE, department=DRIVER_DEPARTMENT,
+                   school_id=school.id)
+    db.session.add(emp)
+    db.session.flush()
+    user, username, password = _create_driver_account(emp, school, role)
+    return {'employee': emp, 'new_employee_id': emp.id,
+            'new_user_id': user.id, 'credentials': (username, password)}, None
+
+
+def _set_route_driver(route, driver, fd):
+    """Link the route to the driver Employee (syncing the legacy text columns so
+    existing consumers keep working), or keep the manual/legacy text."""
+    if driver:
+        emp = driver['employee']
+        route.driver_employee_id = emp.id
+        route.driver_name  = (emp.full_name or '')[:200]
+        route.driver_phone = (emp.phone or '')[:30]
+    else:
+        route.driver_employee_id = None
+        route.driver_name  = fd['driver_name'].strip()
+        route.driver_phone = fd['driver_phone'].strip()
+
+
+def _after_driver_commit(route_id, old_driver_id, driver):
+    """Audit driver events and show new credentials once — after the commit.
+    Credentials are never written to the audit log."""
+    new_driver_id = driver['employee_id'] if driver else None
+    if driver and driver['new_employee_id']:
+        log_action('create', 'employee', driver['new_employee_id'],
+                   details=f'driver employee created from transport route={route_id}')
+    if driver and driver['new_user_id']:
+        log_action('create', 'user', driver['new_user_id'],
+                   details=f'driver account for employee={new_driver_id} '
+                           f'from transport route={route_id}')
+    if new_driver_id != old_driver_id:
+        log_action('link_driver' if new_driver_id else 'unlink_driver',
+                   'transport_route', route_id,
+                   details=f'driver_employee {old_driver_id} -> {new_driver_id}')
+    if driver and driver['credentials']:
+        username, password = driver['credentials']
+        flash('تم إنشاء حساب دخول للسائق (تطبيق الهاتف). '
+              f'اسم المستخدم: {username} — كلمة المرور: {password}. '
+              'يرجى حفظ هذه البيانات وتسليمها للسائق.', 'success')
 
 
 def _month_ar(m):

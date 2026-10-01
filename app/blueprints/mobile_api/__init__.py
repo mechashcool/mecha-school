@@ -6,6 +6,7 @@ JWT-authenticated REST API for the Mecha-School mobile application.
 Supported roles
   parent  — children, attendance, fees, grades, exams, schedule, notifications
   teacher — profile, sections, students, schedule, exams, grade-entry, notifications
+  driver  — assigned transport routes, start / end trip
 
 Authentication
   POST /api/mobile/v1/auth/login    → access token (24 h) + refresh token (30 d)
@@ -22,4 +23,4 @@ from flask import Blueprint
 mobile_api_bp = Blueprint('mobile_api', __name__)
 
 # Import route modules after creating the blueprint to avoid circular imports.
-from . import auth, common, parent, teacher, teacher_leave, chat, school_board, badges, notifications, investor  # noqa: E402, F401
+from . import auth, common, parent, teacher, teacher_leave, chat, school_board, badges, notifications, investor, driver  # noqa: E402, F401

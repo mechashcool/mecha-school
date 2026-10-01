@@ -28,7 +28,7 @@ from __future__ import annotations
 # the protected admin tiers) but can never rename, recreate, or delete them.
 BUILTIN_ROLE_NAMES = frozenset({
     'super_admin', 'school_admin', 'admin', 'accountant', 'teacher',
-    'hr', 'reception', 'parent', 'investor_viewer',
+    'hr', 'reception', 'parent', 'investor_viewer', 'driver',
 })
 
 

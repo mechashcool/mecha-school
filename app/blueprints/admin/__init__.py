@@ -41,7 +41,9 @@ INVESTOR_ROLE = 'investor_viewer'
 # Existing users that already hold these roles are unaffected — the backend,
 # permission system, and APIs treat these roles normally.
 # To re-enable a role in the dropdown, remove its name from this set.
-HIDDEN_FROM_CREATE_FORM_ROLES = {'hr', 'reception'}
+# 'driver' accounts are created only from the Transport Routes page, where they
+# are always linked to a driver Employee.
+HIDDEN_FROM_CREATE_FORM_ROLES = {'hr', 'reception', 'driver'}
 
 # The ONLY roles a school-scoped manager may assign from the Create/Edit User
 # screens. An allow-list, not an exclude-list, so a role added to the system

@@ -155,6 +155,15 @@ ROLE_PRESETS = {
         'is_admin':    False,
         'permissions': [],
     },
+    # School-scoped transport driver. No permissions: it never reaches staff
+    # web pages (driver confinement guard) and only uses the role-gated mobile
+    # /driver/* endpoints. Created only from the Transport Routes page.
+    'driver': {
+        'label':       'سائق',
+        'description': 'سائق خط نقل — يستخدم تطبيق الهاتف فقط لعرض خطوطه وبدء/إنهاء الرحلة',
+        'is_admin':    False,
+        'permissions': [],
+    },
 }
 
 
