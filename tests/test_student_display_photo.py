@@ -3,7 +3,7 @@ Student display-photo derivative (students.photo_display) — targeted tests.
 
 Student.photo stays the byte-identical original and the only AI Face source.
 A NEW upload through Student create/edit also stores a display-only WebP copy
-(<=1024 px, q80, EXIF/GPS stripped) under students/display/. Every display
+(192 x 192 centred square, q45/m6, EXIF/GPS stripped) under students/display/. Every display
 consumer (web list/search/attendance/detail/edit/create-success, mobile parent
 and teacher) prefers the copy and falls back to Student.photo; the legacy raw
 /api/v1/parent/me stays unchanged. Existing students (photo_display NULL) render
@@ -87,22 +87,178 @@ def _decode(data):
 #  Derivative policy (helper level)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _mean_diff(a, b):
+    a, b = a.convert('RGB'), b.convert('RGB').resize(a.size)
+    pa, pb = a.tobytes(), b.tobytes()
+    return sum(abs(x - y) for x, y in zip(pa, pb)) / len(pa)
+
+
+def _quadrants(w, h):
+    """Four distinct quadrants meeting at the centre: every one of the 8 EXIF
+    orientations gives a different centred crop."""
+    img = Image.new('RGB', (w, h))
+    d = ImageDraw.Draw(img)
+    d.rectangle((0, 0, w // 2, h // 2), fill=(220, 30, 30))
+    d.rectangle((w // 2, 0, w, h // 2), fill=(30, 200, 30))
+    d.rectangle((0, h // 2, w // 2, h), fill=(30, 30, 220))
+    d.rectangle((w // 2, h // 2, w, h), fill=(230, 230, 40))
+    return img
+
+
+def _bands(w, h):
+    """Green centre with red/blue bands on the long-axis ends, outside the
+    centred square: a centred crop shows green only."""
+    img = Image.new('RGB', (w, h), (30, 200, 30))
+    d = ImageDraw.Draw(img)
+    band = (max(w, h) - min(w, h)) // 2 - 50
+    if w >= h:
+        d.rectangle((0, 0, band, h), fill=(220, 30, 30))
+        d.rectangle((w - band, 0, w, h), fill=(30, 30, 220))
+    else:
+        d.rectangle((0, 0, w, band), fill=(220, 30, 30))
+        d.rectangle((0, h - band, w, h), fill=(30, 30, 220))
+    return img
+
+
+def _swapped_primaries_icc():
+    """A valid non-sRGB RGB profile: sRGB with its red/blue colorants swapped,
+    so red pixels tagged with it are blue once converted to sRGB."""
+    import struct
+    from PIL import ImageCms
+    p = bytearray(ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes())
+    entries = {bytes(p[132 + 12 * i:136 + 12 * i]): 132 + 12 * i
+               for i in range(struct.unpack('>I', p[128:132])[0])}
+    r, b = entries[b'rXYZ'], entries[b'bXYZ']
+    p[r + 4:r + 12], p[b + 4:b + 12] = p[b + 4:b + 12], p[r + 4:r + 12]
+    return bytes(p)
+
+
 class DisplayPolicyTest(unittest.TestCase):
+    """Shared 192 x 192 WebP q45/m6 policy (encode_display_photo)."""
 
     def test_policy_constants(self):
-        self.assertEqual((STUDENT_DISPLAY_MAX_SIDE, STUDENT_DISPLAY_WEBP_QUALITY), (1024, 80))
+        self.assertEqual((STUDENT_DISPLAY_MAX_SIDE, STUDENT_DISPLAY_WEBP_QUALITY,
+                          sdp.STUDENT_DISPLAY_WEBP_METHOD, sdp.STUDENT_DISPLAY_SUBFOLDER),
+                         (192, 45, 6, 'students/display'))
+        self.assertEqual((sdp.DISPLAY_SIDE, sdp.DISPLAY_WEBP_QUALITY, sdp.DISPLAY_WEBP_METHOD),
+                         (192, 45, 6))
 
-    def test_size_orientation_metadata_alpha(self):
-        out = _decode(make_display_photo(_phone_jpeg(4032, 3024, orientation=6)))
-        self.assertEqual((out.format, out.size), ('WEBP', (768, 1024)))  # rotated, <=1024
+    def test_exact_192_square_webp_portrait_and_landscape(self):
+        for (w, h, fmt) in ((3024, 4032, 'JPEG'), (4032, 3024, 'JPEG'), (900, 1600, 'PNG'),
+                            (1600, 900, 'PNG'), (1200, 1200, 'WEBP'), (192, 500, 'PNG')):
+            with self.subTest(w=w, h=h, fmt=fmt):
+                out = _decode(make_display_photo(_enc(_portrait(w, h), fmt)))
+                self.assertEqual((out.format, out.size), ('WEBP', (192, 192)))
+
+    def test_never_upscaled(self):
+        for (w, h, side) in ((40, 30, 30), (150, 120, 120), (100, 400, 100), (191, 191, 191)):
+            with self.subTest(w=w, h=h):
+                out = _decode(make_display_photo(_enc(_portrait(w, h), 'PNG')))
+                self.assertEqual(out.size, (side, side))         # min(w, h) square, no upscale
+
+    def test_centered_crop(self):
+        from PIL import ImageOps
+        for (w, h, fmt) in ((1600, 900, 'PNG'), (900, 1600, 'PNG'), (2400, 1350, 'JPEG')):
+            with self.subTest(w=w, h=h):
+                src = _bands(w, h)
+                out = _decode(make_display_photo(_enc(src, fmt, **({'quality': 95} if fmt == 'JPEG' else {}))))
+                ref = ImageOps.fit(src, (192, 192), Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+                self.assertLess(_mean_diff(out, ref), 6.0)
+                for xy in ((1, 1), (190, 1), (1, 190), (190, 190), (96, 96)):
+                    r, g, b = out.convert('RGB').getpixel(xy)
+                    self.assertGreater(g, 150, xy)               # centre only: no edge bands
+                    self.assertLess(max(r, b), 90, xy)
+
+    def test_webp_quality_45_method_6_exactly(self):
+        from PIL import ImageOps
+        src = _portrait(1600, 1200)
+        raw = _enc(src, 'PNG')
+        ref = ImageOps.fit(src, (192, 192), Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+        expect = {(q, m): _enc(ref, 'WEBP', quality=q, method=m)
+                  for (q, m) in ((45, 6), (40, 6), (50, 6), (45, 4), (80, 4))}
+        got = make_display_photo(raw)
+        self.assertEqual(got, expect[(45, 6)])
+        for other in ((40, 6), (50, 6), (45, 4), (80, 4)):
+            self.assertNotEqual(got, expect[other], other)
+
+    def test_exif_orientations_1_to_8(self):
+        from PIL import ImageOps
+        unoriented = None
+        for orientation in range(1, 9):
+            with self.subTest(orientation=orientation):
+                exif = Image.Exif()
+                exif[0x0112] = orientation
+                raw = _enc(_quadrants(1600, 1200), 'JPEG', quality=95, exif=exif.tobytes())
+                out = _decode(make_display_photo(raw))
+                self.assertEqual(out.size, (192, 192))
+                ref = ImageOps.fit(ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert('RGB'),
+                                   (192, 192), Image.Resampling.LANCZOS)
+                self.assertLess(_mean_diff(out, ref), 6.0)        # same picture, same orientation
+                if orientation == 1:
+                    unoriented = out
+                else:
+                    self.assertGreater(_mean_diff(out, unoriented), 25.0)   # orientation applied
+
+    def test_exif_xmp_gps_removed_original_untouched(self):
+        xmp = (b'<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf='
+               b'"http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description '
+               b'SecretXmp="1"/></rdf:RDF></x:xmpmeta>')
+        exif = Image.Exif()
+        exif[0x0112], exif[0x010F] = 6, 'SecretCam'
+        gps = exif.get_ifd(0x8825)
+        gps[1], gps[2] = 'N', (33.0, 18.0, 0.0)
+        raw = _enc(_portrait(3000, 2250), 'JPEG', quality=90, exif=exif.tobytes(), xmp=xmp)
+        before = hashlib.sha256(raw).hexdigest()
+        data = make_display_photo(raw)
+        out = _decode(data)
         self.assertEqual(len(out.getexif()), 0)
-        self.assertNotIn('exif', out.info)
-        self.assertNotIn('xmp', out.info)
-        small = _decode(make_display_photo(_enc(_portrait(600, 800), 'JPEG', quality=90)))
-        self.assertEqual(small.size, (600, 800))                          # never upscaled
+        for key in ('exif', 'xmp', 'XML:com.adobe.xmp', 'icc_profile'):
+            self.assertNotIn(key, out.info)
+        for marker in (b'SecretCam', b'SecretXmp', b'Exif', b'EXIF', b'XMP ', b'xmpmeta', b'ICCP'):
+            self.assertNotIn(marker, data)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), before)          # original bytes
+        src = Image.open(io.BytesIO(raw))
+        self.assertEqual(src.getexif()[0x010F], 'SecretCam')
+        self.assertEqual(dict(src.getexif().get_ifd(0x8825))[1], 'N')
+        self.assertIn(b'SecretXmp', raw)
+
+    def test_icc_converted_to_srgb_and_dropped(self):
+        from PIL import ImageCms
+        red = Image.new('RGB', (400, 300), (230, 20, 20))
+        swapped = _swapped_primaries_icc()
+        for fmt in ('PNG', 'JPEG'):
+            with self.subTest(fmt=fmt):
+                raw = _enc(red, fmt, icc_profile=swapped)
+                before = hashlib.sha256(raw).hexdigest()
+                data = make_display_photo(raw)
+                out = _decode(data)
+                self.assertNotIn('icc_profile', out.info)
+                self.assertNotIn(b'ICCP', data)
+                r, g, b = out.convert('RGB').getpixel((96, 96))
+                self.assertGreater(b, 180)                       # converted: red → blue in sRGB
+                self.assertLess(r, 60)
+                self.assertEqual(hashlib.sha256(raw).hexdigest(), before)
+                self.assertEqual(Image.open(io.BytesIO(raw)).info.get('icc_profile'), swapped)
+        srgb = ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes()
+        plain = _decode(make_display_photo(_enc(red, 'PNG')))
+        tagged = _decode(make_display_photo(_enc(red, 'PNG', icc_profile=srgb)))
+        self.assertNotIn('icc_profile', tagged.info)
+        self.assertLess(_mean_diff(plain, tagged), 2.0)          # sRGB source: same colours
+        broken = _decode(make_display_photo(_enc(red, 'PNG', icc_profile=b'not a profile')))
+        self.assertEqual((broken.size, broken.info.get('icc_profile')), ((192, 192), None))
+        self.assertLess(_mean_diff(plain, broken), 2.0)          # unusable profile ignored
+
+    def test_transparency_preserved(self):
         alpha = _decode(make_display_photo(_transparent_png()))
-        self.assertEqual((alpha.mode, alpha.size), ('RGBA', (1024, 1024)))
-        self.assertLess(alpha.getpixel((2, 2))[3], 10)
+        self.assertEqual((alpha.mode, alpha.size), ('RGBA', (192, 192)))
+        self.assertLess(alpha.getpixel((2, 2))[3], 10)                  # transparent corner
+        self.assertGreater(alpha.getpixel((96, 96))[3], 245)            # opaque centre
+        icc = _decode(make_display_photo(_enc(Image.open(io.BytesIO(_transparent_png())),
+                                              'PNG', icc_profile=_swapped_primaries_icc())))
+        self.assertEqual(icc.mode, 'RGBA')
+        self.assertLess(icc.getpixel((2, 2))[3], 10)                    # alpha kept through ICC
+        opaque = _decode(make_display_photo(_enc(_portrait(800, 600), 'PNG')))
+        self.assertEqual(opaque.mode, 'RGB')
 
     def test_animated_gif_uses_first_frame(self):
         a, b = _portrait(300, 400), _portrait(300, 400).rotate(180)
@@ -110,7 +266,20 @@ class DisplayPolicyTest(unittest.TestCase):
                    duration=100)
         out = _decode(make_display_photo(gif))
         self.assertEqual((out.format, out.size, getattr(out, 'n_frames', 1)),
-                         ('WEBP', (300, 400), 1))
+                         ('WEBP', (192, 192), 1))
+        first = Image.new('RGB', (300, 400), (220, 30, 30)).convert('P')
+        second = Image.new('RGB', (300, 400), (30, 30, 220)).convert('P')
+        out = _decode(make_display_photo(_enc(first, 'GIF', save_all=True,
+                                              append_images=[second], duration=100)))
+        r, g, b = out.convert('RGB').getpixel((96, 96))
+        self.assertGreater(r, 150)                                      # red = frame 0
+        self.assertLess(b, 100)
+
+    def test_student_and_employee_share_one_encoder(self):
+        from app.utils.employee_display_photo import make_employee_display_photo
+        for raw in (_phone_jpeg(1600, 1200, orientation=6), _transparent_png(600, 600),
+                    _enc(_portrait(900, 1600), 'WEBP')):
+            self.assertEqual(make_display_photo(raw), make_employee_display_photo(raw))
 
     def test_size_examples_report(self):
         cases = [('phone portrait JPEG q90', _phone_jpeg()),
@@ -124,7 +293,7 @@ class DisplayPolicyTest(unittest.TestCase):
             print(f'{label} | {src.format} {src.width}x{src.height} {len(raw):,} B | '
                   f'same {len(raw):,} B | WEBP {out.width}x{out.height} {len(disp):,} B | '
                   f'{100 - 100 * len(disp) / len(raw):.1f}%')
-            self.assertLessEqual(max(out.size), 1024)
+            self.assertEqual(out.size, (192, 192))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -374,8 +543,8 @@ class StudentDisplayPhotoTest(unittest.TestCase):
         data = self.storage.call_args_list[1].args[0]
         img = _decode(data)
         self.assertEqual(img.format, 'WEBP')
-        self.assertLessEqual(max(img.size), 1024)                           # 4
-        self.assertEqual(data, make_display_photo(raw))                     # 5: q80 policy
+        self.assertEqual(img.size, (192, 192))                              # 4
+        self.assertEqual(data, make_display_photo(raw))                     # 5: 192/q45 policy
         self.assertEqual(len(img.getexif()), 0)                             # 6
         for marker in (b'SecretCam', b'Exif', b'EXIF'):
             self.assertNotIn(marker, data)

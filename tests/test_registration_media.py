@@ -606,8 +606,8 @@ class RegistrationApprovalTest(_RegistrationBase):
         self.assertEqual((d_bucket, d_ct), ('uploads', 'image/webp'))
         self.assertRegex(d_path, r'^students/display/[0-9a-f]{32}\.webp$')
         self.assertEqual(st['photo_display'], f'{PUBLIC}uploads/{d_path}')
-        self.assertEqual(d_data, make_display_photo(raw))                  # 47: q80 policy
-        self.assertLessEqual(max(_decode(d_data).size), 1024)              # 46
+        self.assertEqual(d_data, make_display_photo(raw))                  # 47: 192/q45 policy
+        self.assertEqual(_decode(d_data).size, (192, 192))                 # 46
         self.assertNotIn(b'SecretCam', d_data)
         # the fetched object was the registration original, byte-identical
         self.assertEqual(self.fs.fetches, [self._key(req['photo'])])

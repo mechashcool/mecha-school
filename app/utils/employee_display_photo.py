@@ -19,16 +19,13 @@ BEFORE this code is deployed — the mapped column is part of every Employee
 INSERT/SELECT. The previous release does not map it, so applying the migration
 first is safe while the old code is still running.
 
-Display policy (same as the Student display copy): EXIF orientation applied to
-the COPY only, EXIF/XMP/GPS dropped (an RGB ICC profile is kept), longest side
-<= 1024 px (never upscaled, LANCZOS), WebP quality 80 / method 4, alpha kept
-when the source has transparency. Animated GIF/WEBP use their first frame — the
-frame AI Face uses; the stored original keeps its animation.
-
-Memory: JPEG is decoded at a reduced libjpeg scale (draft), the image is
-converted/resized BEFORE the orientation transpose (which then runs on the
-<=1024 px copy), and an image already in the target mode is resized in place —
-no avoidable full-resolution copies.
+Display policy: identical to the Student display copy — both are produced by
+the ONE shared encoder app.utils.student_display_photo.encode_display_photo:
+centred 192 x 192 square (never upscaled), WebP quality 45 / method 6, EXIF
+orientation applied to the COPY only, EXIF/XMP/GPS dropped, an RGB ICC profile
+converted to sRGB and dropped, alpha kept when the source has transparency.
+Animated GIF/WEBP use their first frame — the frame AI Face uses; the stored
+original keeps its animation.
 """
 from __future__ import annotations
 
@@ -37,15 +34,15 @@ import logging
 import os
 
 from app.utils.employee_photo import EMPLOYEE_PHOTO_MAX_PIXELS
+from app.utils.student_display_photo import (DISPLAY_SIDE, DISPLAY_WEBP_METHOD,
+                                             DISPLAY_WEBP_QUALITY, encode_display_photo)
 
 log = logging.getLogger(__name__)
 
-EMPLOYEE_DISPLAY_MAX_SIDE = 1024
-EMPLOYEE_DISPLAY_WEBP_QUALITY = 80
-EMPLOYEE_DISPLAY_WEBP_METHOD = 4
+EMPLOYEE_DISPLAY_MAX_SIDE = DISPLAY_SIDE
+EMPLOYEE_DISPLAY_WEBP_QUALITY = DISPLAY_WEBP_QUALITY
+EMPLOYEE_DISPLAY_WEBP_METHOD = DISPLAY_WEBP_METHOD
 EMPLOYEE_DISPLAY_SUBFOLDER = 'employees/display'
-_ALLOWED_FORMATS = ('JPEG', 'PNG', 'GIF', 'WEBP')
-_ORIENTATION_TAG = 0x0112
 
 
 # ── Display resolution (no Storage / network access) ──────────────────────────
@@ -105,51 +102,12 @@ def employee_photo_url(employee) -> str | None:
 
 # ── Generation (new / replacement uploads only) ──────────────────────────────
 
-def _has_alpha(img) -> bool:
-    return (img.mode in ('RGBA', 'LA', 'PA')
-            or (img.mode in ('P', 'L', 'RGB') and 'transparency' in img.info))
-
-
-def _transpose_method(orientation):
-    """The transpose Pillow's ImageOps.exif_transpose applies for *orientation*."""
-    from PIL import Image
-    T = Image.Transpose
-    return {2: T.FLIP_LEFT_RIGHT, 3: T.ROTATE_180, 4: T.FLIP_TOP_BOTTOM,
-            5: T.TRANSPOSE, 6: T.ROTATE_270, 7: T.TRANSVERSE,
-            8: T.ROTATE_90}.get(orientation)
-
-
 def make_employee_display_photo(raw: bytes) -> bytes:
     """Encode the display copy of an (already validated) photo. Raises on error.
 
     ``raw`` is never modified; the returned bytes are an independent WebP.
     """
-    from PIL import Image
-
-    img = Image.open(io.BytesIO(raw), formats=list(_ALLOWED_FORMATS))
-    with img:
-        width, height = img.size
-        if width < 1 or height < 1 or width * height > EMPLOYEE_PHOTO_MAX_PIXELS:
-            raise ValueError('unsupported dimensions')
-        orientation = img.getexif().get(_ORIENTATION_TAG, 1)
-        icc_profile = (img.info.get('icc_profile')
-                       if img.mode in ('RGB', 'RGBA', 'P', 'PA') else None)
-        if img.format == 'JPEG':
-            img.draft(img.mode, (EMPLOYEE_DISPLAY_MAX_SIDE, EMPLOYEE_DISPLAY_MAX_SIDE))
-        img.load()                                    # first frame only
-        target = 'RGBA' if _has_alpha(img) else 'RGB'
-        out = img if img.mode == target else img.convert(target)
-        if max(out.size) > EMPLOYEE_DISPLAY_MAX_SIDE:  # shrink only, never upscale
-            out.thumbnail((EMPLOYEE_DISPLAY_MAX_SIDE, EMPLOYEE_DISPLAY_MAX_SIDE),
-                          Image.Resampling.LANCZOS)
-        method = _transpose_method(orientation)
-        if method is not None:
-            out = out.transpose(method)               # on the <=1024 px copy
-        buf = io.BytesIO()
-        extra = {'icc_profile': icc_profile} if icc_profile else {}
-        out.save(buf, format='WEBP', quality=EMPLOYEE_DISPLAY_WEBP_QUALITY,
-                 method=EMPLOYEE_DISPLAY_WEBP_METHOD, **extra)   # no exif/xmp → stripped
-    return buf.getvalue()
+    return encode_display_photo(raw, max_pixels=EMPLOYEE_PHOTO_MAX_PIXELS)
 
 
 def prepare_employee_display_photo(upload) -> bytes | None:

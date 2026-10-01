@@ -352,7 +352,7 @@ class ApplyTest(BackfillTestBase):
         self.assertEqual(self.blobs[('uploads', key)], raw)          # original bytes intact
         disp = Image.open(io.BytesIO(self.blobs[('uploads', rec['new_object_key'])]))
         self.assertEqual(disp.format, 'WEBP')
-        self.assertEqual(max(disp.size), 1024)
+        self.assertEqual(disp.size, (192, 192))
         self.assertEqual(summary['db_writes'], 1)
         self.save_uploaded.assert_not_called()
 

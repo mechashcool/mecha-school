@@ -3,7 +3,8 @@ Employee display-photo derivative (employees.photo_display) — targeted tests.
 
 Employee.photo stays the byte-identical original and the only AI Face source.
 A NEW / replacement upload additionally stores a display-only WebP copy
-(<=1024 px, q80, EXIF/GPS/XMP stripped) under employees/display/; any failure
+(192 x 192 centred square, q45/m6, EXIF/GPS/XMP stripped, ICC → sRGB) under
+employees/display/ — the SAME shared encoder as the Student copy; any failure
 leaves photo_display NULL and never fails the employee operation. Every display
 consumer (web list/search/detail/edit/attendance report, mobile login/profile,
 chat contacts) prefers the copy and falls back to Employee.photo. Existing
@@ -116,28 +117,29 @@ class EmployeeDisplayPolicyTest(unittest.TestCase):
     def test_policy_constants(self):
         self.assertEqual((EMPLOYEE_DISPLAY_MAX_SIDE, EMPLOYEE_DISPLAY_WEBP_QUALITY,
                           EMPLOYEE_DISPLAY_WEBP_METHOD, EMPLOYEE_DISPLAY_SUBFOLDER),
-                         (1024, 80, 4, 'employees/display'))
+                         (192, 45, 6, 'employees/display'))
 
-    def test_10_11_longest_side_and_no_upscale(self):
+    def test_10_11_square_192_and_no_upscale(self):
         for (w, h) in ((4032, 3024), (3024, 4032), (2000, 900)):
             out = _decode(make_employee_display_photo(_enc(_portrait(w, h), 'JPEG')))
-            self.assertEqual((out.format, max(out.size)), ('WEBP', 1024), (w, h))
-            self.assertAlmostEqual(out.width / out.height, w / h, delta=0.01)
-        for (w, h) in ((600, 800), (1024, 700), (40, 30)):
+            self.assertEqual((out.format, out.size), ('WEBP', (192, 192)), (w, h))
+        for (w, h, side) in ((600, 800, 192), (1024, 700, 192), (40, 30, 30), (150, 120, 120)):
             out = _decode(make_employee_display_photo(_enc(_portrait(w, h), 'PNG')))
-            self.assertEqual(out.size, (w, h))                              # never upscaled
+            self.assertEqual(out.size, (side, side))                        # never upscaled
 
-    def test_12_webp_quality_80_method_4(self):
+    def test_12_webp_quality_45_method_6(self):
+        from PIL import ImageOps
         raw = _enc(_portrait(1600, 1200), 'JPEG', quality=92)
         ref = Image.open(io.BytesIO(raw))
-        ref.draft('RGB', (1024, 1024))
-        ref = ref.convert('RGB')
-        ref.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
-        expect = {q: _enc(ref, 'WEBP', quality=q, method=4) for q in (80, 90, 70)}
+        ref.draft('RGB', (384, 384))
+        ref = ImageOps.fit(ref.convert('RGB'), (192, 192), Image.Resampling.LANCZOS,
+                           centering=(0.5, 0.5))
+        expect = {(q, m): _enc(ref, 'WEBP', quality=q, method=m)
+                  for (q, m) in ((45, 6), (50, 6), (40, 6), (45, 4), (80, 4))}
         got = make_employee_display_photo(raw)
-        self.assertEqual(got, expect[80])
-        self.assertNotEqual(got, expect[90])
-        self.assertNotEqual(got, expect[70])
+        self.assertEqual(got, expect[(45, 6)])
+        for other in ((50, 6), (40, 6), (45, 4), (80, 4)):
+            self.assertNotEqual(got, expect[other], other)
 
     def test_13_exif_orientation_applied_like_pillow(self):
         from PIL import ImageOps
@@ -145,12 +147,10 @@ class EmployeeDisplayPolicyTest(unittest.TestCase):
             with self.subTest(orientation=orientation):
                 raw = _phone_jpeg(1600, 1200, orientation=orientation)
                 out = _decode(make_employee_display_photo(raw))
-                ref = ImageOps.exif_transpose(Image.open(io.BytesIO(raw)))
-                ref.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
-                self.assertEqual(out.size, ref.size)
+                ref = ImageOps.fit(ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert('RGB'),
+                                   (192, 192), Image.Resampling.LANCZOS)
+                self.assertEqual(out.size, (192, 192))
                 self.assertLess(_mean_diff(out, ref), 6.0)                  # same picture/orientation
-        rotated = _decode(make_employee_display_photo(_phone_jpeg(4032, 3024, orientation=6)))
-        self.assertEqual(rotated.size, (768, 1024))                         # landscape → portrait
 
     def test_14_15_metadata_stripped_original_untouched(self):
         raw = _phone_jpeg(3000, 2250, orientation=6)
@@ -171,22 +171,24 @@ class EmployeeDisplayPolicyTest(unittest.TestCase):
 
     def test_transparency_and_icc(self):
         alpha = _decode(make_employee_display_photo(_transparent_png()))
-        self.assertEqual((alpha.mode, alpha.size), ('RGBA', (1024, 1024)))
+        self.assertEqual((alpha.mode, alpha.size), ('RGBA', (192, 192)))
         self.assertLess(alpha.getpixel((2, 2))[3], 10)
         opaque = _decode(make_employee_display_photo(_enc(_portrait(800, 600), 'PNG')))
         self.assertEqual(opaque.mode, 'RGB')
         from PIL import ImageCms
         icc = ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes()
-        with_icc = _decode(make_employee_display_photo(
-            _enc(_portrait(800, 600), 'JPEG', icc_profile=icc)))
-        self.assertEqual(with_icc.info.get('icc_profile'), icc)             # RGB ICC kept
+        raw = _enc(_portrait(800, 600), 'JPEG', icc_profile=icc)
+        data = make_employee_display_photo(raw)
+        self.assertNotIn('icc_profile', _decode(data).info)                 # ICC converted + dropped
+        self.assertNotIn(b'ICCP', data)
+        self.assertEqual(Image.open(io.BytesIO(raw)).info.get('icc_profile'), icc)  # original keeps it
 
     def test_animated_first_frame_only(self):
         for fmt in ('GIF', 'WEBP'):
             with self.subTest(fmt):
                 out = _decode(make_employee_display_photo(_two_frame(fmt)))
                 self.assertEqual((out.format, getattr(out, 'n_frames', 1)), ('WEBP', 1))
-                r, g, b = out.convert('RGB').getpixel((150, 200))
+                r, g, b = out.convert('RGB').getpixel((96, 96))
                 self.assertGreater(r, 150)                                  # red = frame 0
                 self.assertLess(b, 100)
 
@@ -445,7 +447,7 @@ class EmployeeDisplayPhotoRouteTest(unittest.TestCase):
         self.assertEqual(stored, (BASE + opath, BASE + dpath))
         disp = _decode(self.storage.call_args_list[1].args[0])
         self.assertEqual(disp.format, 'WEBP')
-        self.assertLessEqual(max(disp.size), 1024)
+        self.assertEqual(disp.size, (192, 192))
         return disp
 
     # ── 1-4: create stores the original verbatim + a display copy ────────────
@@ -467,11 +469,11 @@ class EmployeeDisplayPhotoRouteTest(unittest.TestCase):
                 disp = self._assert_pair(raw, name, stored)
                 if label.startswith('animated'):
                     self.assertEqual(getattr(disp, 'n_frames', 1), 1)
-                    self.assertGreater(disp.convert('RGB').getpixel((150, 200))[0], 150)
+                    self.assertGreater(disp.convert('RGB').getpixel((96, 96))[0], 150)
                     stored_orig = self.storage.call_args_list[0].args[0]
                     self.assertEqual(Image.open(io.BytesIO(stored_orig)).n_frames, 2)
                 if label == 'jpeg':
-                    self.assertEqual(disp.size, (1024, 768))                 # 3024x4032 + orientation 6
+                    self.assertEqual(disp.size, (192, 192))                  # 3024x4032 + orientation 6
                     self.assertIn(b'SecretCam', self.storage.call_args_list[0].args[0])
         self.fetch.assert_not_called()
         self.delete.assert_not_called()
