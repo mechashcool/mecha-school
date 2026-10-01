@@ -5,7 +5,8 @@ GET /api/mobile/v1/investor/dashboard   full KPI dashboard for the investor's sc
 GET /api/mobile/v1/investor/revenues    read-only revenue list
 GET /api/mobile/v1/investor/expenses    read-only expense list
 GET /api/mobile/v1/investor/employees/attendance
-                                        active employees + one day's attendance
+                                        active employees + one day's attendance,
+                                        or per-employee counts for a from/to range
 GET /api/mobile/v1/investor/employees/<id>/attendance
                                         one employee's paginated attendance history
 
@@ -378,6 +379,9 @@ def investor_expenses():
 EMP_ATT_DEFAULT_LIMIT = 30
 EMP_ATT_MAX_LIMIT = 100
 EMP_SEARCH_MAX_LEN = 100
+# Inclusive calendar days for ?from=&to= (same cap as the parent institute
+# attendance window). Longer ranges are rejected, never truncated.
+EMP_ATT_MAX_RANGE_DAYS = 31
 
 
 def _investor_school_id():
@@ -554,6 +558,71 @@ def _employee_attendance_today(school):
     return summary
 
 
+def _parse_range_args():
+    """(from, to, error_response) for the optional inclusive ?from=&to= range.
+
+    Both absent → (None, None, None). Both are required together; from <= to;
+    at most EMP_ATT_MAX_RANGE_DAYS inclusive days (rejected, never truncated).
+    """
+    start, start_err = _parse_date_arg('from')
+    if start_err:
+        return None, None, err('invalid_from')
+    end, end_err = _parse_date_arg('to')
+    if end_err:
+        return None, None, err('invalid_to')
+    if start is None and end is None:
+        return None, None, None
+    if start is None or end is None or start > end:
+        return None, None, err('invalid_date_range')
+    if (end - start).days + 1 > EMP_ATT_MAX_RANGE_DAYS:
+        return None, None, err('date_range_too_large')
+    return start, end, None
+
+
+def _range_attendance_by_employee(sid, emp_ids, working_days):
+    """{employee_id: range_attendance block} for one page of employees.
+
+    Only employee working days count (days off / employee holidays are never
+    absences, and a row stored on a day off is ignored — same as the HR report
+    calculate_employee_stats). One grouped (employee_id, status) query for the
+    whole page — no per-employee or per-day reads. uq_employee_date guarantees
+    at most one row per employee per day, so not_recorded = working days with
+    no row. absent_days counts only recorded 'absent' rows; the HR report also
+    treats not_recorded days as absences. Any other stored status stays in
+    working_days but in no bucket, exactly like the HR report.
+    """
+    from app.models import EmployeeAttendance
+
+    counts = {emp_id: {} for emp_id in emp_ids}
+    if emp_ids and working_days:
+        status = func.lower(func.trim(EmployeeAttendance.status))
+        rows = (db.session.query(EmployeeAttendance.employee_id, status,
+                                 func.count(EmployeeAttendance.id))
+                .execution_options(include_all_years=True)
+                .filter(EmployeeAttendance.school_id == sid,
+                        EmployeeAttendance.employee_id.in_(emp_ids),
+                        EmployeeAttendance.date >= working_days[0],
+                        EmployeeAttendance.date <= working_days[-1],
+                        EmployeeAttendance.date.in_(working_days))
+                .group_by(EmployeeAttendance.employee_id, status)
+                .all())
+        for emp_id, st, n in rows:
+            counts[emp_id][st] = counts[emp_id].get(st, 0) + n
+
+    total = len(working_days)
+    return {
+        emp_id: {
+            'working_days':      total,
+            'present_days':      c.get('present', 0),
+            'late_days':         c.get('late', 0),
+            'absent_days':       c.get('absent', 0),
+            'on_leave_days':     c.get('on_leave', 0),
+            'not_recorded_days': total - sum(c.values()),
+        }
+        for emp_id, c in counts.items()
+    }
+
+
 @mobile_api_bp.route('/investor/employees/attendance', methods=['GET'])
 @jwt_required()
 @role_required('investor_viewer')
@@ -564,9 +633,19 @@ def investor_employees_attendance():
 
     Query: date=YYYY-MM-DD (default: school-local today), limit (default 30,
     max 100), offset, search (name or employee code, max 100 chars).
+
+    Range mode (additive): from=YYYY-MM-DD&to=YYYY-MM-DD, both required,
+    inclusive, at most EMP_ATT_MAX_RANGE_DAYS days; takes precedence over
+    ``date``. Pagination still pages employees. Each item gains
+    ``range_attendance`` (counts over employee working days, one grouped query
+    per page); ``attendance`` is filled only when from == to — no single status
+    is invented for a period. The response adds ``from``, ``to`` and
+    ``working_days``; ``date`` echoes ``from`` so its type never changes, and
+    ``is_day_off`` means the range has no employee working day at all.
     """
     from app.models import Employee, EmployeeAttendance
     from app.utils.attendance_helpers import get_local_date, is_holiday_date
+    from app.utils.employee_attendance_helper import get_working_days
 
     school, school_err = _investor_school()
     if school_err:
@@ -576,7 +655,14 @@ def investor_employees_attendance():
     att_date, date_err = _parse_date_arg('date')
     if date_err:
         return err('invalid_date')
-    if att_date is None:
+    range_from, range_to, range_err = _parse_range_args()
+    if range_err:
+        return range_err
+    is_range = range_from is not None
+    if is_range:
+        # A one-day range keeps the single-day attendance object.
+        att_date = range_from if range_from == range_to else None
+    elif att_date is None:
         att_date = get_local_date(school)
 
     limit, offset, page_err = _strict_page_args()
@@ -587,14 +673,16 @@ def investor_employees_attendance():
     if len(search) > EMP_SEARCH_MAX_LEN:
         return err('invalid_search')
 
-    query = (db.session.query(Employee, EmployeeAttendance)
+    query = (db.session.query(Employee)
              .execution_options(include_all_years=True)
              .options(_employee_columns())
-             .outerjoin(EmployeeAttendance,
-                        (EmployeeAttendance.employee_id == Employee.id)
-                        & (EmployeeAttendance.school_id == sid)
-                        & (EmployeeAttendance.date == att_date))
              .filter(Employee.school_id == sid, Employee.status == 'active'))
+    if att_date is not None:
+        query = (query.add_entity(EmployeeAttendance)
+                 .outerjoin(EmployeeAttendance,
+                            (EmployeeAttendance.employee_id == Employee.id)
+                            & (EmployeeAttendance.school_id == sid)
+                            & (EmployeeAttendance.date == att_date)))
     if search:
         query = query.filter(
             Employee.full_name.icontains(search, autoescape=True)
@@ -603,12 +691,31 @@ def investor_employees_attendance():
     rows = (query.order_by(Employee.full_name, Employee.id)
             .limit(limit + 1).offset(offset).all())
     rows, pagination = _page(rows, limit, offset)
+    if att_date is None:
+        rows = [(emp, None) for emp in rows]
 
     items = []
     for emp, rec in rows:
         item = _employee_payload(emp)
         item['attendance'] = _attendance_payload(rec) if rec is not None else None
         items.append(item)
+
+    if is_range:
+        working_days = get_working_days(range_from, range_to, school)
+        by_emp = _range_attendance_by_employee(
+            sid, [emp.id for emp, _ in rows], working_days)
+        for (emp, _), item in zip(rows, items):
+            item['range_attendance'] = by_emp[emp.id]
+        return ok(**{
+            'school':       _school_block(school),
+            'date':         range_from.isoformat(),
+            'from':         range_from.isoformat(),
+            'to':           range_to.isoformat(),
+            'working_days': len(working_days),
+            'is_day_off':   not working_days,
+            'items':        items,
+            'pagination':   pagination,
+        })
 
     return ok(
         school=_school_block(school),
