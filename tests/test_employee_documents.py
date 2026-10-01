@@ -29,8 +29,7 @@ from app.models import db, AcademicYear, AuditLog, Employee, EmployeeDocument, R
 from app.utils import employee_documents as ed
 from app.utils import helpers
 from app.utils.student_documents import (MSG_ANIMATED, MSG_INVALID, MSG_TOO_LARGE,
-                                         STUDENT_DOC_IMAGE_MAX_SIDE, STUDENT_DOC_MAX_PIXELS,
-                                         STUDENT_DOC_WEBP_QUALITY)
+                                         STUDENT_DOC_MAX_PIXELS)
 
 PASSWORD = 'Test1234!'
 OPTS = {'bypass_tenant_scope': True}
@@ -144,8 +143,8 @@ class EmployeeDocumentPolicyTest(unittest.TestCase):
         self.assertEqual(ed.EMPLOYEE_DOC_STORED_EXTS, {'pdf', 'webp', 'png'})
         self.assertEqual(ed.EMPLOYEE_DOC_MAX_BYTES, MB5)
         self.assertEqual((ed.EMPLOYEE_DOC_TITLE_MAX, ed.EMPLOYEE_DOC_TYPE_MAX), (200, 80))
-        self.assertEqual((STUDENT_DOC_IMAGE_MAX_SIDE, STUDENT_DOC_WEBP_QUALITY,
-                          STUDENT_DOC_MAX_PIXELS), (1600, 88, 40_000_000))
+        self.assertEqual((ed.EMPLOYEE_DOC_IMAGE_MAX_SIDE, ed.EMPLOYEE_DOC_WEBP_QUALITY,
+                          STUDENT_DOC_MAX_PIXELS), (1600, 88, 40_000_000))   # unchanged
 
     def test_6_15_22_23_invalid_uploads_refused(self):
         for label, name, raw, msg in _invalid_cases():

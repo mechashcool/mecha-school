@@ -17,9 +17,11 @@ New-upload policy:
   * JPG/JPEG/PNG → app.utils.student_documents.optimize_document_image (the
     deployed, generic document-image pipeline): real decode, 40 MP ceiling,
     animated/APNG refused, EXIF orientation, EXIF/GPS/XMP stripped (RGB ICC
-    kept), <= 1600 px (never upscaled, LANCZOS), WebP q88 with the proven
-    lossless-WebP / metadata-free-PNG fallback. Only the processed bytes are
-    stored; the original image is never stored.
+    kept), <= EMPLOYEE_DOC_IMAGE_MAX_SIDE (1600) px (never upscaled, LANCZOS),
+    WebP q EMPLOYEE_DOC_WEBP_QUALITY (88) with the proven lossless-WebP /
+    metadata-free-PNG fallback. Only the processed bytes are stored; the
+    original image is never stored. (Student documents use the same pipeline
+    with their own 1200 px / q75 policy.)
   * title / doc_type are validated against their column lengths first.
 """
 from __future__ import annotations
@@ -34,6 +36,8 @@ EMPLOYEE_DOC_ALLOWED_EXTS = frozenset({'pdf', 'jpg', 'jpeg', 'png'})
 # WebP (or a metadata-free PNG when that is smaller).
 EMPLOYEE_DOC_STORED_EXTS = frozenset({'pdf', 'webp', 'png'})
 EMPLOYEE_DOC_MAX_BYTES = 5 * 1024 * 1024          # 5 MB per file
+EMPLOYEE_DOC_IMAGE_MAX_SIDE = 1600                 # employee policy, unchanged
+EMPLOYEE_DOC_WEBP_QUALITY = 88
 EMPLOYEE_DOC_SUBFOLDER = 'employee_docs'
 EMPLOYEE_DOC_TITLE_MAX = 200                       # EmployeeDocument.title
 EMPLOYEE_DOC_TYPE_MAX = 80                         # EmployeeDocument.doc_type
@@ -113,7 +117,8 @@ def prepare_employee_document(file_storage):
             raw = stream.read()
         finally:
             stream.seek(pos)
-        processed = optimize_document_image(raw)
+        processed = optimize_document_image(raw, max_side=EMPLOYEE_DOC_IMAGE_MAX_SIDE,
+                                            quality=EMPLOYEE_DOC_WEBP_QUALITY)
     except StudentDocumentImageError as exc:
         return None, str(exc)
     except Exception:

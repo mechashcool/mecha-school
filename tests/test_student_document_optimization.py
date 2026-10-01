@@ -3,7 +3,7 @@ Student document image optimisation — Add Student, Edit → add, Replace.
 
 Helper level (app.utils.student_documents.optimize_document_image): real
 decode, pixel ceiling, animation refusal, EXIF orientation then strip,
-<=1600 px without upscaling, WebP q88, alpha kept, smallest safe encoding for
+<=1200 px without upscaling, WebP q75, alpha kept, smallest safe encoding for
 flat graphics, fine text stays legible.
 
 Route level: every path validates and processes BEFORE Storage; image
@@ -148,31 +148,36 @@ class DocumentImagePolicyTest(unittest.TestCase):
 
     def test_policy_constants(self):
         self.assertEqual((STUDENT_DOC_IMAGE_MAX_SIDE, STUDENT_DOC_WEBP_QUALITY,
-                          STUDENT_DOC_MAX_PIXELS), (1600, 88, 40_000_000))
+                          STUDENT_DOC_MAX_PIXELS), (1200, 75, 40_000_000))
 
     def test_11_12_resize_and_never_upscale(self):
         out = optimize_document_image(_enc(_document(3024, 4032, photographed=True), 'JPEG', quality=90))
-        self.assertEqual((out.ext, (out.width, out.height)), ('webp', (1200, 1600)))
-        self.assertEqual(_decode(out.data).size, (1200, 1600))
-        small = optimize_document_image(_enc(_document(900, 1200, photographed=True), 'JPEG', quality=90))
-        self.assertEqual((small.width, small.height), (900, 1200))
+        self.assertEqual((out.ext, (out.width, out.height)), ('webp', (900, 1200)))
+        self.assertEqual(_decode(out.data).size, (900, 1200))
+        landscape = optimize_document_image(_enc(_document(4032, 3024, photographed=True), 'JPEG', quality=90))
+        self.assertEqual((landscape.width, landscape.height), (1200, 900))
+        small = optimize_document_image(_enc(_document(600, 800, photographed=True), 'JPEG', quality=90))
+        self.assertEqual((small.width, small.height), (600, 800))      # never upscaled
+        edge = optimize_document_image(_enc(_document(900, 1200, photographed=True), 'PNG'))
+        self.assertEqual((edge.width, edge.height), (900, 1200))       # exactly at the limit
 
-    def test_13_quality_88_policy(self):
+    def test_13_quality_75_policy(self):
         raw = _enc(_document(2400, 3200, photographed=True), 'JPEG', quality=92)
         ref = Image.open(io.BytesIO(raw))
-        ref.draft(ref.mode, (1600, 1600))
+        ref.draft(ref.mode, (1200, 1200))
         ref = ref.convert('RGB')
-        ref.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
-        expected = _enc(ref, 'WEBP', quality=88, method=4)
+        ref.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+        expected = _enc(ref, 'WEBP', quality=75, method=4)
         self.assertEqual(optimize_document_image(raw).data, expected)
-        self.assertNotEqual(expected, _enc(ref, 'WEBP', quality=80, method=4))
+        for other in (70, 80, 88):
+            self.assertNotEqual(expected, _enc(ref, 'WEBP', quality=other, method=4), other)
 
     def test_14_15_metadata_stripped_orientation_applied(self):
         raw = _jpeg_with_exif(2000, 1500, orientation=6)       # displays rotated 90° cw
         self.assertIn(b'SecretCam', raw)
         out = optimize_document_image(raw)
         img = _decode(out.data)
-        self.assertEqual(img.size, (1200, 1600))
+        self.assertEqual(img.size, (900, 1200))
         self.assertEqual(len(img.getexif()), 0)
         self.assertNotIn('xmp', img.info)
         for marker in (b'SecretCam', b'Exif', b'EXIF'):
@@ -206,7 +211,7 @@ class DocumentImagePolicyTest(unittest.TestCase):
                 raw = _enc(src, fmt, **({'quality': 90} if fmt == 'JPEG' else {}))
                 out = _decode(optimize_document_image(raw).data)
                 ref = _decode(raw)
-                ref.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+                ref.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
                 self.assertEqual(out.size, ref.size)
                 mae = ImageStat.Stat(ImageChops.difference(out.convert('L'),
                                                            ref.convert('L'))).mean[0]
@@ -229,7 +234,7 @@ class DocumentImagePolicyTest(unittest.TestCase):
             print(f'{label} | {src.format} {src.width}x{src.height} {len(raw):,} B | '
                   f'{out.ext.upper()} {out.width}x{out.height} {len(out.data):,} B | '
                   f'{100 - 100 * len(out.data) / len(raw):.1f}% | {ms:.0f} ms')
-            self.assertLessEqual(max(out.width, out.height), 1600)
+            self.assertLessEqual(max(out.width, out.height), 1200)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -363,7 +368,7 @@ class StudentDocumentRouteTest(unittest.TestCase):
         self.assertIn(ctype, ('image/webp', 'image/png'))
         self.assertTrue(path.endswith('.webp' if ctype == 'image/webp' else '.png'), path)
         img = _decode(data)
-        self.assertLessEqual(max(img.size), 1600)
+        self.assertLessEqual(max(img.size), 1200)
         self.assertEqual(len(img.getexif()), 0)
         return data, path
 
@@ -379,10 +384,13 @@ class StudentDocumentRouteTest(unittest.TestCase):
         self.assertEqual(self.storage.call_count, 3)
         d0, p0 = self._assert_optimised_doc(0)                      # 1: JPEG -> WebP
         self.assertEqual(self._stored(0)[2], 'image/webp')
+        self.assertEqual(d0, optimize_document_image(jpeg).data)    # the shared 1200/q75 policy
+        self.assertEqual(_decode(d0).size, (900, 1200))
         self.assertNotEqual(d0, jpeg)
         self.assertNotIn(b'SecretCam', d0)
         d1, p1 = self._assert_optimised_doc(1)                      # 2: PNG optimised
         self.assertLess(len(d1), len(png))
+        self.assertEqual(d1, optimize_document_image(png).data)
         pdf_data, pdf_path, pdf_ct = self._stored(2)                # 3: PDF byte-identical
         self.assertEqual(hashlib.sha256(pdf_data).digest(), hashlib.sha256(PDF).digest())
         self.assertEqual((pdf_ct, pdf_path.endswith('.pdf')), ('application/pdf', True))
@@ -405,10 +413,11 @@ class StudentDocumentRouteTest(unittest.TestCase):
 
     def test_04_edit_adds_optimised_image(self):
         before = self._docs(self.ids['student_a'])
-        resp = self._edit(self._web(), [('التقرير الطبي', 'med.jpg',
-                                         _enc(_document(3024, 4032, photographed=True), 'JPEG', quality=90))])
+        raw = _enc(_document(3024, 4032, photographed=True), 'JPEG', quality=90)
+        resp = self._edit(self._web(), [('التقرير الطبي', 'med.jpg', raw)])
         self.assertEqual(resp.status_code, 302)
-        _, path = self._assert_optimised_doc(0)
+        data, path = self._assert_optimised_doc(0)
+        self.assertEqual(data, optimize_document_image(raw).data)  # same 1200/q75 policy
         after = self._docs(self.ids['student_a'])
         self.assertEqual(len(after), len(before) + 1)
         self.assertIn(BASE + path, [r[2] for r in after])
@@ -443,6 +452,8 @@ class StudentDocumentRouteTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 302)
         data, path = self._assert_optimised_doc(0)
         self.assertEqual(self._stored(0)[2], 'image/webp')
+        self.assertEqual(data, optimize_document_image(raw).data)       # same 1200/q75 policy
+        self.assertEqual(_decode(data).size, (900, 1200))
         self.assertNotEqual(data, raw)                                   # original never stored
         self.assertNotIn(b'SecretCam', data)
         rows = {r[0]: r for r in self._docs(self.ids['student_a'])}
