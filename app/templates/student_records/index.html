@@ -17,20 +17,20 @@
       <ul class="dropdown-menu dropdown-menu-end">
         <li>
           <a class="dropdown-item" target="_blank"
-             href="{{ url_for('student_records.export_pdf', paper='a4', q=q or None, rfid=rfid or None) }}">
+             href="{{ url_for('student_records.export_pdf', paper='a4', q=q or None, rfid=rfid or None, stage=stage or None) }}">
             <i class="bi bi-file-earmark-pdf me-1"></i>تصدير PDF A4
           </a>
         </li>
         <li>
           <a class="dropdown-item" target="_blank"
-             href="{{ url_for('student_records.export_pdf', paper='a3', q=q or None, rfid=rfid or None) }}">
+             href="{{ url_for('student_records.export_pdf', paper='a3', q=q or None, rfid=rfid or None, stage=stage or None) }}">
             <i class="bi bi-file-earmark-pdf-fill me-1"></i>تصدير PDF A3
           </a>
         </li>
         <li><hr class="dropdown-divider"></li>
         <li>
           <a class="dropdown-item"
-             href="{{ url_for('student_records.export_excel', q=q or None, rfid=rfid or None) }}">
+             href="{{ url_for('student_records.export_excel', q=q or None, rfid=rfid or None, stage=stage or None) }}">
             <i class="bi bi-file-earmark-excel me-1"></i>تصدير Excel
           </a>
         </li>
@@ -46,7 +46,7 @@
 <div class="card mb-4">
   <div class="card-body">
     <form method="GET" class="row g-3 align-items-end">
-      <div class="col-12 col-md-5">
+      <div class="col-12 col-md-4">
         <label class="form-label">بحث بالاسم أو رقم الطالب</label>
         <div class="input-group">
           <span class="input-group-text"><i class="bi bi-search"></i></span>
@@ -72,9 +72,18 @@
           </button>
         </div>
       </div>
+      <div class="col-12 col-md-2">
+        <label for="stageFilter" class="form-label">المرحلة</label>
+        <select id="stageFilter" name="stage" class="form-select">
+          <option value="" {{ 'selected' if not stage }}>كل المراحل</option>
+          {% for stage_name in stages %}
+          <option value="{{ stage_name }}" {{ 'selected' if stage == stage_name }}>{{ stage_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
       <div class="col-auto">
         <button type="submit" class="btn btn-primary">بحث</button>
-        {% if q or rfid %}
+        {% if q or rfid or stage %}
         <a href="{{ url_for('student_records.index') }}"
            class="btn btn-outline-secondary ms-1">مسح</a>
         {% endif %}
@@ -160,7 +169,7 @@
   <ul class="pagination justify-content-center">
     {% if records.has_prev %}
     <li class="page-item">
-      <a class="page-link" href="{{ url_for('student_records.index', page=records.prev_num, q=q, rfid=rfid) }}">
+      <a class="page-link" href="{{ url_for('student_records.index', page=records.prev_num, q=q, rfid=rfid, stage=stage) }}">
         السابق
       </a>
     </li>
@@ -168,7 +177,7 @@
     {% for p in records.iter_pages() %}
       {% if p %}
       <li class="page-item {{ 'active' if p == records.page }}">
-        <a class="page-link" href="{{ url_for('student_records.index', page=p, q=q, rfid=rfid) }}">{{ p }}</a>
+        <a class="page-link" href="{{ url_for('student_records.index', page=p, q=q, rfid=rfid, stage=stage) }}">{{ p }}</a>
       </li>
       {% else %}
       <li class="page-item disabled"><span class="page-link">…</span></li>
@@ -176,7 +185,7 @@
     {% endfor %}
     {% if records.has_next %}
     <li class="page-item">
-      <a class="page-link" href="{{ url_for('student_records.index', page=records.next_num, q=q, rfid=rfid) }}">
+      <a class="page-link" href="{{ url_for('student_records.index', page=records.next_num, q=q, rfid=rfid, stage=stage) }}">
         التالي
       </a>
     </li>
@@ -327,6 +336,8 @@
     params.set('q', q);
     const card = rfidInput ? rfidInput.value.trim() : '';
     if (card) params.set('rfid', card);
+    const stage = document.getElementById('stageFilter');
+    if (stage && stage.value) params.set('stage', stage.value);
     return SEARCH_URL + '?' + params.toString();
   }
 

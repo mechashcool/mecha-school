@@ -12,6 +12,7 @@ from app.models import (db, Student, StudentRegistrationRecord, Section, Grade,
                         AcademicYear, School, parent_students, User)
 from app.utils.decorators import (permission_required, any_permission_required,
                                    get_current_school, admin_required)
+from app.utils.school_stages import ALL_STAGES
 
 student_records_bp = Blueprint(
     'student_records', __name__,
@@ -44,18 +45,19 @@ def _school_or_404():
     return school
 
 
-def _records_query(school, q, rfid=''):
+def _records_query(school, q, rfid='', stage=''):
     """School-scoped registration-records query, optionally filtered by the same
-    name/number search used on the index page and/or by the student's RFID card.
-    Ordered newest-updated first. Shared by the index list, the live-search
-    endpoint and the bulk export routes so they stay consistent.
+    name/number search used on the index page, the student's RFID card, and the
+    canonical stage value. Ordered newest-updated first. Shared by the index
+    list, the live-search endpoint and the bulk export routes so they stay
+    consistent.
     """
     query = StudentRegistrationRecord.query.filter(
         StudentRegistrationRecord.school_id == school.id
     )
-    # One join covers both student-backed filters (joining twice would be
-    # ambiguous when q and rfid are supplied together).
-    if q or rfid:
+    # One join covers both student-backed filters and the stage join (joining
+    # twice would be ambiguous when q, rfid and stage are supplied together).
+    if q or rfid or stage:
         query = query.join(Student)
     if q:
         query = query.filter(
@@ -73,6 +75,12 @@ def _records_query(school, q, rfid=''):
     # Empty (the default) → no effect at all.
     if rfid:
         query = query.filter(Student.rfid_tag_id == rfid)
+    if stage:
+        query = (query
+                 .join(Section, Student.section_id == Section.id)
+                 .join(Grade, Section.grade_id == Grade.id)
+                 .filter(Grade.stage == stage,
+                         Grade.school_id == school.id))
     return query.order_by(StudentRegistrationRecord.updated_at.desc())
 
 
@@ -317,8 +325,9 @@ def search():
     # never degrades to "6110011". Kept here so the live search keeps applying
     # the card filter instead of silently dropping it.
     rfid = request.args.get('rfid', '').strip()
+    stage = request.args.get('stage', '').strip()
 
-    rows = _records_query(school, q, rfid).limit(50).all()
+    rows = _records_query(school, q, rfid, stage).limit(50).all()
 
     def _gs(r):
         if r.snap_grade_name:
@@ -360,12 +369,14 @@ def index():
     # STRING that is only trimmed of the whitespace/CR/LF the CR20 reader
     # appends. Never parsed as a number, so leading zeroes survive intact.
     rfid   = request.args.get('rfid', '').strip()
+    stage  = request.args.get('stage', '').strip()
 
-    records = _records_query(school, q, rfid).paginate(
+    records = _records_query(school, q, rfid, stage).paginate(
         page=page, per_page=25, error_out=False
     )
     return render_template('student_records/index.html',
-                           records=records, q=q, rfid=rfid, school=school)
+                           records=records, q=q, rfid=rfid, stage=stage,
+                           school=school, stages=ALL_STAGES)
 
 
 # ─── NEW ──────────────────────────────────────────────────────────────────────
@@ -505,21 +516,24 @@ def export_pdf():
     school = _school_or_404()
     q      = request.args.get('q', '').strip()
     rfid   = request.args.get('rfid', '').strip()
+    stage  = request.args.get('stage', '').strip()
 
     paper = request.args.get('paper', 'a4').lower()
     if paper not in ('a3', 'a4'):
         paper = 'a4'
 
-    records = _records_query(school, q, rfid).all()
+    records = _records_query(school, q, rfid, stage).all()
     if not records:
         flash('لا توجد سجلات قيد للتصدير.', 'warning')
-        return redirect(url_for('student_records.index', q=q or None, rfid=rfid or None))
+        return redirect(url_for('student_records.index', q=q or None,
+                                rfid=rfid or None, stage=stage or None))
 
     from app.utils.pdf_gen import generate_registration_records_bulk_pdf
     pdf_bytes = generate_registration_records_bulk_pdf(records, school, paper=paper)
     if not pdf_bytes:
         flash('تعذّر إنشاء ملف PDF — تحقق من توفر مكتبة ReportLab والخط العربي.', 'danger')
-        return redirect(url_for('student_records.index', q=q or None, rfid=rfid or None))
+        return redirect(url_for('student_records.index', q=q or None,
+                                rfid=rfid or None, stage=stage or None))
 
     fname = f'سجلات_القيد_{paper.upper()}.pdf'
     return send_file(BytesIO(pdf_bytes), mimetype='application/pdf',
@@ -535,17 +549,20 @@ def export_excel():
     school = _school_or_404()
     q      = request.args.get('q', '').strip()
     rfid   = request.args.get('rfid', '').strip()
+    stage  = request.args.get('stage', '').strip()
 
-    records = _records_query(school, q, rfid).all()
+    records = _records_query(school, q, rfid, stage).all()
     if not records:
         flash('لا توجد سجلات قيد للتصدير.', 'warning')
-        return redirect(url_for('student_records.index', q=q or None, rfid=rfid or None))
+        return redirect(url_for('student_records.index', q=q or None,
+                                rfid=rfid or None, stage=stage or None))
 
     from app.utils.excel_export import export_registration_records
     xlsx_bytes = export_registration_records(records)
     if not xlsx_bytes:
         flash('تعذّر إنشاء ملف Excel — تحقق من توفر مكتبة openpyxl.', 'danger')
-        return redirect(url_for('student_records.index', q=q or None, rfid=rfid or None))
+        return redirect(url_for('student_records.index', q=q or None,
+                                rfid=rfid or None, stage=stage or None))
 
     return send_file(
         BytesIO(xlsx_bytes),
