@@ -1,11 +1,6 @@
 {% extends "shared/base.html" %}
-{% if mode == 'edit' %}
-{% block title %}تعديل السجل الوسطي{% endblock %}
-{% block page_title %}تعديل السجل الوسطي{% endblock %}
-{% else %}
-{% block title %}إضافة سجل وسيط{% endblock %}
-{% block page_title %}إضافة سجل وسيط{% endblock %}
-{% endif %}
+{% block title %}{% if mode == 'edit' %}تعديل السجل الوسطي{% else %}إضافة سجل وسيط{% endif %}{% endblock %}
+{% block page_title %}{% if mode == 'edit' %}تعديل السجل الوسطي{% else %}إضافة سجل وسيط{% endif %}{% endblock %}
 
 {% block content %}
 <style>
@@ -56,7 +51,7 @@
 </form>
 {% endif %}
 
-<form method="POST">
+<form method="POST" action="{{ url_for('student_middle_records.edit', record_id=record.id) if record else url_for('student_middle_records.new') }}">
   {% if record %}
   <input type="hidden" name="student_id" value="{{ record.student_id }}">
   {% elif prefill and prefill.student_id %}
@@ -227,7 +222,7 @@
         <div class="col-md-3">
           <label class="form-label">المجموع</label>
           <input type="number" step="any" class="form-control" name="total_score"
-                 value="{{ record.total_score if record and record.total_score is not none else prefill.total_score if prefill else '' }}">
+               value="{{ record.total_score if record and record.total_score is not none else '' }}">
         </div>
         <div class="col-md-4">
           <label class="form-label">نتيجة الدور الأول</label>

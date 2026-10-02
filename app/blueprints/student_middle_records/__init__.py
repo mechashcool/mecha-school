@@ -274,7 +274,7 @@ def new():
             prefill['student_id'] = student.id
 
     return render_template(
-        'form.html',
+        'student_middle_records/form.html',
         record=None,
         school=school,
         mode='new',
@@ -292,7 +292,7 @@ def new():
 def view(record_id):
     school = _school_or_404()
     record = StudentMiddleRecord.query.filter_by(id=record_id, school_id=school.id).first_or_404()
-    return render_template('view.html', record=record, school=school,
+    return render_template('student_middle_records/view.html', record=record, school=school,
                            subjects=SUBJECTS, grade_columns=GRADE_COLUMNS)
 
 
@@ -315,7 +315,8 @@ def edit(record_id):
         flash('تم تحديث السجل الوسطي بنجاح.', 'success')
         return redirect(url_for('student_middle_records.view', record_id=record.id))
 
-    return render_template('form.html', record=record, school=school, mode='edit',
+    return render_template('student_middle_records/form.html', record=record, school=school, mode='edit',
+                           students=[], q='', prefill={},
                            subjects=SUBJECTS, grade_columns=GRADE_COLUMNS)
 
 
@@ -325,5 +326,5 @@ def edit(record_id):
 def print_record(record_id):
     school = _school_or_404()
     record = StudentMiddleRecord.query.filter_by(id=record_id, school_id=school.id).first_or_404()
-    return render_template('print.html', record=record, school=school,
+    return render_template('student_middle_records/print.html', record=record, school=school,
                            subjects=SUBJECTS, grade_columns=GRADE_COLUMNS)
