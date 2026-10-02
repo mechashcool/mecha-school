@@ -66,7 +66,7 @@
       <div class="row g-3">
         <div class="col-md-3">
           <label class="form-label">رقم القيد</label>
-          <input type="text" class="form-control" name="record_number" value="{{ ((record.record_number or record.snap_student_number) if record else prefill.record_number) or '' }}">
+          <input type="text" class="form-control" name="record_number" value="{{ (record.record_number if record else prefill.record_number) or '' }}">
         </div>
         <div class="col-md-2">
           <label class="form-label">رقم الصفحة</label>

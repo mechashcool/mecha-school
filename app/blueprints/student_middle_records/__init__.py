@@ -82,7 +82,7 @@ def _build_autofill(student, school, academic_year):
     section = student.section
     grade = section.grade if section else None
     return {
-        'record_number': student.student_id or '',
+        'record_number': '',
         'page_number': '',
         'father_name': '',
         'grandfather_name': '',
