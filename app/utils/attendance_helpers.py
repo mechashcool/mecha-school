@@ -3,6 +3,7 @@ Attendance utility helpers — time-based status determination and timezone supp
 """
 import pytz
 from datetime import datetime
+from typing import NamedTuple, Optional
 
 
 def _get_tz(settings=None):
@@ -46,13 +47,106 @@ def utc_to_local(utc_dt, settings=None):
     return utc_dt.astimezone(tz).replace(tzinfo=None)
 
 
-def determine_check_in_status(check_in_time, settings, shift=None):
+# ─────────────────────────────────────────────────────────────────────────────
+#  Effective attendance settings — ONE calculation path for both audiences
+#
+#  Students and employees store their timings in separate School columns and
+#  resolve their shift differently (section→grade vs Employee.shift_id), but
+#  the PRECEDENCE RULES are identical, so they live here once:
+#
+#    late_threshold  = shift.late_after_time ?? school.<audience late>
+#    departure_time  = shift.dismissal_time  ?? school.<audience departure>
+#    absence_cutoff  = school.<audience shift cutoff>  when shift mode is ON
+#                      school.<audience absence threshold>  when it is OFF
+#
+#  The absence cutoff NEVER cross-falls-back: not between the two modes of one
+#  audience, and not between audiences.  NULL stays NULL and the caller fails
+#  closed.  This reproduces the existing student rule exactly (see
+#  School.shift_absent_after_time) and applies the same discipline to employees.
+#
+#  This function performs NO database access.  The caller supplies the
+#  already-resolved shift (get_student_shift / get_employee_shift), so reports
+#  and payroll can bulk-preload shifts and still share this logic.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# audience → (late threshold, absence threshold, departure, shift toggle,
+#             shift-mode absence cutoff) column names on School/SchoolSettings.
+_AUDIENCE_SETTINGS_FIELDS = {
+    'students': (
+        'att_late_threshold', 'att_absence_threshold', 'att_departure_time',
+        'enable_attendance_shifts', 'shift_absent_after_time',
+    ),
+    'employees': (
+        'emp_att_late_threshold', 'emp_att_absence_threshold',
+        'emp_att_departure_time', 'emp_enable_attendance_shifts',
+        'emp_shift_absent_after_time',
+    ),
+}
+
+
+class EffectiveAttendanceSettings(NamedTuple):
+    """Resolved timings for one audience (and optionally one shift)."""
+    audience:       str
+    shift_enabled:  bool
+    late_threshold: Optional[object]   # datetime.time | None
+    absence_cutoff: Optional[object]   # datetime.time | None
+    departure_time: Optional[object]   # datetime.time | None
+
+
+def _audience_fields(audience):
+    try:
+        return _AUDIENCE_SETTINGS_FIELDS[audience]
+    except KeyError:
+        raise ValueError(f'invalid attendance audience: {audience!r}') from None
+
+
+def get_effective_attendance_settings(school, audience, shift=None):
+    """
+    Effective attendance timings for `audience` ('students' | 'employees').
+
+    PURE — no queries, no writes.  `shift` is the already-resolved shift object
+    for the person (or None); anything exposing `late_after_time` /
+    `dismissal_time` works, which is why AttendanceShift and
+    EmployeeAttendanceShift use those same attribute names.
+
+    `shift_enabled` reflects the SCHOOL TOGGLE only, not whether a shift was
+    passed — it is what selects which absence-cutoff column applies.
+    """
+    late_f, absence_f, departure_f, toggle_f, shift_cutoff_f = _audience_fields(audience)
+
+    shift_enabled = bool(getattr(school, toggle_f, False)) if school else False
+
+    late = getattr(shift, 'late_after_time', None) if shift is not None else None
+    if late is None and school:
+        late = getattr(school, late_f, None)
+
+    departure = getattr(shift, 'dismissal_time', None) if shift is not None else None
+    if departure is None and school:
+        departure = getattr(school, departure_f, None)
+
+    # No cross-fallback between the two modes: an unset cutoff stays unset.
+    cutoff = None
+    if school:
+        cutoff = getattr(school, shift_cutoff_f if shift_enabled else absence_f, None)
+
+    return EffectiveAttendanceSettings(
+        audience       = audience,
+        shift_enabled  = shift_enabled,
+        late_threshold = late,
+        absence_cutoff = cutoff,
+        departure_time = departure,
+    )
+
+
+def determine_check_in_status(check_in_time, settings, shift=None, audience='students'):
     """
     Return 'present' or 'late' based on check_in_time vs time thresholds.
 
-    If `shift` is provided (AttendanceShift), its late_after_time is used.
-    Otherwise falls back to settings.att_late_threshold (existing behaviour).
-    Passing shift=None is fully backwards-compatible with all existing callers.
+    If `shift` is provided, its late_after_time is used.  Otherwise falls back
+    to the school-level late threshold for `audience` (students →
+    settings.att_late_threshold, the existing behaviour).
+    Passing shift=None is fully backwards-compatible with all existing callers,
+    and `audience` defaults to 'students' so no existing call site changes.
 
     INSTITUTE ONLY — optional student lateness
     ──────────────────────────────────────────
@@ -71,13 +165,16 @@ def determine_check_in_status(check_in_time, settings, shift=None):
     silently revived by a school-level time.  When a cutoff IS configured the
     existing calculation and the existing shift-first priority run unchanged.
 
-    Employee attendance calls this helper WITHOUT a shift (employees have no
-    shifts at all), so for staff the school-level threshold remains the single
-    switch — already optional, since that column is nullable. Existing schools,
-    payroll and stored shift times are unaffected; nothing here writes.
+    EMPLOYEE attendance passes audience='employees', which swaps the
+    school-level source to ``emp_att_late_threshold`` and lets an
+    EmployeeAttendanceShift supply ``late_after_time``.  The two audiences never
+    read each other's columns.  Nothing here writes.
     """
+    late_field = _audience_fields(audience)[0]
+    school_threshold = getattr(settings, late_field, None) if settings else None
+
     if shift is not None and getattr(settings, 'is_institute', False):
-        if getattr(settings, 'att_late_threshold', None) is None:
+        if school_threshold is None:
             return 'present'
         if getattr(shift, 'late_after_time', None) is None:
             return 'present'
@@ -85,8 +182,8 @@ def determine_check_in_status(check_in_time, settings, shift=None):
     threshold = None
     if shift is not None:
         threshold = getattr(shift, 'late_after_time', None)
-    if threshold is None and settings:
-        threshold = getattr(settings, 'att_late_threshold', None)
+    if threshold is None:
+        threshold = school_threshold
     if threshold and check_in_time >= threshold:
         return 'late'
     return 'present'
@@ -132,6 +229,40 @@ def get_student_shift(student, school):
              .execution_options(bypass_tenant_scope=True)
              .get(shift_id))
     if shift and not shift.is_active:
+        return None
+    return shift
+
+
+def get_employee_shift(employee, school):
+    """
+    Return the EmployeeAttendanceShift for `employee`, else None.
+
+    Deliberately NOT merged with get_student_shift: a student's shift comes
+    from section→grade, an employee's from a direct Employee.shift_id. Both
+    feed the same get_effective_attendance_settings / determine_check_in_status.
+
+    Returns None when:
+      - school.emp_enable_attendance_shifts is False/absent
+      - employee.shift_id is NULL
+      - the shift no longer exists or is inactive
+      - the shift does not belong to the employee's school AND the resolving
+        school (cross-school rows can never influence a status, even if one was
+        somehow stored)
+    """
+    if not school or not getattr(school, 'emp_enable_attendance_shifts', False):
+        return None
+    shift_id = getattr(employee, 'shift_id', None)
+    if not shift_id:
+        return None
+    from app.models import EmployeeAttendanceShift
+    shift = (EmployeeAttendanceShift.query
+             .execution_options(bypass_tenant_scope=True)
+             .get(shift_id))
+    if not shift or not shift.is_active:
+        return None
+    if shift.school_id != getattr(employee, 'school_id', None):
+        return None
+    if shift.school_id != getattr(school, 'id', None):
         return None
     return shift
 

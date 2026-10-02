@@ -252,6 +252,27 @@ def _form_context(employee=None):
                                    .filter_by(employee_id=employee.id, is_active=True)
                                    .first())
 
+    # ── Employee attendance shift (optional) ──────────────────────────────────
+    # Only ACTIVE shifts of THIS school are offered, and only while the school
+    # has employee shifts enabled. When the feature is off the dropdown is not
+    # rendered at all, so no shift can be assigned. An employee already holding
+    # an inactive shift keeps it listed so edit can preselect it rather than
+    # silently clearing the assignment.
+    emp_shifts = []
+    if school and getattr(school, 'emp_enable_attendance_shifts', False):
+        from app.models import EmployeeAttendanceShift
+        emp_shifts = (EmployeeAttendanceShift.query
+                      .filter_by(school_id=school.id, is_active=True)
+                      .order_by(EmployeeAttendanceShift.start_time)
+                      .all())
+        if employee and employee.shift_id:
+            if not any(s.id == employee.shift_id for s in emp_shifts):
+                current = (EmployeeAttendanceShift.query
+                           .filter_by(id=employee.shift_id, school_id=school.id)
+                           .first())
+                if current:
+                    emp_shifts = emp_shifts + [current]
+
     # Institutes: study groups the instructor teaches (InstituteStudyGroup.
     # instructor_id) replace grades/sections. Never computed for a school.
     inst_teaching = None
@@ -284,7 +305,41 @@ def _form_context(employee=None):
         emp_class_other         = _ec.OTHER,
         emp_cur_job             = cur_job,
         emp_cur_dep             = cur_dep,
+        emp_shifts              = emp_shifts,
+        emp_cur_shift_id        = employee.shift_id if employee else None,
     )
+
+
+def _posted_employee_shift_id(school, employee=None):
+    """Resolve the posted ``shift_id`` to a shift owned by `school`, else None.
+
+    Security: the submitted id is never trusted. It is looked up with an
+    explicit ``school_id`` filter, so a shift belonging to another school
+    resolves to None (the assignment is dropped) instead of being stored.
+    Returns the employee's current shift unchanged when the field is absent
+    from the submission, so a form that does not render the dropdown — the
+    feature is off, or the field is hidden — cannot clear an existing value.
+    """
+    if 'shift_id' not in request.form:
+        return employee.shift_id if employee else None
+    if not school or not getattr(school, 'emp_enable_attendance_shifts', False):
+        return employee.shift_id if employee else None
+
+    raw = (request.form.get('shift_id') or '').strip()
+    if not raw:
+        return None                      # explicit "— بدون شفت —"
+    if not raw.isdigit():
+        return employee.shift_id if employee else None
+
+    from app.models import EmployeeAttendanceShift
+    shift = (EmployeeAttendanceShift.query
+             .filter_by(id=int(raw), school_id=school.id)
+             .first())
+    if shift is None:
+        _log.warning('[employee-shift] rejected shift_id=%s for school_id=%s '
+                     '(not an employee shift of this school)', raw, school.id)
+        return employee.shift_id if employee else None
+    return shift.id
 
 
 # Every field the institute teaching section can post. ANY of them marks a
@@ -760,6 +815,7 @@ def _handle_employee_post(employee):
             photo         = photo_path,
             photo_display = photo_display_path,
             notes         = notes_value,
+            shift_id      = _posted_employee_shift_id(school),
             school_id     = school.id if school else None,
         )
         import logging as _logging
@@ -785,6 +841,7 @@ def _handle_employee_post(employee):
         employee.full_name     = full_name
         employee.job_title     = job_title if job_title is not None else employee.job_title
         employee.department    = department
+        employee.shift_id      = _posted_employee_shift_id(school, employee)
         employee.gender        = request.form.get('gender', employee.gender)
         employee.date_of_birth = dob if dob else employee.date_of_birth
         employee.nationality   = request.form.get('nationality', '').strip()

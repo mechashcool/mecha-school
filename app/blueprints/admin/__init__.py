@@ -2959,8 +2959,14 @@ def attendance_settings():
         # automatic-absence control, and without this its saved cutoff would be
         # wiped every time any other setting on this form was saved.
         # For a school every field is always rendered, so behaviour is unchanged.
+        # The emp_att_* fields are the EMPLOYEE equivalents, stored in their own
+        # columns: saving them never reads or writes a student att_* value, and
+        # vice versa.  They follow the same key-presence rule, so a tab that is
+        # not rendered cannot wipe the other audience's saved times.
         for _field in ('att_start_time', 'att_late_threshold',
-                       'att_absence_threshold', 'att_departure_time'):
+                       'att_absence_threshold', 'att_departure_time',
+                       'emp_att_start_time', 'emp_att_late_threshold',
+                       'emp_att_absence_threshold', 'emp_att_departure_time'):
             if _field in request.form:
                 setattr(settings_row, _field,
                         _parse_time(request.form.get(_field, '')))
@@ -2973,6 +2979,10 @@ def attendance_settings():
             settings_row.emp_absence_alert_enabled = bool(request.form.get('emp_absence_alert_enabled'))
             # Attendance shifts feature toggle
             settings_row.enable_attendance_shifts = bool(request.form.get('enable_attendance_shifts'))
+            # EMPLOYEE attendance shifts feature toggle — independent of the
+            # student toggle above; neither one reads the other.
+            settings_row.emp_enable_attendance_shifts = bool(
+                request.form.get('emp_enable_attendance_shifts'))
 
         db.session.commit()
         resource_id = school.id if is_school_obj else getattr(settings_row, 'id', None)
@@ -3004,11 +3014,28 @@ def attendance_settings():
         active_shifts   = [s for s in all_shifts if s.is_active]
         inactive_shifts = [s for s in all_shifts if not s.is_active]
 
+    # EMPLOYEE shifts — a separate table, loaded regardless of the employee
+    # toggle (same as the student list above) so the section still shows after
+    # switching the toggle off. One query; never mixed with student shifts.
+    emp_active_shifts   = []
+    emp_inactive_shifts = []
+    if is_school_obj:
+        from app.models import EmployeeAttendanceShift
+        emp_all = (EmployeeAttendanceShift.query
+                   .execution_options(bypass_tenant_scope=True)
+                   .filter_by(school_id=school.id)
+                   .order_by(EmployeeAttendanceShift.start_time)
+                   .all())
+        emp_active_shifts   = [s for s in emp_all if s.is_active]
+        emp_inactive_shifts = [s for s in emp_all if not s.is_active]
+
     return render_template('admin/attendance_settings.html',
                            settings=settings_row,
                            is_school_obj=is_school_obj,
                            active_shifts=active_shifts,
-                           inactive_shifts=inactive_shifts)
+                           inactive_shifts=inactive_shifts,
+                           emp_active_shifts=emp_active_shifts,
+                           emp_inactive_shifts=emp_inactive_shifts)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

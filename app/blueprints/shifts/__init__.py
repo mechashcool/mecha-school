@@ -10,18 +10,29 @@ school shares School.shift_absent_after_time, edited through
 `update_global_absence` below.  AttendanceShift.absent_after_time is retained
 in the database for rollback/audit and is no longer read for behaviour.
 
+EMPLOYEE shifts are a SEPARATE model (EmployeeAttendanceShift) with its own
+routes at the bottom of this file. They share the validation shape and the
+school-resolution pattern but touch no student row: student and employee shift
+data, toggles and cutoffs are fully independent.
+
 Routes:
   POST /attendance-shifts/create
   POST /attendance-shifts/<id>/edit
   POST /attendance-shifts/<id>/toggle
   POST /attendance-shifts/<id>/delete
   POST /attendance-shifts/global-absence
+  POST /attendance-shifts/employee/create
+  POST /attendance-shifts/employee/<id>/edit
+  POST /attendance-shifts/employee/<id>/toggle
+  POST /attendance-shifts/employee/<id>/delete
+  POST /attendance-shifts/employee/global-absence
 """
 from flask import Blueprint, redirect, url_for, flash, request
 from flask_login import login_required, current_user
 from datetime import time as _time
 
-from app.models import db, AttendanceShift, School, Section
+from app.models import (db, AttendanceShift, EmployeeAttendanceShift, Employee,
+                        School, Section)
 from app.utils.decorators import get_current_school
 
 shifts_bp = Blueprint('shifts', __name__)
@@ -305,4 +316,263 @@ def update_global_absence():
         return redirect(url_for('admin.attendance_settings'))
 
     flash(f'تم حفظ وقت الغياب التلقائي للشفتات: {cutoff.strftime("%H:%M")}.', 'success')
+    return redirect(url_for('admin.attendance_settings'))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  EMPLOYEE SHIFTS — EmployeeAttendanceShift CRUD
+#
+#  Separate rows, separate toggle (School.emp_enable_attendance_shifts) and a
+#  separate cutoff (School.emp_shift_absent_after_time) from the student shifts
+#  above.  Nothing in this section reads or writes AttendanceShift, Section,
+#  Grade or StudentAttendance.
+#
+#  The school is always resolved from the trusted server-side session context
+#  (get_current_school); a school_id in the request body is never read, and
+#  every row is re-checked against it before being modified.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _emp_shift_or_none(shift_id, school):
+    """Fetch an employee shift and verify it belongs to the current school.
+
+    bypass_tenant_scope + an explicit school_id comparison, matching the
+    student shift routes: a cross-school id is treated exactly like a missing
+    one, so the response never reveals that it exists elsewhere.
+    """
+    shift = (EmployeeAttendanceShift.query
+             .execution_options(bypass_tenant_scope=True)
+             .get(shift_id))
+    if shift is None or not school or shift.school_id != school.id:
+        return None
+    return shift
+
+
+def _emp_shift_times_or_error(school):
+    """Parse + validate the posted employee shift times.
+
+    Returns (name, start_time, late_after_time, dismissal_time, error_message).
+    Same rules as the student shift forms: name and start required, lateness
+    required for a school but optional for an institute, and a late threshold
+    must be strictly after the start.
+    """
+    name           = request.form.get('name', '').strip()
+    start_time     = _parse_time(request.form.get('start_time', ''))
+    late_after     = _parse_time(request.form.get('late_after_time', ''))
+    dismissal_time = _parse_time(request.form.get('dismissal_time', ''))
+
+    lateness_optional = bool(getattr(school, 'is_institute', False))
+
+    if not start_time:
+        return name, None, None, None, 'وقت بداية الدوام مطلوب.'
+    if late_after is None and not lateness_optional:
+        return name, None, None, None, 'أوقات البداية والتأخر مطلوبة.'
+    if late_after is not None and late_after <= start_time:
+        return name, None, None, None, 'وقت التأخر يجب أن يكون بعد وقت البداية.'
+    return name, start_time, late_after, dismissal_time, None
+
+
+@shifts_bp.route('/employee/create', methods=['POST'])
+@login_required
+def create_employee_shift():
+    if not _require_admin():
+        flash('ليس لديك صلاحية.', 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+
+    school = get_current_school()
+    if not school or not isinstance(school, School):
+        flash('لم يتم تحديد المدرسة.', 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+
+    name, start_time, late_after, dismissal_time, err = _emp_shift_times_or_error(school)
+    if not name:
+        flash('اسم الشفت مطلوب.', 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+    if err:
+        flash(err, 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+
+    existing = (EmployeeAttendanceShift.query
+                .execution_options(bypass_tenant_scope=True)
+                .filter_by(school_id=school.id, name=name)
+                .first())
+    if existing:
+        flash(f'يوجد شفت موظفين بنفس الاسم بالفعل: "{name}".', 'warning')
+        return redirect(url_for('admin.attendance_settings'))
+
+    db.session.add(EmployeeAttendanceShift(
+        school_id       = school.id,
+        name            = name,
+        start_time      = start_time,
+        late_after_time = late_after,
+        dismissal_time  = dismissal_time,
+        is_active       = True,
+    ))
+    db.session.commit()
+    flash(f'تم إضافة شفت الموظفين "{name}" بنجاح.', 'success')
+    return redirect(url_for('admin.attendance_settings'))
+
+
+@shifts_bp.route('/employee/<int:shift_id>/edit', methods=['POST'])
+@login_required
+def edit_employee_shift(shift_id):
+    if not _require_admin():
+        flash('ليس لديك صلاحية.', 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+
+    school = get_current_school()
+    shift  = _emp_shift_or_none(shift_id, school)
+    if shift is None:
+        flash('لا يمكن تعديل هذا الشفت.', 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+
+    name, start_time, late_after, dismissal_time, err = _emp_shift_times_or_error(school)
+    name = name or shift.name
+    if err:
+        flash(err, 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+
+    dup = (EmployeeAttendanceShift.query
+           .execution_options(bypass_tenant_scope=True)
+           .filter(EmployeeAttendanceShift.school_id == shift.school_id,
+                   EmployeeAttendanceShift.name == name,
+                   EmployeeAttendanceShift.id != shift.id)
+           .first())
+    if dup:
+        flash(f'يوجد شفت موظفين بنفس الاسم بالفعل: "{name}".', 'warning')
+        return redirect(url_for('admin.attendance_settings'))
+
+    shift.name            = name
+    shift.start_time      = start_time
+    shift.late_after_time = late_after
+    shift.dismissal_time  = dismissal_time
+    db.session.commit()
+    flash(f'تم تحديث شفت الموظفين "{name}" بنجاح.', 'success')
+    return redirect(url_for('admin.attendance_settings'))
+
+
+@shifts_bp.route('/employee/<int:shift_id>/toggle', methods=['POST'])
+@login_required
+def toggle_employee_shift(shift_id):
+    if not _require_admin():
+        flash('ليس لديك صلاحية.', 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+
+    school = get_current_school()
+    shift  = _emp_shift_or_none(shift_id, school)
+    if shift is None:
+        flash('لا يمكن تعديل هذا الشفت.', 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+
+    # An inactive shift is ignored by get_employee_shift, so those employees
+    # fall back to the school-level employee settings. The assignment itself is
+    # preserved, exactly like deactivating a student shift keeps Section.shift_id.
+    shift.is_active = not shift.is_active
+    db.session.commit()
+    state = 'مفعَّل' if shift.is_active else 'معطَّل'
+    flash(f'شفت الموظفين "{shift.name}" الآن {state}.', 'info')
+    return redirect(url_for('admin.attendance_settings'))
+
+
+@shifts_bp.route('/employee/<int:shift_id>/delete', methods=['POST'])
+@login_required
+def delete_employee_shift(shift_id):
+    if not _require_admin():
+        flash('ليس لديك صلاحية.', 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+
+    school = get_current_school()
+    shift  = _emp_shift_or_none(shift_id, school)
+    if shift is None:
+        flash('لا يمكن حذف هذا الشفت.', 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+
+    # Block delete while employees are still assigned — mirrors the student
+    # route, which refuses to delete a shift that still has sections.
+    in_use = (Employee.query
+              .execution_options(bypass_tenant_scope=True)
+              .filter(Employee.school_id == shift.school_id,
+                      Employee.shift_id == shift.id)
+              .count())
+    if in_use:
+        flash(
+            f'لا يمكن حذف شفت الموظفين "{shift.name}" لأنه مرتبط بـ {in_use} موظف. '
+            f'قم بإلغاء تعيين الموظفين أولاً، أو عطِّل الشفت بدلاً من حذفه.',
+            'warning',
+        )
+        return redirect(url_for('admin.attendance_settings'))
+
+    name = shift.name
+    db.session.delete(shift)
+    db.session.commit()
+    flash(f'تم حذف شفت الموظفين "{name}".', 'success')
+    return redirect(url_for('admin.attendance_settings'))
+
+
+@shifts_bp.route('/employee/global-absence', methods=['POST'])
+@login_required
+def update_employee_global_absence():
+    """
+    Set the school-wide employee absence cutoff shared by ALL employee shifts
+    (School.emp_shift_absent_after_time).
+
+    Mirrors update_global_absence: its own tiny form, because the employee
+    shift pane sits outside the main attendance-settings form and nested forms
+    are invalid HTML.  An empty value clears the setting back to NULL, which
+    keeps employee shift absence fail-closed.  The student
+    School.shift_absent_after_time and the unified
+    School.emp_att_absence_threshold are NOT touched here.
+
+    A non-empty cutoff is REJECTED (nothing saved, previous value kept) unless
+    it is strictly after the start_time of every ACTIVE employee shift.
+    """
+    from app.utils.audit import log_action
+
+    if not _require_admin():
+        flash('ليس لديك صلاحية.', 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+
+    school = get_current_school()
+    if not school or not isinstance(school, School):
+        flash('لم يتم تحديد المدرسة.', 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+
+    raw    = request.form.get('emp_shift_absent_after_time', '')
+    cutoff = _parse_time(raw)
+
+    if raw.strip() and cutoff is None:
+        flash('صيغة الوقت غير صحيحة.', 'danger')
+        return redirect(url_for('admin.attendance_settings'))
+
+    if cutoff is not None:
+        invalid = (EmployeeAttendanceShift.query
+                   .execution_options(bypass_tenant_scope=True)
+                   .filter(EmployeeAttendanceShift.school_id == school.id,
+                           EmployeeAttendanceShift.is_active.is_(True),
+                           EmployeeAttendanceShift.start_time >= cutoff)
+                   .order_by(EmployeeAttendanceShift.start_time)
+                   .all())
+        if invalid:
+            details = '، '.join(
+                f'{sh.name} (يبدأ {sh.start_time.strftime("%H:%M")})'
+                for sh in invalid
+            )
+            flash(
+                f'لم يتم الحفظ: وقت اعتبار الغياب ({cutoff.strftime("%H:%M")}) '
+                f'يجب أن يكون بعد بداية دوام كل شفتات الموظفين المفعَّلة. '
+                f'الشفتات التالية تبدأ في نفس الوقت أو بعده: {details}. '
+                f'لم يتم تغيير الوقت المحفوظ سابقاً.',
+                'danger',
+            )
+            return redirect(url_for('admin.attendance_settings'))
+
+    school.emp_shift_absent_after_time = cutoff
+    db.session.commit()
+    log_action('edit', 'school_settings', school.id,
+               details='employee shift absence cutoff updated')
+
+    if cutoff is None:
+        flash('تم إلغاء وقت اعتبار الغياب لشفتات الموظفين.', 'warning')
+    else:
+        flash(f'تم حفظ وقت اعتبار الغياب لشفتات الموظفين: {cutoff.strftime("%H:%M")}.',
+              'success')
     return redirect(url_for('admin.attendance_settings'))

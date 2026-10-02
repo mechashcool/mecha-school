@@ -101,6 +101,37 @@ class School(db.Model):
     emp_absence_period        = db.Column(db.String(20), nullable=True, default='monthly')
     emp_absence_alert_enabled = db.Column(db.Boolean,   default=True)
 
+    # ── EMPLOYEE attendance timings — fully independent of the student att_*
+    # columns above.  Employees previously read att_late_threshold /
+    # att_departure_time directly; migration h8e9m1p2s3t4 copies those two
+    # values forward so behaviour is unchanged on deploy and can then be
+    # edited per audience.
+    #
+    # emp_att_start_time is configuration/display only — exactly like the
+    # student att_start_time, no logic reads it.
+    #
+    # emp_att_absence_threshold is deliberately NOT copied from
+    # att_absence_threshold: employee absence has no cutoff policy today, and
+    # inventing one would silently change which days count as absent. NULL
+    # means "not configured" and must stay fail-closed.
+    emp_att_start_time        = db.Column(db.Time, nullable=True)
+    emp_att_late_threshold    = db.Column(db.Time, nullable=True)
+    emp_att_absence_threshold = db.Column(db.Time, nullable=True)
+    emp_att_departure_time    = db.Column(db.Time, nullable=True)
+
+    # Optional per-school feature: employee attendance shifts.  Independent of
+    # the student `enable_attendance_shifts` toggle; default OFF so existing
+    # schools behave exactly as before.  See EmployeeAttendanceShift.
+    emp_enable_attendance_shifts = db.Column(db.Boolean, default=False, nullable=False,
+                                             server_default=db.false())
+
+    # EMPLOYEE SHIFT MODE ONLY — the single absence cutoff shared by every
+    # EmployeeAttendanceShift of this school.  Mirrors
+    # School.shift_absent_after_time: NULL means "not configured yet" and does
+    # NOT fall back to emp_att_absence_threshold (fail closed, no cross-audience
+    # fallback to the student cutoff either).
+    emp_shift_absent_after_time = db.Column(db.Time, nullable=True)
+
     # Fee installment reminder notifications
     fee_reminder_enabled      = db.Column(db.Boolean,    default=False)
     fee_reminder_before_value = db.Column(db.Integer,    default=3)    # legacy, kept for DB compat
@@ -391,6 +422,57 @@ class AttendanceShift(db.Model):
 
     def __repr__(self):
         return f'<AttendanceShift {self.name} school={self.school_id}>'
+
+
+class EmployeeAttendanceShift(db.Model):
+    """
+    A named EMPLOYEE work shift (e.g. الدوام الصباحي / الدوام المسائي).
+
+    Deliberately a SEPARATE table from AttendanceShift rather than an
+    `audience` column on it: AttendanceShift is queried from ~20 places that
+    carry no audience filter (section/grade assignment dropdowns, all four
+    student auto-absence passes, the school↔institute conversion guard), and a
+    single missed filter there would change STUDENT absence behaviour.
+
+    The attribute names start_time / late_after_time / dismissal_time match
+    AttendanceShift exactly ON PURPOSE, so both objects feed the same
+    calculation helpers (determine_check_in_status,
+    get_effective_attendance_settings) with no adapter.
+
+    Only relevant when School.emp_enable_attendance_shifts is True.
+    Employees are linked directly via Employee.shift_id — there is no
+    department-level or rotating assignment.
+
+    The automatic-absence cutoff is NOT per shift: every employee shift of a
+    school shares School.emp_shift_absent_after_time.  AttendanceShift's dead
+    `absent_after_time` column is deliberately NOT replicated here.
+    """
+    __tablename__ = 'employee_attendance_shifts'
+    __school_scoped__ = True
+
+    id              = db.Column(db.Integer, primary_key=True)
+    school_id       = db.Column(db.Integer, db.ForeignKey('schools.id', ondelete='CASCADE'),
+                                nullable=False, index=True)
+    name            = db.Column(db.String(100), nullable=False)
+    start_time      = db.Column(db.Time, nullable=False)
+    # NULL = lateness is switched off for this shift (same semantics as
+    # AttendanceShift.late_after_time).
+    late_after_time = db.Column(db.Time, nullable=True)
+    dismissal_time  = db.Column(db.Time, nullable=True)
+    is_active       = db.Column(db.Boolean, default=True, nullable=False,
+                                server_default=db.true())
+    created_at      = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at      = db.Column(db.DateTime, default=datetime.utcnow,
+                                onupdate=datetime.utcnow)
+
+    school = db.relationship('School', foreign_keys=[school_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('school_id', 'name', name='uq_emp_shift_school_name'),
+    )
+
+    def __repr__(self):
+        return f'<EmployeeAttendanceShift {self.name} school={self.school_id}>'
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1809,6 +1891,19 @@ class Employee(db.Model):
 
     user_id       = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     school_id     = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False, index=True)
+
+    # Optional EMPLOYEE shift assignment — only consulted when
+    # School.emp_enable_attendance_shifts is True (see get_employee_shift).
+    # NULL for every existing employee and the default for new ones: the
+    # school-level emp_att_* settings then apply. Indexed for the Phase 2 bulk
+    # shift preload in reports/payroll. Deleting a shift that still has
+    # employees assigned is blocked in the CRUD route, mirroring how a student
+    # shift with sections cannot be deleted.
+    shift_id      = db.Column(db.Integer,
+                              db.ForeignKey('employee_attendance_shifts.id'),
+                              nullable=True, index=True)
+
+    shift = db.relationship('EmployeeAttendanceShift', foreign_keys=[shift_id])
 
     sections_managed = db.relationship('Section', backref='teacher', lazy='dynamic',
                                         foreign_keys='Section.teacher_id')
@@ -3461,6 +3556,16 @@ class SchoolSettings(db.Model):
     att_late_threshold    = db.Column(db.Time, nullable=True)
     att_absence_threshold = db.Column(db.Time, nullable=True)
     att_departure_time    = db.Column(db.Time, nullable=True)
+    # EMPLOYEE equivalents — present for schema parity with School so the
+    # single-tenant / fresh-install fallback resolves the same attribute names.
+    # emp_att_absence_threshold stays NULL (no employee cutoff policy exists).
+    emp_att_start_time        = db.Column(db.Time, nullable=True)
+    emp_att_late_threshold    = db.Column(db.Time, nullable=True)
+    emp_att_absence_threshold = db.Column(db.Time, nullable=True)
+    emp_att_departure_time    = db.Column(db.Time, nullable=True)
+    emp_enable_attendance_shifts = db.Column(db.Boolean, default=False, nullable=False,
+                                             server_default=db.false())
+    emp_shift_absent_after_time  = db.Column(db.Time, nullable=True)
     updated_at      = db.Column(db.DateTime, default=datetime.utcnow,
                                 onupdate=datetime.utcnow)
 

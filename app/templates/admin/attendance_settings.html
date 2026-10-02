@@ -30,7 +30,7 @@
   <li class="nav-item">
     <a class="nav-link" id="pill-employees" href="#"
        onclick="showAttTab('employees');return false;">
-      <i class="bi bi-person-x me-1"></i>غياب الموظفين
+      <i class="bi bi-person-x me-1"></i>حضور وغياب الموظفين
       <span class="badge bg-warning text-dark ms-1" style="font-size:9px">HR</span>
     </a>
   </li>
@@ -299,6 +299,112 @@
      Inside the main form so emp fields are included in every POST
   ══════════════════════════════════════════════════════════════════════╝ #}
   <div id="tab-employees" class="att-tab-pane" style="display:none">
+
+    {# ── A. Employee work timings — same att-time-card design as the student
+       default timings in tab-general. Stored in their own emp_att_* columns:
+       editing them never changes a student value. ── #}
+    <div class="card mb-4">
+      <div class="card-header d-flex align-items-center flex-wrap gap-2">
+        <span>
+          <i class="bi bi-clock-history text-accent me-1"></i>أوقات دوام الموظفين
+        </span>
+        <span id="empShiftFallbackBadge"
+              class="badge bg-info{{ '' if settings.emp_enable_attendance_shifts else ' d-none' }}"
+              style="font-size:10px">
+          إعداد احتياطي للموظفين بدون شفت
+        </span>
+      </div>
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-6 col-lg-3">
+            <div class="att-time-card" style="border-top-color:#1a3a5c">
+              <div class="att-time-icon" style="background:#eef2ff">
+                <i class="bi bi-door-open" style="color:#1a3a5c"></i>
+              </div>
+              <div class="att-time-label">وقت الحضور</div>
+              <input type="time" name="emp_att_start_time"
+                     value="{{ settings.emp_att_start_time.strftime('%H:%M') if settings.emp_att_start_time else '' }}"
+                     class="form-control form-control-sm text-center fw-700 mt-2">
+              <div class="att-time-hint">بداية دوام الموظف</div>
+            </div>
+          </div>
+          <div class="col-6 col-lg-3">
+            <div class="att-time-card" style="border-top-color:#e8a020">
+              <div class="att-time-icon" style="background:#fff8ee">
+                <i class="bi bi-clock" style="color:#e8a020"></i>
+              </div>
+              <div class="att-time-label">حد التأخير</div>
+              <input type="time" name="emp_att_late_threshold"
+                     value="{{ settings.emp_att_late_threshold.strftime('%H:%M') if settings.emp_att_late_threshold else '' }}"
+                     class="form-control form-control-sm text-center fw-700 mt-2"
+                     style="border-color:#e8a020">
+              <div class="att-time-hint" style="color:#e8a020">بعده → متأخر</div>
+            </div>
+          </div>
+          <div class="col-6 col-lg-3">
+            <div class="att-time-card" style="border-top-color:#e03e3e">
+              <div class="att-time-icon" style="background:#fff0f0">
+                <i class="bi bi-x-circle" style="color:#e03e3e"></i>
+              </div>
+              <div class="att-time-label">وقت اعتبار الغياب</div>
+              <input type="time" name="emp_att_absence_threshold"
+                     value="{{ settings.emp_att_absence_threshold.strftime('%H:%M') if settings.emp_att_absence_threshold else '' }}"
+                     class="form-control form-control-sm text-center fw-700 mt-2"
+                     style="border-color:#e03e3e">
+              <div class="att-time-hint text-danger">بعده → غائب</div>
+            </div>
+          </div>
+          <div class="col-6 col-lg-3">
+            <div class="att-time-card" style="border-top-color:#6c757d">
+              <div class="att-time-icon" style="background:#f5f5f5">
+                <i class="bi bi-door-closed" style="color:#6c757d"></i>
+              </div>
+              <div class="att-time-label">وقت الانصراف</div>
+              <input type="time" name="emp_att_departure_time"
+                     value="{{ settings.emp_att_departure_time.strftime('%H:%M') if settings.emp_att_departure_time else '' }}"
+                     class="form-control form-control-sm text-center fw-700 mt-2"
+                     style="border-color:#6c757d">
+              <div class="att-time-hint text-muted">يسمح بعده بالخروج</div>
+            </div>
+          </div>
+        </div>
+        <div class="alert alert-warning py-2 mt-3 mb-0" style="font-size:12px">
+          <i class="bi bi-info-circle me-1"></i>
+          هذه الأوقات خاصة بالموظفين فقط ومستقلة تماماً عن أوقات الطلاب.
+          اتركها فارغةً لتعطيل المنطق الزمني الخاص بها.
+        </div>
+      </div>
+    </div>
+
+    {# ── B. Employee shifts toggle — the shift list/CRUD itself lives in
+       #empShiftSettingsPane outside this form (nested forms are invalid HTML),
+       and is shown under this tab by showAttTab(). ── #}
+    {% if is_school_obj %}
+    <div class="card mb-4">
+      <div class="card-body py-3">
+        <div class="d-flex align-items-center gap-3 flex-wrap">
+          <div class="att-mode-icon" style="background:#eef2ff">
+            <i class="bi bi-layers-half" style="color:#1a3a5c;font-size:1.1rem"></i>
+          </div>
+          <div>
+            <div class="fw-700" style="font-size:14px">شفتات الموظفين</div>
+            <div class="text-muted" style="font-size:12.5px">
+              عند التفعيل، يتبع كل موظف أوقات الشفت المعيَّن له؛ ومَن لا شفت له
+              يستخدم أوقات دوام الموظفين أعلاه.
+            </div>
+          </div>
+          <div class="ms-auto form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch"
+                   name="emp_enable_attendance_shifts" id="empShiftsToggle"
+                   onchange="syncEmpShiftPane()"
+                   {{ 'checked' if settings.emp_enable_attendance_shifts }}>
+            <label class="form-check-label small" for="empShiftsToggle">تفعيل شفتات الموظفين</label>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
     <div class="row g-4">
       <div class="col-lg-7">
         <div class="card mb-4">
@@ -362,6 +468,256 @@
   </div>{# /tab-employees #}
 
 </form>{# /main settings form #}
+
+{# ══════════════════════════════════════════════════════════════════════════
+   EMPLOYEE SHIFTS PANE
+   Rendered visually inside the "حضور وغياب الموظفين" tab, directly under the
+   employee shifts toggle.  It must stay OUTSIDE the main settings <form>
+   because it carries its own CRUD sub-forms (shifts.create_employee_shift /
+   edit / toggle / delete / employee global-absence) and nested forms are
+   invalid HTML — the same structure the student shift pane uses.
+   Visibility is driven by showAttTab() + syncEmpShiftPane(); no student shift
+   row, toggle or cutoff is read or written anywhere in this pane.
+══════════════════════════════════════════════════════════════════════════ #}
+{% if is_school_obj %}
+<div id="empShiftSettingsPane"
+     class="{{ '' if settings.emp_enable_attendance_shifts else 'd-none' }}"
+     style="display:none">
+
+  <div class="d-flex align-items-center gap-3 mb-4 flex-wrap">
+    <div>
+      <h5 class="fw-700 mb-1">
+        <i class="bi bi-layers-half text-accent me-1"></i>إدارة شفتات الموظفين
+      </h5>
+      <p class="text-muted mb-0" style="font-size:13px">إضافة وتعديل وتفعيل شفتات دوام الموظفين</p>
+    </div>
+    <div class="ms-auto">
+      {% if settings.emp_enable_attendance_shifts %}
+      <span class="badge bg-success">شفتات الموظفين مفعَّلة</span>
+      {% else %}
+      <span class="badge bg-secondary">شفتات الموظفين معطَّلة</span>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if not settings.emp_enable_attendance_shifts %}
+  <div class="alert alert-info mb-4" style="font-size:13px">
+    <i class="bi bi-info-circle me-1"></i>
+    شفتات الموظفين <b>معطَّلة</b> حالياً. يمكنك إعدادها الآن، لكنها لن تُستخدم
+    إلا بعد تفعيل الخيار أعلاه والضغط على <b>حفظ الإعدادات</b>.
+  </div>
+  {% endif %}
+
+  {# ── Employee absence cutoff for shift mode (school-level, shared by ALL
+     employee shifts). Its own <form> posting to
+     shifts.update_employee_global_absence, because this pane sits outside the
+     main settings form. The unified emp_att_absence_threshold above and the
+     student shift_absent_after_time are separate settings, untouched here. ── #}
+  <div class="card mb-4" style="border-top:3px solid #e03e3e">
+    <div class="card-header">
+      <i class="bi bi-x-circle text-danger me-1"></i>وقت اعتبار الغياب عند تفعيل الشفتات
+    </div>
+    <div class="card-body">
+      <p class="text-muted mb-3" style="font-size:13px;line-height:1.9">
+        وقت واحد موحَّد لجميع شفتات الموظفين. يُستخدم بدلاً من
+        <b>وقت اعتبار الغياب</b> أعلاه عندما تكون شفتات الموظفين مفعَّلة.
+      </p>
+
+      {% if settings.emp_enable_attendance_shifts and not settings.emp_shift_absent_after_time %}
+      <div class="alert alert-danger py-2 mb-3" style="font-size:13px">
+        <i class="bi bi-exclamation-triangle-fill me-1"></i>
+        <b>لم يتم تحديد وقت اعتبار الغياب لشفتات الموظفين.</b>
+        لا يوجد وقت مرجعي للغياب لموظفي الشفتات حتى يتم تحديد وقت وحفظه.
+      </div>
+      {% endif %}
+
+      <form method="POST" action="{{ url_for('shifts.update_employee_global_absence') }}"
+            class="row g-3 align-items-end">
+        <div class="col-md-4">
+          <label class="form-label fw-600 small">
+            <i class="bi bi-x-circle text-danger me-1"></i>وقت اعتبار الغياب الموحَّد
+          </label>
+          <input type="time" name="emp_shift_absent_after_time" class="form-control"
+                 style="border-color:#e03e3e"
+                 value="{{ settings.emp_shift_absent_after_time.strftime('%H:%M') if settings.emp_shift_absent_after_time else '' }}">
+          <small class="text-muted">اتركه فارغاً لإلغاء الوقت المرجعي لشفتات الموظفين.</small>
+        </div>
+        <div class="col-md-3">
+          <button type="submit" class="btn btn-primary w-100">
+            <i class="bi bi-save me-1"></i>حفظ وقت الغياب
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {# Employee shifts list — same table design as the student shifts list #}
+  {% if emp_active_shifts or emp_inactive_shifts %}
+  <div class="card mb-4">
+    <div class="card-header">
+      <i class="bi bi-list-ul me-1"></i>شفتات الموظفين المضافة
+    </div>
+    <div class="table-wrapper">
+      <table class="table table-sm mb-0">
+        <thead>
+          <tr>
+            <th>اسم الشفت</th>
+            <th>وقت الحضور</th>
+            <th style="color:#e8a020">حد التأخير</th>
+            <th>وقت الانصراف</th>
+            <th>الحالة</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for shift in emp_active_shifts + emp_inactive_shifts %}
+          <tr class="{{ '' if shift.is_active else 'text-muted' }}">
+            <td class="fw-600">{{ shift.name }}</td>
+            <td>{{ shift.start_time.strftime('%H:%M') if shift.start_time else '—' }}</td>
+            <td><span style="color:#e8a020">{{ shift.late_after_time.strftime('%H:%M') if shift.late_after_time else '—' }}</span></td>
+            <td>{{ shift.dismissal_time.strftime('%H:%M') if shift.dismissal_time else '—' }}</td>
+            <td>
+              {% if shift.is_active %}
+              <span class="badge-status badge-active">مفعَّل</span>
+              {% else %}
+              <span class="badge bg-secondary">معطَّل</span>
+              {% endif %}
+            </td>
+            <td>
+              <div class="d-flex gap-1">
+                <button class="btn btn-sm btn-outline-secondary"
+                        data-shift-id="{{ shift.id }}"
+                        data-shift-name="{{ shift.name }}"
+                        data-start="{{ shift.start_time.strftime('%H:%M') if shift.start_time else '' }}"
+                        data-late="{{ shift.late_after_time.strftime('%H:%M') if shift.late_after_time else '' }}"
+                        data-dismissal="{{ shift.dismissal_time.strftime('%H:%M') if shift.dismissal_time else '' }}"
+                        onclick="showEditEmpShift(this)" title="تعديل">
+                  <i class="bi bi-pencil"></i>
+                </button>
+                <form method="POST"
+                      action="{{ url_for('shifts.toggle_employee_shift', shift_id=shift.id) }}"
+                      class="d-inline">
+                  <button class="btn btn-sm {{ 'btn-outline-warning' if shift.is_active else 'btn-outline-success' }}"
+                          title="{{ 'تعطيل' if shift.is_active else 'تفعيل' }}">
+                    <i class="bi {{ 'bi-pause-circle' if shift.is_active else 'bi-play-circle' }}"></i>
+                  </button>
+                </form>
+                <form method="POST"
+                      action="{{ url_for('shifts.delete_employee_shift', shift_id=shift.id) }}"
+                      class="d-inline">
+                  <button class="btn btn-sm btn-outline-danger"
+                          data-confirm="حذف شفت الموظفين '{{ shift.name }}'؟ لا يمكن حذفه إذا كان موظفون مرتبطين به.">
+                    <i class="bi bi-trash"></i>
+                  </button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="alert alert-light border mb-4" style="font-size:13px">
+    <i class="bi bi-info-circle me-1"></i>
+    لا توجد شفتات موظفين مضافة بعد. أضف شفتاً من النموذج أدناه.
+  </div>
+  {% endif %}
+
+  {# Add employee shift form — same layout as the student add-shift form #}
+  <div class="card">
+    <div class="card-header">
+      <i class="bi bi-plus-circle-fill text-accent me-1"></i>إضافة شفت موظفين جديد
+    </div>
+    <div class="card-body">
+      <form method="POST" action="{{ url_for('shifts.create_employee_shift') }}" class="row g-3">
+        <div class="col-md-4">
+          <label class="form-label fw-600">اسم الشفت <span class="text-danger">*</span></label>
+          <input type="text" name="name" class="form-control"
+                 placeholder="مثال: الدوام الصباحي" required>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label fw-600 small">
+            <i class="bi bi-door-open text-accent me-1"></i>وقت الحضور <span class="text-danger">*</span>
+          </label>
+          <input type="time" name="start_time" class="form-control" required>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label fw-600 small">
+            <i class="bi bi-clock text-warning me-1"></i>حد التأخير
+            {% if not is_institute %}<span class="text-danger">*</span>{% endif %}
+          </label>
+          <input type="time" name="late_after_time" class="form-control"
+                 style="border-color:#e8a020" {{ '' if is_institute else 'required' }}>
+          {% if is_institute %}
+          <small class="text-muted">اختياري — اتركه فارغاً لتعطيل التأخر</small>
+          {% endif %}
+        </div>
+        <div class="col-md-3">
+          <label class="form-label fw-600 small">
+            <i class="bi bi-door-closed text-secondary me-1"></i>وقت الانصراف
+          </label>
+          <input type="time" name="dismissal_time" class="form-control">
+          <small class="text-muted">اختياري</small>
+        </div>
+        <div class="col-md-1 d-flex align-items-end">
+          <button type="submit" class="btn btn-primary w-100">
+            <i class="bi bi-plus-circle-fill"></i>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {# Edit employee shift modal — same design as the student edit modal #}
+  <div class="modal fade" id="editEmpShiftModal" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title fw-700">تعديل شفت الموظفين</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <form method="POST" id="editEmpShiftForm">
+          <div class="modal-body">
+            <div class="mb-3">
+              <label class="form-label fw-600">اسم الشفت <span class="text-danger">*</span></label>
+              <input type="text" name="name" id="editEmpShiftName" class="form-control" required>
+            </div>
+            <div class="row g-3">
+              <div class="col-6">
+                <label class="form-label fw-600">وقت الحضور <span class="text-danger">*</span></label>
+                <input type="time" name="start_time" id="editEmpShiftStart" class="form-control" required>
+              </div>
+              <div class="col-6">
+                <label class="form-label fw-600">حد التأخير
+                  {% if not is_institute %}<span class="text-danger">*</span>{% endif %}
+                </label>
+                <input type="time" name="late_after_time" id="editEmpShiftLate"
+                       class="form-control" {{ '' if is_institute else 'required' }}>
+                {% if is_institute %}
+                <small class="text-muted">اختياري — اتركه فارغاً لتعطيل التأخر</small>
+                {% endif %}
+              </div>
+              <div class="col-6">
+                <label class="form-label fw-600">وقت الانصراف</label>
+                <input type="time" name="dismissal_time" id="editEmpShiftDismissal" class="form-control">
+                <small class="text-muted">اختياري</small>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">إلغاء</button>
+            <button type="submit" class="btn btn-primary">حفظ التغييرات</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+</div>{# /empShiftSettingsPane #}
+{% endif %}
+
 
 {# ══════════════════════════════════════════════════════════════════════════
    TAB 2 — غياب الطلاب  (outside main form — no form fields here)
@@ -900,6 +1256,23 @@ function showAttTab(name) {
   /* The mode-dependent settings panes only belong to the general tab. */
   var shiftPane = document.getElementById('shiftSettingsPane');
   if (shiftPane) shiftPane.style.display = (name === 'general') ? '' : 'none';
+
+  /* The employee shift pane lives outside the main form (nested forms are
+     invalid HTML) but belongs visually to the employees tab. */
+  var empPane = document.getElementById('empShiftSettingsPane');
+  if (empPane) empPane.style.display = (name === 'employees') ? '' : 'none';
+}
+
+/* Employee shift pane visibility follows the employee shifts toggle only.
+   Purely a visibility switch — it never writes to, clears or resets any
+   employee or student shift setting. */
+function syncEmpShiftPane() {
+  var chk  = document.getElementById('empShiftsToggle');
+  var pane = document.getElementById('empShiftSettingsPane');
+  var badge = document.getElementById('empShiftFallbackBadge');
+  var on = !!(chk && chk.checked);
+  if (pane)  pane.classList.toggle('d-none', !on);
+  if (badge) badge.classList.toggle('d-none', !on);
 }
 
 /* Show the settings pane that matches the currently selected mode.
@@ -949,6 +1322,9 @@ function selectAttMode(mode) {
 document.addEventListener('DOMContentLoaded', function() {
   var chk = document.getElementById('shiftsToggle');
   syncAttModePanes(chk && chk.checked ? 'shifts' : 'normal');
+  /* Same rule for employees: derived from the SAVED
+     settings.emp_enable_attendance_shifts rendered into #empShiftsToggle. */
+  syncEmpShiftPane();
 });
 
 /* Edit shift modal — identical to original */
@@ -960,6 +1336,17 @@ function showEditShift(btn) {
   document.getElementById('editShiftForm').action     =
     '/attendance-shifts/' + btn.dataset.shiftId + '/edit';
   new bootstrap.Modal(document.getElementById('editShiftModal')).show();
+}
+
+/* Edit employee shift modal — same pattern, employee routes */
+function showEditEmpShift(btn) {
+  document.getElementById('editEmpShiftName').value      = btn.dataset.shiftName;
+  document.getElementById('editEmpShiftStart').value     = btn.dataset.start;
+  document.getElementById('editEmpShiftLate').value      = btn.dataset.late;
+  document.getElementById('editEmpShiftDismissal').value = btn.dataset.dismissal;
+  document.getElementById('editEmpShiftForm').action     =
+    '/attendance-shifts/employee/' + btn.dataset.shiftId + '/edit';
+  new bootstrap.Modal(document.getElementById('editEmpShiftModal')).show();
 }
 </script>
 {% endblock %}

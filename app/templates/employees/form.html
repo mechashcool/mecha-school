@@ -100,6 +100,24 @@
             {% elif employee and employee.contract_type %}
             <input type="hidden" name="contract_type" value="{{ employee.contract_type }}">
             {% endif %}
+            {# Employee attendance shift — rendered only while the school has
+               employee shifts enabled AND has at least one active shift. When
+               it is not rendered the field is simply not posted, and the save
+               handler preserves any existing assignment. #}
+            {% if emp_shifts %}
+            <div class="col-md-6">
+              <label class="form-label">الشفت</label>
+              <select name="shift_id" class="form-select">
+                <option value="">— بدون شفت —</option>
+                {% for shift in emp_shifts %}
+                <option value="{{ shift.id }}" {{ 'selected' if emp_cur_shift_id == shift.id }}>
+                  {{ shift.name }}{% if shift.start_time %} ({{ shift.start_time.strftime('%H:%M') }}){% endif %}
+                </option>
+                {% endfor %}
+              </select>
+              <small class="text-muted">اختياري — بدون شفت تُطبَّق أوقات دوام الموظفين العامة</small>
+            </div>
+            {% endif %}
             {% if school_cfg.field_visible('employees', 'base_salary') %}
             <div class="col-md-6">
               <label class="form-label">الراتب الأساسي (د.ع) <span class="text-danger">*</span></label>
