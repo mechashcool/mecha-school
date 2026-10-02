@@ -271,7 +271,7 @@ def generate_middle_record_pdf(record, subjects, grade_columns):
 
     columns_by_label = {label: key for key, label in grade_columns}
     displayed_columns = []
-    for label, width in GRADE_COLUMNS:
+    for label, width in GRADE_COLUMNS[1:]:
         key = columns_by_label.get(label)
         displayed_columns.append((key, label, width))
 
@@ -282,6 +282,7 @@ def generate_middle_record_pdf(record, subjects, grade_columns):
         (key, label, width) for key, label, width in displayed_columns
     ]
     visual_header = list(reversed(header_data))
+    column_widths = [width for _key, _label, width in visual_header]
     current_x = table_left
     for key, label, width in visual_header:
         header_text = label
@@ -301,8 +302,8 @@ def generate_middle_record_pdf(record, subjects, grade_columns):
             header_text = 'درجة\nالإكمال'
         elif label == 'الدرجة النهائية بعد الإكمال':
             header_text = 'الدرجة النهائية\nبعد الإكمال'
-        draw_cell(current_x, header_top, width, header_height, INNER_BORDER,
-                  header_text, 9.2, bold=True, leading=10.2, padding=0.7)
+        draw_lines(header_text, x_pt(current_x), box_y(header_top, header_height),
+               width, header_height, 9.2, bold=True, leading=10.2, padding=0.7)
         current_x += width
 
     def draw_grade_row(top, height, subject_label, values, total=False):
@@ -320,8 +321,8 @@ def generate_middle_record_pdf(record, subjects, grade_columns):
                 bold = total
                 align = 'center'
                 padding = 0.6
-            draw_cell(row_x, top, width, height, INNER_BORDER, value, size,
-                      bold=bold, align=align, padding=padding)
+            draw_lines(value, x_pt(row_x), box_y(top, height), width, height,
+                       size, bold=bold, align=align, padding=padding)
             row_x += width
 
     row_top = header_top + header_height
@@ -337,9 +338,29 @@ def generate_middle_record_pdf(record, subjects, grade_columns):
     draw_grade_row(row_top, GRADE_TABLE['total_h'], 'المجموع', total_values, total=True)
     table_bottom = row_top + GRADE_TABLE['total_h']
     page.setLineWidth(OUTER_BORDER * mm)
-    page.rect(x_pt(table_left), box_y(table_bottom, 0),
-              x_pt(GRADE_TABLE['w']), x_pt(table_bottom - GRADE_TABLE['top']),
+    table_y = box_y(table_bottom, 0)
+    table_height = x_pt(table_bottom - GRADE_TABLE['top'])
+    page.rect(x_pt(table_left), table_y, x_pt(GRADE_TABLE['w']), table_height,
               stroke=1, fill=0)
+
+    page.setLineWidth(INNER_BORDER * mm)
+    separator_x = table_left
+    for width in column_widths[:-1]:
+        separator_x += width
+        page.line(x_pt(separator_x), table_y, x_pt(separator_x), table_y + table_height)
+
+    separator_top = GRADE_TABLE['top'] + GRADE_TABLE['header_h']
+    page.line(x_pt(table_left), box_y(separator_top, 0),
+              x_pt(table_left + GRADE_TABLE['w']), box_y(separator_top, 0))
+    for _subject_key, _subject_label in SUBJECTS_TOP_TO_BOTTOM[:-1]:
+        separator_top += GRADE_TABLE['row_h']
+        separator_y = box_y(separator_top, 0)
+        page.line(x_pt(table_left), separator_y,
+                  x_pt(table_left + GRADE_TABLE['w']), separator_y)
+    total_top = GRADE_TABLE['top'] + GRADE_TABLE['header_h'] + len(SUBJECTS_TOP_TO_BOTTOM) * GRADE_TABLE['row_h']
+    total_y = box_y(total_top, 0)
+    page.line(x_pt(table_left), total_y,
+              x_pt(table_left + GRADE_TABLE['w']), total_y)
 
     draw_result_box(RESULT_1, 'نتيجة الدور الأول:', record.first_round_result or '')
     draw_result_box(RESULT_2, 'نتيجة الدور الثاني:', record.second_round_result or '')
