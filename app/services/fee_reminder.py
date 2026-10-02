@@ -31,8 +31,9 @@ Duplicate prevention
 ────────────────────
 FeeReminderLog has a UNIQUE constraint on
   (installment_id, parent_user_id, reminder_date, slot_index).
-An optimistic pre-check avoids unnecessary DB writes; an IntegrityError
-catch handles the rare concurrent-scheduler race condition.
+An optimistic pre-check avoids unnecessary DB writes (read once per school
+per tick for the whole slot, not once per parent); an IntegrityError catch
+handles the rare concurrent-scheduler race condition.
 
 Isolation guarantees
 ────────────────────
@@ -69,6 +70,20 @@ _SLOT_TIMES: dict[int, list[tuple[int, int]]] = {
     5: [(8, 0), (10, 30), (13, 0), (15, 30), (18, 0)],
     6: [(8, 0), (10, 0), (12, 0), (14, 0), (16, 0), (18, 0)],
 }
+
+
+# PostgreSQL's wire protocol caps a statement at 32767 bind parameters, so an
+# unbounded IN (...) list would start failing outright on a very large school
+# rather than merely being slow. Batching keeps each lookup to a handful of
+# statements while staying one statement for any realistic volume.
+_IN_CHUNK = 2000
+
+
+def _chunks(values):
+    """Yield de-duplicated lists of at most _IN_CHUNK ids; nothing when empty."""
+    unique = list(dict.fromkeys(v for v in values if v is not None))
+    for start in range(0, len(unique), _IN_CHUNK):
+        yield unique[start:start + _IN_CHUNK]
 
 
 def _get_daily_slots(per_day: int) -> list[tuple[int, int]]:
@@ -142,9 +157,14 @@ def _scheduler_loop(app, interval: int) -> None:
 def _run_check() -> None:
     from app.models import School
 
+    # Only schools whose master switch is ON are read at all. Filtering in SQL
+    # instead of skipping disabled schools in Python keeps their rows off every
+    # tick; _check_school still re-checks the flag, so the guard stays closed.
+    # A NULL flag is excluded here exactly as `if not enabled` skips it there.
     all_schools = (
         School.query
         .execution_options(bypass_tenant_scope=True)
+        .filter(School.fee_reminder_enabled.is_(True))
         .all()
     )
 
@@ -195,15 +215,32 @@ def _check_school(school) -> tuple[int, int]:
         # Not within any slot firing window right now.
         return 0, 0
 
+    # Read once into a local: db.session.commit() below expires every ORM
+    # instance in this session, so a later `school.id` would re-SELECT the
+    # (wide) School row once per sent reminder.
+    school_id = school.id
+
     # Query installments that are inside the reminder window AND still unpaid/partial.
     # due_date <= today + days_before  means the window has opened (or due date has passed).
     cutoff_date = today + timedelta(days=days_before)
 
+    # The same three conditions as before. Only the columns this scheduler
+    # actually uses are transferred; `status` is needed by the filter alone,
+    # and `amount` stays the Decimal the notification body has always formatted.
     installments = (
         FeeInstallment.query
         .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+        .with_entities(
+            FeeInstallment.id,
+            FeeInstallment.fee_record_id,
+            FeeInstallment.academic_year_id,
+            FeeInstallment.installment_no,
+            FeeInstallment.amount,
+            FeeInstallment.received_amount,
+            FeeInstallment.due_date,
+        )
         .filter(
-            FeeInstallment.school_id == school.id,
+            FeeInstallment.school_id == school_id,
             FeeInstallment.due_date  <= cutoff_date,
             FeeInstallment.status.in_(['pending', 'partial', 'overdue']),
         )
@@ -213,11 +250,16 @@ def _check_school(school) -> tuple[int, int]:
     _log.debug(
         '[fees-reminder] school_id=%s date=%s slot=%d/%d days_before=%d '
         'installments_in_window=%d',
-        school.id, today, slot_idx, len(slots) - 1, days_before, len(installments),
+        school_id, today, slot_idx, len(slots) - 1, days_before, len(installments),
     )
 
     sent = skipped = 0
 
+    # --- Balance filter first --------------------------------------------
+    # It needs no DB access and it decides which installments the batched
+    # lookups below have to cover at all. Unchanged rule: the status field may
+    # lag behind a payment, so the remaining balance is what stops reminders.
+    due_rows = []
     for inst in installments:
         # Double-check balance — status field may lag behind a payment.
         paid      = float(inst.received_amount or 0)
@@ -225,48 +267,101 @@ def _check_school(school) -> tuple[int, int]:
         if remaining <= 0:
             skipped += 1
             continue
+        due_rows.append((inst, paid, remaining))
 
-        fee_record = (
-            FeeRecord.query
-            .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
-            .get(inst.fee_record_id)
-        )
-        if not fee_record:
-            continue
+    if not due_rows:
+        return sent, skipped
 
-        student = (
-            Student.query
+    # --- Batched reads: a small fixed set of SELECTs for the whole tick ---
+    # Replaces FeeRecord.get / Student.get / parent_students / User per
+    # installment and FeeReminderLog per parent. Every filter below is the one
+    # the per-row version applied, so eligibility and isolation are unchanged.
+
+    # fee_record_id -> student_id
+    student_id_by_record = {}
+    for chunk in _chunks(inst.fee_record_id for inst, _p, _r in due_rows):
+        student_id_by_record.update({
+            row[0]: row[1] for row in (
+                FeeRecord.query
+                .execution_options(bypass_tenant_scope=True, bypass_year_scope=True)
+                .with_entities(FeeRecord.id, FeeRecord.student_id)
+                .filter(FeeRecord.id.in_(chunk))
+                .all()
+            )
+        })
+
+    # student_id -> (id, full_name, school_id). Never the full Student row. The
+    # school restriction is applied in SQL AND re-asserted per installment
+    # below, so a student of another school can reach no notification.
+    students_by_id = {}
+    for chunk in _chunks(student_id_by_record.values()):
+        students_by_id.update({
+            row.id: row for row in (
+                Student.query
+                .execution_options(bypass_tenant_scope=True)
+                .with_entities(Student.id, Student.full_name, Student.school_id)
+                .filter(Student.id.in_(chunk), Student.school_id == school_id)
+                .all()
+            )
+        })
+
+    # student_id -> [active parent user id, ...]. One join instead of two
+    # queries per installment, carrying the parent id only - with the same
+    # restrictions as before: this school's accounts, active ones only.
+    parents_by_student = {}
+    for chunk in _chunks(students_by_id.keys()):
+        for row in (
+            db.session.query(parent_students.c.student_id,
+                             parent_students.c.user_id)
             .execution_options(bypass_tenant_scope=True)
-            .get(fee_record.student_id)
-        )
-        # Hard school-isolation guard: student must belong to this school.
-        if not student or student.school_id != school.id:
-            continue
-
-        # Collect parent user IDs linked to this student.
-        parent_ids = [
-            row[0] for row in
-            db.session.query(parent_students.c.user_id)
-            .filter(parent_students.c.student_id == student.id)
-            .all()
-        ]
-        if not parent_ids:
-            _log.debug('[fees-reminder] installment_id=%s — no linked parents, skip', inst.id)
-            continue
-
-        # Fetch only active parents that belong to this school.
-        # This prevents cross-school notification regardless of parent_students content.
-        active_parents = (
-            User.query
-            .execution_options(bypass_tenant_scope=True)
+            .join(User, User.id == parent_students.c.user_id)
             .filter(
-                User.id.in_(parent_ids),
-                User.school_id == school.id,
+                parent_students.c.student_id.in_(chunk),
+                User.school_id == school_id,
                 User.is_active.is_(True),
             )
             .all()
+        ):
+            parents_by_student.setdefault(row[0], []).append(row[1])
+
+    # (installment_id, parent_user_id) pairs already logged for THIS school,
+    # date and slot - one SELECT instead of one per parent. school_id is
+    # redundant (an installment id already belongs to this school) but lets the
+    # lookup use the indexed column. The DB UNIQUE constraint remains the real
+    # guard; this only avoids pointless writes.
+    already_sent = set()
+    for chunk in _chunks(inst.id for inst, _p, _r in due_rows):
+        already_sent.update(
+            (row[0], row[1]) for row in (
+                FeeReminderLog.query
+                .execution_options(bypass_tenant_scope=True)
+                .with_entities(FeeReminderLog.installment_id,
+                               FeeReminderLog.parent_user_id)
+                .filter(
+                    FeeReminderLog.school_id     == school_id,
+                    FeeReminderLog.reminder_date == today,
+                    FeeReminderLog.slot_index    == slot_idx,
+                    FeeReminderLog.installment_id.in_(chunk),
+                )
+                .all()
+            )
         )
-        if not active_parents:
+
+    # --- Send loop: installment -> FeeRecord -> Student -> active parents ---
+    for inst, paid, remaining in due_rows:
+        student_id = student_id_by_record.get(inst.fee_record_id)
+        if student_id is None:
+            continue
+
+        student = students_by_id.get(student_id)
+        # Hard school-isolation guard: student must belong to this school.
+        if not student or student.school_id != school_id:
+            continue
+
+        # Active parent accounts of this school linked to this student.
+        parent_ids = parents_by_student.get(student.id)
+        if not parent_ids:
+            _log.debug('[fees-reminder] installment_id=%s — no linked parents, skip', inst.id)
             continue
 
         is_overdue   = inst.due_date < today
@@ -288,38 +383,28 @@ def _check_school(school) -> tuple[int, int]:
             'screen':         'fees',
         }
 
-        for parent in active_parents:
-            # Optimistic pre-check (avoids a DB write on the common already-sent path).
-            already = (
-                FeeReminderLog.query
-                .execution_options(bypass_tenant_scope=True)
-                .filter_by(
-                    installment_id=inst.id,
-                    parent_user_id=parent.id,
-                    reminder_date=today,
-                    slot_index=slot_idx,
-                )
-                .first()
-            )
-            if already:
+        for parent_id in parent_ids:
+            # Optimistic pre-check (avoids a DB write on the common already-sent
+            # path) - now answered from the batched set, not a SELECT per parent.
+            if (inst.id, parent_id) in already_sent:
                 skipped += 1
                 continue
 
             try:
                 db.session.add(Notification(
-                    school_id      = school.id,
+                    school_id      = school_id,
                     title          = title,
                     body           = body,
                     ntype          = 'fee_reminder',
-                    target_user_id = parent.id,
+                    target_user_id = parent_id,
                     created_by     = None,
                 ))
                 db.session.add(FeeReminderLog(
-                    school_id        = school.id,
+                    school_id        = school_id,
                     academic_year_id = inst.academic_year_id,
                     student_id       = student.id,
                     installment_id   = inst.id,
-                    parent_user_id   = parent.id,
+                    parent_user_id   = parent_id,
                     reminder_date    = today,
                     slot_index       = slot_idx,
                     due_date         = inst.due_date,
@@ -330,19 +415,19 @@ def _check_school(school) -> tuple[int, int]:
                 try:
                     from app.services.fcm_service import is_enabled, send_push_to_user
                     if is_enabled():
-                        send_push_to_user(parent.id, title, body, data)
+                        send_push_to_user(parent_id, title, body, data)
                 except Exception as fcm_exc:
                     _log.error(
                         '[fees-reminder] FCM push failed parent_id=%s installment_id=%s: %s',
-                        parent.id, inst.id, fcm_exc,
+                        parent_id, inst.id, fcm_exc,
                     )
 
                 sent += 1
                 _log.info(
                     '[fees-reminder] sent school=%s student=%s inst=%s '
                     'parent=%s slot=%d/%d overdue=%s remaining=%.0f',
-                    school.id, student.id, inst.id,
-                    parent.id, slot_idx, len(slots) - 1,
+                    school_id, student.id, inst.id,
+                    parent_id, slot_idx, len(slots) - 1,
                     is_overdue, remaining,
                 )
 
@@ -354,7 +439,7 @@ def _check_school(school) -> tuple[int, int]:
             except Exception as exc:
                 _log.error(
                     '[fees-reminder] error parent_id=%s installment_id=%s: %s',
-                    parent.id, inst.id, exc,
+                    parent_id, inst.id, exc,
                 )
                 db.session.rollback()
 
