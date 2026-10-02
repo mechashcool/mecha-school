@@ -6,6 +6,9 @@
 <style>
   .middle-grade-grid { min-width: 1500px; }
   .middle-grade-grid input { min-width: 105px; }
+  .middle-notes-cell { min-width: 170px; vertical-align: top !important; }
+  .middle-notes-cell textarea { min-height: 300px; resize: vertical; }
+  .middle-grade-total { min-width: 105px; text-align: center; }
 </style>
 <div class="page-header">
   <div>
@@ -133,27 +136,42 @@
           </thead>
           <tbody>
             {% for subject_key, subject_label in subjects %}
+            {% set subject_is_first = loop.first %}
             {% set subject_data = saved_grades.get(subject_key, {}) %}
             <tr>
               <th class="text-nowrap">{{ subject_label }}</th>
               {% for column_key, column_label in grade_columns %}
+              {% if column_key != 'notes' %}
               {% set cell_value = subject_data.get(column_key) %}
               <td>
-                {% if column_key == 'notes' %}
-                <input class="form-control form-control-sm" type="text"
-                       name="grade__{{ subject_key }}__{{ column_key }}"
-                       value="{{ cell_value if cell_value is not none else '' }}"
-                       aria-label="{{ subject_label }} - {{ column_label }}">
-                {% else %}
                 <input class="form-control form-control-sm" type="number" step="any"
                        name="grade__{{ subject_key }}__{{ column_key }}"
+                       data-grade-column="{{ column_key }}"
                        value="{{ cell_value if cell_value is not none else '' }}"
                        aria-label="{{ subject_label }} - {{ column_label }}">
-                {% endif %}
               </td>
+              {% endif %}
               {% endfor %}
+              {% if subject_is_first %}
+              <td class="middle-notes-cell" rowspan="{{ subjects|length }}">
+                <textarea class="form-control h-100" rows="12" name="result_notes"
+                          aria-label="الملاحظات">{{ record.result_notes if record else prefill.result_notes }}</textarea>
+              </td>
+              {% endif %}
             </tr>
             {% endfor %}
+            <tr class="table-light">
+              <th>المجموع</th>
+              {% for column_key, column_label in grade_columns %}
+              {% if column_key != 'notes' %}
+              <td>
+                <input type="number" class="form-control form-control-sm middle-grade-total"
+                       data-total-for="{{ column_key }}" readonly aria-label="مجموع {{ column_label }}">
+              </td>
+              {% endif %}
+              {% endfor %}
+              <td></td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -179,10 +197,6 @@
           <input type="text" class="form-control" name="second_round_result"
                  value="{{ record.second_round_result if record else prefill.second_round_result }}">
         </div>
-        <div class="col-md-12">
-          <label class="form-label">الملاحظات</label>
-          <textarea class="form-control" rows="3" name="result_notes">{{ record.result_notes if record else prefill.result_notes }}</textarea>
-        </div>
       </div>
     </div>
   </div>
@@ -194,4 +208,34 @@
     </button>
   </div>
 </form>
+<script>
+  (() => {
+    const gradeTable = document.querySelector('.middle-grade-grid');
+    if (!gradeTable) return;
+
+    const updateTotals = () => {
+      gradeTable.querySelectorAll('[data-total-for]').forEach((totalField) => {
+        const columnKey = totalField.dataset.totalFor;
+        let total = 0;
+        let hasNumericValue = false;
+
+        gradeTable.querySelectorAll(`[data-grade-column="${columnKey}"]`).forEach((gradeField) => {
+          const value = gradeField.value.trim();
+          if (!value) return;
+          const number = Number(value);
+          if (!Number.isFinite(number)) return;
+          total += number;
+          hasNumericValue = true;
+        });
+
+        totalField.value = hasNumericValue ? String(total) : '';
+      });
+    };
+
+    gradeTable.addEventListener('input', (event) => {
+      if (event.target.matches('[data-grade-column]')) updateTotals();
+    });
+    updateTotals();
+  })();
+</script>
 {% endblock %}

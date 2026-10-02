@@ -128,24 +128,27 @@ def _parse_optional_number(value):
     return int(number) if number.is_integer() else number
 
 
-def _parse_subject_grades(form):
+def _parse_subject_grades(form, existing_grades=None):
     grades = {}
+    existing_grades = existing_grades if isinstance(existing_grades, dict) else {}
     for subject_key, _subject_label in SUBJECTS:
         subject_grades = {}
+        existing_row = existing_grades.get(subject_key, {})
+        existing_row = existing_row if isinstance(existing_row, dict) else {}
         for column_key, _column_label in GRADE_COLUMNS:
+            if column_key == 'notes':
+                if column_key in existing_row:
+                    subject_grades[column_key] = existing_row[column_key]
+                continue
             field_name = f'grade__{subject_key}__{column_key}'
             value = form.get(field_name, '')
-            subject_grades[column_key] = (
-                (value or '').strip()
-                if column_key == 'notes'
-                else _parse_optional_number(value)
-            )
+            subject_grades[column_key] = _parse_optional_number(value)
         grades[subject_key] = subject_grades
     return grades
 
 
 def _apply_record_fields(record, form, school):
-    record.subject_grades = _parse_subject_grades(form)
+    record.subject_grades = _parse_subject_grades(form, record.subject_grades)
     record.total_score = _parse_optional_number(form.get('total_score'))
     record.first_round_result = (form.get('first_round_result', '') or '').strip()
     record.second_round_result = (form.get('second_round_result', '') or '').strip()
@@ -303,8 +306,14 @@ def new():
 def view(record_id):
     school = _school_or_404()
     record = StudentMiddleRecord.query.filter_by(id=record_id, school_id=school.id).first_or_404()
+    from app.blueprints.student_middle_records.pdf import compute_column_totals
+
+    subject_grades = record.subject_grades
+    if not isinstance(subject_grades, dict):
+        subject_grades = {}
     return render_template('student_middle_records/view.html', record=record, school=school,
-                           subjects=SUBJECTS, grade_columns=GRADE_COLUMNS)
+                           subjects=SUBJECTS, grade_columns=GRADE_COLUMNS,
+                           column_totals=compute_column_totals(subject_grades))
 
 
 @student_middle_records_bp.route('/<int:record_id>/edit', methods=['GET', 'POST'])

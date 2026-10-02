@@ -1,5 +1,6 @@
 """Fixed A4 layout for the official middle student record PDF."""
 from io import BytesIO
+import math
 
 from app.utils.pdf_gen import (
     _get_rl,
@@ -83,9 +84,10 @@ def blank_safe_number(value):
     if value in (None, ''):
         return None
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if math.isfinite(number) else None
 
 
 def compute_column_totals(subject_grades):
@@ -281,6 +283,9 @@ def _draw_middle_record_page(page, record, grade_columns, mm, pdfmetrics,
     def draw_grade_row(top, height, subject_label, values, total=False):
         row_x = table_left
         for key, label, width in visual_header:
+            if key == 'notes':
+                row_x += width
+                continue
             if key == 'subject':
                 value = subject_label
                 size = 9.5 if not total else 9.2
@@ -305,8 +310,21 @@ def _draw_middle_record_page(page, record, grade_columns, mm, pdfmetrics,
         draw_grade_row(row_top, GRADE_TABLE['row_h'], subject_label, row)
         row_top += GRADE_TABLE['row_h']
 
+    notes_width = GRADE_COLUMNS[-1][1]
+    notes_height = len(SUBJECTS_TOP_TO_BOTTOM) * GRADE_TABLE['row_h']
+    draw_lines(
+        record.result_notes or '',
+        x_pt(table_left),
+        box_y(row_top, 0),
+        notes_width,
+        notes_height,
+        7,
+        align='right',
+        leading=8,
+        padding=1,
+    )
+
     total_values = dict(total_by_key)
-    total_values['notes'] = ''
     draw_grade_row(row_top, GRADE_TABLE['total_h'], 'المجموع', total_values, total=True)
     table_bottom = row_top + GRADE_TABLE['total_h']
     page.setLineWidth(OUTER_BORDER * mm)
@@ -327,7 +345,7 @@ def _draw_middle_record_page(page, record, grade_columns, mm, pdfmetrics,
     for _subject_key, _subject_label in SUBJECTS_TOP_TO_BOTTOM[:-1]:
         separator_top += GRADE_TABLE['row_h']
         separator_y = box_y(separator_top, 0)
-        page.line(x_pt(table_left), separator_y,
+        page.line(x_pt(table_left + notes_width), separator_y,
                   x_pt(table_left + GRADE_TABLE['w']), separator_y)
     total_top = GRADE_TABLE['top'] + GRADE_TABLE['header_h'] + len(SUBJECTS_TOP_TO_BOTTOM) * GRADE_TABLE['row_h']
     total_y = box_y(total_top, 0)
