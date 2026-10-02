@@ -138,6 +138,74 @@ def get_effective_attendance_settings(school, audience, shift=None):
     )
 
 
+def effective_shift_late_threshold(school, audience, shift):
+    """The late boundary attendance logic actually applies to `shift`.
+
+    Thin wrapper over get_effective_attendance_settings so validation can never
+    drift from runtime: shift.late_after_time when configured, otherwise the
+    audience's school-level threshold. Returns None when lateness is switched
+    off for this audience/shift (both sources NULL) — there is then no late
+    boundary at all.
+
+    `shift` only needs a ``late_after_time`` attribute, so a not-yet-saved form
+    submission can be validated with a lightweight stand-in object.
+    """
+    return get_effective_attendance_settings(school, audience,
+                                             shift=shift).late_threshold
+
+
+def shift_absence_boundary(school, audience, shift):
+    """The earliest time at which `shift` may legitimately be called absent-ready.
+
+        effective late threshold  (shift.late_after_time ?? school-level)
+        ELSE shift.start_time     (when lateness is disabled on BOTH sources)
+
+    The start_time fallback matters because a shift with no late threshold at all
+    still has a start: without it, a 14:00 shift with lateness disabled would
+    accept an 08:00 absence cutoff, declaring those people absent six hours
+    before their day begins.
+
+    dismissal_time is never consulted.  Returns None only when the shift exposes
+    neither boundary.
+    """
+    late = effective_shift_late_threshold(school, audience, shift)
+    if late is not None:
+        return late
+    return getattr(shift, 'start_time', None)
+
+
+def conflicting_shift_late_thresholds(school, audience, shifts, cutoff):
+    """Shifts that make `cutoff` an invalid global absence cutoff.
+
+    RULE: the single school-level absence cutoff must be STRICTLY AFTER the
+    absence boundary of every ACTIVE shift, so nobody in a later shift can be
+    called absent while still inside their valid arrival window.
+    Equality is a conflict.
+
+    The boundary is the shift's effective LATE threshold, falling back to its
+    start_time when lateness is disabled on both the shift and the school (see
+    shift_absence_boundary) — never dismissal_time: the cutoff decides when a
+    missing record may become an absence, not when the day ends.
+
+    Returns [(shift, boundary)] for the offending shifts, ordered by boundary.
+    Empty list = the cutoff is valid.
+      * cutoff None (unconfigured / being cleared) → no conflict, fail closed
+        is handled by the consumers.
+      * a shift exposing neither a late threshold nor a start_time cannot
+        conflict, since there is nothing to order the cutoff against.
+
+    PURE: no queries, no writes. The caller supplies the active shifts.
+    """
+    if cutoff is None:
+        return []
+    conflicts = []
+    for shift in shifts or ():
+        boundary = shift_absence_boundary(school, audience, shift)
+        if boundary is not None and boundary >= cutoff:
+            conflicts.append((shift, boundary))
+    return sorted(conflicts, key=lambda pair: pair[1])
+
+
 def determine_check_in_status(check_in_time, settings, shift=None, audience='students'):
     """
     Return 'present' or 'late' based on check_in_time vs time thresholds.
