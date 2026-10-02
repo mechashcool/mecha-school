@@ -437,6 +437,10 @@
       </div>
       {% endif %}{# teacher_assignment section #}
 
+      {% if (school and school.is_institute) or (employee and employee.school and employee.school.is_institute) %}
+      {% include 'employees/_institute_teaching.html' %}
+      {% endif %}
+
       {# ── 4. Attendance Device (read-only — managed from Attendance Devices page) ── #}
       <div class="card mb-3">
         <div class="card-header">
