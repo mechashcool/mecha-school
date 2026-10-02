@@ -132,6 +132,16 @@
         </div>
       </div>
       {% endif %}
+      {% if stats.not_recorded is defined and stats.not_recorded > 0 %}
+      <div class="col-6 col-md-4">
+        <div class="card text-center h-100 border-secondary">
+          <div class="card-body py-3">
+            <div style="font-size:2rem;font-weight:800;color:#6c757d">{{ stats.not_recorded }}</div>
+            <div class="text-muted small">غير مسجل بعد</div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
       <div class="col-6 col-md-4">
         <div class="card text-center h-100
           {% if stats.rate >= 90 %}border-success
@@ -162,6 +172,9 @@
       <span class="badge bg-danger">غائب: {{ stats.absent }}</span>
       {% if stats.on_leave is defined and stats.on_leave > 0 %}
       <span class="badge" style="background:#2e7d32">مجاز: {{ stats.on_leave }}</span>
+      {% endif %}
+      {% if stats.not_recorded is defined and stats.not_recorded > 0 %}
+      <span class="badge bg-secondary">غير مسجل بعد: {{ stats.not_recorded }}</span>
       {% endif %}
     </div>
   </div>
@@ -202,6 +215,12 @@
               </span>
             {% elif day.status == 'on_leave' %}
               <span class="badge" style="background:#2e7d32">مجاز</span>
+            {% elif day.status == 'not_recorded' %}
+              {# Today, before the employee absence cutoff (or with no cutoff
+                 configured): the day cannot legitimately be called absent yet. #}
+              <span class="badge bg-secondary" title="لم يحن وقت اعتبار الغياب بعد">
+                غير مسجل بعد
+              </span>
             {% else %}
               <span class="badge bg-secondary">{{ day.status }}</span>
             {% endif %}

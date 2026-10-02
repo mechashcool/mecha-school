@@ -1437,9 +1437,17 @@ def _parse_date_arg(arg_name, fallback):
     return fallback, fallback.isoformat()
 
 
-def _attendance_filters():
-    """Read shared filter args from query string. Returns a dict."""
-    today = date.today()
+def _attendance_filters(school=None):
+    """Read shared filter args from query string. Returns a dict.
+
+    `today` is the SCHOOL-LOCAL date, not the server date, so the default range
+    matches the day the school is actually in. A future `date_to` is accepted and
+    echoed back to the form, but the calculation itself clamps to the local date
+    (see get_employees_attendance_summary), so future days never become
+    attendance obligations.
+    """
+    from app.utils.attendance_helpers import get_local_date
+    today = get_local_date(school) if school is not None else date.today()
     date_from, date_from_str = _parse_date_arg('date_from', today.replace(day=1))
     date_to,   date_to_str   = _parse_date_arg('date_to',   today)
     return {
@@ -1470,11 +1478,11 @@ def _all_employees(school):
 def attendance_report():
     from app.utils.employee_attendance_helper import (
         get_employees_attendance_summary, get_absence_alerts,
-        get_working_days,
+        get_employee_absence_clock, get_working_days,
     )
 
     school = get_current_school()
-    f = _attendance_filters()
+    f = _attendance_filters(school)
     employees = _all_employees(school)
     departments = sorted({e.department for e in employees if e.department})
 
@@ -1491,7 +1499,12 @@ def attendance_report():
     )
 
     alerts = get_absence_alerts(rows, school)
-    working_days_count = len(get_working_days(f['date_from'], f['date_to'], school))
+    # Page-level figure: clamped the same way the per-employee rows are, so
+    # the displayed total matches what the rows were calculated against.
+    working_days_count = len(get_working_days(
+        f['date_from'],
+        min(f['date_to'], get_employee_absence_clock(school).local_today),
+        school))
     # Drives the "no employee weekly days off configured" hint only.
     from app.utils.attendance_helpers import resolve_weekly_off_days
     employee_weekly_off_set = bool(
@@ -1502,6 +1515,10 @@ def attendance_report():
     total_late     = sum(r['late']    for r in rows)
     total_absent   = sum(r['absent']  for r in rows)
     total_checkout = sum(r['checked_out'] for r in rows)
+    # Days that cannot yet be declared absent (today before the employee absence
+    # cutoff, or with no cutoff configured). Reported separately so they are
+    # never presented or counted as absence.
+    total_not_recorded = sum(r.get('not_recorded', 0) for r in rows)
 
     return render_template(
         'employees/attendance_report.html',
@@ -1520,6 +1537,7 @@ def attendance_report():
         total_present     = total_present,
         total_late        = total_late,
         total_absent      = total_absent,
+        total_not_recorded= total_not_recorded,
         total_checkout    = total_checkout,
         school            = school,
     )
@@ -1533,16 +1551,20 @@ def attendance_report():
 @action_required('employee_attendance', 'view_detail')
 def attendance_report_detail(emp_id):
     from app.utils.employee_attendance_helper import (
-        calculate_employee_stats, get_working_days,
+        calculate_employee_stats, get_employee_absence_clock, get_working_days,
     )
     from app.models import EmployeeAttendance
 
     school = get_current_school()
     emp = Employee.query.filter_by(id=emp_id, school_id=school.id).first_or_404()
 
-    f = _attendance_filters()
+    f = _attendance_filters(school)
 
-    working_days = get_working_days(f['date_from'], f['date_to'], school)
+    # Clamp to the school-local date: future working days are never an
+    # attendance obligation (same rule as get_employees_attendance_summary).
+    _clock = get_employee_absence_clock(school)
+    working_days = get_working_days(
+        f['date_from'], min(f['date_to'], _clock.local_today), school)
 
     records = (EmployeeAttendance.query
                .execution_options(bypass_tenant_scope=True)
@@ -1554,7 +1576,8 @@ def attendance_report_detail(emp_id):
                ).all())
 
     records_by_date = {r.date: r for r in records}
-    stats = calculate_employee_stats(emp, records_by_date, working_days)
+    stats = calculate_employee_stats(emp, records_by_date, working_days,
+                                     school, clock=_clock)
 
     return render_template(
         'employees/attendance_report_detail.html',
@@ -1578,7 +1601,7 @@ def attendance_report_export_excel():
     from app.utils.excel_export import export_employee_attendance
 
     school = get_current_school()
-    f = _attendance_filters()
+    f = _attendance_filters(school)
     employees = _all_employees(school)
     sel_emp_id = f['employee_id']
     emp_list = [e for e in employees if e.id == sel_emp_id] if sel_emp_id else employees
@@ -1615,7 +1638,7 @@ def attendance_report_export_pdf():
     from app.utils.pdf_gen import generate_employee_attendance_pdf
 
     school = get_current_school()
-    f = _attendance_filters()
+    f = _attendance_filters(school)
     employees = _all_employees(school)
     sel_emp_id = f['employee_id']
     emp_list = [e for e in employees if e.id == sel_emp_id] if sel_emp_id else employees
@@ -1649,14 +1672,19 @@ def attendance_report_export_pdf():
 def attendance_report_employee_excel(emp_id):
     from flask import Response
     from app.models import EmployeeAttendance
-    from app.utils.employee_attendance_helper import calculate_employee_stats, get_working_days
+    from app.utils.employee_attendance_helper import (
+        calculate_employee_stats, get_employee_absence_clock, get_working_days)
     from app.utils.excel_export import export_single_employee_attendance
 
     school = get_current_school()
     emp = Employee.query.filter_by(id=emp_id, school_id=school.id).first_or_404()
-    f = _attendance_filters()
+    f = _attendance_filters(school)
 
-    working_days = get_working_days(f['date_from'], f['date_to'], school)
+    # Clamp to the school-local date: future working days are never an
+    # attendance obligation (same rule as get_employees_attendance_summary).
+    _clock = get_employee_absence_clock(school)
+    working_days = get_working_days(
+        f['date_from'], min(f['date_to'], _clock.local_today), school)
     records = (EmployeeAttendance.query
                .execution_options(bypass_tenant_scope=True)
                .filter(EmployeeAttendance.school_id == school.id,
@@ -1664,7 +1692,8 @@ def attendance_report_employee_excel(emp_id):
                        EmployeeAttendance.date >= f['date_from'],
                        EmployeeAttendance.date <= f['date_to'])
                .all())
-    stats = calculate_employee_stats(emp, {r.date: r for r in records}, working_days)
+    stats = calculate_employee_stats(emp, {r.date: r for r in records},
+                                     working_days, school, clock=_clock)
 
     data = export_single_employee_attendance(stats, f['date_from_str'], f['date_to_str'])
     if not data:
@@ -1688,14 +1717,19 @@ def attendance_report_employee_excel(emp_id):
 def attendance_report_employee_pdf(emp_id):
     from flask import Response
     from app.models import EmployeeAttendance
-    from app.utils.employee_attendance_helper import calculate_employee_stats, get_working_days
+    from app.utils.employee_attendance_helper import (
+        calculate_employee_stats, get_employee_absence_clock, get_working_days)
     from app.utils.pdf_gen import generate_single_employee_attendance_pdf
 
     school = get_current_school()
     emp = Employee.query.filter_by(id=emp_id, school_id=school.id).first_or_404()
-    f = _attendance_filters()
+    f = _attendance_filters(school)
 
-    working_days = get_working_days(f['date_from'], f['date_to'], school)
+    # Clamp to the school-local date: future working days are never an
+    # attendance obligation (same rule as get_employees_attendance_summary).
+    _clock = get_employee_absence_clock(school)
+    working_days = get_working_days(
+        f['date_from'], min(f['date_to'], _clock.local_today), school)
     records = (EmployeeAttendance.query
                .execution_options(bypass_tenant_scope=True)
                .filter(EmployeeAttendance.school_id == school.id,
@@ -1703,7 +1737,8 @@ def attendance_report_employee_pdf(emp_id):
                        EmployeeAttendance.date >= f['date_from'],
                        EmployeeAttendance.date <= f['date_to'])
                .all())
-    stats = calculate_employee_stats(emp, {r.date: r for r in records}, working_days)
+    stats = calculate_employee_stats(emp, {r.date: r for r in records},
+                                     working_days, school, clock=_clock)
 
     data = generate_single_employee_attendance_pdf(stats, f['date_from_str'], f['date_to_str'], school=school)
     if not data:
@@ -1936,8 +1971,14 @@ def manual_attendance_list():
     except ValueError:
         att_date = local_now.date()
 
-    # Departure-window check (mirrors student attendance logic)
-    departure_time = getattr(settings, 'att_departure_time', None)
+    # Departure-window check — now driven by the EMPLOYEE departure setting
+    # (School.emp_att_departure_time) through the shared resolver instead of the
+    # student att_departure_time. This sheet is school-wide, so the school-level
+    # employee value is used; a per-employee shift dismissal_time is applied
+    # where attendance is actually written, not in this page-level flag.
+    from app.utils.attendance_helpers import get_effective_attendance_settings
+    departure_time = get_effective_attendance_settings(
+        settings, 'employees').departure_time
     if departure_time == _time(0, 0, 0):
         departure_time = None
     now_time    = local_now.time().replace(microsecond=0)
@@ -2084,6 +2125,13 @@ def manual_attendance_save():
                   ).all()):
             existing[a.employee_id] = a
 
+    # Effective employee shifts for the whole submitted set in ONE query, so the
+    # loop below resolves late/present without a per-employee shift lookup.
+    # Employees with no shift (or shifts disabled) are simply absent from the map
+    # and fall back to School.emp_att_late_threshold.
+    from app.utils.attendance_helpers import get_employee_shift_map
+    _emp_shift_cache = get_employee_shift_map(school, employees)
+
     created = updated = 0
     # Notification queue: tuples of (employee_obj, att_record, action).
     # Populated during the loop; flushed after a confirmed commit so that no
@@ -2118,9 +2166,18 @@ def manual_attendance_save():
             if check_in_val is None and att_date == local_now.date():
                 check_in_val = now_time
 
-            # Auto-determine late vs present from check-in time
+            # Auto-determine late vs present from the check-in time, using THIS
+            # employee's effective settings: their assigned employee shift's
+            # late_after_time when one resolves, else School.emp_att_late_threshold.
+            # Identical resolution to the Face ID path, so the same employee +
+            # date + check-in time always yields the same present/late result.
+            # An explicit 'late', 'absent' or 'on_leave' selection is never
+            # overridden — only a plain 'present' is refined.
             if check_in_val and status_choice == 'present':
-                status_choice = determine_check_in_status(check_in_val, settings)
+                status_choice = determine_check_in_status(
+                    check_in_val, settings,
+                    shift=_emp_shift_cache.get(emp_id),
+                    audience='employees')
 
             if co_str:
                 try:

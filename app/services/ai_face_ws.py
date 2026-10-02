@@ -647,6 +647,19 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
     _notify_action   = None   # 'check_in' | 'check_out'
     _notify_att      = None   # EmployeeAttendance instance for the notification
 
+    # Effective EMPLOYEE lateness for this punch: the employee's assigned
+    # employee shift's late_after_time when one resolves, else
+    # School.emp_att_late_threshold. Never a student setting. One shift lookup
+    # per punch, which is the same cost the student punch path already pays.
+    # Identical resolution to the manual sheet, so manual and device entry of the
+    # same time always agree on present/late.
+    from app.utils.attendance_helpers import (determine_check_in_status,
+                                              get_employee_shift)
+    emp_shift = get_employee_shift(employee, school)
+    punch_status = determine_check_in_status(punch_time, school,
+                                            shift=emp_shift,
+                                            audience='employees')
+
     try:
         emp_att = (EmployeeAttendance.query
                    .execution_options(bypass_tenant_scope=True)
@@ -659,7 +672,7 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
                 school_id        = school.id,
                 academic_year_id = year.id,
                 date             = punch_date,
-                status           = 'present',
+                status           = punch_status,
                 check_in         = punch_time,
                 source           = 'aiface',
                 device_id        = device.id,
@@ -667,8 +680,8 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
             )
             db.session.add(emp_att)
             db.session.commit()
-            log.info("  [aiface] employee check_in: employee_id=%d (%s) at %s",
-                     employee.id, employee.full_name, punch_time)
+            log.info("  [aiface] employee check_in: employee_id=%d (%s) at %s status=%s",
+                     employee.id, employee.full_name, punch_time, punch_status)
             _notify_action = 'check_in'
             _notify_att    = emp_att
 
@@ -676,6 +689,35 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
             log.debug("  [aiface] duplicate punch employee_id=%d tag=%s",
                       employee.id, dedup_tag)
             return 'skipped'
+
+        elif emp_att.check_in is None:
+            # A row exists but nobody has checked in yet — most commonly an
+            # approved-leave row written by the leave sync (status='on_leave',
+            # source='leave', check_in NULL). A physical device punch is proof the
+            # employee actually arrived, so it is a CHECK-IN, not a check-out.
+            # This mirrors the student rule already applied in
+            # attendance_service.py ("a device scan is proof the student
+            # physically arrived, regardless of leave status").
+            _prev_status = emp_att.status
+            _prev_source = emp_att.source
+            emp_att.status    = punch_status
+            emp_att.check_in  = punch_time
+            emp_att.source    = 'aiface'
+            emp_att.device_id = device.id
+            # Keep provenance: the overridden status/source stay in notes next to
+            # the dedup tag, so an on_leave row that was overridden is auditable.
+            emp_att.notes = ' | '.join(filter(None, [
+                (emp_att.notes or '').strip() or None,
+                f'تم الحضور فعلياً (كان: {_prev_status}/{_prev_source or "—"})',
+                dedup_tag,
+            ]))
+            db.session.commit()
+            log.info("  [aiface] employee check_in on existing row without check_in: "
+                     "employee_id=%d (%s) at %s status=%s (was %s/%s)",
+                     employee.id, employee.full_name, punch_time, punch_status,
+                     _prev_status, _prev_source)
+            _notify_action = 'check_in'
+            _notify_att    = emp_att
 
         else:
             emp_att.check_out = punch_time

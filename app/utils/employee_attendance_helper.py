@@ -3,11 +3,17 @@ Employee attendance calculation helpers.
 
 Calculates working days, virtual absences, and per-employee stats.
 Kept entirely separate from student attendance to avoid any interference.
+
+ABSENCE IS COMPUTED AT READ TIME — there is deliberately no employee
+auto-absence scheduler and no automatic 'absent' INSERT. A working day with no
+EmployeeAttendance row is classified on the fly by
+``classify_missing_working_day`` below, which is the SINGLE source of truth
+shared by the HR report, the exports and payroll.
 """
 from __future__ import annotations
 import re as _re
-from datetime import date, timedelta
-from typing import Dict, List
+from datetime import date, datetime, time, timedelta
+from typing import Dict, List, NamedTuple, Optional
 
 # Matches the AiFace dedup tag written by _process_employee_punch:
 #   "AI Face YYYY-MM-DD HH:MM:SS"
@@ -55,39 +61,131 @@ def get_working_days(date_from: date, date_to: date, school) -> List[date]:
     return working
 
 
+# ── Absence clock: when may a missing day be called absent? ──────────────────
+#
+# Employees have no auto-absence job, so "absent" is decided while reading. That
+# makes the CLOCK part of the calculation: a working day with no row is only an
+# absence once the day's arrival window has actually closed.
+#
+# The employee absence cutoff is a SCHOOL-level value in both modes (unified →
+# emp_att_absence_threshold, shift mode → emp_shift_absent_after_time), so it is
+# resolved ONCE per school and reused for every employee — no per-employee query.
+
+# A stored 00:00 is treated as "not configured". The column is nullable and the
+# UI writes NULL when cleared, but a mis-saved midnight must not silently mean
+# "every employee is absent from the very start of the day".
+_MIDNIGHT = time(0, 0)
+
+
+class EmployeeAbsenceClock(NamedTuple):
+    """School-local now + the effective employee absence cutoff."""
+    local_today:    date
+    local_now:      datetime
+    absence_cutoff: Optional[time]       # None = not configured → fail closed
+
+    @property
+    def cutoff_passed(self) -> bool:
+        """True only when a cutoff IS configured and the local time reached it."""
+        return (self.absence_cutoff is not None
+                and self.local_now.time() >= self.absence_cutoff)
+
+
+def get_employee_absence_clock(school) -> EmployeeAbsenceClock:
+    """Resolve the school-local clock + employee absence cutoff once.
+
+    Uses the Phase 1 resolver with audience='employees', so it honours the
+    employee shift toggle and never falls back to any student setting.
+    """
+    from app.utils.attendance_helpers import (get_effective_attendance_settings,
+                                              get_local_now)
+
+    now = get_local_now(school)
+    cutoff = get_effective_attendance_settings(school, 'employees').absence_cutoff
+    if cutoff == _MIDNIGHT:
+        cutoff = None
+    return EmployeeAbsenceClock(local_today=now.date(), local_now=now,
+                               absence_cutoff=cutoff)
+
+
+def classify_missing_working_day(d: date, clock: EmployeeAbsenceClock,
+                                 hire_date: Optional[date] = None) -> Optional[str]:
+    """Classify a working day that has NO EmployeeAttendance row.
+
+    Returns:
+        'absent'       – the day is over (or today's cutoff has passed)
+        'not_recorded' – today, and absence cannot legitimately be declared yet
+        None           – not an attendance obligation at all; the caller must
+                         exclude the day entirely (future, or before hire_date)
+
+    Rules (school-local):
+        before hire_date        → None   (the employee was not employed yet)
+        future day              → None   (it has not happened)
+        past working day        → 'absent'
+        today, cutoff passed    → 'absent'
+        today, before cutoff    → 'not_recorded'
+        today, cutoff NULL      → 'not_recorded'  (never auto-absent)
+    """
+    if hire_date and d < hire_date:
+        return None
+    if d > clock.local_today:
+        return None
+    if d < clock.local_today:
+        return 'absent'
+    return 'absent' if clock.cutoff_passed else 'not_recorded'
+
+
 # ── Per-employee statistics ───────────────────────────────────────────────────
 
 def calculate_employee_stats(employee,
                               records_by_date: Dict[date, object],
-                              working_days: List[date]) -> dict:
+                              working_days: List[date],
+                              school=None,
+                              *,
+                              clock: Optional[EmployeeAbsenceClock] = None) -> dict:
     """
     Build full attendance statistics for one employee across working_days.
-    Days without a record in records_by_date are treated as virtual-absent.
+
+    A day with no record is classified by classify_missing_working_day(): past
+    days are absent, today is absent only after the employee absence cutoff has
+    passed, and future / pre-hire days are dropped from the day list entirely.
+
+    `clock` lets a bulk caller resolve the school clock once; when omitted it is
+    derived from `school`.
 
     Returns:
         employee      – the Employee ORM object
         present       – count of on-time days
         late          – count of late days
-        absent        – count of absent days (real DB records + virtual)
+        absent        – count of absent days (real DB records + computed)
         on_leave      – count of approved-leave days (status='on_leave')
+        not_recorded  – working days with no record that cannot yet be called
+                        absent (computed only — never stored)
         checked_out   – count of days with a check_out time
-        working_days  – total number of working days in range
+        working_days  – working days that are an attendance obligation for THIS
+                        employee (excludes future and pre-hire days)
+        calendar_working_days – working days in the range for the school
         attended      – present + late (employee showed up)
-        rate          – attended / (working_days - on_leave) * 100; approved
-                        leave days are excluded from the denominator so they
-                        do not penalise the attendance percentage
+        rate          – attended / (working_days - on_leave - not_recorded) *
+                        100; approved leave is excused and a day that is not yet
+                        declarable is not counted against the employee
         daily         – list of per-day dicts (date, status, check_in, ...)
     """
+    if clock is None:
+        clock = get_employee_absence_clock(school)
+    hire_date = getattr(employee, 'hire_date', None)
+
     daily: list = []
-    present = absent = late = checked_out = on_leave = 0
+    present = absent = late = checked_out = on_leave = not_recorded = 0
 
     for d in working_days:
         rec = records_by_date.get(d)
         if rec is None:
-            # No DB record → virtual absence
+            computed = classify_missing_working_day(d, clock, hire_date)
+            if computed is None:
+                continue        # future or pre-employment — not an obligation
             daily.append({
                 'date': d,
-                'status': 'absent',
+                'status': computed,
                 'check_in': None,
                 'check_out': None,
                 'source': None,
@@ -95,7 +193,10 @@ def calculate_employee_stats(employee,
                 'notes': None,
                 'is_virtual': True,
             })
-            absent += 1
+            if computed == 'absent':
+                absent += 1
+            else:
+                not_recorded += 1
         else:
             status = rec.status
             if status == 'present':
@@ -120,10 +221,14 @@ def calculate_employee_stats(employee,
                 'record_id': rec.id,
             })
 
-    total = len(working_days)
+    # `daily` now holds only the days that are an obligation for THIS employee:
+    # future and pre-hire days were skipped above. A day that HAS a record is
+    # always kept — real data is never hidden.
+    total = len(daily)
     attended = present + late
-    # Approved leave days are excused — exclude them from the rate denominator
-    billable = total - on_leave
+    # Approved leave is excused, and a day that cannot yet be declared absent is
+    # not yet a miss — neither belongs in the denominator.
+    billable = total - on_leave - not_recorded
     rate = round(attended / billable * 100, 1) if billable > 0 else 0.0
 
     return {
@@ -132,8 +237,10 @@ def calculate_employee_stats(employee,
         'late': late,
         'absent': absent,
         'on_leave': on_leave,
+        'not_recorded': not_recorded,
         'checked_out': checked_out,
         'working_days': total,
+        'calendar_working_days': len(working_days),
         'attended': attended,
         'rate': rate,
         'daily': daily,
@@ -156,12 +263,23 @@ def get_employees_attendance_summary(
     Fetches all EmployeeAttendance records in one bulk query, then assembles
     per-employee stats.  Filters are applied in Python after the bulk fetch.
 
-    status_filter values: 'present' | 'late' | 'absent' | 'on_leave' | '' (= all)
+    status_filter values: 'present' | 'late' | 'absent' | 'on_leave' |
+                          'not_recorded' | '' (= all)
     The filter keeps rows where the employee has AT LEAST ONE day of that status.
+
+    The range end is clamped to the SCHOOL-LOCAL date, so a future date_to can
+    never turn days that have not happened into attendance obligations.  The
+    absence clock (and therefore the employee cutoff) is resolved ONCE here and
+    shared by every employee — no per-employee settings or shift query.
     """
     from app.models import EmployeeAttendance
 
-    working_days = get_working_days(date_from, date_to, school)
+    clock = get_employee_absence_clock(school)
+    effective_to = min(date_to, clock.local_today)
+    if effective_to < date_from:
+        return []                      # range is entirely in the future
+
+    working_days = get_working_days(date_from, effective_to, school)
 
     # Narrow the employee list first (cheap in-memory)
     filtered = list(employees)
@@ -185,7 +303,7 @@ def get_employees_attendance_summary(
             EmployeeAttendance.school_id == school.id,
             EmployeeAttendance.employee_id.in_(emp_ids),
             EmployeeAttendance.date >= date_from,
-            EmployeeAttendance.date <= date_to,
+            EmployeeAttendance.date <= effective_to,
         )
         .all()
     )
@@ -197,7 +315,8 @@ def get_employees_attendance_summary(
 
     results = []
     for emp in filtered:
-        stats = calculate_employee_stats(emp, records_map.get(emp.id, {}), working_days)
+        stats = calculate_employee_stats(emp, records_map.get(emp.id, {}),
+                                         working_days, school, clock=clock)
 
         # Apply status_filter to summary row
         if status_filter == 'present' and stats['present'] == 0:
@@ -207,6 +326,8 @@ def get_employees_attendance_summary(
         if status_filter == 'absent' and stats['absent'] == 0:
             continue
         if status_filter == 'on_leave' and stats.get('on_leave', 0) == 0:
+            continue
+        if status_filter == 'not_recorded' and stats.get('not_recorded', 0) == 0:
             continue
 
         results.append(stats)
@@ -227,6 +348,11 @@ def get_absence_alerts(summary_rows: list, school) -> list:
     """
     Returns a list of dicts for employees whose absent count exceeds
     school.emp_absence_limit.  Returns [] if limit is not configured.
+
+    Counts row['absent'] ONLY — which by construction already excludes
+    not_recorded, on_leave, weekly days off, employee holidays, pre-hire days
+    and future days.  An alert can therefore never be raised for a day the
+    employee was not yet obliged to attend.
     """
     limit = getattr(school, 'emp_absence_limit', None)
     if not limit:

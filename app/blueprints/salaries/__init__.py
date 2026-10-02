@@ -381,7 +381,9 @@ def create():
         db.session.flush()
         settings = get_settings(school_id)
         apply_recurring_components(record)
-        apply_attendance_items(record, settings, school)
+        # Pass the employee so compute_attendance resolves their employee shift
+        # without re-loading the row.
+        apply_attendance_items(record, settings, school, employee=emp)
         record.recompute()
         db.session.commit()
         flash('تم إنشاء مسودة الراتب.', 'success')

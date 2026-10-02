@@ -129,6 +129,16 @@
       </div>
     </div>
   </div>
+  {% if total_not_recorded %}
+  <div class="col-6 col-md-2">
+    <div class="card text-center h-100 border-secondary">
+      <div class="card-body py-3">
+        <div style="font-size:1.8rem;font-weight:800;color:#6c757d">{{ total_not_recorded }}</div>
+        <div class="text-muted small">غير مسجل بعد</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
   <div class="col-6 col-md-2">
     <div class="card text-center h-100 {% if alerts %}border-danger bg-danger bg-opacity-10{% else %}border-secondary{% endif %}">
       <div class="card-body py-3">
@@ -236,6 +246,7 @@
           <th class="text-center text-success">حاضر</th>
           <th class="text-center text-warning">متأخر</th>
           <th class="text-center text-danger">غائب</th>
+          <th class="text-center text-secondary">غير مسجل بعد</th>
           <th class="text-center text-info">انصراف</th>
           <th class="text-center">نسبة الحضور</th>
           <th class="text-center">إجراءات</th>
@@ -271,6 +282,14 @@
           <td class="text-center">
             {% if row.absent > 0 %}
             <span class="fw-bold text-danger">{{ row.absent }}</span>
+            {% else %}
+            <span class="text-muted">0</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            {# Today, before the employee absence cutoff — not an absence yet. #}
+            {% if row.not_recorded is defined and row.not_recorded > 0 %}
+            <span class="fw-bold text-secondary" title="لم يحن وقت اعتبار الغياب بعد">{{ row.not_recorded }}</span>
             {% else %}
             <span class="text-muted">0</span>
             {% endif %}

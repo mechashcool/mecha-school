@@ -267,6 +267,38 @@ def get_employee_shift(employee, school):
     return shift
 
 
+def get_employee_shift_map(school, employees):
+    """{employee_id: EmployeeAttendanceShift} for a SET of employees — ONE query.
+
+    The bulk form of get_employee_shift, for the manual daily sheet and payroll
+    generation, so neither performs a shift query per employee.  Applies exactly
+    the same rules: feature toggle off, no assignment, inactive shift or a shift
+    from another school all yield no entry (the caller then falls back to the
+    school-level employee settings).
+    """
+    if not school or not getattr(school, 'emp_enable_attendance_shifts', False):
+        return {}
+    wanted = {getattr(e, 'shift_id', None) for e in employees}
+    wanted.discard(None)
+    if not wanted:
+        return {}
+
+    from app.models import EmployeeAttendanceShift
+    rows = (EmployeeAttendanceShift.query
+            .execution_options(bypass_tenant_scope=True)
+            .filter(EmployeeAttendanceShift.id.in_(wanted),
+                    EmployeeAttendanceShift.school_id == school.id,
+                    EmployeeAttendanceShift.is_active.is_(True))
+            .all())
+    by_id = {s.id: s for s in rows}
+    return {
+        e.id: by_id[e.shift_id]
+        for e in employees
+        if getattr(e, 'shift_id', None) in by_id
+        and getattr(e, 'school_id', None) == school.id
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Holidays & weekly days off — audience aware (students / employees)
 #

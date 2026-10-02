@@ -144,23 +144,32 @@ def _minutes_between(t_from, t_to) -> int:
 
 
 def compute_attendance(record: SalaryRecord, settings: PayrollSettings, school,
-                       working_days=None) -> dict:
+                       working_days=None, employee=None, shift_map=None) -> dict:
     """
     Calculate attendance-based deduction details for one payroll record's month.
 
     ``working_days`` may be a pre-computed list of working days for the same
     month/year/school (identical for every employee in a generation run) so the
-    holiday/weekend calendar is not recomputed per employee. When None it is
-    computed here, exactly as before.
+    holiday/weekend calendar is not recomputed per employee.
+    ``employee`` / ``shift_map`` let a bulk run supply the Employee row and the
+    school's active employee shifts so this function performs NO per-employee
+    query. When omitted the employee is loaded once here (single-record callers).
 
-    Uses EmployeeAttendance (NOT student attendance). Mirrors the HR attendance
-    report logic (calculate_employee_stats): iterates over every working day in
-    the effective range and treats any day with no DB record as a virtual absence.
-    The effective range is capped at today so future working days in the current
-    month are not counted as absences when payroll is generated mid-month.
-    Returns a dict with counts and Decimal deduction amounts.
+    Uses EmployeeAttendance (NOT student attendance) and the EMPLOYEE attendance
+    settings throughout — employee shift late_after_time / dismissal_time when a
+    shift resolves, else School.emp_att_late_threshold /
+    School.emp_att_departure_time. No student setting is ever read.
+
+    Absence uses exactly the same temporal rule as the HR attendance report
+    (classify_missing_working_day): a past working day with no row is an absence;
+    TODAY is an absence only once the employee absence cutoff has passed, and
+    never when that cutoff is unconfigured; future and pre-hire_date days are not
+    obligations at all. Deduction FORMULAS are unchanged — only which days and
+    which thresholds feed them.
     """
-    from app.utils.employee_attendance_helper import get_working_days
+    from app.utils.attendance_helpers import get_effective_attendance_settings
+    from app.utils.employee_attendance_helper import (
+        classify_missing_working_day, get_employee_absence_clock, get_working_days)
 
     result = {
         'absence_days': 0, 'late_count': 0, 'early_leave_count': 0,
@@ -170,11 +179,12 @@ def compute_attendance(record: SalaryRecord, settings: PayrollSettings, school,
     if not settings or not settings.attendance_deduction_enabled:
         return result
 
+    clock = get_employee_absence_clock(school)
     date_from, date_to = _month_range(record.month, record.year)
-    # Cap at today: working days that haven't occurred yet must not be counted
-    # as virtual absences (matches what the HR attendance report shows when the
-    # user picks the same date range).
-    effective_to = min(date_to, date.today())
+    # Cap at the SCHOOL-LOCAL date (not the server date): working days that have
+    # not occurred yet must never be counted as absences. Today IS included, but
+    # the classifier decides whether it may be called absent yet.
+    effective_to = min(date_to, clock.local_today)
     if effective_to < date_from:
         return result  # salary month is entirely in the future
 
@@ -182,6 +192,25 @@ def compute_attendance(record: SalaryRecord, settings: PayrollSettings, school,
         working_days = get_working_days(date_from, effective_to, school)
     if not working_days:
         return result
+
+    if employee is None:
+        from app.models import Employee
+        employee = (Employee.query
+                    .execution_options(bypass_tenant_scope=True)
+                    .filter_by(id=record.employee_id, school_id=record.school_id)
+                    .first())
+    hire_date = getattr(employee, 'hire_date', None)
+
+    # Effective employee thresholds for THIS employee: shift first, then the
+    # school-level employee settings. shift_map is pre-loaded by the bulk caller.
+    emp_shift = None
+    if employee is not None:
+        if shift_map is not None:
+            emp_shift = shift_map.get(employee.id)
+        else:
+            from app.utils.attendance_helpers import get_employee_shift
+            emp_shift = get_employee_shift(employee, school)
+    effective = get_effective_attendance_settings(school, 'employees', shift=emp_shift)
 
     # One bulk query for explicit EmployeeAttendance records within the effective
     # range.  bypass_tenant_scope so it works regardless of the active view year.
@@ -198,19 +227,24 @@ def compute_attendance(record: SalaryRecord, settings: PayrollSettings, school,
     )
     records_by_date = {r.date: r for r in rows}
 
-    late_threshold = getattr(school, 'att_late_threshold', None)
-    departure_time = getattr(school, 'att_departure_time', None)
+    # EMPLOYEE thresholds (shift → school employee settings). Previously these
+    # read the STUDENT att_late_threshold / att_departure_time.
+    late_threshold = effective.late_threshold
+    departure_time = effective.departure_time
 
     absence_days = late_count = early_leave_count = 0
     total_late_minutes = 0
 
-    # Iterate over working days exactly as calculate_employee_stats() does:
-    # a missing record on a working day is a virtual absence.
+    # Iterate over working days exactly as calculate_employee_stats() does, using
+    # the same classifier for a missing record so the payroll figure can never
+    # disagree with the HR report: not_recorded and pre-hire/future days produce
+    # no deduction.
     # Days with status='on_leave' are approved leave — no deduction of any kind.
     for d in working_days:
         rec = records_by_date.get(d)
         if rec is None:
-            absence_days += 1  # virtual absence
+            if classify_missing_working_day(d, clock, hire_date) == 'absent':
+                absence_days += 1
             continue
         if rec.status == 'on_leave':
             continue  # approved leave — exempt from all attendance deductions
@@ -310,14 +344,16 @@ def apply_recurring_components(record: SalaryRecord, comps=None):
 
 
 def apply_attendance_items(record: SalaryRecord, settings: PayrollSettings, school,
-                           working_days=None):
+                           working_days=None, employee=None, shift_map=None):
     """Compute attendance deductions and store them as 'attendance' line items
     plus informational counts on the record.
 
-    ``working_days`` is forwarded to compute_attendance() so a bulk run can
-    share one pre-computed working-day calendar across all employees.
+    ``working_days`` / ``employee`` / ``shift_map`` are forwarded to
+    compute_attendance() so a bulk run shares one working-day calendar and one
+    employee-shift map across all employees (no per-employee query).
     """
-    stats = compute_attendance(record, settings, school, working_days=working_days)
+    stats = compute_attendance(record, settings, school, working_days=working_days,
+                               employee=employee, shift_map=shift_map)
     record.absence_days      = stats['absence_days']
     record.late_count        = stats['late_count']
     record.early_leave_count = stats['early_leave_count']
@@ -391,13 +427,20 @@ def generate_payroll(school, active_year, month: int, year: int,
         .all()
     )
 
+    # The employee-shift map is also identical for the whole run: ONE query for
+    # the school's active employee shifts instead of one lookup per employee.
     shared_working_days = None
+    shared_shift_map = {}
     if settings and settings.attendance_deduction_enabled:
-        from app.utils.employee_attendance_helper import get_working_days
+        from app.utils.attendance_helpers import get_employee_shift_map
+        from app.utils.employee_attendance_helper import (
+            get_employee_absence_clock, get_working_days)
         _df, _dt = _month_range(month, year)
-        _eff_to = min(_dt, date.today())
+        # School-local date, not the server date.
+        _eff_to = min(_dt, get_employee_absence_clock(school).local_today)
         shared_working_days = (get_working_days(_df, _eff_to, school)
                                if _eff_to >= _df else [])
+        shared_shift_map = get_employee_shift_map(school, employees)
 
     created = skipped = 0
     with db.session.no_autoflush:
@@ -423,7 +466,8 @@ def generate_payroll(school, active_year, month: int, year: int,
             db.session.flush()  # need record.id + academic_year_id for items
             apply_recurring_components(record, comps=recurring_comps)
             apply_attendance_items(record, settings, school,
-                                   working_days=shared_working_days)
+                                   working_days=shared_working_days,
+                                   employee=emp, shift_map=shared_shift_map)
             record.recompute()
             created += 1
 
