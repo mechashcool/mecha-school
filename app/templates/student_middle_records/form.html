@@ -182,17 +182,12 @@
     <div class="card-body">
       <h2 class="h5 mb-3">C. النتائج</h2>
       <div class="row g-3">
-        <div class="col-md-3">
-          <label class="form-label">المجموع</label>
-          <input type="number" step="any" class="form-control" name="total_score"
-               value="{{ record.total_score if record and record.total_score is not none else '' }}">
-        </div>
-        <div class="col-md-4">
+        <div class="col-md-6">
           <label class="form-label">نتيجة الدور الأول</label>
           <input type="text" class="form-control" name="first_round_result"
                  value="{{ record.first_round_result if record else prefill.first_round_result }}">
         </div>
-        <div class="col-md-4">
+        <div class="col-md-6">
           <label class="form-label">نتيجة الدور الثاني</label>
           <input type="text" class="form-control" name="second_round_result"
                  value="{{ record.second_round_result if record else prefill.second_round_result }}">

@@ -149,9 +149,12 @@ def _parse_subject_grades(form, existing_grades=None):
 
 def _apply_record_fields(record, form, school):
     record.subject_grades = _parse_subject_grades(form, record.subject_grades)
-    record.total_score = _parse_optional_number(form.get('total_score'))
-    record.first_round_result = (form.get('first_round_result', '') or '').strip()
-    record.second_round_result = (form.get('second_round_result', '') or '').strip()
+    if 'total_score' in form:
+        record.total_score = _parse_optional_number(form.get('total_score'))
+    if 'first_round_result' in form:
+        record.first_round_result = (form.get('first_round_result', '') or '').strip()
+    if 'second_round_result' in form:
+        record.second_round_result = (form.get('second_round_result', '') or '').strip()
     record.result_notes = (form.get('result_notes', '') or '').strip()
     record.page_number = (form.get('page_number', '') or '').strip()
     record.father_name = (form.get('father_name', '') or '').strip()
