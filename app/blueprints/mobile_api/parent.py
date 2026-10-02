@@ -17,6 +17,8 @@ GET /parent/notifications                     notifications feed (paginated)
 GET /parent/children/<id>/transportation/live latest bus location (active trip only)
 GET /parent/children/<id>/institute/groups    INSTITUTE: current study groups
                                               + weekly slots (the timetable)
+                                              + last-30-day attendance rows and
+                                              exam score/max_score (evaluation)
 GET /parent/children/<id>/institute/attendance
                                               INSTITUTE: per-lesson attendance,
                                               ?start=&end= ≤31-day window
@@ -51,6 +53,7 @@ from app.models import (
     ExamResult,
     Homework,
     InstituteAttendanceRecord,
+    InstituteAttendanceSession,
     InstituteStudyGroup,
     LeaveRequest,
     Notification,
@@ -972,6 +975,15 @@ def _institute_parent_homework(s: Student, school: School, page_meta: dict):
 
 # ─── Institute study groups + weekly timetable ────────────────────────────────
 
+# Additive evaluation payload of the institute groups endpoint. The attendance
+# window is counted in the SCHOOL's local days (inst_att.local_today) — the
+# same clock the sessions were materialized with — so the two cannot drift.
+_INSTITUTE_EVAL_WINDOW_DAYS = 30
+# No result cap: nothing in the data model bounds how many exams a group may
+# hold, so any fixed LIMIT could silently truncate the evaluation. The query is
+# already bounded by the child's own current-year groups and stays ONE SELECT.
+
+
 @mobile_api_bp.route('/parent/children/<int:student_id>/institute/groups', methods=['GET'])
 @jwt_required()
 @role_required('parent')
@@ -985,8 +997,15 @@ def parent_child_institute_groups(student_id):
     year. Ended memberships, deactivated groups, other years and other
     institutes never appear. Slots are the group's active weekly rules.
 
+    Also returns, for the SAME scope, the child's existing per-lesson
+    attendance of the last 30 institute-local days (attendance_records) and the
+    stored score / max_score of the child's institute exams across ALL of those
+    groups (evaluation_results). Both are read-only projections of existing
+    rows: nothing is created, and no absence is inferred.
+
     Queries: school, year, enrollments+groups (one join), subjects, instructor
-    names, slots — a fixed count regardless of how many groups.
+    names, slots, attendance, results — a fixed count regardless of how many
+    groups.
     """
     s = _assert_owns_student(student_id)
     school = _user_institute()
@@ -1006,6 +1025,67 @@ def parent_child_institute_groups(student_id):
                        .all()) if instructor_ids else {}
     slots = (inst_att.slots_by_group(school.id, year_id, group_ids, active_only=True)
              if group_ids else {})
+
+    # ── Attendance of the LAST 30 SCHOOL-LOCAL DAYS ─────────────────────────
+    # Existing rows only, written by the instructor/admin session-attendance
+    # flow — nothing is materialized or created here. ONE bounded query: the
+    # records of THIS child joined to the sessions of the child's OWN current
+    # groups (group_ids, already resolved above by student_current_enrollments:
+    # ACTIVE enrollment + ACTIVE group + this institute + current year). The
+    # join carries school_id on both sides, so a record can never be paired
+    # with another school's session. An unmarked lesson simply has no row —
+    # omission is NOT an absence, and none is invented.
+    today = inst_att.local_today(school)
+    window_start = today - timedelta(days=_INSTITUTE_EVAL_WINDOW_DAYS - 1)
+    attendance_rows = (
+        db.session.query(InstituteAttendanceRecord.status,
+                         InstituteAttendanceSession.session_date)
+        .join(InstituteAttendanceSession,
+              and_(InstituteAttendanceSession.id
+                   == InstituteAttendanceRecord.session_id,
+                   InstituteAttendanceSession.school_id
+                   == InstituteAttendanceRecord.school_id))
+        .filter(InstituteAttendanceRecord.school_id == school.id,
+                InstituteAttendanceRecord.student_id == s.id,
+                InstituteAttendanceSession.school_id == school.id,
+                InstituteAttendanceSession.academic_year_id == year_id,
+                InstituteAttendanceSession.group_id.in_(group_ids),
+                InstituteAttendanceSession.session_date >= window_start,
+                InstituteAttendanceSession.session_date <= today)
+        .execution_options(**_OPTS)
+        .order_by(InstituteAttendanceSession.session_date.desc(),
+                  InstituteAttendanceSession.start_time.desc(),
+                  InstituteAttendanceRecord.id.desc())
+        .all()) if group_ids and year_id else []
+
+    # ── Authoritative score / max_score for the client-side evaluation ──────
+    # THIS child's stored institute exam results across the child's OWN current
+    # groups. A school-section exam can never appear: institute_group_id must
+    # be one of group_ids. uq_exam_student guarantees one result row per
+    # (exam, student), so the join cannot duplicate a result.
+    #
+    # Column projection, not entities: six scalars, no identity map, no lazy
+    # relationship and no unused column (grade_letter, rank, notes, the exam's
+    # name/type/subject/section …). The unusable rows are discarded by the
+    # DATABASE — marks IS NOT NULL and max_marks > 0, where a NULL max_marks
+    # fails the comparison — so they are never transferred or decoded.
+    evaluation_rows = (db.session.query(ExamResult.id,
+                                        Exam.id,
+                                        Exam.institute_group_id,
+                                        Exam.exam_date,
+                                        ExamResult.marks,
+                                        Exam.max_marks)
+                       .join(Exam, Exam.id == ExamResult.exam_id)
+                       .filter(ExamResult.student_id == s.id,
+                               ExamResult.school_id == school.id,
+                               ExamResult.academic_year_id == year_id,
+                               Exam.school_id == school.id,
+                               Exam.institute_group_id.in_(group_ids),
+                               ExamResult.marks.isnot(None),
+                               Exam.max_marks > 0)
+                       .execution_options(**_OPTS)
+                       .order_by(Exam.exam_date.desc(), ExamResult.id.desc())
+                       .all()) if group_ids and year_id else []
 
     return ok(
         student_id=s.id,
@@ -1033,6 +1113,30 @@ def parent_child_institute_groups(student_id):
                 ],
             }
             for enr, grp in pairs
+        ],
+        # Canonical stored statuses, unmapped: present / late / absent /
+        # excused. Only rows a human actually recorded appear here.
+        attendance_records=[
+            {
+                'date':   session_date.isoformat() if session_date else None,
+                'status': status,
+            }
+            for status, session_date in attendance_rows
+        ],
+        # Unusable rows (NULL score, NULL or non-positive max_score) were
+        # already OMITTED by the query above — never coerced to zero — so the
+        # client can never divide by a missing or non-positive maximum.
+        evaluation_results=[
+            {
+                'result_id': result_id,
+                'exam_id':   exam_id,
+                'group_id':  group_id,
+                'exam_date': exam_date.isoformat() if exam_date else None,
+                'score':     float(marks),
+                'max_score': float(max_marks),
+            }
+            for (result_id, exam_id, group_id,
+                 exam_date, marks, max_marks) in evaluation_rows
         ],
     )
 
