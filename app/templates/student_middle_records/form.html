@@ -1,0 +1,257 @@
+{% extends "shared/base.html" %}
+{% if mode == 'edit' %}
+{% block title %}تعديل السجل الوسطي{% endblock %}
+{% block page_title %}تعديل السجل الوسطي{% endblock %}
+{% else %}
+{% block title %}إضافة سجل وسيط{% endblock %}
+{% block page_title %}إضافة سجل وسيط{% endblock %}
+{% endif %}
+
+{% block content %}
+<style>
+  .middle-grade-grid { min-width: 1500px; }
+  .middle-grade-grid input { min-width: 105px; }
+</style>
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{% if mode == 'edit' %}تعديل السجل الوسطي{% else %}إضافة سجل وسيط{% endif %}</h1>
+    <p class="page-subtitle">سجل رسمي مستقل يلتقط بيانات الطالب في المرحلة المتوسطة</p>
+  </div>
+  <a href="{{ url_for('student_middle_records.index') }}" class="btn btn-outline-secondary">العودة للقائمة</a>
+</div>
+
+{% if not record and students %}
+<div class="card mb-4">
+  <div class="card-header bg-light">
+    <strong>الطلاب المطابقة للبحث</strong>
+  </div>
+  <div class="list-group list-group-flush">
+    {% for s in students %}
+    <a class="list-group-item list-group-item-action d-flex justify-content-between align-items-center"
+       href="{{ url_for('student_middle_records.new', student_id=s.id, q=q or None) }}">
+      <span>
+        <span class="fw-semibold">{{ s.full_name }}</span>
+        <span class="text-muted small"> / {{ s.student_id or 'بدون رقم' }}</span>
+      </span>
+      <span class="small text-muted">{{ s.section.name if s.section else '' }}{% if s.section and s.section.grade %} / {{ s.section.grade.name }}{% endif %}</span>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if not record %}
+<form method="GET" class="card mb-4">
+  <div class="card-body">
+    <div class="row g-3">
+      <div class="col-md-8">
+        <label class="form-label">بحث عن طالب</label>
+        <input type="text" name="q" class="form-control" value="{{ q or '' }}" placeholder="اسم الطالب أو رقم الطالب">
+      </div>
+      <div class="col-md-4 d-flex align-items-end">
+        <button type="submit" class="btn btn-primary w-100">بحث</button>
+      </div>
+    </div>
+  </div>
+</form>
+{% endif %}
+
+<form method="POST">
+  {% if record %}
+  <input type="hidden" name="student_id" value="{{ record.student_id }}">
+  {% elif prefill and prefill.student_id %}
+  <input type="hidden" name="student_id" value="{{ prefill.student_id }}">
+  {% endif %}
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <h2 class="h5 mb-3">A. بيانات الطالب والسجل</h2>
+      <div class="row g-3">
+        <div class="col-md-3">
+          <label class="form-label">رقم القيد</label>
+          <input type="text" class="form-control" name="record_number" value="{{ (record.record_number if record else prefill.record_number) or '' }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">رقم الصفحة</label>
+          <input type="text" class="form-control" name="page_number" value="{{ record.page_number if record else prefill.page_number }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">السنة الدراسية</label>
+          <input type="text" class="form-control" value="{{ record.snap_year_name if record else prefill.snap_year_name }}" readonly>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">اسم المدرسة</label>
+          <input type="text" class="form-control" name="school_name" value="{{ (record.school_name if record else prefill.school_name) or '' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">اسم المدرسة بالعربي</label>
+          <input type="text" class="form-control" name="school_name_ar" value="{{ (record.school_name_ar if record else prefill.school_name_ar) or school.school_name_ar or '' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">تاريخ القيد</label>
+          <input type="date" class="form-control" name="admission_date" value="{{ (record.admission_date if record else prefill.admission_date) or '' }}">
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">اسم الطالب</label>
+          <input type="text" class="form-control" name="snap_full_name" value="{{ (record.snap_full_name if record else prefill.snap_full_name) or '' }}" required>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">رقم الطالب</label>
+          <input type="text" class="form-control" name="snap_student_number" value="{{ (record.snap_student_number if record else prefill.snap_student_number) or '' }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">المرحلة</label>
+          <input type="text" class="form-control" name="snap_stage" value="{{ (record.snap_stage if record else prefill.snap_stage) or '' }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">الصف</label>
+          <input type="text" class="form-control" name="snap_grade_name" value="{{ (record.snap_grade_name if record else prefill.snap_grade_name) or '' }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">الشعبة</label>
+          <input type="text" class="form-control" name="snap_section_name" value="{{ (record.snap_section_name if record else prefill.snap_section_name) or '' }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">اسم الأب</label>
+          <input type="text" class="form-control" name="father_name" value="{{ record.father_name if record else prefill.father_name }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">اسم الجد</label>
+          <input type="text" class="form-control" name="grandfather_name" value="{{ record.grandfather_name if record else prefill.grandfather_name }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">اسم أب الجد</label>
+          <input type="text" class="form-control" name="great_grandfather_name" value="{{ record.great_grandfather_name if record else prefill.great_grandfather_name }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">سنوات الرسوب</label>
+          <input type="text" class="form-control" name="years_failed" value="{{ record.years_failed if record else prefill.years_failed }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">الجنس</label>
+          <input type="text" class="form-control" name="snap_gender" value="{{ (record.snap_gender if record else prefill.snap_gender) or '' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">تاريخ الميلاد</label>
+          <input type="date" class="form-control" name="snap_date_of_birth" value="{{ (record.snap_date_of_birth if record else prefill.snap_date_of_birth) or '' }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">الهاتف</label>
+          <input type="text" class="form-control" name="snap_phone" value="{{ (record.snap_phone if record else prefill.snap_phone) or '' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">الحالة</label>
+          <input type="text" class="form-control" name="snap_status" value="{{ (record.snap_status if record else prefill.snap_status) or 'active' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">تاريخ الالتحاق</label>
+          <input type="date" class="form-control" name="snap_enrollment_date" value="{{ (record.snap_enrollment_date if record else prefill.snap_enrollment_date) or '' }}">
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">اسم ولي الأمر</label>
+          <input type="text" class="form-control" name="snap_guardian_name" value="{{ (record.snap_guardian_name if record else prefill.snap_guardian_name) or '' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">هاتف ولي الأمر</label>
+          <input type="text" class="form-control" name="snap_guardian_phone" value="{{ (record.snap_guardian_phone if record else prefill.snap_guardian_phone) or '' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">صلة القرابة</label>
+          <input type="text" class="form-control" name="snap_guardian_relation" value="{{ (record.snap_guardian_relation if record else prefill.snap_guardian_relation) or '' }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">المدرسة السابقة</label>
+          <input type="text" class="form-control" name="previous_school" value="{{ (record.previous_school if record else prefill.previous_school) or '' }}">
+        </div>
+
+        <div class="col-md-12">
+          <label class="form-label">العنوان</label>
+          <textarea class="form-control" rows="3" name="snap_address">{{ (record.snap_address if record else prefill.snap_address) or '' }}</textarea>
+        </div>
+        <div class="col-md-12">
+          <label class="form-label">ملاحظات</label>
+          <textarea class="form-control" rows="3" name="notes">{{ (record.notes if record else prefill.notes) or '' }}</textarea>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card shadow-sm mt-4">
+    <div class="card-body">
+      <h2 class="h5 mb-3">B. جدول الدرجات</h2>
+      {% set saved_grades = record.subject_grades if record and record.subject_grades else {} %}
+      <div class="table-responsive">
+        <table class="table table-bordered table-sm align-middle text-center middle-grade-grid mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>المادة</th>
+              {% for column_key, column_label in grade_columns %}
+              <th>{{ column_label }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for subject_key, subject_label in subjects %}
+            {% set subject_data = saved_grades.get(subject_key, {}) %}
+            <tr>
+              <th class="text-nowrap">{{ subject_label }}</th>
+              {% for column_key, column_label in grade_columns %}
+              {% set cell_value = subject_data.get(column_key) %}
+              <td>
+                {% if column_key == 'notes' %}
+                <input class="form-control form-control-sm" type="text"
+                       name="grade__{{ subject_key }}__{{ column_key }}"
+                       value="{{ cell_value if cell_value is not none else '' }}"
+                       aria-label="{{ subject_label }} - {{ column_label }}">
+                {% else %}
+                <input class="form-control form-control-sm" type="number" step="any"
+                       name="grade__{{ subject_key }}__{{ column_key }}"
+                       value="{{ cell_value if cell_value is not none else '' }}"
+                       aria-label="{{ subject_label }} - {{ column_label }}">
+                {% endif %}
+              </td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card shadow-sm mt-4">
+    <div class="card-body">
+      <h2 class="h5 mb-3">C. النتائج والملاحظات</h2>
+      <div class="row g-3">
+        <div class="col-md-3">
+          <label class="form-label">المجموع</label>
+          <input type="number" step="any" class="form-control" name="total_score"
+                 value="{{ record.total_score if record and record.total_score is not none else prefill.total_score if prefill else '' }}">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">نتيجة الدور الأول</label>
+          <input type="text" class="form-control" name="first_round_result"
+                 value="{{ record.first_round_result if record else prefill.first_round_result }}">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">نتيجة الدور الثاني</label>
+          <input type="text" class="form-control" name="second_round_result"
+                 value="{{ record.second_round_result if record else prefill.second_round_result }}">
+        </div>
+        <div class="col-md-12">
+          <label class="form-label">الملاحظات</label>
+          <textarea class="form-control" rows="3" name="result_notes">{{ record.result_notes if record else prefill.result_notes }}</textarea>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="d-flex justify-content-end gap-2 mt-4">
+    <a href="{{ url_for('student_middle_records.index') }}" class="btn btn-outline-secondary">إلغاء</a>
+    <button type="submit" class="btn btn-primary">
+      {% if mode == 'edit' %}حفظ التعديلات{% else %}حفظ السجل{% endif %}
+    </button>
+  </div>
+</form>
+{% endblock %}

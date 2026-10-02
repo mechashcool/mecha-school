@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8">
+    <title>سجل الدرجات للمدارس المتوسطة</title>
+    <style>
+      @page { size: A3 portrait; margin: 8mm; }
+      * { box-sizing: border-box; }
+      body { margin: 0; color: #111; font-family: Arial, sans-serif; font-size: 10px; }
+      h1, h2, p { margin: 0; }
+      .heading { display: grid; grid-template-columns: 1fr 2fr 1fr; align-items: center; text-align: center; margin-bottom: 5mm; }
+      .school { border: 1px solid #222; padding: 7px; font-weight: 700; }
+      .title { font-size: 18px; line-height: 1.5; font-weight: 700; }
+      .page-number { border: 1px solid #222; padding: 7px; }
+      .school-name { border: 1px solid #222; text-align: center; font-size: 15px; font-weight: 700; padding: 7px; margin-bottom: 4mm; }
+      .student-data, .grade-table, .results { width: 100%; border-collapse: collapse; table-layout: fixed; }
+      th, td { border: 1px solid #333; padding: 4px 3px; text-align: center; vertical-align: middle; overflow-wrap: anywhere; }
+      .student-data { margin-bottom: 4mm; }
+      .student-data th { background: #f4f4f4; width: 9%; }
+      .student-data td { width: 11%; }
+      .grade-table { font-size: 8px; }
+      .grade-table th, .grade-table td { padding: 3px 2px; height: 8mm; }
+      .grade-table thead th { background: #f2f2f2; }
+      .grade-table .subject { width: 13%; }
+      .results { margin-top: 4mm; }
+      .results th { background: #f2f2f2; }
+      .result-line { min-height: 12mm; text-align: right; }
+      @media screen {
+        body { max-width: 297mm; margin: 10px auto; padding: 8mm; }
+      }
+      @media print {
+        body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      }
+    </style>
+  </head>
+  <body onload="window.print()">
+    <header class="heading">
+      <div class="page-number">رقم الصفحة<br>{{ record.page_number or '' }}</div>
+      <div class="title"><h1>سجل الدرجات</h1><p>للمدارس المتوسطة</p></div>
+      <div class="school"><div>السنة الدراسية</div>{{ record.snap_year_name or '' }}</div>
+    </header>
+
+    <div class="school-name">{{ record.school_name_ar or record.school_name or '' }}</div>
+
+    <table class="student-data">
+      <tbody>
+        <tr>
+          <th>اسم الطالب</th><td colspan="2">{{ record.snap_full_name or '' }}</td>
+          <th>اسم الأب</th><td>{{ record.father_name or '' }}</td>
+          <th>اسم الجد</th><td>{{ record.grandfather_name or '' }}</td>
+          <th>اسم أب الجد</th><td>{{ record.great_grandfather_name or '' }}</td>
+        </tr>
+        <tr>
+          <th>الصف والشعبة</th><td colspan="2">{{ record.snap_grade_name or '' }}{% if record.snap_section_name %} / {{ record.snap_section_name }}{% endif %}</td>
+          <th>رقم القيد</th><td>{{ record.record_number or '' }}</td>
+          <th>المواليد</th><td>{{ record.snap_date_of_birth.isoformat() if record.snap_date_of_birth else '' }}</td>
+          <th>سنوات الرسوب</th><td>{{ record.years_failed or '' }}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <table class="grade-table">
+      <thead>
+        <tr>
+          <th class="subject">المادة</th>
+          {% for column_key, column_label in grade_columns %}
+          <th>{{ column_label }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for subject_key, subject_label in subjects %}
+        {% set subject_data = record.subject_grades.get(subject_key, {}) if record.subject_grades else {} %}
+        <tr>
+          <th class="subject">{{ subject_label }}</th>
+          {% for column_key, column_label in grade_columns %}
+          <td>{{ subject_data.get(column_key) if subject_data.get(column_key) is not none else '' }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+        <tr>
+          <th class="subject">المجموع</th>
+          <td colspan="9">{{ record.total_score if record.total_score is not none else '' }}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <table class="results">
+      <tbody>
+        <tr><th>نتيجة الدور الأول</th><td class="result-line">{{ record.first_round_result or '' }}</td></tr>
+        <tr><th>نتيجة الدور الثاني</th><td class="result-line">{{ record.second_round_result or '' }}</td></tr>
+        <tr><th>الملاحظات</th><td class="result-line">{{ record.result_notes or '' }}</td></tr>
+      </tbody>
+    </table>
+  </body>
+</html>

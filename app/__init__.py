@@ -123,6 +123,7 @@ def create_app(config_name=None):
     from app.blueprints.homework          import homework_bp
     from app.blueprints.chat              import chat_bp
     from app.blueprints.student_records   import student_records_bp
+    from app.blueprints.student_middle_records import student_middle_records_bp
     from app.blueprints.buildings         import buildings_bp
     from app.blueprints.shifts            import shifts_bp
     # Institute study groups — institutes only (School.is_institute)
@@ -171,6 +172,7 @@ def create_app(config_name=None):
     app.register_blueprint(homework_bp,            url_prefix='/homework')
     app.register_blueprint(chat_bp,                url_prefix='/chat')
     app.register_blueprint(student_records_bp,     url_prefix='/student-registration-records')
+    app.register_blueprint(student_middle_records_bp, url_prefix='/student-middle-records')
     app.register_blueprint(buildings_bp,           url_prefix='/buildings')
     app.register_blueprint(shifts_bp,              url_prefix='/attendance-shifts')
     # No BLUEPRINT_MODULE entry: this surface is gated by School.is_institute

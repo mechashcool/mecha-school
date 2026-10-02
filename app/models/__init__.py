@@ -4385,6 +4385,85 @@ class StudentRegistrationRecord(db.Model):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  STUDENT MIDDLE RECORD  (السجل الوسطي)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class StudentMiddleRecord(db.Model):
+    """Official snapshot record for middle-stage students.
+
+    This is intentionally independent from the live Student profile so the
+    school can preserve the official form values even after a student's data is
+    edited later. It follows the same snapshot pattern as the main student
+    registration record, but is scoped to the official middle-record workflow.
+    """
+    __tablename__ = 'student_middle_records'
+    __school_scoped__ = True
+
+    id        = db.Column(db.Integer, primary_key=True)
+    school_id = db.Column(db.Integer, db.ForeignKey('schools.id'),
+                          nullable=False, index=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id'),
+                           nullable=False, index=True)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'),
+                                 nullable=False, index=True)
+
+    record_number = db.Column(db.String(80), nullable=True)
+    page_number = db.Column(db.String(40), nullable=True)
+    father_name = db.Column(db.String(200), nullable=True)
+    grandfather_name = db.Column(db.String(200), nullable=True)
+    great_grandfather_name = db.Column(db.String(200), nullable=True)
+    years_failed = db.Column(db.String(100), nullable=True)
+
+    snap_full_name       = db.Column(db.String(200), nullable=False)
+    snap_student_number  = db.Column(db.String(40),  nullable=True)
+    snap_stage           = db.Column(db.String(50),  nullable=True)
+    snap_grade_name      = db.Column(db.String(100), nullable=True)
+    snap_section_name    = db.Column(db.String(50),  nullable=True)
+    snap_year_name       = db.Column(db.String(50),  nullable=True)
+    snap_gender          = db.Column(db.String(10),  nullable=True)
+    snap_date_of_birth   = db.Column(db.Date,        nullable=True)
+    snap_phone           = db.Column(db.String(30),  nullable=True)
+    snap_address         = db.Column(db.Text,        nullable=True)
+    snap_status          = db.Column(db.String(20),  nullable=True)
+    snap_enrollment_date = db.Column(db.Date,        nullable=True)
+
+    snap_guardian_name     = db.Column(db.String(200), nullable=True)
+    snap_guardian_phone    = db.Column(db.String(30),  nullable=True)
+    snap_guardian_relation = db.Column(db.String(50),  nullable=True)
+
+    school_name    = db.Column(db.String(200), nullable=True)
+    school_name_ar = db.Column(db.String(200), nullable=True)
+    previous_school = db.Column(db.String(200), nullable=True)
+
+    admission_date = db.Column(db.Date, nullable=True)
+    notes          = db.Column(db.Text, nullable=True)
+    subject_grades = db.Column(db.JSON, nullable=False, default=dict)
+    total_score = db.Column(db.Float, nullable=True)
+    first_round_result = db.Column(db.String(100), nullable=True)
+    second_round_result = db.Column(db.String(100), nullable=True)
+    result_notes = db.Column(db.Text, nullable=True)
+
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow,
+                           onupdate=datetime.utcnow)
+
+    student = db.relationship('Student', foreign_keys=[student_id],
+                              backref=db.backref('middle_records', lazy='dynamic'))
+    school = db.relationship('School', foreign_keys=[school_id])
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    creator = db.relationship('User', foreign_keys=[created_by])
+
+    __table_args__ = (
+        db.UniqueConstraint('school_id', 'student_id', 'academic_year_id',
+                            name='uq_middle_record_school_student_year'),
+    )
+
+    def __repr__(self):
+        return f'<StudentMiddleRecord {self.id} student={self.student_id}>'
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  MOBILE BADGE SYSTEM  — per-user module last-viewed timestamps
 # ═════════════════════════════════════════════════════════════════════════════
 

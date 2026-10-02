@@ -1,0 +1,121 @@
+{% extends "shared/base.html" %}
+{% block title %}السجلات الوسطية{% endblock %}
+{% block page_title %}السجلات الوسطية{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">السجلات الوسطية</h1>
+    <p class="page-subtitle">السجلات الرسمية للطلاب في المرحلة المتوسطة</p>
+  </div>
+  <a href="{{ url_for('student_middle_records.new') }}" class="btn btn-primary">
+    <i class="bi bi-plus-circle-fill me-1"></i>إضافة سجل وسيط
+  </a>
+</div>
+
+<div class="card mb-4">
+  <div class="card-body">
+    <form method="GET" class="row g-3 align-items-end">
+      <div class="col-md-5">
+        <label class="form-label">بحث</label>
+        <div class="input-group">
+          <span class="input-group-text"><i class="bi bi-search"></i></span>
+          <input type="text" name="q" class="form-control" value="{{ q }}" placeholder="اسم الطالب، رقم الطالب أو رقم السجل">
+        </div>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">المرحلة</label>
+        <select name="stage" class="form-select">
+          <option value="" {{ 'selected' if not stage }}>كل المراحل</option>
+          {% for stage_name in stages %}
+          <option value="{{ stage_name }}" {{ 'selected' if stage == stage_name }}>{{ stage_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-primary">بحث</button>
+        {% if q or stage %}
+        <a href="{{ url_for('student_middle_records.index') }}" class="btn btn-outline-secondary ms-1">مسح</a>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if records.items %}
+<div class="card shadow-sm">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>#</th>
+            <th>اسم الطالب</th>
+            <th>رقم الطالب</th>
+            <th>المرحلة</th>
+            <th>الصف / الشعبة</th>
+            <th>السنة</th>
+            <th>رقم السجل</th>
+            <th class="text-center">الإجراءات</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for rec in records.items %}
+          <tr>
+            <td>{{ loop.index + (records.page - 1) * records.per_page }}</td>
+            <td class="fw-semibold">{{ rec.snap_full_name }}</td>
+            <td>{{ rec.snap_student_number or '—' }}</td>
+            <td>{{ rec.snap_stage or '—' }}</td>
+            <td>{{ rec.snap_grade_name or '—' }}{% if rec.snap_section_name %} / {{ rec.snap_section_name }}{% endif %}</td>
+            <td>{{ rec.snap_year_name or '—' }}</td>
+            <td>{{ rec.record_number or '—' }}</td>
+            <td class="text-center">
+              <a href="{{ url_for('student_middle_records.view', record_id=rec.id) }}" class="btn btn-sm btn-outline-primary me-1" title="عرض">
+                <i class="bi bi-eye-fill"></i>
+              </a>
+              <a href="{{ url_for('student_middle_records.edit', record_id=rec.id) }}" class="btn btn-sm btn-outline-secondary me-1" title="تعديل">
+                <i class="bi bi-pencil-fill"></i>
+              </a>
+              <a href="{{ url_for('student_middle_records.print_record', record_id=rec.id) }}" class="btn btn-sm btn-outline-success" target="_blank" title="طباعة">
+                <i class="bi bi-printer-fill"></i>
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{% if records.pages > 1 %}
+<nav class="mt-3">
+  <ul class="pagination justify-content-center">
+    {% if records.has_prev %}
+    <li class="page-item"><a class="page-link" href="{{ url_for('student_middle_records.index', page=records.prev_num, q=q, stage=stage) }}">السابق</a></li>
+    {% endif %}
+    {% for p in records.iter_pages() %}
+    {% if p %}
+    <li class="page-item {{ 'active' if p == records.page }}">
+      <a class="page-link" href="{{ url_for('student_middle_records.index', page=p, q=q, stage=stage) }}">{{ p }}</a>
+    </li>
+    {% else %}
+    <li class="page-item disabled"><span class="page-link">…</span></li>
+    {% endif %}
+    {% endfor %}
+    {% if records.has_next %}
+    <li class="page-item"><a class="page-link" href="{{ url_for('student_middle_records.index', page=records.next_num, q=q, stage=stage) }}">التالي</a></li>
+    {% endif %}
+  </ul>
+</nav>
+{% endif %}
+{% else %}
+<div class="text-center py-5 text-muted">
+  <i class="bi bi-journal-text" style="font-size:3rem"></i>
+  <p class="mt-3">لا توجد سجلات وسطية بعد.</p>
+  <a href="{{ url_for('student_middle_records.new') }}" class="btn btn-primary mt-2">
+    <i class="bi bi-plus-circle-fill me-1"></i>إضافة أول سجل
+  </a>
+</div>
+{% endif %}
+{% endblock %}

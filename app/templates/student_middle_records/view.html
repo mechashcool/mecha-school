@@ -1,0 +1,88 @@
+{% extends "shared/base.html" %}
+{% block title %}عرض السجل الوسطي{% endblock %}
+{% block page_title %}عرض السجل الوسطي{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">السجل الوسطي</h1>
+    <p class="page-subtitle">{{ record.snap_full_name }}</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('student_middle_records.print_record', record_id=record.id) }}" class="btn btn-outline-success" target="_blank">
+      <i class="bi bi-printer-fill me-1"></i>طباعة
+    </a>
+    <a href="{{ url_for('student_middle_records.edit', record_id=record.id) }}" class="btn btn-primary">
+      <i class="bi bi-pencil-fill me-1"></i>تعديل
+    </a>
+  </div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-body">
+    <div class="row g-3">
+      <div class="col-md-2"><strong>رقم الصفحة:</strong> {{ record.page_number or '—' }}</div>
+      <div class="col-md-2"><strong>رقم القيد:</strong> {{ record.record_number or '—' }}</div>
+      <div class="col-md-4"><strong>اسم المدرسة:</strong> {{ record.school_name_ar or record.school_name or '—' }}</div>
+      <div class="col-md-3"><strong>السنة الدراسية:</strong> {{ record.snap_year_name or '—' }}</div>
+      <div class="col-md-3"><strong>اسم الطالب:</strong> {{ record.snap_full_name }}</div>
+      <div class="col-md-3"><strong>اسم الأب:</strong> {{ record.father_name or '—' }}</div>
+      <div class="col-md-3"><strong>اسم الجد:</strong> {{ record.grandfather_name or '—' }}</div>
+      <div class="col-md-3"><strong>اسم أب الجد:</strong> {{ record.great_grandfather_name or '—' }}</div>
+
+      <div class="col-md-2"><strong>المرحلة:</strong> {{ record.snap_stage or '—' }}</div>
+      <div class="col-md-2"><strong>الصف:</strong> {{ record.snap_grade_name or '—' }}</div>
+      <div class="col-md-2"><strong>الشعبة:</strong> {{ record.snap_section_name or '—' }}</div>
+      <div class="col-md-3"><strong>المواليد:</strong> {{ record.snap_date_of_birth.isoformat() if record.snap_date_of_birth else '—' }}</div>
+      <div class="col-md-3"><strong>سنوات الرسوب:</strong> {{ record.years_failed or '—' }}</div>
+
+      <div class="col-md-2"><strong>الجنس:</strong> {{ record.snap_gender or '—' }}</div>
+      <div class="col-md-2"><strong>الهاتف:</strong> {{ record.snap_phone or '—' }}</div>
+      <div class="col-md-2"><strong>الحالة:</strong> {{ record.snap_status or '—' }}</div>
+      <div class="col-md-4"><strong>تاريخ الالتحاق:</strong> {{ record.snap_enrollment_date | to_baghdad('%Y-%m-%d') if record.snap_enrollment_date else '—' }}</div>
+
+      <div class="col-md-4"><strong>ولي الأمر:</strong> {{ record.snap_guardian_name or '—' }}</div>
+      <div class="col-md-3"><strong>هاتف ولي الأمر:</strong> {{ record.snap_guardian_phone or '—' }}</div>
+      <div class="col-md-2"><strong>صلة القرابة:</strong> {{ record.snap_guardian_relation or '—' }}</div>
+      <div class="col-md-3"><strong>المدرسة السابقة:</strong> {{ record.previous_school or '—' }}</div>
+
+      <div class="col-md-12"><strong>العنوان:</strong><br>{{ record.snap_address or '—' }}</div>
+      <div class="col-md-12"><strong>ملاحظات:</strong><br>{{ record.notes or '—' }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="card shadow-sm mt-4">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-bordered table-sm text-center align-middle mb-0">
+        <thead class="table-light">
+          <tr><th>المادة</th>{% for column_key, column_label in grade_columns %}<th>{{ column_label }}</th>{% endfor %}</tr>
+        </thead>
+        <tbody>
+          {% for subject_key, subject_label in subjects %}
+          {% set subject_data = record.subject_grades.get(subject_key, {}) if record.subject_grades else {} %}
+          <tr>
+            <th class="text-nowrap">{{ subject_label }}</th>
+            {% for column_key, column_label in grade_columns %}
+            <td>{{ subject_data.get(column_key) if subject_data.get(column_key) is not none else '—' }}</td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="card shadow-sm mt-4">
+  <div class="card-body">
+    <div class="row g-3">
+      <div class="col-md-3"><strong>المجموع:</strong> {{ record.total_score if record.total_score is not none else '—' }}</div>
+      <div class="col-md-4"><strong>نتيجة الدور الأول:</strong> {{ record.first_round_result or '—' }}</div>
+      <div class="col-md-4"><strong>نتيجة الدور الثاني:</strong> {{ record.second_round_result or '—' }}</div>
+      <div class="col-md-12"><strong>الملاحظات:</strong><br>{{ record.result_notes or '—' }}</div>
+    </div>
+  </div>
+</div>
+{% endblock %}
