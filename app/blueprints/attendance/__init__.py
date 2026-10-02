@@ -341,13 +341,17 @@ def _run_auto_absent(school, year, settings, recorded_by_id=None, target_date=No
     # the enrollment year and is never updated across years. Filtering by the
     # current year would exclude all students enrolled in previous years.
     # The year is correctly stamped on each StudentAttendance record below.
-    all_students_q = (Student.query
-                      .execution_options(bypass_tenant_scope=True)
-                      .filter_by(status='active'))
+    # Egress optimisation: the first pass only needs the IDs, so do NOT load full
+    # Student rows for every active student on every tick.  The full objects are
+    # fetched below, under the same scope, only for the students that are missing
+    # an attendance record for `today`.
+    student_ids_q = (Student.query
+                     .execution_options(bypass_tenant_scope=True)
+                     .filter_by(status='active'))
     if school:
-        all_students_q = all_students_q.filter_by(school_id=school_id)
-    all_students = all_students_q.all()
-    student_ids  = [s.id for s in all_students]
+        student_ids_q = student_ids_q.filter_by(school_id=school_id)
+    student_ids = [row.id for row in
+                   student_ids_q.with_entities(Student.id).all()]
 
     _log.info('[attendance] school_id=%s "%s" active_students=%d year_id=%s',
               school_id, school_name, len(student_ids), year.id if year else None)
@@ -366,7 +370,18 @@ def _run_auto_absent(school, year, settings, recorded_by_id=None, target_date=No
             .with_entities(StudentAttendance.student_id)
             .all()
     }
-    unmarked = [s for s in all_students if s.id not in already_ids]
+    missing_ids = [sid for sid in student_ids if sid not in already_ids]
+
+    if not missing_ids:
+        unmarked = []
+    else:
+        unmarked_q = (Student.query
+                      .execution_options(bypass_tenant_scope=True)
+                      .filter_by(status='active')
+                      .filter(Student.id.in_(missing_ids)))
+        if school:
+            unmarked_q = unmarked_q.filter_by(school_id=school_id)
+        unmarked = unmarked_q.all()
 
     _log.info(
         '[attendance] school_id=%s "%s" date=%s existing_attendance=%d missing_attendance=%d',
