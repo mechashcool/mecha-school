@@ -59,7 +59,7 @@
   {% endif %}
   <input type="hidden" name="snap_student_number" value="{{ record.snap_student_number if record else prefill.snap_student_number }}">
   <input type="hidden" name="snap_stage" value="{{ record.snap_stage if record else prefill.snap_stage }}">
-  <input type="hidden" name="school_name_ar" value="{{ record.school_name_ar if record else prefill.school_name_ar }}">
+  <input type="hidden" name="school_name" value="{{ record.school_name if record else prefill.school_name }}">
   <div class="card shadow-sm">
     <div class="card-body">
       <h2 class="h5 mb-3">A. بيانات الطالب والسجل</h2>
@@ -74,11 +74,11 @@
         </div>
         <div class="col-md-3">
           <label class="form-label">السنة الدراسية</label>
-          <input type="text" class="form-control" value="{{ record.snap_year_name if record else prefill.snap_year_name }}" readonly>
+          <input type="text" class="form-control" name="snap_year_name" value="{{ record.snap_year_name if record else prefill.snap_year_name }}">
         </div>
         <div class="col-md-3">
           <label class="form-label">اسم المدرسة</label>
-          <input type="text" class="form-control" name="school_name" value="{{ (record.school_name if record else prefill.school_name) or '' }}">
+          <input type="text" class="form-control" name="school_name_ar" value="{{ ((record.school_name_ar or record.school_name) if record else (prefill.school_name_ar or prefill.school_name)) or '' }}">
         </div>
 
         <div class="col-md-4">
@@ -108,10 +108,6 @@
         <div class="col-md-2">
           <label class="form-label">سنوات الرسوب</label>
           <input type="text" class="form-control" name="years_failed" value="{{ record.years_failed if record else prefill.years_failed }}">
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">الجنس</label>
-          <input type="text" class="form-control" name="snap_gender" value="{{ (record.snap_gender if record else prefill.snap_gender) or '' }}">
         </div>
         <div class="col-md-3">
           <label class="form-label">تاريخ الميلاد</label>

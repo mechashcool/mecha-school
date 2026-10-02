@@ -161,6 +161,8 @@ def _apply_record_fields(record, form, school):
     record.snap_section_name = (form.get('snap_section_name', '') or '').strip()
     record.snap_date_of_birth = _parse_date(form.get('snap_date_of_birth'))
     record.school_name = (form.get('school_name', school.school_name if school else '') or '').strip()
+    if 'snap_year_name' in form:
+        record.snap_year_name = (form.get('snap_year_name', '') or '').strip()
 
     optional_fields = {
         'snap_student_number': lambda: (form.get('snap_student_number', '') or '').strip(),
@@ -173,7 +175,7 @@ def _apply_record_fields(record, form, school):
         'snap_guardian_name': lambda: (form.get('snap_guardian_name', '') or '').strip(),
         'snap_guardian_phone': lambda: (form.get('snap_guardian_phone', '') or '').strip(),
         'snap_guardian_relation': lambda: (form.get('snap_guardian_relation', '') or '').strip(),
-        'school_name_ar': lambda: (form.get('school_name_ar', school.school_name_ar if school else '') or '').strip(),
+        'school_name_ar': lambda: (form.get('school_name_ar', '') or '').strip(),
         'previous_school': lambda: (form.get('previous_school', '') or '').strip(),
         'admission_date': lambda: _parse_date(form.get('admission_date')),
         'notes': lambda: (form.get('notes', '') or '').strip(),
