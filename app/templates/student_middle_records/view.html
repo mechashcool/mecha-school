@@ -39,7 +39,7 @@
       <div class="col-md-2"><strong>الجنس:</strong> {{ record.snap_gender or '—' }}</div>
       <div class="col-md-2"><strong>الهاتف:</strong> {{ record.snap_phone or '—' }}</div>
       <div class="col-md-2"><strong>الحالة:</strong> {{ record.snap_status or '—' }}</div>
-      <div class="col-md-4"><strong>تاريخ الالتحاق:</strong> {{ record.snap_enrollment_date | to_baghdad('%Y-%m-%d') if record.snap_enrollment_date else '—' }}</div>
+      <div class="col-md-4"><strong>تاريخ الالتحاق:</strong> {{ record.snap_enrollment_date.strftime('%Y-%m-%d') if record.snap_enrollment_date else '—' }}</div>
 
       <div class="col-md-4"><strong>ولي الأمر:</strong> {{ record.snap_guardian_name or '—' }}</div>
       <div class="col-md-3"><strong>هاتف ولي الأمر:</strong> {{ record.snap_guardian_phone or '—' }}</div>
