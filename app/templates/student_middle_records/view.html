@@ -81,7 +81,6 @@
 <div class="card shadow-sm mt-4">
   <div class="card-body">
     <div class="row g-3">
-      <div class="col-md-3"><strong>المجموع:</strong> {{ record.total_score if record.total_score is not none else '—' }}</div>
       <div class="col-md-4"><strong>نتيجة الدور الأول:</strong> {{ record.first_round_result or '—' }}</div>
       <div class="col-md-4"><strong>نتيجة الدور الثاني:</strong> {{ record.second_round_result or '—' }}</div>
     </div>
