@@ -9,6 +9,9 @@
     <p class="page-subtitle">{{ record.snap_full_name }}</p>
   </div>
   <div class="d-flex gap-2">
+    <a href="{{ url_for('student_middle_records.pdf', record_id=record.id) }}" class="btn btn-outline-danger">
+      <i class="bi bi-file-earmark-pdf-fill me-1"></i>تصدير PDF
+    </a>
     <a href="{{ url_for('student_middle_records.print_record', record_id=record.id) }}" class="btn btn-outline-success" target="_blank">
       <i class="bi bi-printer-fill me-1"></i>طباعة
     </a>

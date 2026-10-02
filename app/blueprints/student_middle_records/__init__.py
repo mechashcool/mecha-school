@@ -1,8 +1,11 @@
 """Middle student record snapshots (السجلات الوسطية)."""
 from datetime import datetime, date
 import math
+import re
+from io import BytesIO
 
-from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
+from flask import (Blueprint, abort, flash, redirect, render_template,
+                   request, send_file, url_for)
 from flask_login import current_user, login_required
 from sqlalchemy.orm import joinedload
 
@@ -328,3 +331,31 @@ def print_record(record_id):
     record = StudentMiddleRecord.query.filter_by(id=record_id, school_id=school.id).first_or_404()
     return render_template('student_middle_records/print.html', record=record, school=school,
                            subjects=SUBJECTS, grade_columns=GRADE_COLUMNS)
+
+
+@student_middle_records_bp.route('/<int:record_id>/pdf')
+@login_required
+@permission_required('view_student_records')
+def pdf(record_id):
+    school = _school_or_404()
+    record = StudentMiddleRecord.query.filter_by(
+        id=record_id, school_id=school.id
+    ).first_or_404()
+
+    from app.blueprints.student_middle_records.pdf import generate_middle_record_pdf
+
+    pdf_bytes = generate_middle_record_pdf(record, SUBJECTS, GRADE_COLUMNS)
+    if not pdf_bytes:
+        flash('تعذّر إنشاء ملف PDF — تحقق من توفر محرك PDF والخط العربي.', 'danger')
+        return redirect(url_for('student_middle_records.view', record_id=record.id))
+
+    filename_parts = [record.snap_full_name or str(record.id), record.snap_year_name or '']
+    safe_parts = [re.sub(r'[^\w-]+', '_', part, flags=re.UNICODE).strip('_')
+                  for part in filename_parts]
+    filename = 'السجل_الوسطي_' + '_'.join(part for part in safe_parts if part) + '.pdf'
+    return send_file(
+        BytesIO(pdf_bytes),
+        mimetype='application/pdf',
+        as_attachment=True,
+        download_name=filename,
+    )
