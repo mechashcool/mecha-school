@@ -356,6 +356,8 @@ def teacher_profile():
             'school_id':   emp.school_id,
             'school_name': school.school_name if school else None,
             'role':        g.mobile_user.role.name if g.mobile_user.role else None,
+            'can_record_institute_attendance': bool(
+                emp.can_record_institute_attendance),
         },
         stats={
             'sections_count':      sections_count,
@@ -2715,6 +2717,8 @@ def teacher_institute_session_open():
     emp, school, year = _institute_context()
     if school is None:
         return err('institute_not_available', 404)
+    if not emp.can_record_institute_attendance:
+        return err('attendance_not_permitted', 403)
 
     group_id = request.args.get('group_id', type=int)
     groups = {g.id: g for g in _my_institute_groups(school, year, emp)}
@@ -2792,6 +2796,8 @@ def teacher_institute_submit_attendance(session_id):
     emp, school, year = _institute_context()
     if school is None:
         return err('institute_not_available', 404)
+    if not emp.can_record_institute_attendance:
+        return err('attendance_not_permitted', 403)
 
     session = (InstituteAttendanceSession.query
                .execution_options(bypass_tenant_scope=True)

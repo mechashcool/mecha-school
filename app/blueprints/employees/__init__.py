@@ -684,6 +684,10 @@ def _handle_employee_post(employee):
             pass
 
     notes_value = request.form.get('notes', '').strip()
+    can_record_institute_attendance = (
+        bool(getattr(school, 'is_institute', False))
+        and bool(request.form.get('can_record_institute_attendance'))
+    )
 
     # ── Create-wizard limits — enforced BEFORE anything is created ────────────
     # Notes length, photo size, document count, and per-document size are all
@@ -816,6 +820,7 @@ def _handle_employee_post(employee):
             photo_display = photo_display_path,
             notes         = notes_value,
             shift_id      = _posted_employee_shift_id(school),
+            can_record_institute_attendance = can_record_institute_attendance,
             school_id     = school.id if school else None,
         )
         import logging as _logging
@@ -859,6 +864,7 @@ def _handle_employee_post(employee):
         if salary_start:
             employee.salary_start_date = salary_start
         employee.notes         = notes_value
+        employee.can_record_institute_attendance = can_record_institute_attendance
         if hire_date:
             employee.hire_date = hire_date
         if photo_path:

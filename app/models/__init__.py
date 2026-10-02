@@ -1902,6 +1902,8 @@ class Employee(db.Model):
     shift_id      = db.Column(db.Integer,
                               db.ForeignKey('employee_attendance_shifts.id'),
                               nullable=True, index=True)
+    can_record_institute_attendance = db.Column(
+        db.Boolean, nullable=False, default=False, server_default=db.false())
 
     shift = db.relationship('EmployeeAttendanceShift', foreign_keys=[shift_id])
 

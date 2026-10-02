@@ -1440,6 +1440,15 @@ def attendance_take(group_id, date_str):
     if occ is None:
         abort(404)
 
+    if not _is_group_manager():
+        teacher_employee = (Employee.query
+                            .filter_by(user_id=current_user.id,
+                                       school_id=school.id)
+                            .first())
+        if not (teacher_employee
+                and teacher_employee.can_record_institute_attendance):
+            abort(403)
+
     # Materializing does NOT record anything: the row is 'not_recorded' until
     # somebody submits. Opening the page can never create an absence.
     session = att.get_or_create_session(school, group, occ)

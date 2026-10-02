@@ -19,6 +19,16 @@
 <input type="hidden" name="save_institute_groups" value="1">
 {% endif %}
 
+<div class="form-check mb-4">
+  <input class="form-check-input" type="checkbox"
+         name="can_record_institute_attendance"
+         id="canRecordInstituteAttendance" value="1"
+         {{ 'checked' if (request.form.get('can_record_institute_attendance') if _posted else employee and employee.can_record_institute_attendance) }}>
+  <label class="form-check-label fw-semibold" for="canRecordInstituteAttendance">
+    السماح بتسجيل حضور الطلاب
+  </label>
+</div>
+
 <div class="mb-4" id="instTeaching">
   <h6 class="fw-semibold mb-2">
     <i class="bi bi-collection me-1 text-accent"></i>المجموعات الدراسية التي يدرّسها
