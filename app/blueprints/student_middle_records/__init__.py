@@ -359,3 +359,35 @@ def pdf(record_id):
         as_attachment=True,
         download_name=filename,
     )
+
+
+@student_middle_records_bp.route('/export/pdf')
+@login_required
+@permission_required('view_student_records')
+def export_pdf():
+    school = _school_or_404()
+    q = request.args.get('q', '').strip()
+    stage = request.args.get('stage', '').strip()
+    records = _query(school, q, stage).all()
+
+    if not records:
+        flash('لا توجد سجلات مطابقة للتصدير.', 'warning')
+        return redirect(url_for('student_middle_records.index',
+                                q=q or None, stage=stage or None))
+
+    from app.blueprints.student_middle_records.pdf import generate_middle_records_pdf
+
+    pdf_bytes = generate_middle_records_pdf(records, SUBJECTS, GRADE_COLUMNS)
+    if not pdf_bytes:
+        flash('تعذّر إنشاء ملف PDF — تحقق من توفر محرك PDF والخط العربي.', 'danger')
+        return redirect(url_for('student_middle_records.index',
+                                q=q or None, stage=stage or None))
+
+    school_name = re.sub(r'[^\w-]+', '_', school.school_name or '', flags=re.UNICODE).strip('_')
+    filename = f'السجلات_الوسطية_{school_name or f"school_{school.id}"}.pdf'
+    return send_file(
+        BytesIO(pdf_bytes),
+        mimetype='application/pdf',
+        as_attachment=True,
+        download_name=filename,
+    )

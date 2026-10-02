@@ -8,9 +8,15 @@
     <h1 class="page-title">السجلات الوسطية</h1>
     <p class="page-subtitle">السجلات الرسمية للطلاب في المرحلة المتوسطة</p>
   </div>
-  <a href="{{ url_for('student_middle_records.new') }}" class="btn btn-primary">
-    <i class="bi bi-plus-circle-fill me-1"></i>إضافة سجل وسيط
-  </a>
+  <div class="d-flex gap-2">
+    <a href="{{ url_for('student_middle_records.export_pdf', q=q or None, stage=stage or None) }}"
+       class="btn btn-outline-danger">
+      <i class="bi bi-file-earmark-pdf-fill me-1"></i>تصدير الكل PDF
+    </a>
+    <a href="{{ url_for('student_middle_records.new') }}" class="btn btn-primary">
+      <i class="bi bi-plus-circle-fill me-1"></i>إضافة سجل وسيط
+    </a>
+  </div>
 </div>
 
 <div class="card mb-4">
@@ -76,8 +82,8 @@
               <a href="{{ url_for('student_middle_records.edit', record_id=rec.id) }}" class="btn btn-sm btn-outline-secondary me-1" title="تعديل">
                 <i class="bi bi-pencil-fill"></i>
               </a>
-              <a href="{{ url_for('student_middle_records.print_record', record_id=rec.id) }}" class="btn btn-sm btn-outline-success" target="_blank" title="طباعة">
-                <i class="bi bi-printer-fill"></i>
+              <a href="{{ url_for('student_middle_records.pdf', record_id=rec.id) }}" class="btn btn-sm btn-outline-danger" title="تصدير PDF">
+                <i class="bi bi-file-earmark-pdf-fill me-1"></i>تصدير PDF
               </a>
             </td>
           </tr>

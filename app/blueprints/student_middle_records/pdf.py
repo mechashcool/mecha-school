@@ -110,37 +110,9 @@ def compute_column_totals(subject_grades):
     return totals
 
 
-def generate_middle_record_pdf(record, subjects, grade_columns):
-    """Render one saved middle-record snapshot as a one-page A4 portrait PDF."""
-    if not _get_rl():
-        return None
-
-    try:
-        import arabic_reshaper  # noqa: F401
-        from bidi.algorithm import get_display  # noqa: F401
-    except ImportError:
-        return None
-
-    from reportlab.lib.colors import black
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.units import mm
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.pdfgen import canvas
-
-    if not _register_arabic_fonts(pdfmetrics, TTFont):
-        return None
-
-    font = 'Amiri'
-    bold_font = 'Amiri-Bold'
-    page_height = A4[1]
-    output = BytesIO()
-    page = canvas.Canvas(output, pagesize=A4, pageCompression=1)
-    page.setTitle('السجل الوسطي')
-    page.setAuthor('Core School')
-    page.setFillColor(black)
-    page.setStrokeColor(black)
-
+def _draw_middle_record_page(page, record, grade_columns, mm, pdfmetrics,
+                             font, bold_font, page_height):
+    """Draw one saved middle-record snapshot using the approved page layout."""
     def x_pt(value):
         return value * mm
 
@@ -369,6 +341,52 @@ def generate_middle_record_pdf(record, subjects, grade_columns):
     page.setFont(bold_font, 11.5)
     page.drawString(x_pt(MANAGER['x']), manager_y, shaped('مدير المدرسة'))
 
-    page.showPage()
+
+def _generate_middle_records_pdf(records, grade_columns):
+    """Create a PDF with one approved A4 portrait page per saved record."""
+    if not _get_rl():
+        return None
+
+    try:
+        import arabic_reshaper  # noqa: F401
+        from bidi.algorithm import get_display  # noqa: F401
+    except ImportError:
+        return None
+
+    from reportlab.lib.colors import black
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.pdfgen import canvas
+
+    if not _register_arabic_fonts(pdfmetrics, TTFont):
+        return None
+
+    font = 'Amiri'
+    bold_font = 'Amiri-Bold'
+    output = BytesIO()
+    page = canvas.Canvas(output, pagesize=A4, pageCompression=1)
+    page.setTitle('السجل الوسطي')
+    page.setAuthor('Core School')
+    page.setFillColor(black)
+    page.setStrokeColor(black)
+
+    for record in records:
+        _draw_middle_record_page(
+            page, record, grade_columns, mm, pdfmetrics, font, bold_font, A4[1]
+        )
+        page.showPage()
+
     page.save()
     return output.getvalue()
+
+
+def generate_middle_record_pdf(record, subjects, grade_columns):
+    """Render one saved middle-record snapshot as a one-page A4 portrait PDF."""
+    return _generate_middle_records_pdf([record], grade_columns)
+
+
+def generate_middle_records_pdf(records, subjects, grade_columns):
+    """Render all supplied snapshots, exactly one A4 portrait page each."""
+    return _generate_middle_records_pdf(records, grade_columns)
