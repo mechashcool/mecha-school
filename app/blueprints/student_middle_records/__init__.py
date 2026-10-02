@@ -157,24 +157,30 @@ def _apply_record_fields(record, form, school):
     record.years_failed = (form.get('years_failed', '') or '').strip()
     record.record_number = (form.get('record_number', '') or '').strip()
     record.snap_full_name = (form.get('snap_full_name', '') or '').strip()
-    record.snap_student_number = (form.get('snap_student_number', '') or '').strip()
-    record.snap_stage = (form.get('snap_stage', '') or '').strip()
     record.snap_grade_name = (form.get('snap_grade_name', '') or '').strip()
     record.snap_section_name = (form.get('snap_section_name', '') or '').strip()
-    record.snap_gender = (form.get('snap_gender', '') or '').strip()
     record.snap_date_of_birth = _parse_date(form.get('snap_date_of_birth'))
-    record.snap_phone = (form.get('snap_phone', '') or '').strip()
-    record.snap_address = (form.get('snap_address', '') or '').strip()
-    record.snap_status = (form.get('snap_status', 'active') or 'active').strip() or 'active'
-    record.snap_enrollment_date = _parse_date(form.get('snap_enrollment_date'))
-    record.snap_guardian_name = (form.get('snap_guardian_name', '') or '').strip()
-    record.snap_guardian_phone = (form.get('snap_guardian_phone', '') or '').strip()
-    record.snap_guardian_relation = (form.get('snap_guardian_relation', '') or '').strip()
     record.school_name = (form.get('school_name', school.school_name if school else '') or '').strip()
-    record.school_name_ar = (form.get('school_name_ar', school.school_name_ar if school else '') or '').strip()
-    record.previous_school = (form.get('previous_school', '') or '').strip()
-    record.admission_date = _parse_date(form.get('admission_date'))
-    record.notes = (form.get('notes', '') or '').strip()
+
+    optional_fields = {
+        'snap_student_number': lambda: (form.get('snap_student_number', '') or '').strip(),
+        'snap_stage': lambda: (form.get('snap_stage', '') or '').strip(),
+        'snap_gender': lambda: (form.get('snap_gender', '') or '').strip(),
+        'snap_phone': lambda: (form.get('snap_phone', '') or '').strip(),
+        'snap_address': lambda: (form.get('snap_address', '') or '').strip(),
+        'snap_status': lambda: (form.get('snap_status', 'active') or 'active').strip() or 'active',
+        'snap_enrollment_date': lambda: _parse_date(form.get('snap_enrollment_date')),
+        'snap_guardian_name': lambda: (form.get('snap_guardian_name', '') or '').strip(),
+        'snap_guardian_phone': lambda: (form.get('snap_guardian_phone', '') or '').strip(),
+        'snap_guardian_relation': lambda: (form.get('snap_guardian_relation', '') or '').strip(),
+        'school_name_ar': lambda: (form.get('school_name_ar', school.school_name_ar if school else '') or '').strip(),
+        'previous_school': lambda: (form.get('previous_school', '') or '').strip(),
+        'admission_date': lambda: _parse_date(form.get('admission_date')),
+        'notes': lambda: (form.get('notes', '') or '').strip(),
+    }
+    for field_name, value_factory in optional_fields.items():
+        if field_name in form:
+            setattr(record, field_name, value_factory())
 
 
 @student_middle_records_bp.route('/')

@@ -57,13 +57,16 @@
   {% elif prefill and prefill.student_id %}
   <input type="hidden" name="student_id" value="{{ prefill.student_id }}">
   {% endif %}
+  <input type="hidden" name="snap_student_number" value="{{ record.snap_student_number if record else prefill.snap_student_number }}">
+  <input type="hidden" name="snap_stage" value="{{ record.snap_stage if record else prefill.snap_stage }}">
+  <input type="hidden" name="school_name_ar" value="{{ record.school_name_ar if record else prefill.school_name_ar }}">
   <div class="card shadow-sm">
     <div class="card-body">
       <h2 class="h5 mb-3">A. بيانات الطالب والسجل</h2>
       <div class="row g-3">
         <div class="col-md-3">
           <label class="form-label">رقم القيد</label>
-          <input type="text" class="form-control" name="record_number" value="{{ (record.record_number if record else prefill.record_number) or '' }}">
+          <input type="text" class="form-control" name="record_number" value="{{ ((record.record_number or record.snap_student_number) if record else prefill.record_number) or '' }}">
         </div>
         <div class="col-md-2">
           <label class="form-label">رقم الصفحة</label>
@@ -77,26 +80,10 @@
           <label class="form-label">اسم المدرسة</label>
           <input type="text" class="form-control" name="school_name" value="{{ (record.school_name if record else prefill.school_name) or '' }}">
         </div>
-        <div class="col-md-3">
-          <label class="form-label">اسم المدرسة بالعربي</label>
-          <input type="text" class="form-control" name="school_name_ar" value="{{ (record.school_name_ar if record else prefill.school_name_ar) or school.school_name_ar or '' }}">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">تاريخ القيد</label>
-          <input type="date" class="form-control" name="admission_date" value="{{ (record.admission_date if record else prefill.admission_date) or '' }}">
-        </div>
 
         <div class="col-md-4">
           <label class="form-label">اسم الطالب</label>
           <input type="text" class="form-control" name="snap_full_name" value="{{ (record.snap_full_name if record else prefill.snap_full_name) or '' }}" required>
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">رقم الطالب</label>
-          <input type="text" class="form-control" name="snap_student_number" value="{{ (record.snap_student_number if record else prefill.snap_student_number) or '' }}">
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">المرحلة</label>
-          <input type="text" class="form-control" name="snap_stage" value="{{ (record.snap_stage if record else prefill.snap_stage) or '' }}">
         </div>
         <div class="col-md-2">
           <label class="form-label">الصف</label>
@@ -129,44 +116,6 @@
         <div class="col-md-3">
           <label class="form-label">تاريخ الميلاد</label>
           <input type="date" class="form-control" name="snap_date_of_birth" value="{{ (record.snap_date_of_birth if record else prefill.snap_date_of_birth) or '' }}">
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">الهاتف</label>
-          <input type="text" class="form-control" name="snap_phone" value="{{ (record.snap_phone if record else prefill.snap_phone) or '' }}">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">الحالة</label>
-          <input type="text" class="form-control" name="snap_status" value="{{ (record.snap_status if record else prefill.snap_status) or 'active' }}">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">تاريخ الالتحاق</label>
-          <input type="date" class="form-control" name="snap_enrollment_date" value="{{ (record.snap_enrollment_date if record else prefill.snap_enrollment_date) or '' }}">
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">اسم ولي الأمر</label>
-          <input type="text" class="form-control" name="snap_guardian_name" value="{{ (record.snap_guardian_name if record else prefill.snap_guardian_name) or '' }}">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">هاتف ولي الأمر</label>
-          <input type="text" class="form-control" name="snap_guardian_phone" value="{{ (record.snap_guardian_phone if record else prefill.snap_guardian_phone) or '' }}">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">صلة القرابة</label>
-          <input type="text" class="form-control" name="snap_guardian_relation" value="{{ (record.snap_guardian_relation if record else prefill.snap_guardian_relation) or '' }}">
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">المدرسة السابقة</label>
-          <input type="text" class="form-control" name="previous_school" value="{{ (record.previous_school if record else prefill.previous_school) or '' }}">
-        </div>
-
-        <div class="col-md-12">
-          <label class="form-label">العنوان</label>
-          <textarea class="form-control" rows="3" name="snap_address">{{ (record.snap_address if record else prefill.snap_address) or '' }}</textarea>
-        </div>
-        <div class="col-md-12">
-          <label class="form-label">ملاحظات</label>
-          <textarea class="form-control" rows="3" name="notes">{{ (record.notes if record else prefill.notes) or '' }}</textarea>
         </div>
       </div>
     </div>
@@ -217,7 +166,7 @@
 
   <div class="card shadow-sm mt-4">
     <div class="card-body">
-      <h2 class="h5 mb-3">C. النتائج والملاحظات</h2>
+      <h2 class="h5 mb-3">C. النتائج</h2>
       <div class="row g-3">
         <div class="col-md-3">
           <label class="form-label">المجموع</label>
