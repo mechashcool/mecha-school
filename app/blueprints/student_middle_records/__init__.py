@@ -185,7 +185,7 @@ def index():
 
     records = _query(school, q, stage).paginate(page=page, per_page=25, error_out=False)
     return render_template(
-        'index.html',
+        'student_middle_records/index.html',
         records=records,
         q=q,
         stage=stage,
