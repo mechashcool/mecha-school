@@ -42,7 +42,7 @@ from app.utils import badge_cache
 # single visible tab sees fresh values, and so any residual staleness clears
 # quickly; a state-changing action additionally invalidates this user's keys
 # (see invalidate_user_badges) for immediate correctness on the acting worker.
-LIVE_TTL = 5  # seconds
+LIVE_TTL = 60  # seconds
 
 
 def _empty_counts() -> dict:
