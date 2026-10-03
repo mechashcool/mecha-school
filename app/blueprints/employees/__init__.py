@@ -1,5 +1,6 @@
 """Al-Muhandis – Employees Blueprint  (Phase 6: user account, teacher assignments)"""
 import logging
+from decimal import Decimal, InvalidOperation
 
 from flask import (Blueprint, render_template, redirect, url_for, flash, request, jsonify,
                    abort)
@@ -69,6 +70,31 @@ _MSG_PHOTO_REJECTED = ('تعذّر حفظ صورة الموظف — تأكد م�
                        'وأن الحجم لا يتجاوز 2 ميجابايت.')
 _MSG_PHOTO_REPLACE_FAILED = ('تعذّر حفظ صورة الموظف الجديدة. لم يتم حفظ التعديلات '
                              'وبقيت الصورة الحالية كما هي. يرجى المحاولة مرة أخرى.')
+_MAX_BASE_SALARY = Decimal('9999999999.99')
+_MSG_BASE_SALARY_INVALID = 'يرجى إدخال الراتب الأساسي كرقم صالح.'
+_MSG_BASE_SALARY_NEGATIVE = 'الراتب الأساسي لا يمكن أن يكون سالباً.'
+_MSG_BASE_SALARY_TOO_LARGE = (
+    'الراتب الأساسي أكبر من الحد المسموح. يجب أن يكون أقل من 10,000,000,000.'
+)
+
+
+def _parse_employee_base_salary(value):
+    raw_value = '' if value is None else str(value).strip()
+    if not raw_value:
+        return Decimal('0'), None
+
+    try:
+        salary = Decimal(raw_value)
+    except InvalidOperation:
+        return None, _MSG_BASE_SALARY_INVALID
+
+    if not salary.is_finite():
+        return None, _MSG_BASE_SALARY_INVALID
+    if salary < 0:
+        return None, _MSG_BASE_SALARY_NEGATIVE
+    if salary > _MAX_BASE_SALARY:
+        return None, _MSG_BASE_SALARY_TOO_LARGE
+    return salary, None
 
 
 def _available_roles():
@@ -634,6 +660,14 @@ def _handle_employee_post(employee):
     # Create uses the multi-step wizard; edit keeps the single form.
     _tmpl = 'employees/create_wizard.html' if is_create else 'employees/form.html'
 
+    salary_default = 0 if is_create else employee.base_salary
+    base_salary, salary_error = _parse_employee_base_salary(
+        request.form.get('base_salary', salary_default)
+    )
+    if salary_error:
+        flash(salary_error, 'danger')
+        return render_template(_tmpl, error_step='basic', **_form_context(employee))
+
     full_name = request.form.get('full_name', '').strip()
     email     = request.form.get('email', '').strip() or None
 
@@ -808,7 +842,7 @@ def _handle_employee_post(employee):
             phone         = request.form.get('phone', '').strip(),
             email         = email,
             address       = request.form.get('address', '').strip(),
-            base_salary   = float(request.form.get('base_salary', 0) or 0),
+            base_salary   = base_salary,
             hire_date     = hire_date,
             contract_type = request.form.get('contract_type', '').strip(),
             salary_type   = request.form.get('salary_type', 'monthly') or 'monthly',
@@ -853,8 +887,7 @@ def _handle_employee_post(employee):
         employee.phone         = request.form.get('phone', '').strip()
         employee.email         = email
         employee.address       = request.form.get('address', '').strip()
-        employee.base_salary   = float(
-            request.form.get('base_salary', employee.base_salary) or 0)
+        employee.base_salary   = base_salary
         employee.status        = request.form.get('status', employee.status)
         employee.contract_type = request.form.get('contract_type', '').strip()
         employee.salary_type   = request.form.get('salary_type', employee.salary_type) or 'monthly'
