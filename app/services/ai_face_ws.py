@@ -631,6 +631,11 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
                     employee.id, employee.school_id, school.id, enrollid, sn)
         return 'unmatched'
 
+    if employee.status != 'active':
+        log.info("  [aiface] inactive employee_id=%d — skipping punch",
+                 employee.id)
+        return 'skipped'
+
     year = get_active_year(school.id)
     if not year:
         log.warning("  [aiface] no active year for school_id=%d — skipping employee "

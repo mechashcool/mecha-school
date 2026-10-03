@@ -8,11 +8,16 @@
     <h1 class="page-title">الموظفون</h1>
     <p class="page-subtitle">سجل الموظفين وبيانات التوظيف</p>
   </div>
-  {% if not is_historical_year and school_cfg.action_enabled('employees', 'create') %}
-  <a href="{{ url_for('employees.create') }}" class="btn btn-primary">
-    <i class="bi bi-person-plus-fill me-2"></i>إضافة موظف
-  </a>
-  {% endif %}
+  <div class="d-flex gap-2 flex-wrap">
+    <a href="{{ url_for('employees.archived') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-archive me-1"></i>الموظفون المؤرشفون
+    </a>
+    {% if not is_historical_year and school_cfg.action_enabled('employees', 'create') %}
+    <a href="{{ url_for('employees.create') }}" class="btn btn-primary">
+      <i class="bi bi-person-plus-fill me-2"></i>إضافة موظف
+    </a>
+    {% endif %}
+  </div>
 </div>
 
 <style>
@@ -336,6 +341,13 @@
               <a href="{{ url_for('employees.edit', emp_id=e.id) }}" class="btn btn-sm btn-outline-secondary" title="تعديل">
                 <i class="bi bi-pencil"></i>
               </a>
+              <form method="POST" action="{{ url_for('employees.archive', emp_id=e.id) }}" class="d-inline"
+                    onsubmit="return confirm('هل أنت متأكد من أرشفة هذا الموظف؟\nسيتم تعطيل حسابه وإخفاؤه من قائمة الموظفين النشطين، مع الاحتفاظ بجميع بياناته السابقة.');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-outline-danger" title="أرشفة">
+                  <i class="bi bi-archive"></i>
+                </button>
+              </form>
               {% endif %}
             </div>
           </td>
@@ -380,6 +392,7 @@
   const SEARCH_URL    = "{{ url_for('employees.search') }}";
   const IS_HISTORICAL = {{ 'true' if is_historical_year else 'false' }};
   const CAN_EDIT      = {{ 'false' if is_historical_year else 'true' }};
+  const CSRF_TOKEN    = {{ csrf_token()|tojson }};
 
   // Classification filter data (scoped to this school, built server-side).
   const FILTER_SPEC_MAP  = {{ filter_spec_map|tojson }};
@@ -456,7 +469,12 @@
             <a href="${e.view_url}" class="btn btn-sm btn-outline-primary" title="عرض">
               <i class="bi bi-eye"></i>
             </a>
-            ${CAN_EDIT ? `<a href="${e.edit_url}" class="btn btn-sm btn-outline-secondary" title="تعديل"><i class="bi bi-pencil"></i></a>` : ''}
+            ${CAN_EDIT ? `<a href="${e.edit_url}" class="btn btn-sm btn-outline-secondary" title="تعديل"><i class="bi bi-pencil"></i></a>
+            <form method="POST" action="${e.archive_url}" class="d-inline"
+                  onsubmit="return confirm('هل أنت متأكد من أرشفة هذا الموظف؟\\nسيتم تعطيل حسابه وإخفاؤه من قائمة الموظفين النشطين، مع الاحتفاظ بجميع بياناته السابقة.');">
+              <input type="hidden" name="csrf_token" value="${CSRF_TOKEN}">
+              <button type="submit" class="btn btn-sm btn-outline-danger" title="أرشفة"><i class="bi bi-archive"></i></button>
+            </form>` : ''}
           </div>
         </td>
       </tr>`).join('');

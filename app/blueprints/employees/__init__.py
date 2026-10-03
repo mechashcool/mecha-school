@@ -1195,7 +1195,9 @@ def _employee_filter_context(school):
     db_pairs: list[tuple[str, str]] = []
     if school:
         rows = (db.session.query(Employee.job_title, Employee.department)
-                .filter(Employee.school_id == school.id)
+                .filter(Employee.school_id == school.id,
+                        db.or_(Employee.status.is_(None),
+                               Employee.status != 'archived'))
                 .distinct().all())
         _seen_jt = set()
         for jt, dep in rows:
@@ -1228,7 +1230,8 @@ def index():
     school = get_current_school()
     query  = Employee.query
     if school:
-        query = query.filter_by(school_id=school.id)
+        query = query.filter_by(school_id=school.id).filter(
+            db.or_(Employee.status.is_(None), Employee.status != 'archived'))
     if search:
         query = query.filter(
             db.or_(
@@ -1250,6 +1253,27 @@ def index():
                            **filter_ctx)
 
 
+@employees_bp.route('/archived')
+@login_required
+@permission_required('manage_employees')
+def archived():
+    page = request.args.get('page', 1, type=int)
+    search = request.args.get('q', '').strip()
+    school = get_current_school()
+    if not school:
+        abort(404)
+    query = Employee.query.filter_by(school_id=school.id, status='archived')
+    if search:
+        query = query.filter(db.or_(
+            Employee.full_name.ilike(f'%{search}%'),
+            Employee.employee_id.ilike(f'%{search}%'),
+        ))
+    employees = (query.order_by(Employee.full_name, Employee.employee_id)
+                 .paginate(page=page, per_page=20, error_out=False))
+    return render_template('employees/archived.html', employees=employees,
+                           search=search)
+
+
 @employees_bp.route('/search')
 @login_required
 @permission_required('manage_employees')
@@ -1266,7 +1290,10 @@ def search():
     job_filter = request.args.get('job_title', '').strip()
     dep_filter = request.args.get('department', '').strip()
 
-    query = Employee.query.filter_by(school_id=school.id)
+    query = (Employee.query
+             .filter_by(school_id=school.id)
+             .filter(db.or_(Employee.status.is_(None),
+                            Employee.status != 'archived')))
     if q:
         like = f'%{q}%'
         query = query.filter(db.or_(
@@ -1297,6 +1324,7 @@ def search():
             'photo_url':   _rpu(employee_display_value(e)) or '',
             'view_url':    url_for('employees.view', emp_id=e.id),
             'edit_url':    url_for('employees.edit', emp_id=e.id),
+            'archive_url': url_for('employees.archive', emp_id=e.id),
         })
 
     return jsonify({
@@ -1347,9 +1375,94 @@ def view(emp_id):
 @permission_required('manage_employees')
 def edit(emp_id):
     employee = Employee.query.get_or_404(emp_id)
+    if employee.status == 'archived':
+        flash('يجب استرجاع الموظف قبل تعديل بياناته.', 'warning')
+        return redirect(url_for('employees.view', emp_id=employee.id))
     if request.method == 'POST':
         return _handle_employee_post(employee)
     return render_template('employees/form.html', **_form_context(employee))
+
+
+def _linked_employee_user(employee):
+    if not employee.user_id:
+        return None
+    return (User.query.execution_options(bypass_tenant_scope=True)
+            .filter_by(id=employee.user_id, school_id=employee.school_id)
+            .first())
+
+
+@employees_bp.route('/<int:emp_id>/archive', methods=['POST'])
+@login_required
+@historical_guard
+@permission_required('manage_employees')
+def archive(emp_id):
+    school = get_current_school()
+    if not school:
+        abort(404)
+    employee = Employee.query.filter_by(id=emp_id, school_id=school.id).first_or_404()
+    if employee.status == 'archived':
+        flash('الموظف مؤرشف بالفعل.', 'info')
+        return redirect(url_for('employees.archived'))
+
+    linked_user = _linked_employee_user(employee)
+    if employee.user_id and linked_user is None:
+        db.session.rollback()
+        flash('تعذّرت أرشفة الموظف لأن حساب الدخول المرتبط غير صالح لهذه المدرسة.',
+              'danger')
+        return redirect(url_for('employees.view', emp_id=employee.id))
+
+    try:
+        employee.status = 'archived'
+        if linked_user:
+            linked_user.is_active = False
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        _log.exception('[employee-archive] failed employee_id=%s school_id=%s',
+                       employee.id, school.id)
+        flash('تعذّرت أرشفة الموظف. لم يتم حفظ أي تغيير.', 'danger')
+        return redirect(url_for('employees.view', emp_id=employee.id))
+
+    log_action('archive', 'employee', employee.id)
+    flash('تمت أرشفة الموظف وتعطيل حسابه بنجاح.', 'success')
+    return redirect(url_for('employees.index'))
+
+
+@employees_bp.route('/<int:emp_id>/restore', methods=['POST'])
+@login_required
+@historical_guard
+@permission_required('manage_employees')
+def restore(emp_id):
+    school = get_current_school()
+    if not school:
+        abort(404)
+    employee = Employee.query.filter_by(id=emp_id, school_id=school.id).first_or_404()
+    if employee.status != 'archived':
+        flash('الموظف غير مؤرشف.', 'info')
+        return redirect(url_for('employees.index'))
+
+    linked_user = _linked_employee_user(employee)
+    if employee.user_id and linked_user is None:
+        db.session.rollback()
+        flash('تعذّر استرجاع الموظف لأن حساب الدخول المرتبط غير صالح لهذه المدرسة.',
+              'danger')
+        return redirect(url_for('employees.archived'))
+
+    try:
+        employee.status = 'active'
+        if linked_user:
+            linked_user.is_active = True
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        _log.exception('[employee-restore] failed employee_id=%s school_id=%s',
+                       employee.id, school.id)
+        flash('تعذّر استرجاع الموظف. لم يتم حفظ أي تغيير.', 'danger')
+        return redirect(url_for('employees.archived'))
+
+    log_action('restore', 'employee', employee.id)
+    flash('تم استرجاع الموظف وإعادة تفعيل حسابه بنجاح.', 'success')
+    return redirect(url_for('employees.archived'))
 
 
 @employees_bp.route('/<int:emp_id>/unlink-account', methods=['POST'])

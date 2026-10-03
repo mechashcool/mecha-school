@@ -1,0 +1,90 @@
+{% extends "shared/base.html" %}
+{% block title %}الموظفون المؤرشفون{% endblock %}
+{% block page_title %}الموظفون المؤرشفون{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">الموظفون المؤرشفون</h1>
+    <p class="page-subtitle">الموظفون المحفوظون خارج قائمة الموظفين النشطين مع بقاء بياناتهم السابقة</p>
+  </div>
+  <a href="{{ url_for('employees.index') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>الموظفون النشطون
+  </a>
+</div>
+
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="GET" class="d-flex gap-2">
+      <input type="search" name="q" class="form-control" value="{{ search }}"
+             placeholder="البحث بالاسم أو رقم الموظف">
+      <button type="submit" class="btn btn-primary"><i class="bi bi-search me-1"></i>بحث</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrapper">
+    <table class="table table-hover">
+      <thead>
+        <tr>
+          <th>الاسم</th>
+          <th>رقم الموظف</th>
+          <th>المسمى الوظيفي</th>
+          <th>القسم / الاختصاص</th>
+          <th>الحالة</th>
+          <th>الإجراءات</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for employee in employees.items %}
+        <tr>
+          <td class="fw-600">{{ employee.full_name }}</td>
+          <td><code class="text-primary-custom">{{ employee.employee_id }}</code></td>
+          <td>{{ employee.job_title or '—' }}</td>
+          <td>{{ employee.department or '—' }}</td>
+          <td><span class="badge-status badge-inactive">مؤرشف</span></td>
+          <td>
+            <div class="d-flex gap-1">
+              <a href="{{ url_for('employees.view', emp_id=employee.id) }}"
+                 class="btn btn-sm btn-outline-primary" title="عرض">
+                <i class="bi bi-eye"></i>
+              </a>
+              {% if not is_historical_year %}
+              <form method="POST" action="{{ url_for('employees.restore', emp_id=employee.id) }}" class="d-inline"
+                    onsubmit="return confirm('هل أنت متأكد من استرجاع هذا الموظف؟\nسيتم إعادة تفعيله وإظهاره ضمن قائمة الموظفين النشطين.');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-outline-success" title="استرجاع">
+                  <i class="bi bi-arrow-counterclockwise me-1"></i>استرجاع
+                </button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="text-center text-muted py-5">لا يوجد موظفون مؤرشفون.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if employees.pages > 1 %}
+  <div class="card-footer d-flex justify-content-between align-items-center">
+    <small class="text-muted">عرض {{ employees.items|length }} من {{ employees.total }}</small>
+    <nav>
+      <ul class="pagination pagination-sm mb-0">
+        {% if employees.has_prev %}
+        <li class="page-item"><a class="page-link" href="{{ url_for('employees.archived', page=employees.prev_num, q=search) }}">‹</a></li>
+        {% endif %}
+        <li class="page-item active"><span class="page-link">{{ employees.page }}</span></li>
+        {% if employees.has_next %}
+        <li class="page-item"><a class="page-link" href="{{ url_for('employees.archived', page=employees.next_num, q=search) }}">›</a></li>
+        {% endif %}
+      </ul>
+    </nav>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
