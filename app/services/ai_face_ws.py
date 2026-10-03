@@ -655,6 +655,7 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
     # same time always agree on present/late.
     from app.utils.attendance_helpers import (determine_check_in_status,
                                               get_employee_shift)
+    from app.utils.employee_attendance_helper import is_final_employee_auto_absence
     emp_shift = get_employee_shift(employee, school)
     punch_status = determine_check_in_status(punch_time, school,
                                             shift=emp_shift,
@@ -689,6 +690,25 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
             log.debug("  [aiface] duplicate punch employee_id=%d tag=%s",
                       employee.id, dedup_tag)
             return 'skipped'
+
+        elif is_final_employee_auto_absence(emp_att):
+            # Preserve the automatic absent status, but retain the device event
+            # on the same official row for audit/deduplication. Keep the source
+            # marker so later manual/device writes also recognize final absence.
+            if emp_att.check_in is None:
+                emp_att.check_in = punch_time
+            else:
+                emp_att.check_out = punch_time
+            emp_att.device_id = device.id
+            emp_att.notes = ' | '.join(filter(None, [
+                (emp_att.notes or '').strip() or None,
+                dedup_tag,
+            ]))
+            db.session.commit()
+            log.info("  [aiface] recorded punch on final auto-absent row "
+                     "employee_id=%d date=%s; status remains absent",
+                     employee.id, punch_date)
+            return 'processed'
 
         elif emp_att.check_in is None:
             # A row exists but nobody has checked in yet — most commonly an

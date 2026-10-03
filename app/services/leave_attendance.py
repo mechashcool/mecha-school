@@ -204,6 +204,7 @@ def _apply_employee_leave_dates(school_id, employee_id, year_id, dates, leave_re
     Returns (created, converted) counts.
     """
     from app.models import db, EmployeeAttendance
+    from app.utils.employee_attendance_helper import is_final_employee_auto_absence
 
     date_list = sorted(dates)
     if not date_list:
@@ -235,7 +236,11 @@ def _apply_employee_leave_dates(school_id, employee_id, year_id, dates, leave_re
                 notes            = f'إجازة مجازة #{leave_request.id}',
             ))
             created += 1
-        elif rec.status == 'absent' and rec.check_in is None:
+        elif (
+            rec.status == 'absent'
+            and rec.check_in is None
+            and not is_final_employee_auto_absence(rec)
+        ):
             rec.notes  = _encode_prev_absent(
                 rec.source or 'manual', leave_request.id, rec.notes,
             )

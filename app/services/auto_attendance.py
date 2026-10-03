@@ -3,7 +3,7 @@ Background auto-attendance scheduler.
 
 Runs every ATTENDANCE_CHECK_INTERVAL seconds (default 300 = 5 min).
 For each active school, checks whether the absence cutoff has passed and
-calls _run_auto_absent to mark unmarked students absent and notify parents.
+records eligible employee absences alongside the existing student absence flow.
 
 Set ATTENDANCE_SCHEDULER_DISABLED=true in the environment to opt out.
 
@@ -124,6 +124,92 @@ def _run_check() -> None:
               elapsed_ms, ok_count, err_count)
 
 
+def _run_employee_auto_absent(school) -> dict:
+    """Persist one final employee absent row per eligible missing workday."""
+    from sqlalchemy import or_
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models import Employee, EmployeeAttendance, db
+    from app.utils.decorators import get_active_year
+    from app.utils.employee_attendance_helper import (
+        AUTO_ABSENCE_SOURCE,
+        classify_missing_working_day,
+        get_employee_absence_clock,
+        get_working_days,
+    )
+
+    clock = get_employee_absence_clock(school)
+    if not clock.cutoff_passed:
+        return {'count': 0, 'reason': 'cutoff_not_passed'}
+
+    target_date = clock.local_today
+    if not get_working_days(target_date, target_date, school):
+        return {'count': 0, 'reason': 'non_working_day'}
+
+    year = get_active_year(school.id)
+    if not year:
+        return {'count': 0, 'reason': 'no_active_year'}
+
+    employees = (Employee.query
+                 .execution_options(bypass_tenant_scope=True)
+                 .filter(
+                     Employee.school_id == school.id,
+                     Employee.status == 'active',
+                     or_(Employee.hire_date.is_(None),
+                         Employee.hire_date <= target_date),
+                 )
+                 .all())
+    if not employees:
+        return {'count': 0, 'reason': 'no_eligible_employees'}
+
+    employee_ids = [employee.id for employee in employees]
+    existing_ids = {
+        row.employee_id
+        for row in (EmployeeAttendance.query
+                    .execution_options(bypass_tenant_scope=True)
+                    .filter(
+                        EmployeeAttendance.school_id == school.id,
+                        EmployeeAttendance.employee_id.in_(employee_ids),
+                        EmployeeAttendance.date == target_date,
+                    )
+                    .all())
+    }
+
+    pending = [
+        employee for employee in employees
+        if employee.id not in existing_ids
+        and classify_missing_working_day(
+            target_date, clock, employee.hire_date) == 'absent'
+    ]
+
+    created = raced = 0
+    for employee in pending:
+        try:
+            # The unique (employee_id, date) constraint is the concurrency
+            # authority. A per-row savepoint lets one racing check-in coexist
+            # with successful absences for the rest of this school's staff.
+            with db.session.begin_nested():
+                db.session.add(EmployeeAttendance(
+                    employee_id=employee.id,
+                    school_id=school.id,
+                    academic_year_id=year.id,
+                    date=target_date,
+                    status='absent',
+                    recorded_by=None,
+                    notes='غياب آلي بعد وقت إغلاق الحضور',
+                    source=AUTO_ABSENCE_SOURCE,
+                ))
+                db.session.flush()
+            created += 1
+        except IntegrityError:
+            raced += 1
+
+    if created:
+        db.session.commit()
+
+    return {'count': created, 'raced': raced, 'date': target_date}
+
+
 def _check_school(school) -> None:
     """Per-school check: fire _run_auto_absent if cutoff has passed."""
     from app.utils.attendance_helpers import get_local_now, get_local_date
@@ -131,6 +217,25 @@ def _check_school(school) -> None:
     school_name = getattr(school, 'school_name', f'school_{school.id}')
     local_now   = get_local_now(school)
     local_date  = get_local_date(school)
+
+    # Employee processing is isolated from the student path: a failure rolls
+    # back only this tick's pending work and must not skip existing student
+    # auto-absence processing for the school.
+    try:
+        employee_result = _run_employee_auto_absent(school)
+        if employee_result.get('count'):
+            _log.warning(
+                '[employee-auto-absence] school_id=%s date=%s created=%d raced=%d',
+                school.id, employee_result.get('date'),
+                employee_result['count'], employee_result.get('raced', 0),
+            )
+    except Exception:
+        _log.exception('[employee-auto-absence] failed school_id=%s', school.id)
+        try:
+            from app.models import db
+            db.session.rollback()
+        except Exception:
+            pass
 
     # Branch: shifts mode vs. standard single-cutoff mode
     if getattr(school, 'enable_attendance_shifts', False):

@@ -2084,6 +2084,7 @@ def manual_attendance_save():
     """Create or update employee attendance records for a selected date."""
     from datetime import time as _time
     from app.utils.attendance_helpers import get_local_now, determine_check_in_status
+    from app.utils.employee_attendance_helper import is_final_employee_auto_absence
 
     school = get_current_school()
     # An institute must never write a daily school-style employee_attendance
@@ -2226,6 +2227,12 @@ def manual_attendance_save():
         # on_leave and absent: check_in_val and check_out_val remain None
 
         rec = existing.get(emp_id)
+        if is_final_employee_auto_absence(rec):
+            _log.info('[emp-manual-att] preserved final automatic absence '
+                      'employee_id=%s school_id=%s date=%s',
+                      emp_id, school.id, att_date)
+            continue
+
         if rec:
             # Actual manual selection always wins — including overriding on_leave
             # records created by the leave sync. Actual attendance takes priority.

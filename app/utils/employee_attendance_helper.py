@@ -4,11 +4,9 @@ Employee attendance calculation helpers.
 Calculates working days, virtual absences, and per-employee stats.
 Kept entirely separate from student attendance to avoid any interference.
 
-ABSENCE IS COMPUTED AT READ TIME — there is deliberately no employee
-auto-absence scheduler and no automatic 'absent' INSERT. A working day with no
-EmployeeAttendance row is classified on the fly by
-``classify_missing_working_day`` below, which is the SINGLE source of truth
-shared by the HR report, the exports and payroll.
+Employee absences are stored by the existing attendance scheduler after the
+configured cutoff. The same ``classify_missing_working_day`` rule remains the
+source of truth for report/payroll handling of dates without a stored row.
 """
 from __future__ import annotations
 import re as _re
@@ -19,6 +17,16 @@ from typing import Dict, List, NamedTuple, Optional
 #   "AI Face YYYY-MM-DD HH:MM:SS"
 # Multiple tags are pipe-separated; each segment is checked individually.
 _AIFACE_DEDUP_RE = _re.compile(r'^AI Face \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$')
+AUTO_ABSENCE_SOURCE = 'auto_absence'
+
+
+def is_final_employee_auto_absence(record) -> bool:
+    """True for an automatic absent row whose official status is final that day."""
+    return bool(
+        record
+        and record.status == 'absent'
+        and record.source == AUTO_ABSENCE_SOURCE
+    )
 
 
 def _clean_employee_notes(raw: str | None) -> str | None:
