@@ -28,7 +28,6 @@
 .att-status-btn.active-on_leave  { background: #2e7d32 !important; color: #fff !important; border-color: #2e7d32 !important; }
 
 .time-row { font-size: 12px; margin-top: 6px; }
-.time-row input[type=time] { font-size: 12px; padding: 2px 6px; height: 28px; }
 .time-row input[type=text]  { font-size: 12px; padding: 2px 6px; height: 28px; }
 
 .save-bar {
@@ -357,23 +356,16 @@ function buildCard(emp) {
             <input type="hidden" name="status_${emp.id}" id="sv_${emp.id}" value="${initStatus}">
 
             <div class="time-row" id="times_${emp.id}" style="${timesDisplay}">
-              <div class="row g-1 mb-1">
-                <div class="col">
-                  <label class="form-label mb-0 text-muted" style="font-size:10px">
-                    <i class="bi bi-box-arrow-in-right me-1"></i>وقت الحضور
-                  </label>
-                  <input type="time" class="form-control form-control-sm"
-                         name="check_in_${emp.id}" id="ci_${emp.id}"
-                         value="${escHtml(initCin)}">
-                </div>
-                <div class="col">
-                  <label class="form-label mb-0 text-muted" style="font-size:10px">
-                    <i class="bi bi-box-arrow-right me-1"></i>وقت الانصراف
-                  </label>
-                  <input type="time" class="form-control form-control-sm"
-                         name="check_out_${emp.id}" id="co_${emp.id}"
-                         value="${escHtml(initCout)}">
-                </div>
+              <div class="d-flex align-items-center justify-content-between gap-2 mb-1 text-muted">
+                <span>
+                  ${initCin ? `<i class="bi bi-box-arrow-in-right me-1"></i>${escHtml(initCin)}` : 'يُسجّل وقت الحضور تلقائياً عند الحفظ'}
+                  ${initCout ? ` · <i class="bi bi-box-arrow-right me-1"></i>${escHtml(initCout)}` : ''}
+                </span>
+                ${hasRec && initCin && !initCout && (initStatus === 'present' || initStatus === 'late') ? `
+                <button type="submit" class="btn btn-outline-primary btn-sm"
+                        name="checkout_employee_id" value="${emp.id}">
+                  <i class="bi bi-box-arrow-right me-1"></i>تسجيل الانصراف
+                </button>` : ''}
               </div>
               <input type="text" class="form-control form-control-sm"
                      name="notes_${emp.id}" id="no_${emp.id}"

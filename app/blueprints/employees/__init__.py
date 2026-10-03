@@ -2172,6 +2172,11 @@ def manual_attendance_save():
     from app.utils.attendance_helpers import get_employee_shift_map
     _emp_shift_cache = get_employee_shift_map(school, employees)
 
+    # A checkout is an explicit action from an employee card. Its timestamp is
+    # always generated here from the school-local server clock; browser times
+    # are never accepted by this workflow.
+    checkout_emp_id = request.form.get('checkout_employee_id', type=int)
+
     created = updated = 0
     # Notification queue: tuples of (employee_obj, att_record, action).
     # Populated during the loop; flushed after a confirmed commit so that no
@@ -2181,6 +2186,23 @@ def manual_attendance_save():
     for emp_id in emp_ids:
         if emp_id not in emp_map:
             continue  # Cross-school / inactive — already logged above, rejected
+
+        rec = existing.get(emp_id)
+        if checkout_emp_id is not None:
+            if emp_id != checkout_emp_id:
+                continue
+            if is_final_employee_auto_absence(rec):
+                _log.info('[emp-manual-att] preserved final automatic absence '
+                          'employee_id=%s school_id=%s date=%s',
+                          emp_id, school.id, att_date)
+                continue
+            if rec and rec.check_in is not None and rec.check_out is None:
+                rec.check_out   = now_time
+                rec.source      = 'manual'
+                rec.recorded_by = current_user.id
+                updated += 1
+                _notify_queue.append((emp_map[emp_id], rec, 'check_out'))
+            continue
 
         status_choice = request.form.get(f'status_{emp_id}', 'absent').strip()
         if status_choice not in ('present', 'late', 'absent', 'on_leave'):
@@ -2193,17 +2215,13 @@ def manual_attendance_save():
         notes_val     = request.form.get(f'notes_{emp_id}', '').strip() or None
 
         if status_choice in ('present', 'late'):
-            ci_str = request.form.get(f'check_in_{emp_id}',  '').strip()
-            co_str = request.form.get(f'check_out_{emp_id}', '').strip()
-
-            if ci_str:
-                try:
-                    check_in_val = dt.strptime(ci_str, '%H:%M').time()
-                except ValueError:
-                    pass
-
-            # Fall back to server time only for today (not for historical dates)
-            if check_in_val is None and att_date == local_now.date():
+            # Preserve an attendance event already recorded for this employee.
+            # A newly-created manual check-in always uses the authoritative
+            # school-local server time, regardless of forged form fields.
+            if rec and rec.status in ('present', 'late') and rec.check_in is not None:
+                check_in_val  = rec.check_in
+                check_out_val = rec.check_out
+            else:
                 check_in_val = now_time
 
             # Auto-determine late vs present from the check-in time, using THIS
@@ -2219,14 +2237,8 @@ def manual_attendance_save():
                     shift=_emp_shift_cache.get(emp_id),
                     audience='employees')
 
-            if co_str:
-                try:
-                    check_out_val = dt.strptime(co_str, '%H:%M').time()
-                except ValueError:
-                    pass
         # on_leave and absent: check_in_val and check_out_val remain None
 
-        rec = existing.get(emp_id)
         if is_final_employee_auto_absence(rec):
             _log.info('[emp-manual-att] preserved final automatic absence '
                       'employee_id=%s school_id=%s date=%s',
