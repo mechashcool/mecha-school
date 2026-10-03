@@ -68,6 +68,7 @@ from app.models import (
     Homework,
     InstituteAttendanceRecord,
     InstituteAttendanceSession,
+    InstituteInstructorAttendance,
     InstituteGroupEnrollment,
     InstituteStudyGroup,
     Notification,
@@ -788,6 +789,60 @@ def teacher_my_attendance():
     year = AcademicYear.query.filter_by(school_id=emp.school_id, is_current=True).first()
     if not year:
         return ok(records=[], summary=dict(empty_summary))
+
+    # Institute staff attendance is recorded per lesson in
+    # InstituteInstructorAttendance, not in the daily EmployeeAttendance table.
+    # Keep the institute administration workflow authoritative and expose only
+    # this authenticated employee's rows from this institute and current year.
+    if emp.school and emp.school.is_institute:
+        institute_records = (
+            db.session.query(InstituteInstructorAttendance,
+                             InstituteAttendanceSession)
+            .join(
+                InstituteAttendanceSession,
+                (InstituteAttendanceSession.id
+                 == InstituteInstructorAttendance.session_id)
+                & (InstituteAttendanceSession.school_id == emp.school_id),
+            )
+            .filter(
+                InstituteInstructorAttendance.school_id == emp.school_id,
+                InstituteInstructorAttendance.employee_id == emp.id,
+                InstituteAttendanceSession.academic_year_id == year.id,
+            )
+            .order_by(InstituteAttendanceSession.session_date.desc(),
+                      InstituteAttendanceSession.start_time.desc(),
+                      InstituteInstructorAttendance.id.desc())
+            .all()
+        )
+
+        out = []
+        present_days = late_days = absent_days = 0
+        for rec, session in institute_records:
+            status = _emp_att_status(rec.status)
+            if status == 'present':
+                present_days += 1
+            elif status == 'late':
+                late_days += 1
+            elif status == 'absent':
+                absent_days += 1
+            out.append({
+                'id':        rec.id,
+                'date':      session.session_date.isoformat(),
+                'check_in':  None,
+                'check_out': None,
+                'status':    status,
+                'notes':     rec.notes or '',
+            })
+
+        return ok(
+            records=out,
+            summary={
+                'total_days':   len(institute_records),
+                'present_days': present_days,
+                'late_days':    late_days,
+                'absent_days':  absent_days,
+            },
+        )
 
     # Explicit isolation: own school_id + own employee_id + current year.
     records = (EmployeeAttendance.query
