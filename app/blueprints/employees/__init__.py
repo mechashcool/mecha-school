@@ -1667,9 +1667,8 @@ def attendance_report():
     total_late     = sum(r['late']    for r in rows)
     total_absent   = sum(r['absent']  for r in rows)
     total_checkout = sum(r['checked_out'] for r in rows)
-    # Days that cannot yet be declared absent (today before the employee absence
-    # cutoff, or with no cutoff configured). Reported separately so they are
-    # never presented or counted as absence.
+    # Working-day slots with no persisted attendance row. Reported separately so
+    # they are never presented or counted as absence.
     total_not_recorded = sum(r.get('not_recorded', 0) for r in rows)
 
     return render_template(

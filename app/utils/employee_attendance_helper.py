@@ -1,12 +1,13 @@
 """
 Employee attendance calculation helpers.
 
-Calculates working days, virtual absences, and per-employee stats.
+Calculates working days and per-employee stats.
 Kept entirely separate from student attendance to avoid any interference.
 
 Employee absences are stored by the existing attendance scheduler after the
-configured cutoff. The same ``classify_missing_working_day`` rule remains the
-source of truth for report/payroll handling of dates without a stored row.
+configured cutoff. Reports count only persisted absent rows; the separate
+``classify_missing_working_day`` rule remains available to the scheduler and
+payroll handling that intentionally depends on it.
 """
 from __future__ import annotations
 import re as _re
@@ -153,9 +154,9 @@ def calculate_employee_stats(employee,
     """
     Build full attendance statistics for one employee across working_days.
 
-    A day with no record is classified by classify_missing_working_day(): past
-    days are absent, today is absent only after the employee absence cutoff has
-    passed, and future / pre-hire days are dropped from the day list entirely.
+    A day with no record is always ``not_recorded``. Only a persisted attendance
+    row with status ``absent`` contributes to the absence count. Future and
+    pre-hire days are dropped from the day list entirely.
 
     `clock` lets a bulk caller resolve the school clock once; when omitted it is
     derived from `school`.
@@ -164,10 +165,9 @@ def calculate_employee_stats(employee,
         employee      – the Employee ORM object
         present       – count of on-time days
         late          – count of late days
-        absent        – count of absent days (real DB records + computed)
+        absent        – count of persisted records with status='absent'
         on_leave      – count of approved-leave days (status='on_leave')
-        not_recorded  – working days with no record that cannot yet be called
-                        absent (computed only — never stored)
+        not_recorded  – working days with no persisted attendance row
         checked_out   – count of days with a check_out time
         working_days  – working days that are an attendance obligation for THIS
                         employee (excludes future and pre-hire days)
@@ -188,12 +188,11 @@ def calculate_employee_stats(employee,
     for d in working_days:
         rec = records_by_date.get(d)
         if rec is None:
-            computed = classify_missing_working_day(d, clock, hire_date)
-            if computed is None:
+            if (hire_date and d < hire_date) or d > clock.local_today:
                 continue        # future or pre-employment — not an obligation
             daily.append({
                 'date': d,
-                'status': computed,
+                'status': 'not_recorded',
                 'check_in': None,
                 'check_out': None,
                 'source': None,
@@ -201,10 +200,7 @@ def calculate_employee_stats(employee,
                 'notes': None,
                 'is_virtual': True,
             })
-            if computed == 'absent':
-                absent += 1
-            else:
-                not_recorded += 1
+            not_recorded += 1
         else:
             status = rec.status
             if status == 'present':
@@ -267,7 +263,7 @@ def get_employees_attendance_summary(
     status_filter: str = '',
 ) -> list:
     """
-    Build attendance summaries (with virtual absences) for a list of employees.
+    Build persisted-attendance summaries for a list of employees.
     Fetches all EmployeeAttendance records in one bulk query, then assembles
     per-employee stats.  Filters are applied in Python after the bulk fetch.
 

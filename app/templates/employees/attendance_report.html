@@ -287,9 +287,9 @@
             {% endif %}
           </td>
           <td class="text-center">
-            {# Today, before the employee absence cutoff — not an absence yet. #}
+            {# Working-day slots with no persisted attendance row. #}
             {% if row.not_recorded is defined and row.not_recorded > 0 %}
-            <span class="fw-bold text-secondary" title="لم يحن وقت اعتبار الغياب بعد">{{ row.not_recorded }}</span>
+            <span class="fw-bold text-secondary" title="لا يوجد سجل حضور محفوظ">{{ row.not_recorded }}</span>
             {% else %}
             <span class="text-muted">0</span>
             {% endif %}

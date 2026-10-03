@@ -712,8 +712,8 @@ def export_employee_attendance(rows, date_from: str, date_to: str) -> bytes | No
     from openpyxl.styles import Font, PatternFill, Alignment
 
     hs = _header_style()
-    # 'not_recorded' is a COMPUTED state (today, before the employee absence
-    # cutoff). It must never be exported as 'غائب'.
+    # 'not_recorded' is a working-day slot with no persisted attendance row.
+    # It must never be exported as 'غائب'.
     STATUS_AR = {'present': 'حاضر', 'absent': 'غائب', 'late': 'متأخر',
                  'on_leave': 'مجاز', 'not_recorded': 'غير مسجل بعد'}
     ALT_FILL = PatternFill('solid', fgColor='F0F4F8')
@@ -826,8 +826,8 @@ def export_single_employee_attendance(emp_row, date_from: str, date_to: str) -> 
     from openpyxl.styles import Font, PatternFill, Alignment
 
     hs = _header_style()
-    # 'not_recorded' is a COMPUTED state (today, before the employee absence
-    # cutoff). It must never be exported as 'غائب'.
+    # 'not_recorded' is a working-day slot with no persisted attendance row.
+    # It must never be exported as 'غائب'.
     STATUS_AR = {'present': 'حاضر', 'absent': 'غائب', 'late': 'متأخر',
                  'on_leave': 'مجاز', 'not_recorded': 'غير مسجل بعد'}
     ALT_FILL = PatternFill('solid', fgColor='F0F4F8')

@@ -1055,8 +1055,8 @@ def generate_single_employee_attendance_pdf(emp_row, date_from: str, date_to: st
     elements.append(Spacer(1, 0.45 * cm))
 
     # ── Daily attendance table (full width; subtle status-cell tint) ──────────
-    # 'not_recorded' is a COMPUTED state (today, before the employee absence
-    # cutoff). It must never be exported as 'غائب'.
+    # 'not_recorded' is a working-day slot with no persisted attendance row.
+    # It must never be exported as 'غائب'.
     STATUS_AR = {'present': 'حاضر', 'absent': 'غائب', 'late': 'متأخر',
                  'on_leave': 'مجاز', 'not_recorded': 'غير مسجل بعد'}
     # Status cell text styles (bold, color-coded) + subtle per-status cell tint.
