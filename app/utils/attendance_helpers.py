@@ -74,12 +74,12 @@ def utc_to_local(utc_dt, settings=None):
 _AUDIENCE_SETTINGS_FIELDS = {
     'students': (
         'att_late_threshold', 'att_absence_threshold', 'att_departure_time',
-        'enable_attendance_shifts', 'shift_absent_after_time',
+        'enable_attendance_shifts', 'shift_absent_after_time', 'att_start_time',
     ),
     'employees': (
         'emp_att_late_threshold', 'emp_att_absence_threshold',
         'emp_att_departure_time', 'emp_enable_attendance_shifts',
-        'emp_shift_absent_after_time',
+        'emp_shift_absent_after_time', 'emp_att_start_time',
     ),
 }
 
@@ -91,6 +91,7 @@ class EffectiveAttendanceSettings(NamedTuple):
     late_threshold: Optional[object]   # datetime.time | None
     absence_cutoff: Optional[object]   # datetime.time | None
     departure_time: Optional[object]   # datetime.time | None
+    attendance_start: Optional[object] # datetime.time | None
 
 
 def _audience_fields(audience):
@@ -112,7 +113,7 @@ def get_effective_attendance_settings(school, audience, shift=None):
     `shift_enabled` reflects the SCHOOL TOGGLE only, not whether a shift was
     passed — it is what selects which absence-cutoff column applies.
     """
-    late_f, absence_f, departure_f, toggle_f, shift_cutoff_f = _audience_fields(audience)
+    late_f, absence_f, departure_f, toggle_f, shift_cutoff_f, start_f = _audience_fields(audience)
 
     shift_enabled = bool(getattr(school, toggle_f, False)) if school else False
 
@@ -123,6 +124,10 @@ def get_effective_attendance_settings(school, audience, shift=None):
     departure = getattr(shift, 'dismissal_time', None) if shift is not None else None
     if departure is None and school:
         departure = getattr(school, departure_f, None)
+
+    attendance_start = getattr(shift, 'start_time', None) if shift is not None else None
+    if attendance_start is None and school:
+        attendance_start = getattr(school, start_f, None)
 
     # No cross-fallback between the two modes: an unset cutoff stays unset.
     cutoff = None
@@ -135,6 +140,7 @@ def get_effective_attendance_settings(school, audience, shift=None):
         late_threshold = late,
         absence_cutoff = cutoff,
         departure_time = departure,
+        attendance_start = attendance_start,
     )
 
 

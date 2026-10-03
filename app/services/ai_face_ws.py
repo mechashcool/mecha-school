@@ -659,9 +659,13 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
     # Identical resolution to the manual sheet, so manual and device entry of the
     # same time always agree on present/late.
     from app.utils.attendance_helpers import (determine_check_in_status,
+                                              get_effective_attendance_settings,
                                               get_employee_shift)
-    from app.utils.employee_attendance_helper import is_final_employee_auto_absence
+    from app.utils.employee_attendance_helper import (
+        AUTO_ABSENCE_SOURCE, is_final_employee_auto_absence)
     emp_shift = get_employee_shift(employee, school)
+    effective = get_effective_attendance_settings(
+        school, 'employees', shift=emp_shift)
     punch_status = determine_check_in_status(punch_time, school,
                                             shift=emp_shift,
                                             audience='employees')
@@ -673,21 +677,30 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
                    .first())
 
         if emp_att is None:
+            if (effective.attendance_start is not None
+                    and punch_time < effective.attendance_start):
+                log.info("  [aiface] employee punch before attendance start ignored: "
+                         "employee_id=%d date=%s punch=%s start=%s",
+                         employee.id, punch_date, punch_time,
+                         effective.attendance_start)
+                return 'processed'
+            final_absence = (effective.absence_cutoff is not None
+                             and punch_time >= effective.absence_cutoff)
             emp_att = EmployeeAttendance(
                 employee_id      = employee.id,
                 school_id        = school.id,
                 academic_year_id = year.id,
                 date             = punch_date,
-                status           = punch_status,
+                status           = 'absent' if final_absence else punch_status,
                 check_in         = punch_time,
-                source           = 'aiface',
+                source           = AUTO_ABSENCE_SOURCE if final_absence else 'aiface',
                 device_id        = device.id,
                 notes            = dedup_tag,
             )
             db.session.add(emp_att)
             db.session.commit()
             log.info("  [aiface] employee check_in: employee_id=%d (%s) at %s status=%s",
-                     employee.id, employee.full_name, punch_time, punch_status)
+                     employee.id, employee.full_name, punch_time, emp_att.status)
             _notify_action = 'check_in'
             _notify_att    = emp_att
 
@@ -702,7 +715,7 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
             # marker so later manual/device writes also recognize final absence.
             if emp_att.check_in is None:
                 emp_att.check_in = punch_time
-            else:
+            elif emp_att.check_out is None:
                 emp_att.check_out = punch_time
             emp_att.device_id = device.id
             emp_att.notes = ' | '.join(filter(None, [
@@ -744,7 +757,10 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
             _notify_action = 'check_in'
             _notify_att    = emp_att
 
-        else:
+        elif (emp_att.status in ('present', 'late')
+              and emp_att.check_out is None
+              and effective.departure_time is not None
+              and punch_time >= effective.departure_time):
             emp_att.check_out = punch_time
             emp_att.notes     = (emp_att.notes or '') + '|' + dedup_tag
             db.session.commit()
@@ -752,6 +768,9 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
                      employee.id, employee.full_name, punch_time)
             _notify_action = 'check_out'
             _notify_att    = emp_att
+
+        else:
+            return 'processed'
 
     except IntegrityError:
         # Unique (employee_id, date) race: a concurrent punch (realtime sendlog +

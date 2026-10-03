@@ -2281,7 +2281,9 @@ def manual_attendance_save():
     # loop below resolves late/present without a per-employee shift lookup.
     # Employees with no shift (or shifts disabled) are simply absent from the map
     # and fall back to School.emp_att_late_threshold.
-    from app.utils.attendance_helpers import get_employee_shift_map
+    from app.utils.attendance_helpers import (get_effective_attendance_settings,
+                                              get_employee_shift_map)
+    from app.utils.employee_attendance_helper import AUTO_ABSENCE_SOURCE
     _emp_shift_cache = get_employee_shift_map(school, employees)
 
     # A checkout is an explicit action from an employee card. Its timestamp is
@@ -2300,6 +2302,8 @@ def manual_attendance_save():
             continue  # Cross-school / inactive — already logged above, rejected
 
         rec = existing.get(emp_id)
+        effective = get_effective_attendance_settings(
+            school, 'employees', shift=_emp_shift_cache.get(emp_id))
         if checkout_emp_id is not None:
             if emp_id != checkout_emp_id:
                 continue
@@ -2308,7 +2312,9 @@ def manual_attendance_save():
                           'employee_id=%s school_id=%s date=%s',
                           emp_id, school.id, att_date)
                 continue
-            if rec and rec.check_in is not None and rec.check_out is None:
+            if (rec and rec.check_in is not None and rec.check_out is None
+                    and effective.departure_time is not None
+                    and now_time >= effective.departure_time):
                 rec.check_out   = now_time
                 rec.source      = 'manual'
                 rec.recorded_by = current_user.id
@@ -2336,20 +2342,29 @@ def manual_attendance_save():
             else:
                 check_in_val = now_time
 
+            if rec is None and effective.attendance_start is not None \
+                    and check_in_val < effective.attendance_start:
+                continue
+
+            if rec is None and effective.absence_cutoff is not None \
+                    and check_in_val >= effective.absence_cutoff:
+                status_choice = 'absent'
+                check_in_val = now_time
+
             # Auto-determine late vs present from the check-in time, using THIS
             # employee's effective settings: their assigned employee shift's
             # late_after_time when one resolves, else School.emp_att_late_threshold.
             # Identical resolution to the Face ID path, so the same employee +
             # date + check-in time always yields the same present/late result.
-            # An explicit 'late', 'absent' or 'on_leave' selection is never
-            # overridden — only a plain 'present' is refined.
-            if check_in_val and status_choice == 'present':
+            # New present/late submissions use the same authoritative time
+            # classification as the Face ID path.
+            if check_in_val and status_choice in ('present', 'late'):
                 status_choice = determine_check_in_status(
                     check_in_val, settings,
                     shift=_emp_shift_cache.get(emp_id),
                     audience='employees')
 
-        # on_leave and absent: check_in_val and check_out_val remain None
+        # A post-cutoff automatic absence may retain check_in_val for audit.
 
         if is_final_employee_auto_absence(rec):
             _log.info('[emp-manual-att] preserved final automatic absence '
@@ -2381,7 +2396,9 @@ def manual_attendance_save():
                 check_in         = check_in_val,
                 check_out        = check_out_val,
                 notes            = notes_val,
-                source           = 'manual',
+                source           = (AUTO_ABSENCE_SOURCE
+                                    if status_choice == 'absent' and check_in_val is not None
+                                    else 'manual'),
                 recorded_by      = current_user.id,
             )
             db.session.add(new_att)
