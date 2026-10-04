@@ -133,7 +133,8 @@ def any_enabled() -> bool:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _dedup_key(event_type: str, session_id: int, student_id: int,
-               user_id: int, token_id: int, transition_at: datetime) -> str:
+               status: str, user_id: int, token_id: int,
+               transition_at: datetime) -> str:
     """A key that is stable for duplicates but distinct for real transitions.
 
     The problem: a static key of (session, student, parent, token) would be
@@ -152,13 +153,31 @@ def _dedup_key(event_type: str, session_id: int, student_id: int,
         different key and is correctly delivered.
     """
     stamp = transition_at.replace(microsecond=0).strftime('%Y%m%d%H%M%S')
-    key = (f'{event_type}:{session_id}:{student_id}:'
+    key = (f'{event_type}:{session_id}:{student_id}:{status}:'
            f'{user_id}:{token_id}:{stamp}')
     return key[:_MAX_DEDUP_KEY]
 
 
-def stage_absence_deliveries(school, session, student_ids, *, now=None) -> int:
-    """Stage in-app rows AND push jobs for newly-absent students.
+def _institute_attendance_message(student, group_name, date_str, status):
+    messages = {
+        'present': ('تسجيل حضور',
+                    f'تم تسجيل حضور الطالب {student.full_name} في '
+                    f'{group_name} بتاريخ {date_str}.'),
+        'late': ('تنبيه تأخر',
+                 f'تم تسجيل وصول الطالب {student.full_name} متأخراً في '
+                 f'{group_name} بتاريخ {date_str}.'),
+        'absent': ('تنبيه غياب',
+                   f'تم تسجيل الطالب {student.full_name} غائباً في '
+                   f'{group_name} بتاريخ {date_str}.'),
+        'excused': ('غياب بعذر',
+                    f'تم تسجيل غياب الطالب {student.full_name} بعذر في '
+                    f'{group_name} بتاريخ {date_str}.'),
+    }
+    return messages[status]
+
+
+def stage_attendance_deliveries(school, session, statuses, *, now=None) -> int:
+    """Stage in-app rows AND push jobs for changed attendance statuses.
 
     Adds to the CURRENT session and does NOT commit: the caller commits once,
     together with the attendance rows, so the whole thing is atomic. Any
@@ -170,8 +189,8 @@ def stage_absence_deliveries(school, session, student_ids, *, now=None) -> int:
     """
     if school is None or session is None:
         raise ValueError('outbox: school and session are required')
-    student_ids = [int(s) for s in (student_ids or [])]
-    if not student_ids:
+    statuses = {int(sid): status for sid, status in (statuses or {}).items()}
+    if not statuses:
         return 0
 
     now = now or datetime.utcnow()
@@ -184,22 +203,20 @@ def stage_absence_deliveries(school, session, student_ids, *, now=None) -> int:
     # Tenant guard: only students of THIS school, even if a caller passed a
     # forged id. Mirrors the filter submit_attendance already applies.
     students = (Student.query.execution_options(**OPTS)
-                .filter(Student.id.in_(student_ids),
+                .filter(Student.id.in_(statuses),
                         Student.school_id == school.id)
                 .all())
 
     staged = 0
     for student in students:
-        # Wording, ntype and payload keys are IDENTICAL to the inline path, so
-        # the mobile router, badge counts and tap routing are unaffected.
-        title = 'تنبيه غياب'
-        body = (f'تم تسجيل الطالب {student.full_name} غائباً في '
-                f'{group_name} بتاريخ {date_str}.')
+        status = statuses[student.id]
+        title, body = _institute_attendance_message(
+            student, group_name, date_str, status)
         data = {
             'type':         'attendance',
             'ntype':        'attendance',
-            'action':       'absent',
-            'status':       'absent',
+            'action':       status,
+            'status':       status,
             'student_id':   str(student.id),
             'student_name': student.full_name,
             'date':         date_str,
@@ -240,7 +257,7 @@ def stage_absence_deliveries(school, session, student_ids, *, now=None) -> int:
                     ntype='attendance',
                     dedup_key=_dedup_key(
                         NotificationOutbox.EVENT_INSTITUTE_ABSENCE,
-                        session.id, student.id, parent_id, tok.id, now),
+                        session.id, student.id, status, parent_id, tok.id, now),
                     status=NotificationOutbox.STATUS_PENDING,
                     attempts=0,
                     next_attempt_at=now,
@@ -249,6 +266,13 @@ def stage_absence_deliveries(school, session, student_ids, *, now=None) -> int:
                 staged += 1
 
     return staged
+
+
+def stage_absence_deliveries(school, session, student_ids, *, now=None) -> int:
+    """Backward-compatible wrapper for the original absence-only producer."""
+    return stage_attendance_deliveries(
+        school, session, {int(sid): 'absent' for sid in (student_ids or [])},
+        now=now)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

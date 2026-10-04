@@ -667,9 +667,9 @@ def submit_attendance(school, session, statuses, *, source, actor_user_id,
     single row is written, so an invalid or unauthorised entry leaves the whole
     session untouched — there is no partially recorded class.
 
-    Returns a dict summarising what changed. Only genuinely NEW absences
-    notify; a re-submission of the same values notifies nobody, which is what
-    makes a retry safe.
+    Returns a dict summarising what changed. New records and genuine status
+    transitions notify; a re-submission of the same values notifies nobody,
+    which is what makes a retry safe.
 
     Omitting a student is not "absent". It leaves them unmarked, exactly as
     before the call.
@@ -728,7 +728,7 @@ def submit_attendance(school, session, statuses, *, source, actor_user_id,
 
     now = datetime.utcnow()
     created, updated, unchanged = [], [], []
-    newly_absent = []
+    changed_statuses = {}
 
     for sid, status in cleaned.items():
         rec = existing.get(sid)
@@ -738,18 +738,14 @@ def submit_attendance(school, session, statuses, *, source, actor_user_id,
                 status=status, source=source, recorded_by=actor_user_id,
                 recorded_at=now))
             created.append(sid)
-            if status == InstituteAttendanceRecord.STATUS_ABSENT:
-                newly_absent.append(sid)
+            changed_statuses[sid] = status
         elif rec.status != status:
-            was_absent = rec.status == InstituteAttendanceRecord.STATUS_ABSENT
             rec.status = status
             rec.source = source
             rec.recorded_by = actor_user_id
             rec.recorded_at = now
             updated.append(sid)
-            if (status == InstituteAttendanceRecord.STATUS_ABSENT
-                    and not was_absent):
-                newly_absent.append(sid)
+            changed_statuses[sid] = status
         else:
             # Byte-identical re-submission: touch nothing, notify nobody.
             unchanged.append(sid)
@@ -766,11 +762,11 @@ def submit_attendance(school, session, statuses, *, source, actor_user_id,
     #
     # With the flag off, not a single statement below changes: the legacy
     # inline path runs exactly as it does in production today.
-    outbox_path = bool(notify and newly_absent and outbox.enabled())
+    outbox_path = bool(notify and changed_statuses and outbox.enabled())
     if outbox_path:
         try:
-            staged = outbox.stage_absence_deliveries(
-                school, session, newly_absent, now=now)
+            staged = outbox.stage_attendance_deliveries(
+                school, session, changed_statuses, now=now)
         except Exception:
             # Attendance must never commit without the notification work it
             # promised. Roll the whole thing back and say so.
@@ -779,7 +775,7 @@ def submit_attendance(school, session, statuses, *, source, actor_user_id,
                           'session_id=%s — attendance NOT saved',
                           getattr(session, 'id', None))
             raise AttendanceError(
-                'تعذّر تجهيز إشعارات الغياب، ولم يتم حفظ الحضور. '
+                'تعذّر تجهيز إشعارات الحضور، ولم يتم حفظ الحضور. '
                 'يرجى المحاولة مرة أخرى.')
 
     try:
@@ -793,33 +789,33 @@ def submit_attendance(school, session, statuses, *, source, actor_user_id,
             'تم حفظ حضور هذه الجلسة من جهة أخرى في الوقت نفسه. '
             'يرجى إعادة فتح الصفحة لعرض السجل المحدّث.')
 
-    if notify and newly_absent:
+    if notify and changed_statuses:
         if outbox_path:
             # Committed and durable. A separate worker delivers it; this
             # request returns now. There is deliberately NO inline fallback —
             # falling back to Firebase here would reintroduce exactly the
             # blocking call this path exists to remove.
             log.info('[institute-attendance] session=%s staged %d push job(s) '
-                     'for %d newly-absent student(s)',
-                     session.id, staged, len(newly_absent))
+                     'for %d changed student attendance record(s)',
+                     session.id, staged, len(changed_statuses))
         else:
-            _notify_absent(school, session, newly_absent)
+            _notify_attendance(school, session, changed_statuses)
 
     return {'created': len(created), 'updated': len(updated),
-            'unchanged': len(unchanged), 'notified': len(newly_absent),
+            'unchanged': len(unchanged), 'notified': len(changed_statuses),
             'skipped_suspended': len(suspended)}
 
 
-def _notify_absent(school, session, student_ids):
-    """Parent absence notification, reusing the existing Core School path.
+def _notify_attendance(school, session, statuses):
+    """Notify parents about changed institute attendance statuses.
 
-    Deliberately identical in shape to the school-section absence notification
+    Deliberately identical in shape to the school attendance notification
     (same ntype 'attendance', same 'action'/'status' keys, same
     send_to_parents_of_student targeting) so the mobile router, badge counts
     and tap routing keep working unchanged. Institute context is added as
     EXTRA keys only; nothing existing is renamed or removed.
 
-    Only genuinely NEW absences reach here, so a retry or an unchanged
+    Only genuinely changed statuses reach here, so a retry or an unchanged
     re-submission produces no duplicate notification. Never raises: a delivery
     failure must not undo a committed attendance record.
     """
@@ -834,7 +830,7 @@ def _notify_absent(school, session, student_ids):
         date_str = session.session_date.strftime('%Y-%m-%d')
 
         students = (Student.query.execution_options(**OPTS)
-                    .filter(Student.id.in_(student_ids),
+                    .filter(Student.id.in_(statuses),
                             Student.school_id == school.id).all())
 
         # The in-app parent feed row. NotificationService.send_to_users only
@@ -842,29 +838,32 @@ def _notify_absent(school, session, student_ids):
         # flow creates this row separately — mirrored here so the parent feed,
         # badge counts and tap routing behave identically for an institute.
         for student in students:
-            body = (f'تم تسجيل الطالب {student.full_name} غائباً في '
-                    f'{group_name} بتاريخ {date_str}.')
+            status = statuses[student.id]
+            title, body = outbox._institute_attendance_message(
+                student, group_name, date_str, status)
             for row in db.session.query(parent_students.c.user_id).filter(
                     parent_students.c.student_id == student.id).all():
                 db.session.add(Notification(
-                    school_id=school.id, title='تنبيه غياب', body=body,
+                    school_id=school.id, title=title, body=body,
                     ntype='attendance', target_user_id=row[0],
                     created_by=None))
         db.session.commit()
 
         for student in students:
+            status = statuses[student.id]
+            title, body = outbox._institute_attendance_message(
+                student, group_name, date_str, status)
             NotificationService.send_to_parents_of_student(
                 student.id,
-                'تنبيه غياب',
-                f'تم تسجيل الطالب {student.full_name} غائباً في '
-                f'{group_name} بتاريخ {date_str}.',
+                title,
+                body,
                 ntype='attendance',
                 data={
                     # Existing school-absence contract, unchanged.
                     'type':         'attendance',
                     'ntype':        'attendance',
-                    'action':       'absent',
-                    'status':       'absent',
+                    'action':       status,
+                    'status':       status,
                     'student_id':   str(student.id),
                     'student_name': student.full_name,
                     'date':         date_str,
@@ -876,7 +875,7 @@ def _notify_absent(school, session, student_ids):
                 },
             )
     except Exception:
-        log.exception('[institute-attendance] absence notification failed '
+        log.exception('[institute-attendance] notification failed '
                       'session_id=%s', getattr(session, 'id', None))
 
 
