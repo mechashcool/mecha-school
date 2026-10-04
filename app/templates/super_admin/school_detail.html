@@ -726,14 +726,19 @@
               </div>
               <div class="mb-3">
                 <label class="form-label small">المدارس المصرح بها *</label>
-                <select name="school_ids" class="form-select form-select-sm" multiple size="6" required>
+                <div class="border rounded p-2" style="max-height:240px;overflow-y:auto">
                   {% for available_school in all_schools %}
-                  <option value="{{ available_school.id }}" {{ 'selected' if available_school.id in investor_school_ids }}>
-                    {{ available_school.school_name_ar or available_school.school_name }}{% if investor_assignment_map.get(available_school.id) and available_school.id not in investor_school_ids %} — مرتبطة بـ {{ investor_assignment_map[available_school.id] }}{% endif %}
-                  </option>
+                  <div class="form-check mb-1">
+                    <input class="form-check-input" type="checkbox" name="school_ids"
+                           value="{{ available_school.id }}" id="editSchool{{ available_school.id }}"
+                           {{ 'checked' if available_school.id in investor_school_ids }}>
+                    <label class="form-check-label small" for="editSchool{{ available_school.id }}">
+                      {{ available_school.school_name_ar or available_school.school_name }}{% if investor_assignment_map.get(available_school.id) and available_school.id not in investor_school_ids %} — مرتبطة بـ {{ investor_assignment_map[available_school.id] }}{% endif %}
+                    </label>
+                  </div>
                   {% endfor %}
-                </select>
-                <div class="form-text">يمكن اختيار أكثر من مدرسة.</div>
+                </div>
+                <div class="form-text">حدد مدرسة واحدة أو عدة مدارس، ثم احفظ مرة واحدة.</div>
               </div>
               <div class="form-check mb-3">
                 <input class="form-check-input" type="checkbox" value="1"
@@ -818,14 +823,19 @@
               </div>
               <div class="mb-3">
                 <label class="form-label small">المدارس المصرح بها *</label>
-                <select name="school_ids" class="form-select form-select-sm" multiple size="6" required>
+                <div class="border rounded p-2" style="max-height:240px;overflow-y:auto">
                   {% for available_school in all_schools %}
-                  <option value="{{ available_school.id }}" {{ 'selected' if available_school.id in investor_school_ids }}>
-                    {{ available_school.school_name_ar or available_school.school_name }}{% if investor_assignment_map.get(available_school.id) %} — مرتبطة بـ {{ investor_assignment_map[available_school.id] }}{% endif %}
-                  </option>
+                  <div class="form-check mb-1">
+                    <input class="form-check-input" type="checkbox" name="school_ids"
+                           value="{{ available_school.id }}" id="createSchool{{ available_school.id }}"
+                           {{ 'checked' if available_school.id in investor_school_ids }}>
+                    <label class="form-check-label small" for="createSchool{{ available_school.id }}">
+                      {{ available_school.school_name_ar or available_school.school_name }}{% if investor_assignment_map.get(available_school.id) %} — مرتبطة بـ {{ investor_assignment_map[available_school.id] }}{% endif %}
+                    </label>
+                  </div>
                   {% endfor %}
-                </select>
-                <div class="form-text">يمكن اختيار أكثر من مدرسة.</div>
+                </div>
+                <div class="form-text">حدد مدرسة واحدة أو عدة مدارس، ثم احفظ مرة واحدة.</div>
               </div>
               <div class="form-check mb-3">
                 <input class="form-check-input" type="checkbox" value="1"

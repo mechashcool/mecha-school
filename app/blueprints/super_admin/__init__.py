@@ -24,7 +24,7 @@ from datetime import date as _date, datetime as _dt
 from decimal import Decimal, InvalidOperation
 
 from flask import (Blueprint, render_template, redirect, url_for,
-                   flash, request, session)
+                   flash, request, session, current_app)
 from flask_login import login_required, current_user
 from sqlalchemy import func
 
@@ -445,7 +445,35 @@ def _transfer_school_accesses(conflicts):
             remaining_id = (db.session.query(InvestorSchoolAccess.school_id)
                             .filter_by(investor_user_id=owner.id)
                             .order_by(InvestorSchoolAccess.id).limit(1).scalar())
-            owner.school_id = remaining_id
+            if remaining_id is not None:
+                owner.school_id = remaining_id
+            else:
+                # The global tenant before_flush hook fills a NULL school_id
+                # from an active Super Admin school selection. Use a direct,
+                # explicit update so an investor with no mappings cannot retain
+                # an unauthorized compatibility default.
+                db.session.execute(
+                    User.__table__.update().where(User.id == owner.id)
+                    .values(school_id=None))
+                db.session.expire(owner, ['school_id'])
+
+
+def _sync_investor_school_accesses(investor, selected_school_ids):
+    """Synchronize one investor's mappings with deterministic SQL ordering."""
+    current = list(investor.investor_school_accesses)
+    for access in current:
+        if access.school_id not in selected_school_ids:
+            db.session.delete(access)
+
+    # PostgreSQL may otherwise INSERT new rows before pending DELETEs. Flush
+    # revocations first so the one-investor-per-school constraint never sees a
+    # transient duplicate during an ordinary multi-school save.
+    db.session.flush()
+    remaining_ids = {access.school_id for access in current
+                     if access.school_id in selected_school_ids}
+    for selected_school_id in selected_school_ids - remaining_ids:
+        db.session.add(InvestorSchoolAccess(
+            investor_user_id=investor.id, school_id=selected_school_id))
 
 
 def _investor_role():
@@ -533,8 +561,11 @@ def create_investor(school_id):
             db.session.add(InvestorSchoolAccess(
                 investor_user_id=user.id, school_id=selected_school_id))
         db.session.commit()
-    except Exception as exc:
+    except Exception:
         db.session.rollback()
+        current_app.logger.exception(
+            'Failed to create investor school mappings for school_id=%s',
+            school_id)
         flash('تعذر إنشاء حساب المستثمر بسبب تعارض في القيم. حاول مرة أخرى.', 'danger')
         return redirect(url_for('super_admin.school_detail', school_id=school_id))
 
@@ -600,18 +631,15 @@ def update_investor(school_id):
         investor.full_name = full_name
         investor.email     = email or None
         investor.phone     = phone or None
-        current_ids = {access.school_id for access in investor.investor_school_accesses}
-        for access in list(investor.investor_school_accesses):
-            if access.school_id not in selected_school_ids:
-                db.session.delete(access)
-        for selected_school_id in selected_school_ids - current_ids:
-            db.session.add(InvestorSchoolAccess(
-                investor_user_id=investor.id, school_id=selected_school_id))
+        _sync_investor_school_accesses(investor, selected_school_ids)
         if investor.school_id not in selected_school_ids:
             investor.school_id = min(selected_school_ids)
         db.session.commit()
     except Exception:
         db.session.rollback()
+        current_app.logger.exception(
+            'Failed to update investor school mappings investor_id=%s',
+            investor.id)
         flash('تعذر تحديث صلاحيات مدارس المستثمر. حاول مرة أخرى.', 'danger')
         return redirect(url_for('super_admin.school_detail', school_id=school_id))
     log_action('edit', 'user', investor.id,
