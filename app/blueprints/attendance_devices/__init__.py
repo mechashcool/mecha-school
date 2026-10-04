@@ -1093,7 +1093,8 @@ def ajax_aiface_sync_student(device_id):
         # device user number from the mapping — the card never replaces it.
         card=student.rfid_tag_id,
     )
-    status = 200 if result['ok'] else (503 if result.get('offline') else 502)
+    status = 200 if result['ok'] else (409 if result.get('busy') else
+                                      (503 if result.get('offline') else 502))
     return jsonify(result), status
 
 
@@ -1143,7 +1144,8 @@ def ajax_aiface_sync_employee(device_id):
         photo=employee.photo,
         entity_type='employee',
     )
-    status = 200 if result['ok'] else (503 if result.get('offline') else 502)
+    status = 200 if result['ok'] else (409 if result.get('busy') else
+                                      (503 if result.get('offline') else 502))
     return jsonify(result), status
 
 

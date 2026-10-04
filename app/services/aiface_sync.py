@@ -9,8 +9,15 @@ import base64
 import io
 import logging
 import os
+import threading
+import weakref
 
 log = logging.getLogger('aiface_sync')
+
+# Process-local by design: multiple Gunicorn worker processes would require a
+# cross-process coordination mechanism for devices shared between them.
+_device_sync_locks = weakref.WeakValueDictionary()
+_device_sync_locks_guard = threading.Lock()
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Photo helper
@@ -132,8 +139,8 @@ def prepare_photo_for_device(photo, label: str = '') -> tuple:
 #  Device sync
 # ─────────────────────────────────────────────────────────────────────────────
 
-def sync_person_to_device(device, enrollid: int, name: str, photo,
-                           entity_type: str = 'student', card=None) -> dict:
+def _sync_person_to_device_unlocked(device, enrollid: int, name: str, photo,
+                                    entity_type: str = 'student', card=None) -> dict:
     """
     Push one person (student or employee) to an AI Face device.
 
@@ -344,3 +351,35 @@ def sync_person_to_device(device, enrollid: int, name: str, photo,
         'setuserinfo_result': setuserinfo_result,
         'enableuser_result': enableuser_result,
     }
+
+
+def sync_person_to_device(device, enrollid: int, name: str, photo,
+                          entity_type: str = 'student', card=None) -> dict:
+    """Push one person while preventing overlapping syncs to the same device."""
+    device_key = str(device.device_sn)
+    with _device_sync_locks_guard:
+        device_lock = _device_sync_locks.get(device_key)
+        if device_lock is None:
+            device_lock = threading.Lock()
+            _device_sync_locks[device_key] = device_lock
+
+    if not device_lock.acquire(blocking=False):
+        return {
+            'ok': False,
+            'busy': True,
+            'error_type': 'device_busy',
+            'error_message_ar': (
+                'الجهاز مشغول حالياً بإرسال بيانات أخرى، حاول مرة أخرى بعد قليل.'
+            ),
+            'message': 'Device sync already in progress',
+            'device_sn': device.device_sn,
+            'enrollid': enrollid,
+            'entity_type': entity_type,
+        }
+
+    try:
+        return _sync_person_to_device_unlocked(
+            device, enrollid, name, photo, entity_type, card=card
+        )
+    finally:
+        device_lock.release()
