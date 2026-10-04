@@ -284,6 +284,14 @@ def get_current_school():
 
         return request_memo(('current_school', 'super', active_id), _load_super)
 
+    # Mobile investors may have a different, server-authorized school selected
+    # for this request. The resolver stores the actual School object on ``g``;
+    # no client value is trusted here.
+    from flask import g
+    selected_investor_school = getattr(g, 'investor_school', None)
+    if selected_investor_school is not None and current_user.is_investor:
+        return selected_investor_school
+
     # Regular user — always their own school
     return request_memo(('current_school', 'user', current_user.school_id),
                         lambda: current_user.school)

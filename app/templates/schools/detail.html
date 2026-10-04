@@ -206,6 +206,16 @@
             <input type="text" name="phone" class="form-control form-control-sm"
                    value="{{ investor.phone or '' }}">
           </div>
+          <div class="mb-3">
+            <label class="form-label small mb-1">المدارس المصرح بها *</label>
+            <select name="school_ids" class="form-select form-select-sm" multiple size="6" required>
+              {% for available_school in all_schools %}
+              <option value="{{ available_school.id }}" {{ 'selected' if available_school.id in investor_school_ids }}>
+                {{ available_school.school_name_ar or available_school.school_name }}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
           <button type="submit" class="btn btn-sm btn-primary w-100">
             <i class="bi bi-save me-1"></i>حفظ البيانات
           </button>
@@ -274,6 +284,16 @@
             <label class="form-label small mb-1">كلمة المرور *</label>
             <input type="text" name="password" class="form-control form-control-sm"
                    minlength="6" required placeholder="6 أحرف على الأقل">
+          </div>
+          <div class="mb-3">
+            <label class="form-label small mb-1">المدارس المصرح بها *</label>
+            <select name="school_ids" class="form-select form-select-sm" multiple size="6" required>
+              {% for available_school in all_schools %}
+              <option value="{{ available_school.id }}" {{ 'selected' if available_school.id in investor_school_ids }}>
+                {{ available_school.school_name_ar or available_school.school_name }}
+              </option>
+              {% endfor %}
+            </select>
           </div>
           <button type="submit" class="btn btn-sm btn-success w-100">
             <i class="bi bi-person-plus me-1"></i>إنشاء حساب المستثمر

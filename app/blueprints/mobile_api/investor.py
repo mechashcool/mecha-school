@@ -2,6 +2,7 @@
 Mobile API — Investor (read-only)
 =================================
 GET /api/mobile/v1/investor/dashboard   full KPI dashboard for the investor's school
+GET /api/mobile/v1/investor/schools     authorized school choices
 GET /api/mobile/v1/investor/revenues    read-only revenue list
 GET /api/mobile/v1/investor/expenses    read-only expense list
 GET /api/mobile/v1/investor/employees/attendance
@@ -15,10 +16,11 @@ All endpoints require:
 
 Isolation
 ---------
-The investor's school_id is taken from the authenticated server-side User row
-(set_mobile_request_scope), so the ORM tenant guard forces school_id scoping on
-every query. Each query below also filters explicitly on g.mobile_user.school_id
-as a second barrier. There are no write endpoints for this role.
+The requested X-School-ID is authorized against InvestorSchoolAccess before
+the ORM tenant scope is rebound. With one school (or no header), User.school_id
+remains the compatible default only when its mapping still exists. Each query
+also filters explicitly on the resolved school as a second barrier. There are
+no write endpoints for this role.
 """
 from datetime import date
 from datetime import datetime as _dt
@@ -26,14 +28,85 @@ from datetime import datetime as _dt
 from flask import g, request
 from sqlalchemy import func, extract
 
-from app.models import db, Revenue, Expense, RevenueCategory, ExpenseCategory
+from app.models import (db, Revenue, Expense, RevenueCategory, ExpenseCategory,
+                        School, InvestorSchoolAccess)
 from .utils import jwt_required, role_required, ok, err
 
 from . import mobile_api_bp
 
 
 def _sid():
-    return g.mobile_user.school_id
+    return g.tenant_scope_school_id
+
+
+def resolve_investor_school(user, requested_school_id=None):
+    """Resolve and authorize one investor school, then bind ORM tenant scope.
+
+    Client input identifies a requested school only. The database mapping is
+    always the authorization source of truth.
+    """
+    if not user or not getattr(user, 'is_investor', False):
+        return None, err('forbidden', 403)
+
+    accesses = (db.session.query(InvestorSchoolAccess.school_id, School)
+                .join(School, School.id == InvestorSchoolAccess.school_id)
+                .filter(InvestorSchoolAccess.investor_user_id == user.id)
+                .order_by(InvestorSchoolAccess.id).all())
+    if not accesses:
+        return None, err('forbidden', 403)
+
+    authorized = {school_id: school for school_id, school in accesses}
+    if requested_school_id is None:
+        if len(authorized) == 1:
+            requested_school_id = next(iter(authorized))
+        elif user.school_id in authorized:
+            requested_school_id = user.school_id
+        else:
+            return None, err('school_selection_required', 409)
+
+    school = authorized.get(requested_school_id)
+    if school is None:
+        return None, err('forbidden', 403)
+
+    from app.utils.scoping import set_mobile_request_scope
+    set_mobile_request_scope(user, school.id)
+    g.investor_school = school
+    return school, None
+
+
+def _requested_school_id():
+    raw = (request.headers.get('X-School-ID') or '').strip()
+    if not raw:
+        return None, None
+    try:
+        return int(raw), None
+    except ValueError:
+        return None, err('invalid_school_id', 400)
+
+
+def _resolve_request_school():
+    requested, parse_err = _requested_school_id()
+    if parse_err:
+        return None, parse_err
+    return resolve_investor_school(g.mobile_user, requested)
+
+
+@mobile_api_bp.route('/investor/schools', methods=['GET'])
+@jwt_required()
+@role_required('investor_viewer')
+def investor_schools():
+    rows = (db.session.query(School)
+            .join(InvestorSchoolAccess,
+                  InvestorSchoolAccess.school_id == School.id)
+            .filter(InvestorSchoolAccess.investor_user_id == g.mobile_user.id)
+            .order_by(InvestorSchoolAccess.id).all())
+    return ok(schools=[{
+        'id': school.id,
+        'name': school.school_name,
+        'name_ar': school.school_name_ar,
+        'logo': school.logo_path,
+        'is_default': school.id == g.mobile_user.school_id,
+    } for school in rows])
 
 
 def _parse_int_arg(name):
@@ -93,7 +166,7 @@ def investor_dashboard():
     # Fail closed: an investor account without a school must never reach the
     # shared context below (with no school the ORM tenant guard applies no
     # school filter at all).
-    investor_school, school_err = _investor_school()
+    investor_school, school_err = _resolve_request_school()
     if school_err:
         return school_err
 
@@ -268,6 +341,9 @@ def _serialize_tx(row):
 @jwt_required()
 @role_required('investor_viewer')
 def investor_revenues():
+    _, school_err = _resolve_request_school()
+    if school_err:
+        return school_err
     year  = request.args.get('year', date.today().year, type=int)
     month = request.args.get('month', type=int)
     page  = request.args.get('page', 1, type=int)
@@ -318,6 +394,9 @@ def investor_revenues():
 @jwt_required()
 @role_required('investor_viewer')
 def investor_expenses():
+    _, school_err = _resolve_request_school()
+    if school_err:
+        return school_err
     year  = request.args.get('year', date.today().year, type=int)
     month = request.args.get('month', type=int)
     page  = request.args.get('page', 1, type=int)
@@ -371,8 +450,8 @@ def investor_expenses():
 # as check_out, manual entry and approved leave (status 'on_leave') write the
 # same row. No row = nothing recorded for that day (no virtual absence here).
 #
-# Isolation: the school comes only from the authenticated User row. Every query
-# filters school_id explicitly on top of the ORM tenant guard. The rows are
+# Isolation: the school comes only from the centralized authorization resolver.
+# Every query filters school_id explicitly on top of the ORM tenant guard. The rows are
 # date-keyed, so reads use include_all_years (school criteria stay active, like
 # the web daily sheet and HR reports) instead of the view-year filter.
 
@@ -391,7 +470,7 @@ def _investor_school_id():
     applies no tenant filter at all.
     """
     user = g.mobile_user
-    return user.school_id if getattr(user, 'is_investor', False) else None
+    return _sid() if getattr(user, 'is_investor', False) else None
 
 
 def _strict_page_args():
@@ -460,12 +539,7 @@ def _employee_columns():
 
 def _investor_school():
     """(school, error_response) for the authenticated investor."""
-    from app.models import School
-    sid = _investor_school_id()
-    school = db.session.get(School, sid) if sid else None
-    if school is None:
-        return None, err('forbidden', 403)
-    return school, None
+    return _resolve_request_school()
 
 
 def _school_block(school):

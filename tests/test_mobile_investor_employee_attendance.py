@@ -30,7 +30,7 @@ from sqlalchemy import event
 from app import create_app
 from app.blueprints.mobile_api.utils import encode_token
 from app.models import (db, AcademicYear, Employee, EmployeeAttendance, Role,
-                        School, SchoolHoliday, User)
+                        School, SchoolHoliday, User, InvestorSchoolAccess)
 
 OPTS = {'bypass_tenant_scope': True}
 API = '/api/mobile/v1/investor/employees'
@@ -94,6 +94,9 @@ class InvestorEmployeeAttendanceTest(unittest.TestCase):
                  school_id=school.id if school else None, is_active=True)
         u.set_password('Test1234!')
         self._add(u)
+        if role == 'investor_viewer' and school is not None:
+            self._add(InvestorSchoolAccess(investor_user_id=u.id,
+                                           school_id=school.id))
         self.ids[label] = u.id
         self.user_ids.append(u.id)
         return u

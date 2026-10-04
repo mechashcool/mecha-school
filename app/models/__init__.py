@@ -715,6 +715,10 @@ class User(UserMixin, db.Model):
 
     school = db.relationship('School', foreign_keys=[school_id],
                              backref=db.backref('users', lazy='dynamic'))
+    investor_school_accesses = db.relationship(
+        'InvestorSchoolAccess', foreign_keys='InvestorSchoolAccess.investor_user_id',
+        back_populates='investor', cascade='all, delete-orphan', lazy='select',
+    )
     role   = db.relationship('Role', foreign_keys=[role_id], back_populates='users')
 
     def set_password(self, password):
@@ -785,6 +789,29 @@ class User(UserMixin, db.Model):
 
     def __repr__(self):
         return f'<User {self.username}>'
+
+
+class InvestorSchoolAccess(db.Model):
+    """Super-admin managed authorization for one investor and one school."""
+    __tablename__ = 'investor_school_access'
+    __table_args__ = (
+        db.UniqueConstraint('investor_user_id', 'school_id',
+                            name='uq_investor_school_access_user_school'),
+        db.Index('ix_investor_school_access_investor_user_id', 'investor_user_id'),
+        db.Index('ix_investor_school_access_school_id', 'school_id'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    investor_user_id = db.Column(
+        db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    school_id = db.Column(
+        db.Integer, db.ForeignKey('schools.id', ondelete='CASCADE'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    investor = db.relationship('User', foreign_keys=[investor_user_id],
+                               back_populates='investor_school_accesses')
+    school = db.relationship('School', foreign_keys=[school_id],
+                             backref=db.backref('investor_accesses', lazy='dynamic'))
 
 
 parent_students = db.Table(

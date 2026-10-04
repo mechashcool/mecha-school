@@ -321,7 +321,7 @@ def set_hardware_scope(device):
         g.tenant_scope_view_year_id = year_id  # hardware always uses the current active year
 
 
-def set_mobile_request_scope(user) -> None:
+def set_mobile_request_scope(user, school_id=None) -> None:
     """Set the ORM tenant scope for an authenticated mobile API request.
 
     Called from the jwt_required decorator in mobile_api/utils.py immediately
@@ -343,7 +343,10 @@ def set_mobile_request_scope(user) -> None:
     except Exception:
         g.tenant_scope_role_name = None
 
-    sid = user.school_id  # authoritative server-side value from the authenticated User
+    # ``school_id`` is supplied only by server-side authorization helpers. The
+    # default remains User.school_id for every existing mobile role and for
+    # backward-compatible single-school investor requests.
+    sid = user.school_id if school_id is None else school_id
     g.tenant_scope_school_id = sid
     g.tenant_scope_academic_year_id = None
     g.tenant_scope_view_year_id = None

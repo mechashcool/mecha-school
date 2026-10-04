@@ -32,7 +32,8 @@ from app.models import (db, School, SchoolBilling, AcademicYear,
                          Student, Employee, User, FeeRecord,
                          FeeInstallment, Revenue, Expense,
                          Grade, Section, Subject, FeeType,
-                         Role, MobileDeviceToken, INVESTOR_ROLE)
+                         Role, MobileDeviceToken, INVESTOR_ROLE,
+                         InvestorSchoolAccess)
 from app.utils.decorators import (super_admin_required,
                                   historical_guard)
 from app.utils.audit import log_action
@@ -216,6 +217,10 @@ def school_detail(school_id):
         .order_by(AcademicYear.start_date.desc()).all()
 
     investor = _get_school_investor(school_id)
+    all_schools = (School.query.execution_options(bypass_tenant_scope=True)
+                   .order_by(School.school_name).all())
+    investor_school_ids = ({a.school_id for a in investor.investor_school_accesses}
+                           if investor else {school_id})
 
     # Custom (non built-in) roles the Super Admin can toggle for this school.
     custom_roles = [r for r in Role.query.order_by(Role.label).all()
@@ -235,6 +240,8 @@ def school_detail(school_id):
         registration_link = _registration_link(school),
         custom_roles      = custom_roles,
         assigned_role_ids = assigned_role_ids,
+        all_schools        = all_schools,
+        investor_school_ids = investor_school_ids,
     )
 
 
@@ -361,11 +368,41 @@ def _get_school_investor(school_id):
     return (User.query
             .execution_options(bypass_tenant_scope=True)
             .join(Role, User.role_id == Role.id)
-            .filter(User.school_id == school_id,
+            .join(InvestorSchoolAccess,
+                  InvestorSchoolAccess.investor_user_id == User.id)
+            .filter(InvestorSchoolAccess.school_id == school_id,
                     Role.name == INVESTOR_ROLE,
                     User.username.notlike('~deleted~%'))
             .order_by(User.id)
             .first())
+
+
+def _validated_investor_school_ids():
+    """Validate the required multi-select and return (ids, error_message)."""
+    try:
+        selected = {int(value) for value in request.form.getlist('school_ids')}
+    except (TypeError, ValueError):
+        return None, 'اختيار المدارس غير صالح.'
+    if not selected:
+        return None, 'يجب اختيار مدرسة واحدة على الأقل.'
+    existing = {row[0] for row in
+                db.session.query(School.id).filter(School.id.in_(selected)).all()}
+    if existing != selected:
+        return None, 'تتضمن القائمة مدرسة غير صالحة.'
+    return selected, None
+
+
+def _school_access_conflict(selected, investor_id=None):
+    query = (User.query.execution_options(bypass_tenant_scope=True)
+             .join(Role, User.role_id == Role.id)
+             .join(InvestorSchoolAccess,
+                   InvestorSchoolAccess.investor_user_id == User.id)
+             .filter(InvestorSchoolAccess.school_id.in_(selected),
+                     Role.name == INVESTOR_ROLE,
+                     User.username.notlike('~deleted~%')))
+    if investor_id is not None:
+        query = query.filter(User.id != investor_id)
+    return query.first()
 
 
 def _investor_role():
@@ -389,8 +426,13 @@ def _investor_role():
 def create_investor(school_id):
     school = School.query.get_or_404(school_id)
 
-    # One active investor per school.
-    if _get_school_investor(school_id):
+    selected_school_ids, schools_error = _validated_investor_school_ids()
+    if schools_error:
+        flash(schools_error, 'danger')
+        return redirect(url_for('super_admin.school_detail', school_id=school_id))
+
+    # Preserve the existing one-account-per-school rule for every selection.
+    if _school_access_conflict(selected_school_ids):
         flash('يوجد حساب مستثمر لهذه المدرسة بالفعل.', 'warning')
         return redirect(url_for('super_admin.school_detail', school_id=school_id))
 
@@ -424,21 +466,26 @@ def create_investor(school_id):
             flash(e, 'danger')
         return redirect(url_for('super_admin.school_detail', school_id=school_id))
 
-    # school_id is bound to the URL path (the school being managed) — never taken
-    # from any client field — so the account is authoritatively tied to this school.
+    # Keep the page's school as the compatibility default when selected. Every
+    # posted school id was validated above and is authorized only through the
+    # server-side access rows created in the same transaction.
     user = User(
         username  = username,
         email     = email or None,
         full_name = full_name,
         phone     = phone or None,
         role      = _investor_role(),
-        school_id = school_id,
+        school_id = (school_id if school_id in selected_school_ids
+                     else min(selected_school_ids)),
         is_active = True,
     )
     user.set_password(password)
-    db.session.add(user)
-
     try:
+        db.session.add(user)
+        db.session.flush()
+        for selected_school_id in selected_school_ids:
+            db.session.add(InvestorSchoolAccess(
+                investor_user_id=user.id, school_id=selected_school_id))
         db.session.commit()
     except Exception as exc:
         db.session.rollback()
@@ -465,6 +512,14 @@ def update_investor(school_id):
     username  = request.form.get('username', '').strip()
     email     = request.form.get('email', '').strip()
     phone     = request.form.get('phone', '').strip()
+    selected_school_ids, schools_error = _validated_investor_school_ids()
+
+    if schools_error:
+        flash(schools_error, 'danger')
+        return redirect(url_for('super_admin.school_detail', school_id=school_id))
+    if _school_access_conflict(selected_school_ids, investor.id):
+        flash('إحدى المدارس المحددة مرتبطة بحساب مستثمر آخر.', 'danger')
+        return redirect(url_for('super_admin.school_detail', school_id=school_id))
 
     if not full_name:
         flash('الاسم الكامل مطلوب.', 'danger')
@@ -494,6 +549,15 @@ def update_investor(school_id):
     investor.full_name = full_name
     investor.email     = email or None
     investor.phone     = phone or None
+    current_ids = {access.school_id for access in investor.investor_school_accesses}
+    for access in list(investor.investor_school_accesses):
+        if access.school_id not in selected_school_ids:
+            db.session.delete(access)
+    for selected_school_id in selected_school_ids - current_ids:
+        db.session.add(InvestorSchoolAccess(
+            investor_user_id=investor.id, school_id=selected_school_id))
+    if investor.school_id not in selected_school_ids:
+        investor.school_id = min(selected_school_ids)
     db.session.commit()
     log_action('edit', 'user', investor.id,
                details=f'updated investor account for school={school_id}')

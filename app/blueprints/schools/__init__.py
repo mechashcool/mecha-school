@@ -146,6 +146,10 @@ def detail(school_id):
     # duplicated. Local import avoids any blueprint import-order/circular issues.
     from app.blueprints.super_admin import _get_school_investor
     investor = _get_school_investor(school.id)
+    all_schools = (School.query.execution_options(bypass_tenant_scope=True)
+                   .order_by(School.school_name).all())
+    investor_school_ids = ({a.school_id for a in investor.investor_school_accesses}
+                           if investor else {school.id})
 
     return render_template('schools/detail.html',
                            school=school,
@@ -153,6 +157,8 @@ def detail(school_id):
                            users=users,
                            manager=manager,
                            investor=investor,
+                           all_schools=all_schools,
+                           investor_school_ids=investor_school_ids,
                            student_count=student_count,
                            employee_count=employee_count)
 

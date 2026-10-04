@@ -28,7 +28,7 @@ from sqlalchemy import event
 from app import create_app
 from app.blueprints.mobile_api.utils import encode_token
 from app.models import (db, AcademicYear, Employee, EmployeeAttendance, Role,
-                        School, User)
+                        School, User, InvestorSchoolAccess)
 
 OPTS = {'bypass_tenant_scope': True}
 URL = '/api/mobile/v1/investor/dashboard'
@@ -98,6 +98,9 @@ class InvestorDashboardEmployeeAttendanceTest(unittest.TestCase):
                  school_id=school.id if school else None, is_active=True)
         u.set_password('Test1234!')
         self._add(u)
+        if role == 'investor_viewer' and school is not None:
+            self._add(InvestorSchoolAccess(investor_user_id=u.id,
+                                           school_id=school.id))
         self.ids[label] = u.id
         self.user_ids.append(u.id)
         return u
@@ -167,8 +170,10 @@ class InvestorDashboardEmployeeAttendanceTest(unittest.TestCase):
             user = db.session.get(User, self.ids[user_key], execution_options=OPTS)
             return {'Authorization': f'Bearer {encode_token(user)}'}
 
-    def _get(self, user_key, on_date=D, **params):
+    def _get(self, user_key, on_date=D, selected_school_id=None, **params):
         headers = self._headers(user_key)
+        if selected_school_id is not None:
+            headers['X-School-ID'] = str(selected_school_id)
         with mock.patch(LOCAL_DATE, return_value=on_date):
             return self.app.test_client().get(URL, query_string=params,
                                               headers=headers)
@@ -286,6 +291,40 @@ class InvestorDashboardEmployeeAttendanceTest(unittest.TestCase):
         self.assertEqual(before, after)
         print(f'\n[query-count] dashboard: {len(seen)} statements, '
               f'{len(att)} touching employee_attendance')
+
+    def test_07_multi_school_selection_tampering_and_revocation(self):
+        with self.app.app_context():
+            db.session.add(InvestorSchoolAccess(
+                investor_user_id=self.ids['ia'], school_id=self.ids['school_b']))
+            db.session.commit()
+
+        schools = self.app.test_client().get(
+            '/api/mobile/v1/investor/schools', headers=self._headers('ia'))
+        self.assertEqual(schools.status_code, 200)
+        self.assertEqual([s['id'] for s in schools.get_json()['schools']],
+                         [self.ids['school_a'], self.ids['school_b']])
+
+        selected_b = self._get('ia', selected_school_id=self.ids['school_b'])
+        self.assertEqual(selected_b.status_code, 200)
+        self.assertEqual(selected_b.get_json()['school']['id'], self.ids['school_b'])
+
+        denied = self._get('ia', selected_school_id=self.ids['school_c'])
+        self.assertEqual(denied.status_code, 403)
+        self.assertEqual(denied.get_json(), {'ok': False, 'error': 'forbidden'})
+
+        with self.app.app_context():
+            InvestorSchoolAccess.query.filter_by(
+                investor_user_id=self.ids['ia'],
+                school_id=self.ids['school_b']).delete()
+            db.session.commit()
+        revoked = self._get('ia', selected_school_id=self.ids['school_b'])
+        self.assertEqual(revoked.status_code, 403)
+
+    def test_08_school_header_does_not_help_other_roles(self):
+        for user_key in ('pa', 'ta'):
+            response = self._get(
+                user_key, selected_school_id=self.ids['school_a'])
+            self.assertEqual(response.status_code, 403)
 
 
 if __name__ == '__main__':
