@@ -739,16 +739,26 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
                 academic_year_id = year.id,
                 date             = punch_date,
                 status           = 'absent' if final_absence else punch_status,
-                check_in         = punch_time,
+                # A post-cutoff device event is not an accepted arrival. Keep
+                # the official final-absence row free of a synthetic check-in;
+                # raw device events will be handled by a separate feature.
+                check_in         = None if final_absence else punch_time,
                 source           = AUTO_ABSENCE_SOURCE if final_absence else 'aiface',
                 device_id        = device.id,
                 notes            = dedup_tag,
             )
             db.session.add(emp_att)
             db.session.commit()
-            log.info("  [aiface] employee check_in: employee_id=%d (%s) at %s status=%s",
-                     employee.id, employee.full_name, punch_time, emp_att.status)
-            _notify_action = 'check_in'
+            if final_absence:
+                log.info("  [aiface] employee final absence created from post-cutoff "
+                         "event: employee_id=%d date=%s punch=%s",
+                         employee.id, punch_date, punch_time)
+                _notify_action = 'status_update'
+            else:
+                log.info("  [aiface] employee check_in: employee_id=%d (%s) at %s "
+                         "status=%s", employee.id, employee.full_name,
+                         punch_time, emp_att.status)
+                _notify_action = 'check_in'
             _notify_att    = emp_att
 
         elif is_final_employee_auto_absence(emp_att):
@@ -771,23 +781,22 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
                          "employee_id=%d date=%s punch=%s status=%s",
                          employee.id, punch_date, punch_time, punch_status)
             else:
-                # Preserve the automatic absent status, but retain the device event
-                # on the same official row for audit/deduplication. Keep the source
-                # marker so later manual/device writes also recognize final absence.
-                if emp_att.check_in is None:
-                    emp_att.check_in = punch_time
-                elif emp_att.check_out is None:
-                    emp_att.check_out = punch_time
-                emp_att.device_id = device.id
-                emp_att.notes = ' | '.join(filter(None, [
-                    (emp_att.notes or '').strip() or None,
-                    dedup_tag,
-                ]))
-                db.session.commit()
-                log.info("  [aiface] recorded punch on final auto-absent row "
-                         "employee_id=%d date=%s; status remains absent",
-                         employee.id, punch_date)
+                # At/after-cutoff events cannot mutate official final absence.
+                # Do not write the event into check-in/check-out/notes merely for
+                # deduplication; durable raw-event storage is intentionally out of
+                # scope for this change.
+                log.info("  [aiface] ignored post-cutoff punch on final auto-absent "
+                         "row employee_id=%d date=%s punch=%s",
+                         employee.id, punch_date, punch_time)
                 return 'processed'
+
+        elif emp_att.status == 'absent':
+            # A physical punch must not override an administrative/manual
+            # absence. Authorized manual correction routes remain independent.
+            log.info("  [aiface] ignored punch on administrative absent row "
+                     "employee_id=%d date=%s source=%s",
+                     employee.id, punch_date, emp_att.source)
+            return 'processed'
 
         elif emp_att.check_in is None:
             # A row exists but nobody has checked in yet — most commonly an
