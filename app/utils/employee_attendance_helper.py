@@ -76,9 +76,8 @@ def get_working_days(date_from: date, date_to: date, school) -> List[date]:
 # makes the CLOCK part of the calculation: a working day with no row is only an
 # absence once the day's arrival window has actually closed.
 #
-# The employee absence cutoff is a SCHOOL-level value in both modes (unified →
-# emp_att_absence_threshold, shift mode → emp_shift_absent_after_time), so it is
-# resolved ONCE per school and reused for every employee — no per-employee query.
+# General-mode absence uses the school-level employee cutoff. Shift-mode
+# callers use each already-resolved EmployeeAttendanceShift cutoff instead.
 
 # A stored 00:00 is treated as "not configured". The column is nullable and the
 # UI writes NULL when cleared, but a mis-saved midnight must not silently mean
@@ -100,10 +99,10 @@ class EmployeeAbsenceClock(NamedTuple):
 
 
 def get_employee_absence_clock(school) -> EmployeeAbsenceClock:
-    """Resolve the school-local clock + employee absence cutoff once.
+    """Resolve school-local time and the general-mode employee cutoff.
 
-    Uses the Phase 1 resolver with audience='employees', so it honours the
-    employee shift toggle and never falls back to any student setting.
+    In employee shift mode the returned cutoff is deliberately None; callers
+    must use each already-resolved shift's absent_after_time.
     """
     from app.utils.attendance_helpers import (get_effective_attendance_settings,
                                               get_local_now)

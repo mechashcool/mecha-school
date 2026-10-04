@@ -125,11 +125,8 @@ class School(db.Model):
     emp_enable_attendance_shifts = db.Column(db.Boolean, default=False, nullable=False,
                                              server_default=db.false())
 
-    # EMPLOYEE SHIFT MODE ONLY — the single absence cutoff shared by every
-    # EmployeeAttendanceShift of this school.  Mirrors
-    # School.shift_absent_after_time: NULL means "not configured yet" and does
-    # NOT fall back to emp_att_absence_threshold (fail closed, no cross-audience
-    # fallback to the student cutoff either).
+    # Legacy employee-shift cutoff retained for rollback/schema compatibility.
+    # Active runtime behavior uses EmployeeAttendanceShift.absent_after_time.
     emp_shift_absent_after_time = db.Column(db.Time, nullable=True)
 
     # Fee installment reminder notifications
@@ -443,9 +440,9 @@ class EmployeeAttendanceShift(db.Model):
     Employees are linked directly via Employee.shift_id — there is no
     department-level or rotating assignment.
 
-    The automatic-absence cutoff is NOT per shift: every employee shift of a
-    school shares School.emp_shift_absent_after_time.  AttendanceShift's dead
-    `absent_after_time` column is deliberately NOT replicated here.
+    Automatic absence is configured per employee shift.  The legacy
+    School.emp_shift_absent_after_time column is retained only for migration and
+    rollback compatibility.
     """
     __tablename__ = 'employee_attendance_shifts'
     __school_scoped__ = True
@@ -458,6 +455,7 @@ class EmployeeAttendanceShift(db.Model):
     # NULL = lateness is switched off for this shift (same semantics as
     # AttendanceShift.late_after_time).
     late_after_time = db.Column(db.Time, nullable=True)
+    absent_after_time = db.Column(db.Time, nullable=True)
     dismissal_time  = db.Column(db.Time, nullable=True)
     is_active       = db.Column(db.Boolean, default=True, nullable=False,
                                 server_default=db.true())
@@ -3567,6 +3565,7 @@ class SchoolSettings(db.Model):
     emp_att_departure_time    = db.Column(db.Time, nullable=True)
     emp_enable_attendance_shifts = db.Column(db.Boolean, default=False, nullable=False,
                                              server_default=db.false())
+    # Legacy compatibility column; active employee shifts use their own cutoff.
     emp_shift_absent_after_time  = db.Column(db.Time, nullable=True)
     updated_at      = db.Column(db.DateTime, default=datetime.utcnow,
                                 onupdate=datetime.utcnow)

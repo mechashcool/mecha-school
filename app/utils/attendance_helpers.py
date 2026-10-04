@@ -56,13 +56,14 @@ def utc_to_local(utc_dt, settings=None):
 #
 #    late_threshold  = shift.late_after_time ?? school.<audience late>
 #    departure_time  = shift.dismissal_time  ?? school.<audience departure>
-#    absence_cutoff  = school.<audience shift cutoff>  when shift mode is ON
-#                      school.<audience absence threshold>  when it is OFF
+#    absence_cutoff  = employee shift cutoff for employees in shift mode
+#                      school student-shift cutoff for students in shift mode
+#                      school.<audience absence threshold> when shift mode is OFF
 #
 #  The absence cutoff NEVER cross-falls-back: not between the two modes of one
 #  audience, and not between audiences.  NULL stays NULL and the caller fails
-#  closed.  This reproduces the existing student rule exactly (see
-#  School.shift_absent_after_time) and applies the same discipline to employees.
+#  closed. Student shift behavior remains unchanged (see
+#  School.shift_absent_after_time).
 #
 #  This function performs NO database access.  The caller supplies the
 #  already-resolved shift (get_student_shift / get_employee_shift), so reports
@@ -79,7 +80,7 @@ _AUDIENCE_SETTINGS_FIELDS = {
     'employees': (
         'emp_att_late_threshold', 'emp_att_absence_threshold',
         'emp_att_departure_time', 'emp_enable_attendance_shifts',
-        'emp_shift_absent_after_time', 'emp_att_start_time',
+        None, 'emp_att_start_time',
     ),
 }
 
@@ -111,7 +112,8 @@ def get_effective_attendance_settings(school, audience, shift=None):
     EmployeeAttendanceShift use those same attribute names.
 
     `shift_enabled` reflects the SCHOOL TOGGLE only, not whether a shift was
-    passed — it is what selects which absence-cutoff column applies.
+    passed. In employee shift mode, the cutoff comes from the supplied shift;
+    in student shift mode, the existing school-level cutoff remains in use.
     """
     late_f, absence_f, departure_f, toggle_f, shift_cutoff_f, start_f = _audience_fields(audience)
 
@@ -129,10 +131,16 @@ def get_effective_attendance_settings(school, audience, shift=None):
     if attendance_start is None and school:
         attendance_start = getattr(school, start_f, None)
 
-    # No cross-fallback between the two modes: an unset cutoff stays unset.
+    # Employee shift mode is genuinely per-shift.  A missing shift or NULL
+    # per-shift cutoff fails closed and never falls back to either legacy school
+    # cutoff.  Student shift behavior remains school-global and unchanged.
     cutoff = None
     if school:
-        cutoff = getattr(school, shift_cutoff_f if shift_enabled else absence_f, None)
+        if audience == 'employees' and shift_enabled:
+            cutoff = (getattr(shift, 'absent_after_time', None)
+                      if shift is not None else None)
+        else:
+            cutoff = getattr(school, shift_cutoff_f if shift_enabled else absence_f, None)
 
     return EffectiveAttendanceSettings(
         audience       = audience,

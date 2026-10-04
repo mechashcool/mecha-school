@@ -712,6 +712,12 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
         return 'skipped'
     effective = get_effective_attendance_settings(
         school, 'employees', shift=emp_shift)
+    if (getattr(school, 'emp_enable_attendance_shifts', False)
+            and emp_shift is not None
+            and emp_shift.absent_after_time is None):
+        log.warning('  [aiface] employee shift has no absence cutoff; timed absence '
+                    'disabled for employee_id=%d school_id=%d shift_id=%d',
+                    employee.id, school.id, emp_shift.id)
     punch_status = determine_check_in_status(punch_time, school,
                                             shift=emp_shift,
                                             audience='employees')

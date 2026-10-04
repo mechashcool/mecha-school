@@ -139,7 +139,8 @@ def _run_employee_auto_absent(school) -> dict:
     )
 
     clock = get_employee_absence_clock(school)
-    if not clock.cutoff_passed:
+    shift_mode = bool(getattr(school, 'emp_enable_attendance_shifts', False))
+    if not shift_mode and not clock.cutoff_passed:
         return {'count': 0, 'reason': 'cutoff_not_passed'}
 
     target_date = clock.local_today
@@ -162,8 +163,9 @@ def _run_employee_auto_absent(school) -> dict:
     if not employees:
         return {'count': 0, 'reason': 'no_eligible_employees'}
 
+    shift_map = {}
     valid_shift_employee_ids = None
-    if getattr(school, 'emp_enable_attendance_shifts', False):
+    if shift_mode:
         from app.utils.attendance_helpers import get_employee_shift_map
         shift_map = get_employee_shift_map(school, employees)
         valid_shift_employee_ids = set(shift_map)
@@ -173,6 +175,12 @@ def _run_employee_auto_absent(school) -> dict:
                     '[employee-auto-absence] skipped invalid shift assignment; '
                     'employee_id=%s school_id=%s shift_id=%s',
                     employee.id, school.id, getattr(employee, 'shift_id', None))
+        for employee_id, shift in shift_map.items():
+            if getattr(shift, 'absent_after_time', None) is None:
+                _log.warning(
+                    '[employee-auto-absence] skipped NULL shift absence cutoff; '
+                    'employee_id=%s school_id=%s shift_id=%s',
+                    employee_id, school.id, shift.id)
 
     employee_ids = [employee.id for employee in employees]
     existing_ids = {
@@ -192,8 +200,15 @@ def _run_employee_auto_absent(school) -> dict:
         if employee.id not in existing_ids
         and (valid_shift_employee_ids is None
              or employee.id in valid_shift_employee_ids)
-        and classify_missing_working_day(
-            target_date, clock, employee.hire_date) == 'absent'
+        and (
+            (not shift_mode and classify_missing_working_day(
+                target_date, clock, employee.hire_date) == 'absent')
+            or (shift_mode
+                and employee.id in shift_map
+                and getattr(shift_map[employee.id], 'absent_after_time', None) is not None
+                and clock.local_now.time()
+                    >= shift_map[employee.id].absent_after_time)
+        )
     ]
 
     created = raced = 0

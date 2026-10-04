@@ -354,6 +354,7 @@ def _posted_employee_shift_id(school, employee=None):
     from app.models import EmployeeAttendanceShift
     shift = (EmployeeAttendanceShift.query
              .filter_by(id=int(raw), school_id=school.id, is_active=True)
+             .filter(EmployeeAttendanceShift.absent_after_time.isnot(None))
              .first())
     if shift is None:
         _log.warning('[employee-shift] rejected shift_id=%s for school_id=%s '
@@ -729,6 +730,7 @@ def _handle_employee_post(employee):
         _kept_shift = (EmployeeAttendanceShift.query
                        .filter_by(id=_employee_shift_id, school_id=school.id,
                                   is_active=True)
+                       .filter(EmployeeAttendanceShift.absent_after_time.isnot(None))
                        .first())
         if _kept_shift is None:
             _employee_shift_id = None
@@ -2337,6 +2339,11 @@ def manual_attendance_save():
             continue
         effective = get_effective_attendance_settings(
             school, 'employees', shift=emp_shift)
+        if (getattr(school, 'emp_enable_attendance_shifts', False)
+                and emp_shift.absent_after_time is None):
+            _log.warning('[emp-manual-att] employee shift has no absence cutoff; '
+                         'timed absence disabled employee_id=%s school_id=%s '
+                         'shift_id=%s', emp_id, school.id, emp_shift.id)
         _date_eligible = (
             _is_employee_working_day
             and (emp_map[emp_id].hire_date is None

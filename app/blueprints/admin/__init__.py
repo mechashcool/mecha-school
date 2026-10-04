@@ -3011,13 +3011,21 @@ def attendance_settings():
                             EmployeeAttendanceShift.is_active.is_(True)))
                 .filter(Employee.school_id == settings_row.id,
                         Employee.status == 'active',
-                        EmployeeAttendanceShift.id.is_(None))
+                        db.or_(
+                            EmployeeAttendanceShift.id.is_(None),
+                            EmployeeAttendanceShift.start_time.is_(None),
+                            EmployeeAttendanceShift.absent_after_time.is_(None),
+                            EmployeeAttendanceShift.absent_after_time
+                            <= db.func.coalesce(
+                                EmployeeAttendanceShift.late_after_time,
+                                EmployeeAttendanceShift.start_time)))
                 .count())
             if _invalid_count:
                 db.session.rollback()
                 flash(
                     'لا يمكن تفعيل شفتات الموظفين قبل تعيين شفت لجميع الموظفين النشطين. '
-                    f'يوجد حالياً {_invalid_count} موظف/موظفين بدون شفت صالح.',
+                    f'يوجد حالياً {_invalid_count} موظف/موظفين بدون شفت صالح '
+                    'ومحدد له وقت غياب تلقائي.',
                     'danger')
                 return redirect(url_for('admin.attendance_settings'))
 
