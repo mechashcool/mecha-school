@@ -291,13 +291,6 @@ def _form_context(employee=None):
                       .filter_by(school_id=school.id, is_active=True)
                       .order_by(EmployeeAttendanceShift.start_time)
                       .all())
-        if employee and employee.shift_id:
-            if not any(s.id == employee.shift_id for s in emp_shifts):
-                current = (EmployeeAttendanceShift.query
-                           .filter_by(id=employee.shift_id, school_id=school.id)
-                           .first())
-                if current:
-                    emp_shifts = emp_shifts + [current]
 
     # Institutes: study groups the instructor teaches (InstituteStudyGroup.
     # instructor_id) replace grades/sections. Never computed for a school.
@@ -307,6 +300,7 @@ def _form_context(employee=None):
         inst_teaching = employee_group_context(school, year, employee)
 
     return dict(
+        school                  = school,
         inst_teaching           = inst_teaching,
         employee                = employee,
         subjects                = subjects,
@@ -355,16 +349,16 @@ def _posted_employee_shift_id(school, employee=None):
     if not raw:
         return None                      # explicit "— بدون شفت —"
     if not raw.isdigit():
-        return employee.shift_id if employee else None
+        return None
 
     from app.models import EmployeeAttendanceShift
     shift = (EmployeeAttendanceShift.query
-             .filter_by(id=int(raw), school_id=school.id)
+             .filter_by(id=int(raw), school_id=school.id, is_active=True)
              .first())
     if shift is None:
         _log.warning('[employee-shift] rejected shift_id=%s for school_id=%s '
                      '(not an employee shift of this school)', raw, school.id)
-        return employee.shift_id if employee else None
+        return None
     return shift.id
 
 
@@ -723,6 +717,26 @@ def _handle_employee_post(employee):
         and bool(request.form.get('can_record_institute_attendance'))
     )
 
+    # Resolve once, before uploads or ORM mutation.  Shift mode requires every
+    # active employee to have an explicitly selected, active, same-school shift.
+    _posted_status = (request.form.get('status', employee.status)
+                      if employee is not None else 'active')
+    _employee_shift_id = _posted_employee_shift_id(school, employee)
+    if (school and getattr(school, 'emp_enable_attendance_shifts', False)
+            and _posted_status == 'active' and _employee_shift_id is not None
+            and 'shift_id' not in request.form):
+        from app.models import EmployeeAttendanceShift
+        _kept_shift = (EmployeeAttendanceShift.query
+                       .filter_by(id=_employee_shift_id, school_id=school.id,
+                                  is_active=True)
+                       .first())
+        if _kept_shift is None:
+            _employee_shift_id = None
+    if (school and getattr(school, 'emp_enable_attendance_shifts', False)
+            and _posted_status == 'active' and _employee_shift_id is None):
+        flash('يجب تعيين شفت صالح للموظف لأن نظام شفتات الموظفين مفعّل.', 'danger')
+        return render_template(_tmpl, error_step='basic', **_form_context(employee))
+
     # ── Create-wizard limits — enforced BEFORE anything is created ────────────
     # Notes length, photo size, document count, and per-document size are all
     # validated here: before the Employee row is inserted, before the linked User
@@ -853,7 +867,7 @@ def _handle_employee_post(employee):
             photo         = photo_path,
             photo_display = photo_display_path,
             notes         = notes_value,
-            shift_id      = _posted_employee_shift_id(school),
+            shift_id      = _employee_shift_id,
             can_record_institute_attendance = can_record_institute_attendance,
             school_id     = school.id if school else None,
         )
@@ -880,7 +894,7 @@ def _handle_employee_post(employee):
         employee.full_name     = full_name
         employee.job_title     = job_title if job_title is not None else employee.job_title
         employee.department    = department
-        employee.shift_id      = _posted_employee_shift_id(school, employee)
+        employee.shift_id      = _employee_shift_id
         employee.gender        = request.form.get('gender', employee.gender)
         employee.date_of_birth = dob if dob else employee.date_of_birth
         employee.nationality   = request.form.get('nationality', '').strip()
@@ -1440,6 +1454,13 @@ def restore(emp_id):
     if employee.status != 'archived':
         flash('الموظف غير مؤرشف.', 'info')
         return redirect(url_for('employees.index'))
+
+    if getattr(school, 'emp_enable_attendance_shifts', False):
+        from app.utils.attendance_helpers import get_employee_shift
+        if get_employee_shift(employee, school) is None:
+            flash('يجب تعيين شفت صالح للموظف قبل استرجاعه لأن نظام شفتات الموظفين مفعّل.',
+                  'danger')
+            return redirect(url_for('employees.archived'))
 
     linked_user = _linked_employee_user(employee)
     if employee.user_id and linked_user is None:
@@ -2229,6 +2250,9 @@ def manual_attendance_save():
         att_date = local_now.date()
 
     now_time = local_now.time().replace(microsecond=0)
+    from app.utils.employee_attendance_helper import get_working_days
+    _is_employee_working_day = bool(
+        get_working_days(att_date, att_date, school))
 
     # Employee IDs come from hidden fields injected by JS
     raw_ids = request.form.getlist('emp_ids')
@@ -2291,7 +2315,7 @@ def manual_attendance_save():
     # are never accepted by this workflow.
     checkout_emp_id = request.form.get('checkout_employee_id', type=int)
 
-    created = updated = 0
+    created = updated = invalid_shift_skipped = 0
     # Notification queue: tuples of (employee_obj, att_record, action).
     # Populated during the loop; flushed after a confirmed commit so that no
     # notification is ever sent if the transaction rolls back.
@@ -2302,8 +2326,22 @@ def manual_attendance_save():
             continue  # Cross-school / inactive — already logged above, rejected
 
         rec = existing.get(emp_id)
+        emp_shift = _emp_shift_cache.get(emp_id)
+        if (getattr(school, 'emp_enable_attendance_shifts', False)
+                and emp_shift is None):
+            invalid_shift_skipped += 1
+            _log.warning('[emp-manual-att] employee attendance skipped: shift mode '
+                         'enabled but employee has no valid active shift; '
+                         'employee_id=%s school_id=%s shift_id=%s', emp_id,
+                         school.id, getattr(emp_map[emp_id], 'shift_id', None))
+            continue
         effective = get_effective_attendance_settings(
-            school, 'employees', shift=_emp_shift_cache.get(emp_id))
+            school, 'employees', shift=emp_shift)
+        _date_eligible = (
+            _is_employee_working_day
+            and (emp_map[emp_id].hire_date is None
+                 or att_date >= emp_map[emp_id].hire_date)
+        )
         if checkout_emp_id is not None:
             if emp_id != checkout_emp_id:
                 continue
@@ -2312,7 +2350,7 @@ def manual_attendance_save():
                           'employee_id=%s school_id=%s date=%s',
                           emp_id, school.id, att_date)
                 continue
-            if (rec and rec.check_in is not None and rec.check_out is None
+            if (_date_eligible and rec and rec.check_in is not None and rec.check_out is None
                     and effective.departure_time is not None
                     and now_time >= effective.departure_time):
                 rec.check_out   = now_time
@@ -2326,6 +2364,13 @@ def manual_attendance_save():
         if status_choice not in ('present', 'late', 'absent', 'on_leave'):
             _log.warning('[emp-manual-att] employee_id=%s skipped — invalid status %r '
                          '(school_id=%s date=%s)', emp_id, status_choice, school.id, att_date)
+            continue
+
+        # Leave is an administrative state and remains available independently
+        # of the work clock.  Ordinary attendance must not be created or changed
+        # for pre-hire dates, employee weekly-off days, or employee holidays.
+        if (status_choice != 'on_leave' and not _date_eligible
+                and (rec is None or att_date == local_now.date())):
             continue
 
         check_in_val  = None
@@ -2361,7 +2406,7 @@ def manual_attendance_save():
             if check_in_val and status_choice in ('present', 'late'):
                 status_choice = determine_check_in_status(
                     check_in_val, settings,
-                    shift=_emp_shift_cache.get(emp_id),
+                    shift=emp_shift,
                     audience='employees')
 
         # A post-cutoff automatic absence may retain check_in_val for audit.
@@ -2439,6 +2484,10 @@ def manual_attendance_save():
     if updated:
         parts.append(f'تحديث {updated} سجل')
     flash(('، '.join(parts) or 'لم تطرأ أي تغييرات') + f' ليوم {att_date.isoformat()}.', 'success')
+
+    if invalid_shift_skipped:
+        flash(f'تم تخطي {invalid_shift_skipped} موظف/موظفين لعدم وجود شفت صالح ونشط.',
+              'warning')
 
     redirect_kwargs = {'date': att_date.isoformat()}
     if att_dept:

@@ -162,6 +162,18 @@ def _run_employee_auto_absent(school) -> dict:
     if not employees:
         return {'count': 0, 'reason': 'no_eligible_employees'}
 
+    valid_shift_employee_ids = None
+    if getattr(school, 'emp_enable_attendance_shifts', False):
+        from app.utils.attendance_helpers import get_employee_shift_map
+        shift_map = get_employee_shift_map(school, employees)
+        valid_shift_employee_ids = set(shift_map)
+        for employee in employees:
+            if employee.id not in valid_shift_employee_ids:
+                _log.warning(
+                    '[employee-auto-absence] skipped invalid shift assignment; '
+                    'employee_id=%s school_id=%s shift_id=%s',
+                    employee.id, school.id, getattr(employee, 'shift_id', None))
+
     employee_ids = [employee.id for employee in employees]
     existing_ids = {
         row.employee_id
@@ -178,6 +190,8 @@ def _run_employee_auto_absent(school) -> dict:
     pending = [
         employee for employee in employees
         if employee.id not in existing_ids
+        and (valid_shift_employee_ids is None
+             or employee.id in valid_shift_employee_ids)
         and classify_missing_working_day(
             target_date, clock, employee.hire_date) == 'absent'
     ]

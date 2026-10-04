@@ -2963,13 +2963,67 @@ def attendance_settings():
         # columns: saving them never reads or writes a student att_* value, and
         # vice versa.  They follow the same key-presence rule, so a tab that is
         # not rendered cannot wipe the other audience's saved times.
-        for _field in ('att_start_time', 'att_late_threshold',
+        _time_fields = ('att_start_time', 'att_late_threshold',
                        'att_absence_threshold', 'att_departure_time',
                        'emp_att_start_time', 'emp_att_late_threshold',
-                       'emp_att_absence_threshold', 'emp_att_departure_time'):
+                       'emp_att_absence_threshold', 'emp_att_departure_time')
+        _proposed_times = {
+            _field: (_parse_time(request.form.get(_field, ''))
+                     if _field in request.form else getattr(settings_row, _field, None))
+            for _field in _time_fields
+        }
+
+        # Validate the general EMPLOYEE attendance clock before mutating the ORM
+        # object.  Optional values remain optional; only configured boundaries
+        # are ordered.
+        _emp_start = _proposed_times['emp_att_start_time']
+        _emp_late = _proposed_times['emp_att_late_threshold']
+        _emp_absence = _proposed_times['emp_att_absence_threshold']
+        _emp_departure = _proposed_times['emp_att_departure_time']
+        _time_error = None
+        if _emp_start is not None and _emp_late is not None and _emp_late <= _emp_start:
+            _time_error = 'وقت التأخير يجب أن يكون بعد وقت بداية الحضور.'
+        elif _emp_late is not None and _emp_absence is not None and _emp_absence <= _emp_late:
+            _time_error = 'وقت الغياب يجب أن يكون بعد وقت التأخير.'
+        elif _emp_late is None and _emp_start is not None and _emp_absence is not None \
+                and _emp_absence <= _emp_start:
+            _time_error = 'وقت الغياب يجب أن يكون بعد وقت بداية الحضور.'
+        elif _emp_start is not None and _emp_departure is not None \
+                and _emp_departure < _emp_start:
+            _time_error = 'وقت الانصراف لا يمكن أن يكون قبل وقت بداية الحضور.'
+        if _time_error:
+            db.session.rollback()
+            flash(_time_error, 'danger')
+            return redirect(url_for('admin.attendance_settings'))
+
+        _requested_emp_shifts = bool(request.form.get('emp_enable_attendance_shifts'))
+        if (is_school_obj and _requested_emp_shifts
+                and not getattr(settings_row, 'emp_enable_attendance_shifts', False)):
+            # One aggregate query validates every active employee and its joined
+            # assignment; no per-employee shift lookup.
+            from app.models import Employee, EmployeeAttendanceShift
+            _invalid_count = (Employee.query
+                .execution_options(bypass_tenant_scope=True)
+                .outerjoin(
+                    EmployeeAttendanceShift,
+                    db.and_(Employee.shift_id == EmployeeAttendanceShift.id,
+                            EmployeeAttendanceShift.school_id == settings_row.id,
+                            EmployeeAttendanceShift.is_active.is_(True)))
+                .filter(Employee.school_id == settings_row.id,
+                        Employee.status == 'active',
+                        EmployeeAttendanceShift.id.is_(None))
+                .count())
+            if _invalid_count:
+                db.session.rollback()
+                flash(
+                    'لا يمكن تفعيل شفتات الموظفين قبل تعيين شفت لجميع الموظفين النشطين. '
+                    f'يوجد حالياً {_invalid_count} موظف/موظفين بدون شفت صالح.',
+                    'danger')
+                return redirect(url_for('admin.attendance_settings'))
+
+        for _field in _time_fields:
             if _field in request.form:
-                setattr(settings_row, _field,
-                        _parse_time(request.form.get(_field, '')))
+                setattr(settings_row, _field, _proposed_times[_field])
 
         # Employee absence limit settings (saved on School object only)
         if is_school_obj:
@@ -2981,8 +3035,7 @@ def attendance_settings():
             settings_row.enable_attendance_shifts = bool(request.form.get('enable_attendance_shifts'))
             # EMPLOYEE attendance shifts feature toggle — independent of the
             # student toggle above; neither one reads the other.
-            settings_row.emp_enable_attendance_shifts = bool(
-                request.form.get('emp_enable_attendance_shifts'))
+            settings_row.emp_enable_attendance_shifts = _requested_emp_shifts
 
         db.session.commit()
         resource_id = school.id if is_school_obj else getattr(settings_row, 'id', None)

@@ -646,6 +646,45 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
     punch_date = punch_dt.date()
     punch_time = punch_dt.time().replace(microsecond=0)
 
+    # Preserve the cheap pre-hire short circuit before loading attendance or
+    # consulting either calendar table.
+    if employee.hire_date is not None and punch_date < employee.hire_date:
+        log.info('  [aiface] employee punch outside attendance eligibility skipped: '
+                 'employee_id=%d school_id=%d date=%s',
+                 employee.id, school.id, punch_date)
+        return 'skipped'
+
+    # Load the same date row once and perform the existing exact event-tag check
+    # before the weekly-off / holiday queries.  Only confirmed duplicates return
+    # here; every distinct event continues through all eligibility and timing
+    # rules below.
+    try:
+        emp_att = (EmployeeAttendance.query
+                   .execution_options(bypass_tenant_scope=True)
+                   .filter_by(employee_id=employee.id, date=punch_date)
+                   .first())
+    except Exception:
+        db.session.rollback()
+        log.exception("  [aiface] Employee attendance error employee_id=%d enrollid=%s "
+                      "school_id=%d", employee.id, enrollid, school.id)
+        return 'error'
+
+    if emp_att is not None and dedup_tag in (emp_att.notes or ''):
+        log.debug("  [aiface] duplicate punch employee_id=%d tag=%s",
+                  employee.id, dedup_tag)
+        return 'skipped'
+
+    # Employee attendance is only valid on an employee working day and on/after
+    # hire.  Use the shared audience-aware calendar; do not duplicate holiday or
+    # weekly-off rules here.
+    from app.utils.attendance_helpers import is_holiday_date
+    if is_holiday_date(punch_date, school.id, school=school,
+                       audience='employees'):
+        log.info('  [aiface] employee punch outside attendance eligibility skipped: '
+                 'employee_id=%d school_id=%d date=%s',
+                 employee.id, school.id, punch_date)
+        return 'skipped'
+
     # Track what was written so we can notify after the commit and outside the
     # exception handler. Notification failure must never trigger a rollback of
     # attendance data that was already committed successfully.
@@ -664,6 +703,13 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
     from app.utils.employee_attendance_helper import (
         AUTO_ABSENCE_SOURCE, is_final_employee_auto_absence)
     emp_shift = get_employee_shift(employee, school)
+    if (getattr(school, 'emp_enable_attendance_shifts', False)
+            and emp_shift is None):
+        log.warning('  [aiface] employee attendance skipped: shift mode enabled '
+                    'but employee has no valid active shift; employee_id=%d '
+                    'school_id=%d shift_id=%s', employee.id, school.id,
+                    getattr(employee, 'shift_id', None))
+        return 'skipped'
     effective = get_effective_attendance_settings(
         school, 'employees', shift=emp_shift)
     punch_status = determine_check_in_status(punch_time, school,
@@ -671,11 +717,6 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
                                             audience='employees')
 
     try:
-        emp_att = (EmployeeAttendance.query
-                   .execution_options(bypass_tenant_scope=True)
-                   .filter_by(employee_id=employee.id, date=punch_date)
-                   .first())
-
         if emp_att is None:
             if (effective.attendance_start is not None
                     and punch_time < effective.attendance_start):
@@ -703,11 +744,6 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
                      employee.id, employee.full_name, punch_time, emp_att.status)
             _notify_action = 'check_in'
             _notify_att    = emp_att
-
-        elif dedup_tag in (emp_att.notes or ''):
-            log.debug("  [aiface] duplicate punch employee_id=%d tag=%s",
-                      employee.id, dedup_tag)
-            return 'skipped'
 
         elif is_final_employee_auto_absence(emp_att):
             if (effective.absence_cutoff is not None

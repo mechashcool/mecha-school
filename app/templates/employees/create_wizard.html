@@ -444,6 +444,21 @@
           </div>
           {% endif %}
 
+          {% if school and school.emp_enable_attendance_shifts %}
+          <div class="col-md-6">
+            <label class="form-label">الشفت <span class="text-danger">*</span></label>
+            <select name="shift_id" class="form-select" required>
+              <option value="" disabled {{ 'selected' if not sf.get('shift_id') }}>— اختر شفتاً —</option>
+              {% for shift in emp_shifts %}
+              <option value="{{ shift.id }}" {{ 'selected' if sf.get('shift_id')|string == shift.id|string }}>
+                {{ shift.name }} ({{ shift.start_time.strftime('%H:%M') }})
+              </option>
+              {% endfor %}
+            </select>
+            <small class="text-muted">مطلوب لأن نظام شفتات الموظفين مفعّل.</small>
+          </div>
+          {% endif %}
+
           {% if school_cfg.field_visible('employees', 'address') %}
           <div class="col-12">
             <label class="form-label">العنوان</label>

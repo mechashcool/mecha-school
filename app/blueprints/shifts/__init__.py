@@ -596,6 +596,21 @@ def toggle_employee_shift(shift_id):
         flash('لا يمكن تعديل هذا الشفت.', 'danger')
         return redirect(url_for('admin.attendance_settings'))
 
+    # In shift mode, deactivation may not strand active employees without a
+    # valid assignment.  A single count query is sufficient.
+    if (shift.is_active
+            and getattr(school, 'emp_enable_attendance_shifts', False)):
+        active_users = (Employee.query
+                        .execution_options(bypass_tenant_scope=True)
+                        .filter(Employee.school_id == shift.school_id,
+                                Employee.shift_id == shift.id,
+                                Employee.status == 'active')
+                        .count())
+        if active_users:
+            flash('لا يمكن تعطيل هذا الشفت لأنه مرتبط بموظفين نشطين. '
+                  'يرجى نقل الموظفين إلى شفت آخر أولاً.', 'danger')
+            return redirect(url_for('admin.attendance_settings'))
+
     # Re-ACTIVATION only: a conflicting inactive shift may stay stored but must
     # not become active. Deactivating is always allowed.
     if not shift.is_active:

@@ -107,15 +107,15 @@
             {% if emp_shifts %}
             <div class="col-md-6">
               <label class="form-label">الشفت</label>
-              <select name="shift_id" class="form-select">
-                <option value="">— بدون شفت —</option>
+              <select name="shift_id" class="form-select" required>
+                <option value="" disabled>— اختر شفتاً —</option>
                 {% for shift in emp_shifts %}
                 <option value="{{ shift.id }}" {{ 'selected' if emp_cur_shift_id == shift.id }}>
                   {{ shift.name }}{% if shift.start_time %} ({{ shift.start_time.strftime('%H:%M') }}){% endif %}
                 </option>
                 {% endfor %}
               </select>
-              <small class="text-muted">اختياري — بدون شفت تُطبَّق أوقات دوام الموظفين العامة</small>
+              <small class="text-muted">مطلوب للموظف النشط عند تفعيل نظام الشفتات.</small>
             </div>
             {% endif %}
             {% if school_cfg.field_visible('employees', 'base_salary') %}
