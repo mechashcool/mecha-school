@@ -710,23 +710,42 @@ def _process_employee_punch(device, school, sn: str, enrollid, punch_dt,
             return 'skipped'
 
         elif is_final_employee_auto_absence(emp_att):
-            # Preserve the automatic absent status, but retain the device event
-            # on the same official row for audit/deduplication. Keep the source
-            # marker so later manual/device writes also recognize final absence.
-            if emp_att.check_in is None:
-                emp_att.check_in = punch_time
-            elif emp_att.check_out is None:
-                emp_att.check_out = punch_time
-            emp_att.device_id = device.id
-            emp_att.notes = ' | '.join(filter(None, [
-                (emp_att.notes or '').strip() or None,
-                dedup_tag,
-            ]))
-            db.session.commit()
-            log.info("  [aiface] recorded punch on final auto-absent row "
-                     "employee_id=%d date=%s; status remains absent",
-                     employee.id, punch_date)
-            return 'processed'
+            if (effective.absence_cutoff is not None
+                    and punch_time < effective.absence_cutoff
+                    and (effective.attendance_start is None
+                         or punch_time >= effective.attendance_start)):
+                # A delayed device event proves the employee arrived before the
+                # cutoff; classify its original device time on the existing row.
+                emp_att.status    = punch_status
+                emp_att.check_in  = punch_time
+                emp_att.source    = 'aiface'
+                emp_att.device_id = device.id
+                emp_att.notes = ' | '.join(filter(None, [
+                    (emp_att.notes or '').strip() or None,
+                    dedup_tag,
+                ]))
+                db.session.commit()
+                log.info("  [aiface] corrected delayed punch on auto-absent row "
+                         "employee_id=%d date=%s punch=%s status=%s",
+                         employee.id, punch_date, punch_time, punch_status)
+            else:
+                # Preserve the automatic absent status, but retain the device event
+                # on the same official row for audit/deduplication. Keep the source
+                # marker so later manual/device writes also recognize final absence.
+                if emp_att.check_in is None:
+                    emp_att.check_in = punch_time
+                elif emp_att.check_out is None:
+                    emp_att.check_out = punch_time
+                emp_att.device_id = device.id
+                emp_att.notes = ' | '.join(filter(None, [
+                    (emp_att.notes or '').strip() or None,
+                    dedup_tag,
+                ]))
+                db.session.commit()
+                log.info("  [aiface] recorded punch on final auto-absent row "
+                         "employee_id=%d date=%s; status remains absent",
+                         employee.id, punch_date)
+                return 'processed'
 
         elif emp_att.check_in is None:
             # A row exists but nobody has checked in yet — most commonly an
