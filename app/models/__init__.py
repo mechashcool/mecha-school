@@ -797,6 +797,8 @@ class InvestorSchoolAccess(db.Model):
     __table_args__ = (
         db.UniqueConstraint('investor_user_id', 'school_id',
                             name='uq_investor_school_access_user_school'),
+        db.UniqueConstraint('school_id',
+                            name='uq_investor_school_access_school'),
         db.Index('ix_investor_school_access_investor_user_id', 'investor_user_id'),
         db.Index('ix_investor_school_access_school_id', 'school_id'),
     )

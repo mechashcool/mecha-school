@@ -221,6 +221,7 @@ def school_detail(school_id):
                    .order_by(School.school_name).all())
     investor_school_ids = ({a.school_id for a in investor.investor_school_accesses}
                            if investor else {school_id})
+    investor_assignment_map = _investor_assignment_map()
 
     # Custom (non built-in) roles the Super Admin can toggle for this school.
     custom_roles = [r for r in Role.query.order_by(Role.label).all()
@@ -242,6 +243,7 @@ def school_detail(school_id):
         assigned_role_ids = assigned_role_ids,
         all_schools        = all_schools,
         investor_school_ids = investor_school_ids,
+        investor_assignment_map = investor_assignment_map,
     )
 
 
@@ -392,17 +394,58 @@ def _validated_investor_school_ids():
     return selected, None
 
 
-def _school_access_conflict(selected, investor_id=None):
-    query = (User.query.execution_options(bypass_tenant_scope=True)
+def _school_access_conflicts(selected, investor_id=None):
+    query = (db.session.query(InvestorSchoolAccess, School, User)
+             .join(School, School.id == InvestorSchoolAccess.school_id)
+             .join(User, User.id == InvestorSchoolAccess.investor_user_id)
              .join(Role, User.role_id == Role.id)
-             .join(InvestorSchoolAccess,
-                   InvestorSchoolAccess.investor_user_id == User.id)
              .filter(InvestorSchoolAccess.school_id.in_(selected),
                      Role.name == INVESTOR_ROLE,
                      User.username.notlike('~deleted~%')))
     if investor_id is not None:
         query = query.filter(User.id != investor_id)
-    return query.first()
+    return query.order_by(School.school_name, User.id).all()
+
+
+def _investor_assignment_map():
+    """School id -> investor label for the existing multi-select UI."""
+    rows = (db.session.query(InvestorSchoolAccess.school_id, User.full_name,
+                             User.username)
+            .join(User, User.id == InvestorSchoolAccess.investor_user_id)
+            .join(Role, User.role_id == Role.id)
+            .filter(Role.name == INVESTOR_ROLE,
+                    User.username.notlike('~deleted~%')).all())
+    return {school_id: f'{full_name} ({username})'
+            for school_id, full_name, username in rows}
+
+
+def _conflict_message(conflicts):
+    details = '، '.join(
+        f'{school.school_name_ar or school.school_name} ← '
+        f'{owner.full_name} ({owner.username})'
+        for _, school, owner in conflicts
+    )
+    return ('المدارس التالية مرتبطة حالياً بمستثمر آخر: '
+            f'{details}. لن يتم النقل إلا بعد تحديد مربع تأكيد النقل وإعادة الحفظ.')
+
+
+def _transfer_school_accesses(conflicts):
+    """Revoke conflicting mappings and repair old compatibility defaults."""
+    transferred_by_owner = {}
+    for access, _, owner in conflicts:
+        transferred_by_owner.setdefault(owner.id, (owner, set()))[1].add(
+            access.school_id)
+        db.session.delete(access)
+
+    # Delete first so the school-level UNIQUE constraint can never overlap the
+    # old and receiving investors, even transiently within the transaction.
+    db.session.flush()
+    for owner, transferred_ids in transferred_by_owner.values():
+        if owner.school_id in transferred_ids:
+            remaining_id = (db.session.query(InvestorSchoolAccess.school_id)
+                            .filter_by(investor_user_id=owner.id)
+                            .order_by(InvestorSchoolAccess.id).limit(1).scalar())
+            owner.school_id = remaining_id
 
 
 def _investor_role():
@@ -431,9 +474,10 @@ def create_investor(school_id):
         flash(schools_error, 'danger')
         return redirect(url_for('super_admin.school_detail', school_id=school_id))
 
-    # Preserve the existing one-account-per-school rule for every selection.
-    if _school_access_conflict(selected_school_ids):
-        flash('يوجد حساب مستثمر لهذه المدرسة بالفعل.', 'warning')
+    conflicts = _school_access_conflicts(selected_school_ids)
+    transfer_confirmed = request.form.get('confirm_school_transfer') == '1'
+    if conflicts and not transfer_confirmed:
+        flash(_conflict_message(conflicts), 'danger')
         return redirect(url_for('super_admin.school_detail', school_id=school_id))
 
     full_name = request.form.get('full_name', '').strip()
@@ -481,6 +525,8 @@ def create_investor(school_id):
     )
     user.set_password(password)
     try:
+        if conflicts:
+            _transfer_school_accesses(conflicts)
         db.session.add(user)
         db.session.flush()
         for selected_school_id in selected_school_ids:
@@ -517,8 +563,10 @@ def update_investor(school_id):
     if schools_error:
         flash(schools_error, 'danger')
         return redirect(url_for('super_admin.school_detail', school_id=school_id))
-    if _school_access_conflict(selected_school_ids, investor.id):
-        flash('إحدى المدارس المحددة مرتبطة بحساب مستثمر آخر.', 'danger')
+    conflicts = _school_access_conflicts(selected_school_ids, investor.id)
+    transfer_confirmed = request.form.get('confirm_school_transfer') == '1'
+    if conflicts and not transfer_confirmed:
+        flash(_conflict_message(conflicts), 'danger')
         return redirect(url_for('super_admin.school_detail', school_id=school_id))
 
     if not full_name:
@@ -546,19 +594,26 @@ def update_investor(school_id):
             flash('البريد الإلكتروني مستخدم بالفعل.', 'danger')
             return redirect(url_for('super_admin.school_detail', school_id=school_id))
 
-    investor.full_name = full_name
-    investor.email     = email or None
-    investor.phone     = phone or None
-    current_ids = {access.school_id for access in investor.investor_school_accesses}
-    for access in list(investor.investor_school_accesses):
-        if access.school_id not in selected_school_ids:
-            db.session.delete(access)
-    for selected_school_id in selected_school_ids - current_ids:
-        db.session.add(InvestorSchoolAccess(
-            investor_user_id=investor.id, school_id=selected_school_id))
-    if investor.school_id not in selected_school_ids:
-        investor.school_id = min(selected_school_ids)
-    db.session.commit()
+    try:
+        if conflicts:
+            _transfer_school_accesses(conflicts)
+        investor.full_name = full_name
+        investor.email     = email or None
+        investor.phone     = phone or None
+        current_ids = {access.school_id for access in investor.investor_school_accesses}
+        for access in list(investor.investor_school_accesses):
+            if access.school_id not in selected_school_ids:
+                db.session.delete(access)
+        for selected_school_id in selected_school_ids - current_ids:
+            db.session.add(InvestorSchoolAccess(
+                investor_user_id=investor.id, school_id=selected_school_id))
+        if investor.school_id not in selected_school_ids:
+            investor.school_id = min(selected_school_ids)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        flash('تعذر تحديث صلاحيات مدارس المستثمر. حاول مرة أخرى.', 'danger')
+        return redirect(url_for('super_admin.school_detail', school_id=school_id))
     log_action('edit', 'user', investor.id,
                details=f'updated investor account for school={school_id}')
     flash('تم تحديث بيانات حساب المستثمر.', 'success')

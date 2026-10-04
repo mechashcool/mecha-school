@@ -65,14 +65,6 @@
   </div>
 </div>
 
-{% with messages = get_flashed_messages(with_categories=true) %}
-  {% for cat, msg in messages %}
-  <div class="alert alert-{{ cat }} alert-dismissible fade show">{{ msg }}
-    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-  </div>
-  {% endfor %}
-{% endwith %}
-
 {# Status badge #}
 <div class="mb-3">
   {% if school.is_active %}
@@ -696,9 +688,8 @@
           </div>
           <div class="card-body">
             <p class="text-muted small mb-3">
-              حساب مستثمر مرتبط بهذه المدرسة فقط، للقراءة فقط، يرى لوحة التحكم والإيرادات
-              والمصروفات لهذه المدرسة حصراً. يُدار من هنا فقط ولا يمكن لمدير المدرسة إنشاؤه
-              أو تعديله.
+              حساب مستثمر للقراءة فقط يمكن للمشرف العام تخويله لمدرسة واحدة أو عدة مدارس.
+              لا يمكن لمدير المدرسة إنشاء الحساب أو تعديل المدارس المخوّلة له.
             </p>
 
             {% if investor %}
@@ -738,11 +729,18 @@
                 <select name="school_ids" class="form-select form-select-sm" multiple size="6" required>
                   {% for available_school in all_schools %}
                   <option value="{{ available_school.id }}" {{ 'selected' if available_school.id in investor_school_ids }}>
-                    {{ available_school.school_name_ar or available_school.school_name }}
+                    {{ available_school.school_name_ar or available_school.school_name }}{% if investor_assignment_map.get(available_school.id) and available_school.id not in investor_school_ids %} — مرتبطة بـ {{ investor_assignment_map[available_school.id] }}{% endif %}
                   </option>
                   {% endfor %}
                 </select>
                 <div class="form-text">يمكن اختيار أكثر من مدرسة.</div>
+              </div>
+              <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" value="1"
+                       name="confirm_school_transfer" id="confirmSchoolTransferEdit">
+                <label class="form-check-label small" for="confirmSchoolTransferEdit">
+                  أؤكد نقل أي مدرسة محددة مرتبطة بمستثمر آخر إلى هذا المستثمر.
+                </label>
               </div>
               <button type="submit" class="btn btn-sm btn-primary w-100">
                 <i class="bi bi-save me-1"></i>حفظ البيانات
@@ -823,11 +821,18 @@
                 <select name="school_ids" class="form-select form-select-sm" multiple size="6" required>
                   {% for available_school in all_schools %}
                   <option value="{{ available_school.id }}" {{ 'selected' if available_school.id in investor_school_ids }}>
-                    {{ available_school.school_name_ar or available_school.school_name }}
+                    {{ available_school.school_name_ar or available_school.school_name }}{% if investor_assignment_map.get(available_school.id) %} — مرتبطة بـ {{ investor_assignment_map[available_school.id] }}{% endif %}
                   </option>
                   {% endfor %}
                 </select>
                 <div class="form-text">يمكن اختيار أكثر من مدرسة.</div>
+              </div>
+              <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" value="1"
+                       name="confirm_school_transfer" id="confirmSchoolTransferCreate">
+                <label class="form-check-label small" for="confirmSchoolTransferCreate">
+                  أؤكد نقل أي مدرسة محددة مرتبطة بمستثمر آخر إلى الحساب الجديد.
+                </label>
               </div>
               <button type="submit" class="btn btn-sm btn-success w-100">
                 <i class="bi bi-person-plus me-1"></i>إنشاء حساب المستثمر
