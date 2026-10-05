@@ -23,6 +23,7 @@ from app.utils.decorators import (admin_required, staff_required,
                                    get_current_school,
                                    get_active_year, get_view_year, super_admin_required)
 from app.utils import code_generator
+from app.utils.attendance_helpers import get_local_date
 from app.utils.board_images import BoardImageError, optimize_board_image
 
 admin_bp = Blueprint('admin', __name__, template_folder='../../templates/admin')
@@ -413,6 +414,20 @@ def _save_user_building_access(user, school_id):
 #  DASHBOARD  (school-scoped)
 # ─────────────────────────────────────────────────────────────────────────────
 
+_FEE_PAYMENT_DESCRIPTION_PREFIX = 'دفعة رسوم للطالب'
+
+
+def _fee_payments_collected_on(school_id, payment_date):
+    """Sum active fee-payment allocations received by one school on a date."""
+    q = (db.session.query(func.sum(Revenue.amount))
+         .filter(Revenue.date == payment_date,
+                 Revenue.refunded_at.is_(None),
+                 Revenue.description.startswith(_FEE_PAYMENT_DESCRIPTION_PREFIX)))
+    if school_id:
+        q = q.filter(Revenue.school_id == school_id)
+    return q.scalar() or 0
+
+
 def _build_dashboard_context():
     """Compute the shared school dashboard context (stats, charts, recent lists).
 
@@ -448,15 +463,12 @@ def _build_dashboard_context():
             stats['total_students'] / school.capacity * 100
         ))
 
-    # Fees summary — school-scoped via student FK
-    fee_q = db.session.query(func.sum(FeeInstallment.amount))\
-        .join(FeeInstallment.fee_record)\
-        .filter(FeeInstallment.status == 'paid',
-                FeeInstallment.paid_date == today)
-    if school_id:
-        from app.models import FeeRecord
-        fee_q = fee_q.filter(FeeRecord.school_id == school_id)
-    paid_today = fee_q.scalar() or 0
+    # Actual fee-payment allocations received today. Every accepted full or
+    # partial payment writes one Revenue row per applied amount; refunded rows
+    # are inactive income and remain excluded. Keep the other dashboard cards'
+    # existing date semantics unchanged, while this "today" uses school time.
+    payment_today = get_local_date(school) if school else date.today()
+    paid_today = _fee_payments_collected_on(school_id, payment_today)
 
     overdue_q = FeeInstallment.query\
         .join(FeeInstallment.fee_record)\
@@ -541,13 +553,8 @@ def _build_dashboard_context():
     #  together with today's counts in a single grouped query.)
 
     # ── Yesterday fees collected (for KPI trend %) ───────────────────────────────
-    from app.models import FeeRecord
-    _fyq = (db.session.query(func.sum(FeeInstallment.amount))
-            .join(FeeInstallment.fee_record)
-            .filter(FeeInstallment.status == 'paid', FeeInstallment.paid_date == yesterday))
-    if school_id:
-        _fyq = _fyq.filter(FeeRecord.school_id == school_id)
-    fees_yday = float(_fyq.scalar() or 0)
+    fees_yday = float(_fee_payments_collected_on(
+        school_id, payment_today - timedelta(days=1)))
 
     # ── KPI change percentages ────────────────────────────────────────────────────
     prev_balance = prev_rev - prev_exp
