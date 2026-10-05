@@ -194,14 +194,14 @@ table.detail-tbl tr:nth-child(even) td { background: #f8fbff; }
 
 /* ── Compact signature / stamp area ── */
 .sign-area {
-  margin: 16px 32px 0;
+  margin: 24px 32px 0;
   border: 1px solid #dde8f4;
   border-radius: 8px;
   display: flex;
 }
 .sign-box {
   flex: 1;
-  padding: 10px 16px 8px;
+  padding: 13px 16px 14px;
   text-align: center;
   border-left: 1px solid #dde8f4;
 }
@@ -211,7 +211,7 @@ table.detail-tbl tr:nth-child(even) td { background: #f8fbff; }
   font-weight: 800;
   color: #1a3a5c;
   display: block;
-  margin-bottom: 16px;
+  margin-bottom: 32px;
 }
 .sign-line { border-top: 1px solid #b0bec5; width: 72%; margin: 0 auto; }
 
@@ -279,9 +279,11 @@ table.detail-tbl tr:nth-child(even) td { background: #f8fbff; }
   table.detail-tbl th     { font-size: 11px; padding: 4.5px 12px; }
   table.detail-tbl td     { padding: 4.5px 12px; }
 
-  .sign-area       { margin: 10px 24px 0; }
-  .sign-box        { padding: 7px 14px 6px; }
-  .sign-box label  { font-size: 11px; margin-bottom: 13px; }
+  /* Slightly lower and taller than the other blocks: a stamp and a handwritten
+     signature need real physical room. Still well inside the one-page budget. */
+  .sign-area       { margin: 18px 24px 0; }
+  .sign-box        { padding: 11px 14px 12px; }
+  .sign-box label  { font-size: 11px; margin-bottom: 28px; }
 
   .doc-footer      { margin-top: 8px; padding: 7px 24px 6px; }
   .school-footer   { font-size: 10.5px; line-height: 1.35; margin-bottom: 3px;
