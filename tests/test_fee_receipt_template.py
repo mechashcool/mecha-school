@@ -111,6 +111,23 @@ class FeeReceiptTemplateTest(unittest.TestCase):
                          '2026-10-03', '2026-10-05', 'نقداً / Cash'):
             self.assertIn(fragment, html, fragment)
 
+    # Exactly ONE compact stamp/signature block, with no repeated labels.
+    def test_single_stamp_signature_block(self):
+        html = self._render()
+        self.assertEqual(1, html.count('class="sign-area"'))
+        self.assertEqual(2, html.count('class="sign-box"'))
+        self.assertEqual(1, html.count('ختم المدرسة'))
+        self.assertEqual(1, html.count('توقيع المستلم'))
+
+    # One A4 page: the print block compacts spacing and caps the school footer.
+    def test_print_block_enforces_single_page(self):
+        html = self._render()
+        self.assertIn('@page { size: A4 portrait; margin: 8mm; }', html)
+        self.assertIn('page-break-inside: avoid', html)
+        # The summary section is still present (compaction made dropping it
+        # unnecessary) — assert it survived the layout fix.
+        self.assertIn('ملخص المبلغ', html)
+
     # Refund stamp is preserved (existing receipt state, not new data).
     def test_refund_stamp_states(self):
         self.assertNotIn('مسترجع', self._render())

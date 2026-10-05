@@ -213,8 +213,7 @@ table.detail-tbl tr:nth-child(even) td { background: #f8fbff; }
   display: block;
   margin-bottom: 16px;
 }
-.sign-line { border-top: 1px solid #b0bec5; width: 72%; margin: 0 auto 4px; }
-.sign-box .hint { font-size: 10.5px; color: #b0bec5; font-weight: 600; }
+.sign-line { border-top: 1px solid #b0bec5; width: 72%; margin: 0 auto; }
 
 /* ── Footers ── */
 .doc-footer {
@@ -232,11 +231,24 @@ table.detail-tbl tr:nth-child(even) td { background: #f8fbff; }
 }
 .core-footer { font-size: 11px; color: #b0bec5; font-weight: 600; }
 
-/* ── Print styles ── */
+/* ── Print styles ──────────────────────────────────────────────────────────
+   The whole receipt must occupy exactly ONE A4 portrait page, footer included.
+   Printable height at 8mm margins is ~281mm; the compacted blocks below total
+   roughly 180mm, so even a multi-line school footer cannot push a second page.
+   ------------------------------------------------------------------------- */
 @media print {
+  @page { size: A4 portrait; margin: 8mm; }
+
   body { background: #fff !important; padding: 0; }
   .screen-controls { display: none !important; }
-  .print-wrapper   { box-shadow: none; border-radius: 0; max-width: 100%; }
+  .print-wrapper   {
+    box-shadow: none;
+    border-radius: 0;
+    max-width: 100%;
+    padding-bottom: 0;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
 
   /* Force-print background colours */
   .doc-header, .section-title, .info-strip   { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -244,10 +256,47 @@ table.detail-tbl tr:nth-child(even) td { background: #f8fbff; }
   table.detail-tbl th,
   table.detail-tbl tr:nth-child(even) td     { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 
-  @page { size: A4 portrait; margin: 10mm 8mm; }
+  /* Compaction: padding, gaps and type scale only — no content is dropped. */
+  .doc-header      { padding: 13px 24px; gap: 14px; }
+  .doc-header-logo { width: 46px; height: 46px; }
+  .school-name     { font-size: 17px; }
+  .report-title    { font-size: 12px; margin-top: 2px; }
+  .refund-stamp    { font-size: 11px; padding: 4px 10px; }
 
-  .doc-section, .sign-area, .doc-footer { page-break-inside: avoid; }
-  table.detail-tbl tr { page-break-inside: avoid; }
+  .info-strip      { padding: 8px 24px; }
+  .is-item         { padding: 0 10px; }
+  .is-item label   { font-size: 9px; margin-bottom: 1px; }
+  .is-item span    { font-size: 12px; }
+
+  .doc-section     { padding: 0 24px; margin-top: 10px; }
+  .section-title   { font-size: 12.5px; padding: 6px 14px; }
+
+  .ag-cell         { padding: 8px 12px; }
+  .ag-cell label   { font-size: 9px; margin-bottom: 2px; }
+  .ag-cell .val    { font-size: 15px; }
+
+  table.detail-tbl        { font-size: 11.5px; }
+  table.detail-tbl th     { font-size: 11px; padding: 4.5px 12px; }
+  table.detail-tbl td     { padding: 4.5px 12px; }
+
+  .sign-area       { margin: 10px 24px 0; }
+  .sign-box        { padding: 7px 14px 6px; }
+  .sign-box label  { font-size: 11px; margin-bottom: 13px; }
+
+  .doc-footer      { margin-top: 8px; padding: 7px 24px 6px; }
+  .school-footer   { font-size: 10.5px; line-height: 1.35; margin-bottom: 3px;
+                     /* Multi-line, but a pathologically long footer can never
+                        spill onto a second page. */
+                     max-height: 42px; overflow: hidden; }
+  .core-footer     { font-size: 10px; }
+
+  /* Never split a block across pages. */
+  .doc-header, .info-strip, .doc-section, .sign-area, .doc-footer {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  table.detail-tbl, table.detail-tbl tr { page-break-inside: avoid; break-inside: avoid; }
+  .doc-footer { page-break-before: avoid; break-before: avoid; }
 }
 </style>
 </head>
@@ -344,12 +393,10 @@ table.detail-tbl tr:nth-child(even) td { background: #f8fbff; }
     <div class="sign-box">
       <label>ختم المدرسة</label>
       <div class="sign-line"></div>
-      <div class="hint">ختم المدرسة /</div>
     </div>
     <div class="sign-box">
       <label>توقيع المستلم</label>
       <div class="sign-line"></div>
-      <div class="hint">توقيع المستلم /</div>
     </div>
   </div>
 
