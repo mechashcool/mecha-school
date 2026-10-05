@@ -797,10 +797,16 @@
       if (data.status === 'success') {
         bootstrap.Modal.getInstance(document.getElementById('payModal')).hide();
         if (data.receipt_url) {
-          // window.open may return null when a popup-blocker is active.
-          // Guard against that so the success flow always completes.
-          var win = window.open(data.receipt_url, '_blank');
-          if (win) { win.onload = function () { win.print(); }; }
+          // The receipt still opens in a second tab and still prints
+          // automatically — but it prints ITSELF, only after THIS page has
+          // finished the reload below (fees/receipt.html, autoprint=after_reload).
+          // Printing while this page reloads would pause it (shared renderer)
+          // and leave it visually stuck. `since` lets the receipt recognise the
+          // reloaded document (its timeOrigin is later). window.open may return
+          // null under a popup blocker; the success flow completes regardless.
+          var _sep = data.receipt_url.indexOf('?') === -1 ? '?' : '&';
+          window.open(data.receipt_url + _sep + 'autoprint=after_reload&since=' + Date.now(),
+                      '_blank');
         }
         alert(data.message);
         location.reload();

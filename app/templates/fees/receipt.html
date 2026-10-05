@@ -425,5 +425,47 @@ table.detail-tbl tr:nth-child(even) td { background: #f8fbff; }
 
 </div><!-- /.print-wrapper -->
 
+<script>
+/* Automatic print right after a payment (fees/_fees_table.html opens this tab
+   with ?autoprint=after_reload&since=<ms>). Printing is deferred until the
+   ORIGINAL fees page (window.opener) has finished reloading — a print dialog
+   opened while it reloads pauses it and leaves it stuck. The reloaded page is
+   recognised by a timeOrigin later than `since` plus readyState 'complete'.
+   Bounded wait (15 s) and prints exactly once. Any other way of opening the
+   receipt (reprint button, direct link) is unaffected. */
+(function () {
+  var params = new URLSearchParams(window.location.search);
+  if (params.get('autoprint') !== 'after_reload') return;
+  var since = Number(params.get('since')) || 0;
+  var deadline = Date.now() + 15000;
+  var printed = false;
+
+  function printOnce() {
+    if (printed) return;
+    printed = true;
+    window.print();
+  }
+
+  function openerReloaded() {
+    var o = window.opener;
+    if (!o || o.closed) return true;            // nothing left to wait for
+    try {
+      var origin = o.performance ? o.performance.timeOrigin : 0;
+      return o.document.readyState === 'complete' && origin >= since;
+    } catch (e) {
+      return true;                              // opener navigated cross-origin
+    }
+  }
+
+  function waitThenPrint() {
+    if (openerReloaded() || Date.now() >= deadline) { printOnce(); return; }
+    setTimeout(waitThenPrint, 200);
+  }
+
+  if (document.readyState === 'complete') waitThenPrint();
+  else window.addEventListener('load', waitThenPrint);
+})();
+</script>
+
 </body>
 </html>
