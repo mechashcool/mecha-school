@@ -82,6 +82,18 @@
 
       <div class="card mb-4">
         <div class="card-header">
+          <i class="bi bi-receipt text-accent"></i>تذييل الوصل
+        </div>
+        <div class="card-body">
+          <label class="form-label">تذييل الوصل</label>
+          <textarea name="fee_receipt_footer" class="form-control" rows="2"
+                    placeholder="شكراً لثقتكم بنا">{{ settings.fee_receipt_footer or '' }}</textarea>
+          <div class="form-text">يظهر هذا النص أسفل وصولات الرسوم الخاصة بهذه المدرسة. (اختياري)</div>
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header">
           <i class="bi bi-clock-history text-accent"></i>إعدادات الحضور والغياب
         </div>
         <div class="card-body d-flex align-items-center justify-content-between gap-3">

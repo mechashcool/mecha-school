@@ -2879,6 +2879,12 @@ def school_settings():
         school.email           = request.form.get('email',   '').strip() or None
         school.website         = request.form.get('website', '').strip() or None
         school.locale          = request.form.get('locale',  'ar').strip() or 'ar'
+        # Per-school FEE RECEIPT footer (printed above the fixed Core School line
+        # on fee receipts only). Optional: blank / whitespace-only clears it to
+        # NULL so the receipt renders no empty footer block. Scoped to THIS
+        # school only. The legacy shared `receipt_footer` (class-schedule PDF) is
+        # deliberately NOT written here.
+        school.fee_receipt_footer = request.form.get('fee_receipt_footer', '').strip() or None
         # currency_code, currency_symbol, timezone and receipt_footer are no longer
         # editable from this page. Their fields are not submitted, so we intentionally
         # do NOT reassign them here — the existing stored values are preserved as-is.

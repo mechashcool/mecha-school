@@ -78,7 +78,14 @@ class School(db.Model):
     currency_symbol = db.Column(db.String(10),  default='د.ع')
     timezone        = db.Column(db.String(50),  default='Asia/Baghdad')
     locale          = db.Column(db.String(10),  default='ar')
+    # LEGACY shared footer — still rendered at the bottom of the class-schedule
+    # PDF (pdf_gen.generate_schedule_pdf). Not editable from the identity page
+    # and NOT used by the fee receipt.
     receipt_footer  = db.Column(db.Text, nullable=True)
+    # Fee receipts ONLY (printed above the fixed Core School line). Optional;
+    # NULL/blank renders no footer block. Deliberately separate from
+    # receipt_footer so the schedule PDF is never affected.
+    fee_receipt_footer = db.Column(db.Text, nullable=True)
 
     att_start_time        = db.Column(db.Time, nullable=True)
     att_late_threshold    = db.Column(db.Time, nullable=True)

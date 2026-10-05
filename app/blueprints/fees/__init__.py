@@ -2477,10 +2477,17 @@ def cancel_fee_route(fee_id):
 @login_required
 @permission_required('record_payments')
 def generate_receipt(inst_id):
-    """Generate and serve PDF receipt for a paid installment."""
-    from app.utils.pdf_gen import generate_fee_receipt
+    """Render the printable receipt for a paid installment.
+
+    Presentation only: the authorization, school scoping and the resolution of
+    every receipt value below are unchanged — the document is rendered as the
+    same kind of HTML print view the student financial statement already uses
+    (browser print → PDF), so both financial documents share one visual
+    identity. The receipt is browser/print-only; no API or mobile client
+    consumes this endpoint.
+    """
     from app.models import SchoolSettings
-    from flask import send_file, abort
+    from flask import abort
     
     inst = (
         FeeInstallment.query
@@ -2510,27 +2517,66 @@ def generate_receipt(inst_id):
     _op_ref = (request.args.get('op') or '').strip() or None
     _actual_paid, _resolved_op = resolve_payment_amount_for_receipt(inst, _op_ref)
 
-    school_settings = get_current_school() or SchoolSettings.get()
+    # Branding (name / logo / footer / currency) comes from the school that OWNS
+    # this receipt — resolved from the installment's own school_id, never from a
+    # client-supplied value — so a receipt can only ever carry its own school's
+    # identity. Falls back to the request school, then the legacy single-row
+    # settings (fresh installs), exactly as before.
+    _owner_school = School.query.get(inst.school_id) if inst.school_id else None
+    school_settings = _owner_school or get_current_school() or SchoolSettings.get()
     # Show the operation reference as the receipt number when resolved, so each
     # distinct payment operation prints as a distinct, reproducible receipt;
     # historical untagged payments keep the installment's own receipt number.
     _receipt_label = _resolved_op or inst.receipt_no
     # Show a refund stamp when the resolved operation was reversed (fully/partly).
     _refund_status = _op_refund_status(inst, _resolved_op)
-    pdf_bytes = generate_fee_receipt(inst, school_settings, print_date=date.today(),
-                                     actual_paid=_actual_paid,
-                                     receipt_no_override=_resolved_op,
-                                     refund_status=_refund_status)
 
-    if not pdf_bytes:
-        abort(500, "PDF generation failed")
+    # ── Receipt figures — same sources/arithmetic the PDF generator used ──
+    fee_record = inst.fee_record
+    _total_paid = sum(
+        float(i.received_amount or 0)
+        for i in fee_record.installments.execution_options(include_all_years=True)
+    )
+    _total_due = float(fee_record.net_amount)
+    _remaining = _total_due - _total_paid
 
-    from io import BytesIO
-    buf = BytesIO(pdf_bytes)
-    buf.seek(0)
+    from app.utils.arabic_numbers import amount_to_words_iqd
+    _words = amount_to_words_iqd(int(_actual_paid))
+    _amount_words = (_words + ' فقط لا غير') if _words else '—'
 
-    filename = f"receipt_{_receipt_label}.pdf"
-    return send_file(buf, as_attachment=False, download_name=filename, mimetype='application/pdf')
+    _logo_url = None
+    if getattr(school_settings, 'logo_path', None):
+        from app.utils.helpers import resolve_photo_url
+        _logo_url = resolve_photo_url(school_settings.logo_path)
+
+    # Fee-receipt-only footer. The legacy shared `receipt_footer` (class-schedule
+    # PDF) is deliberately NOT read here, so the two documents stay independent.
+    _school_footer = (getattr(school_settings, 'fee_receipt_footer', None) or '').strip() or None
+
+    return render_template(
+        'fees/receipt.html',
+        installment=inst,
+        student=fee_record.student,
+        fee_type_name=fee_record.fee_type.name,
+        receipt_no=_receipt_label or '—',
+        refund_status=_refund_status,
+        paid_amount=float(_actual_paid),
+        remaining=_remaining,
+        total_due=_total_due,
+        amount_words=_amount_words,
+        payment_method_label={
+            'cash':     'نقداً / Cash',
+            'transfer': 'تحويل بنكي / Bank Transfer',
+            'cheque':   'شيك / Cheque',
+            'card':     'بطاقة / Card',
+        }.get(inst.payment_method, inst.payment_method or '—'),
+        currency=(getattr(school_settings, 'currency_symbol', None) or 'د.ع'),
+        school_name=(getattr(school_settings, 'school_name_ar', None)
+                     or getattr(school_settings, 'school_name', None) or 'المدرسة'),
+        logo_url=_logo_url,
+        school_footer=_school_footer,
+        print_date=date.today(),
+    )
 
 
 @fees_bp.route('/export/excel')
