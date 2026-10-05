@@ -1,20 +1,24 @@
 {#
   Shared fees-table macros — imported by fees/index.html and students/view.html.
 
-  fees_table_body(fee_entries, show_student_col, installment_filter, period_paid)
+  fees_table_body(fee_entries, show_student_col, installment_filter, period_paid,
+                  payment_notes)
     fee_entries        : list of (FeeRecord, [FeeInstallment]) tuples
     show_student_col   : True on fees index, False on student profile
     installment_filter : 'all' or installment number string (fees index filter only)
     period_paid        : None, or {fee_record_id: amount collected in the selected
                          payment-date range} (fees index only) — adds the
                          "المدفوع ضمن الفترة" column
+    payment_notes      : None, or {installment_id: [payment]} from
+                         fees.payment_notes_by_installment — each payment's
+                         own note (Revenue.notes), shown under its installment
 
   fees_modal_and_js()
     Renders the pay modal and all supporting JS (toggle, pay, print, AJAX).
     Call once per page, outside any card wrapper.
 #}
 
-{% macro fees_table_body(fee_entries, show_student_col=True, installment_filter='all', period_paid=None) %}
+{% macro fees_table_body(fee_entries, show_student_col=True, installment_filter='all', period_paid=None, payment_notes=None) %}
 {% set _period = period_paid is not none %}
 {% set _cols = (8 if show_student_col else 7) + (1 if _period else 0) %}
 <div class="table-wrapper">
@@ -53,7 +57,13 @@
           <div style="font-size:11.5px;color:#9aabb8">{{ rec.student.student_id }}</div>
         </td>
         {% endif %}
-        <td>{{ rec.fee_type.name }}</td>
+        <td>
+          {{ rec.fee_type.name }}
+          {% if rec.notes and rec.notes.strip() %}
+          <i class="bi bi-sticky text-muted ms-1" title="يوجد ملاحظات للرسم — اعرض الأقساط"
+             aria-label="يوجد ملاحظات للرسم"></i>
+          {% endif %}
+        </td>
         <td class="fw-600">{{ '{:,.0f}'.format(rec.total_amount) }}</td>
         <td class="text-danger">
           {% if rec.discount %}{{ '{:,.0f}'.format(rec.discount) }}{% else %}—{% endif %}
@@ -103,6 +113,14 @@
       <tr id="inst_{{ rec.id }}" style="display:none;background:#f8fbff">
         <td colspan="{{ _cols }}" class="p-0">
           <div class="px-4 py-3">
+            {# Note entered when the fee was created (FeeRecord.notes). Rendered
+               only when present; autoescaped; line breaks preserved. #}
+            {% if rec.notes and rec.notes.strip() %}
+            <div class="fee-note mb-2">
+              <span class="fee-note-label"><i class="bi bi-sticky me-1"></i>ملاحظات الرسم:</span>
+              <span class="fee-note-text">{{ rec.notes.strip() }}</span>
+            </div>
+            {% endif %}
             <table class="table table-sm mb-0">
               <thead>
                 <tr>
@@ -175,6 +193,37 @@
                   </td>
                   {% endif %}
                 </tr>
+                {# Payment notes — one line per payment TRANSACTION that has a
+                   note (Revenue.notes), so partial payments keep their own
+                   notes. A note saved on the installment by the old code path
+                   (overwritten by each payment) is shown once, labelled as
+                   legacy. Nothing is rendered when there is no note. #}
+                {% set _pnotes = (payment_notes or {}).get(inst.id, []) %}
+                {% set _legacy_note = inst.notes.strip() if inst.notes else '' %}
+                {% if _pnotes or _legacy_note %}
+                <tr class="pay-note-row">
+                  <td colspan="{{ 9 if _can_act else 8 }}">
+                    {% for p in _pnotes %}
+                    <div class="pay-note">
+                      <span class="fee-note-label"><i class="bi bi-chat-left-text me-1"></i>ملاحظات الدفع</span>
+                      <span class="pay-note-meta">
+                        {{ p.date.strftime('%Y-%m-%d') if p.date }} · {{ '{:,.0f}'.format(p.amount) }}
+                        {% if p.op_ref %} · <code>{{ p.op_ref }}</code>{% endif %}
+                        {% if p.refunded %} · <span class="badge-status badge-overdue">مسترجعة</span>{% endif %}
+                      </span>
+                      <span class="fee-note-text">{{ p.note }}</span>
+                    </div>
+                    {% endfor %}
+                    {% if _legacy_note %}
+                    <div class="pay-note">
+                      <span class="fee-note-label"><i class="bi bi-chat-left-text me-1"></i>ملاحظة دفع سابقة</span>
+                      <span class="pay-note-meta">(سُجّلت قبل حفظ ملاحظة مستقلة لكل دفعة)</span>
+                      <span class="fee-note-text">{{ _legacy_note }}</span>
+                    </div>
+                    {% endif %}
+                  </td>
+                </tr>
+                {% endif %}
                 {% endif %}
                 {% endfor %}
               </tbody>
@@ -307,6 +356,14 @@
   }
   .btn.fee-act.fee-act-icon { padding:0 9px; }
   .btn.fee-act i { font-size:13px; margin:0; }
+  .fee-note { background:#fff; border:1px solid #e3ebf3; border-radius:8px;
+              padding:6px 10px; font-size:12.5px; }
+  .fee-note-label { font-weight:600; color:#5b6b7b; }
+  .fee-note-text { white-space:pre-line; overflow-wrap:anywhere; }
+  tr.pay-note-row > td { border-top:0; padding-top:0; background:transparent; }
+  .pay-note { font-size:12px; padding:2px 0 2px 0; display:flex; flex-wrap:wrap;
+              gap:4px 8px; align-items:baseline; }
+  .pay-note-meta { color:#7a8a99; font-size:11.5px; }
 </style>
 {# Pay modal — rendered once per page outside any card wrapper #}
 <div class="modal fade" id="payModal" tabindex="-1" aria-hidden="true">
@@ -327,6 +384,10 @@
               <label class="form-label">المبلغ المستلم <span class="text-danger">*</span></label>
               <input type="number" step="0.01" min="0.01" name="received_amount"
                      id="rAmount" class="form-control" required>
+              {# Display-only: the entered amount in words, worded exactly as the
+                 receipt (shared/_amount_words_iqd.html). Never submitted. #}
+              <div id="rAmountWords" class="small fw-600 mt-1 d-none"
+                   style="color:#0f5e9c" aria-live="polite"></div>
               <small class="text-muted" id="rRemaining"></small>
             </div>
             <div class="col-md-6">
@@ -440,6 +501,7 @@
     </div>
   </div>
 </div>
+{% include 'shared/_amount_words_iqd.html' %}
 <script>
 (function () {
   if (window._feesTableJsLoaded) return;
@@ -482,6 +544,22 @@
     }
   }
 
+  // Live amount-in-words preview of the ENTERED payment (not the installment
+  // total). Empty / invalid input shows nothing.
+  window.updatePayAmountWords = function () {
+    var box = document.getElementById('rAmountWords');
+    if (!box) return;
+    var text = window.CoreAmountWords
+      ? window.CoreAmountWords.receiptText(document.getElementById('rAmount').value) : '';
+    box.textContent = text ? 'المبلغ كتابةً: ' + text : '';
+    box.classList.toggle('d-none', !text);
+  };
+  var _rAmountInput = document.getElementById('rAmount');
+  if (_rAmountInput) {
+    _rAmountInput.addEventListener('input', window.updatePayAmountWords);
+    _rAmountInput.addEventListener('change', window.updatePayAmountWords);
+  }
+
   window.openPayModal = function (instId, studentName, amount, received, instNo) {
     var remaining = (amount - received).toFixed(2);
     _lastRemaining = parseFloat(remaining);
@@ -498,6 +576,7 @@
       ' · <span class="text-danger">المتبقي: <b>' + parseFloat(remaining).toLocaleString() + '</b></span>';
 
     document.getElementById('rAmount').value = '';
+    window.updatePayAmountWords();
     // No hard `max` here: entering more than this installment's remaining is
     // valid — the server settles this installment first, then automatically
     // distributes the excess to the following unpaid installments in order.
@@ -512,6 +591,7 @@
 
   window.fillRemaining = function () {
     document.getElementById('rAmount').value = _lastRemaining.toFixed(2);
+    window.updatePayAmountWords();
   };
 
   window.printReceipt = function (instId) {

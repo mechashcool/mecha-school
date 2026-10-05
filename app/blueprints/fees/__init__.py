@@ -189,6 +189,50 @@ def _payment_receipt_expr():
                           cast(literal(_PAYMENT_RECEIPT_SQL_RE), Text))
 
 
+def payment_notes_by_installment(installments):
+    """``{installment_id: [payment, ...]}`` for the payment transactions that
+    carry a note (``Revenue.notes``), in payment order — ONE query for the whole
+    page, never one per installment.
+
+    Each payment is ``{'date', 'amount', 'op_ref', 'note', 'refunded'}`` and is
+    exactly one Revenue allocation: the note stays attached to its own
+    transaction, so two partial payments keep two separate notes. Rows are bound
+    to an installment by the same exact receipt-number linkage the period filter
+    and refunds use, joined on the installment's own school. Callers pass only
+    installments they already loaded under their own authorization/scoping;
+    ``include_all_years`` relaxes the year filter only (a payment may be booked
+    to another academic year) — the ORM school scope and the explicit
+    same-school join still apply.
+    """
+    ids = [i.id for i in installments if getattr(i, 'receipt_no', None)]
+    if not ids:
+        return {}
+    rows = (
+        db.session.query(FeeInstallment.id, Revenue.date, Revenue.amount,
+                         Revenue.description, Revenue.notes, Revenue.refunded_at)
+        .select_from(Revenue)
+        .join(FeeInstallment, and_(FeeInstallment.receipt_no == _payment_receipt_expr(),
+                                   FeeInstallment.school_id == Revenue.school_id))
+        .execution_options(include_all_years=True)
+        .filter(FeeInstallment.id.in_(ids),
+                Revenue.notes.isnot(None),
+                func.length(func.trim(Revenue.notes)) > 0)
+        .order_by(Revenue.date, Revenue.id)
+        .all()
+    )
+    out = {}
+    for inst_id, paid_on, amount, description, note, refunded_at in rows:
+        m = _PAYMENT_TXN_RE.search(description or '')
+        out.setdefault(inst_id, []).append({
+            'date': paid_on,
+            'amount': amount,
+            'op_ref': m.group(1) if m else None,
+            'note': note.strip(),
+            'refunded': refunded_at is not None,
+        })
+    return out
+
+
 def _period_paid_subquery(school, filters, *, per_installment=False):
     """Grouped subquery (key_id, period_paid): the SUM of ACTIVE fee-payment
     allocations whose payment date (``Revenue.date``, inclusive range) falls in
@@ -702,8 +746,11 @@ def apply_installment_payment(inst, received, *, payment_method='cash',
     inst.payment_method  = payment_method or 'cash'
     if collected_by is not None:
         inst.collected_by = collected_by
-    if notes:
-        inst.notes = notes
+    # `notes` is deliberately NOT written to inst.notes any more: a payment note
+    # belongs to its own transaction and is stored on that operation's Revenue
+    # row(s) (stage_installment_payment → Revenue.notes). Writing it here made
+    # every later payment overwrite the earlier payment's note. Existing
+    # inst.notes values are left untouched and shown as a legacy payment note.
     inst.paid_date = paid_date or date.today()
     inst.recompute_status()
     if Decimal(str(inst.received_amount or 0)) > 0 and not inst.receipt_no:
@@ -843,6 +890,10 @@ def stage_installment_payment(installments, start_installment_no, received, *,
     )
     op_ref = generate_receipt_no()
     txn_tag = _payment_txn_tag(op_ref)
+    # The transaction's note — the same text on every Revenue row of this ONE
+    # operation (a cascaded payment is still one transaction). Kept out of the
+    # machine-parsed description.
+    payment_note = (notes or '').strip() or None
     staged = []
     for alloc in allocations:
         ai, aa = alloc['installment'], alloc['applied']
@@ -859,6 +910,7 @@ def stage_installment_payment(installments, start_installment_no, received, *,
             ),
             date             = paid_date,
             recorded_by      = collected_by,
+            notes            = payment_note,
         )
         db.session.add(rev)
         staged.append({
@@ -1362,6 +1414,8 @@ def index():
     for _i in _page_inst:
         _inst_map.setdefault(_i.fee_record_id, []).append(_i)
     fee_entries = [(r, _inst_map.get(r.id, [])) for r in records.items]
+    # Per-transaction payment notes for the page's installments — one query.
+    payment_notes = payment_notes_by_installment(_page_inst)
 
     # Period amounts: one grouped query for the page + one aggregate for the
     # whole filtered set (never one query per row).
@@ -1373,6 +1427,7 @@ def index():
 
     return render_template('fees/index.html',
                            records=records, fee_entries=fee_entries,
+                           payment_notes=payment_notes,
                            overdue_mode=False, overdue_installments=[],
                            fee_types=fee_types,
                            years=years,

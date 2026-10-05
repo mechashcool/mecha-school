@@ -2253,6 +2253,10 @@ class Revenue(db.Model):
     refunded_at     = db.Column(db.DateTime, nullable=True)
     refund_event_id = db.Column(db.Integer, db.ForeignKey('fee_refund_events.id'),
                                 nullable=True, index=True)
+    # Note typed for ONE fee payment transaction (stage_installment_payment),
+    # stored on each Revenue row of that operation. Free text lives here, never
+    # in `description`, which is machine-parsed (receipt_no + [TXN:] tag).
+    notes = db.Column(db.Text, nullable=True)
 
     recorder = db.relationship('User', foreign_keys=[recorded_by])
     school   = db.relationship('School', foreign_keys=[school_id],

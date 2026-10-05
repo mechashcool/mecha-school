@@ -555,7 +555,7 @@
   {% if overdue_mode %}
   {{ overdue_table_body(overdue_installments, show_student_col=True, period_paid=period_paid) }}
   {% else %}
-  {{ fees_table_body(fee_entries, show_student_col=True, installment_filter=installment_filter, period_paid=period_paid) }}
+  {{ fees_table_body(fee_entries, show_student_col=True, installment_filter=installment_filter, period_paid=period_paid, payment_notes=payment_notes) }}
   {% endif %}
 
   {#  ── Pagination ────────────────────────────────────────────────────────────

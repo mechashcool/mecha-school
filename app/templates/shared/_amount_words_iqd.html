@@ -1,0 +1,86 @@
+{#
+  Client-side mirror of app/utils/arabic_numbers.amount_to_words_iqd — the
+  authoritative helper the fee receipt uses (fees.generate_receipt appends
+  ' فقط لا غير'). Exact parity with the Python output is pinned by
+  tests/test_fee_amount_words_and_notes.py, so a live preview can never word an
+  amount differently from the receipt. Display-only: it never changes a value.
+
+  Exposes window.CoreAmountWords:
+    iqd(value)        → same result as amount_to_words_iqd(value) ('' = none)
+    receiptText(raw)  → receipt wording ('<words> فقط لا غير') for a raw input
+                        value, or '' when the value is empty / invalid /
+                        negative / beyond the Numeric(12,2) money column.
+#}
+<script>
+(function () {
+  if (window.CoreAmountWords) return;
+
+  var ONES = ['', 'واحد', 'اثنان', 'ثلاثة', 'أربعة', 'خمسة', 'ستة', 'سبعة', 'ثمانية', 'تسعة',
+              'عشرة', 'أحد عشر', 'اثنا عشر', 'ثلاثة عشر', 'أربعة عشر', 'خمسة عشر',
+              'ستة عشر', 'سبعة عشر', 'ثمانية عشر', 'تسعة عشر'];
+  var TENS = ['', '', 'عشرون', 'ثلاثون', 'أربعون', 'خمسون', 'ستون', 'سبعون', 'ثمانون', 'تسعون'];
+  var HUNDREDS = ['', 'مائة', 'مائتان', 'ثلاثمائة', 'أربعمائة', 'خمسمائة',
+                  'ستمائة', 'سبعمائة', 'ثمانمائة', 'تسعمائة'];
+  // Largest value a Numeric(12, 2) money column can hold.
+  var MAX_AMOUNT = 9999999999.99;
+
+  function below1000(n) {
+    if (n === 0) return '';
+    if (n < 20) return ONES[n];
+    if (n < 100) {
+      var t = Math.floor(n / 10), o = n % 10;
+      return o === 0 ? TENS[t] : ONES[o] + ' و' + TENS[t];
+    }
+    var h = Math.floor(n / 100), r = n % 100;
+    return r === 0 ? HUNDREDS[h] : HUNDREDS[h] + ' و' + below1000(r);
+  }
+
+  function group(count, hasLower, singular, dualAcc, dualNom, plural310, plural11) {
+    if (count === 1) return singular;
+    if (count === 2) return hasLower ? dualNom : dualAcc;
+    if (count <= 10) return ONES[count] + ' ' + plural310;
+    return below1000(count) + ' ' + plural11;
+  }
+
+  function intToWords(n) {
+    var parts = [];
+    var billions = Math.floor(n / 1e9); n = n % 1e9;
+    var millions = Math.floor(n / 1e6); n = n % 1e6;
+    var thousands = Math.floor(n / 1e3); n = n % 1e3;
+    var remainder = n;
+    var hasLoB = millions > 0 || thousands > 0 || remainder > 0;
+    var hasLoM = thousands > 0 || remainder > 0;
+    var hasLoT = remainder > 0;
+    if (billions)  parts.push(group(billions, hasLoB, 'مليار', 'مليارا', 'ملياران', 'مليارات', 'مليار'));
+    if (millions)  parts.push(group(millions, hasLoM, 'مليون', 'مليونا', 'مليونان', 'ملايين', 'مليون'));
+    if (thousands) parts.push(group(thousands, hasLoT, 'ألف', 'ألفا', 'ألفان', 'آلاف', 'ألف'));
+    if (remainder) parts.push(below1000(remainder));
+    return parts.join(' و');
+  }
+
+  function iqd(value) {
+    if (value === null || value === undefined || value === '') return '';
+    var x = Number(value);
+    if (!isFinite(x)) return '';
+    var n = Math.trunc(x);
+    if (n < 0) return '';
+    if (n === 0) return 'صفر دينار عراقي';
+    if (n === 1) return 'دينار عراقي واحد';
+    if (n === 2) return 'ديناران عراقيان';
+    var w = intToWords(n);
+    return (n >= 3 && n <= 10) ? w + ' دنانير عراقية' : w + ' دينار عراقي';
+  }
+
+  function receiptText(raw) {
+    if (raw === null || raw === undefined) return '';
+    var s = String(raw).trim();
+    if (!s) return '';
+    var x = Number(s);
+    if (!isFinite(x) || x < 0 || x > MAX_AMOUNT) return '';
+    var words = iqd(x);
+    return words ? words + ' فقط لا غير' : '';
+  }
+
+  window.CoreAmountWords = { iqd: iqd, receiptText: receiptText };
+})();
+</script>
