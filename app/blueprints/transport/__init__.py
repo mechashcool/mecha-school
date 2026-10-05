@@ -561,6 +561,10 @@ DRIVER_JOB_TITLE  = 'سائق'
 DRIVER_DEPARTMENT = 'النقل'
 _DRIVER_MODES = ('manual', 'existing', 'new')
 _MSG_DRIVER_SAVE_FAILED = 'تعذّر حفظ بيانات السائق. لم يتم حفظ أي تغيير. يرجى المحاولة مرة أخرى.'
+_MSG_DRIVER_NEEDS_EMPLOYEE_SHIFT = (
+    'نظام شفتات الموظفين مفعّل لهذه المدرسة، ولا يمكن إنشاء سائق جديد من هنا بدون '
+    'شفت صالح. أضف السائق من صفحة الموظفين (المسمى الوظيفي: سائق) مع اختيار شفت صالح، '
+    'ثم اختره هنا كسائق موجود.')
 
 
 def _driver_mode(fd):
@@ -719,6 +723,11 @@ def _stage_driver(fd, school, mode):
                 'new_user_id': user.id, 'credentials': (username, password)}, None
 
     # mode == 'new'
+    # The quick driver form has no shift selector: in employee shift mode a
+    # new ACTIVE Employee would have no valid shift, so refuse (fail closed,
+    # nothing is created) and point to the employee flow.
+    if getattr(school, 'emp_enable_attendance_shifts', False):
+        return None, _MSG_DRIVER_NEEDS_EMPLOYEE_SHIFT
     error = _account_creation_error(school)
     if error:
         return None, error

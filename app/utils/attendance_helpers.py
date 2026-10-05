@@ -315,6 +315,100 @@ def get_student_shift(student, school):
     return shift
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Employee shift validity — the ONE canonical definition
+#
+#  Used by: the attendance-settings OFF→ON activation check, employee
+#  create/edit/restore, the teacher/driver creation guards, and the runtime
+#  resolvers below (AI Face, manual sheet, automatic absence, payroll).
+#  A shift is valid for a school ONLY when ALL of these hold:
+#    * it exists and belongs to that school
+#    * it is active
+#    * start_time and absent_after_time are set
+#    * absent_after_time > COALESCE(late_after_time, start_time)
+#  Pure — no queries.  late_after_time / dismissal_time fallback semantics are
+#  NOT decided here (see get_effective_attendance_settings).
+# ─────────────────────────────────────────────────────────────────────────────
+
+EMPLOYEE_SHIFT_INVALID_REASONS = {
+    'no_shift':          'لم يُعيَّن له شفت',
+    'missing':           'الشفت المعيَّن غير موجود',
+    'foreign':           'الشفت المعيَّن لا يتبع هذه المدرسة',
+    'inactive':          'الشفت المعيَّن معطَّل',
+    'no_start_time':     'الشفت المعيَّن بلا وقت بداية',
+    'no_absence_time':   'الشفت المعيَّن بلا وقت غياب تلقائي',
+    'bad_absence_order': 'وقت الغياب التلقائي للشفت ليس بعد وقت التأخر/البداية',
+}
+
+
+def employee_shift_invalid_reason(shift, school_id):
+    """None when `shift` is a valid employee shift of `school_id`, else a key of
+    EMPLOYEE_SHIFT_INVALID_REASONS.  Checks run in a fixed order so the first
+    failing condition is reported."""
+    if shift is None:
+        return 'missing'
+    if school_id is None or getattr(shift, 'school_id', None) != school_id:
+        return 'foreign'
+    if not getattr(shift, 'is_active', False):
+        return 'inactive'
+    start = getattr(shift, 'start_time', None)
+    if start is None:
+        return 'no_start_time'
+    cutoff = getattr(shift, 'absent_after_time', None)
+    if cutoff is None:
+        return 'no_absence_time'
+    late = getattr(shift, 'late_after_time', None)
+    boundary = late if late is not None else start
+    if not cutoff > boundary:
+        return 'bad_absence_order'
+    return None
+
+
+def is_valid_employee_shift(shift, school_id):
+    """True only for a shift meeting the canonical rule for `school_id`."""
+    return employee_shift_invalid_reason(shift, school_id) is None
+
+
+def list_invalid_shift_employees(school):
+    """ACTIVE employees of `school` without a valid shift — ONE query.
+
+    Returns [{'id', 'full_name', 'employee_code', 'reason', 'reason_label',
+    'shift_name'}] ordered by name.  Archived / on_leave / terminated employees
+    are not included.  A shift of another school is reported by reason only;
+    its name is never returned.
+    """
+    if not school or getattr(school, 'id', None) is None:
+        return []
+    from app.models import db, Employee, EmployeeAttendanceShift
+    rows = (db.session.query(Employee.id, Employee.full_name, Employee.employee_id,
+                             Employee.shift_id, EmployeeAttendanceShift)
+            .execution_options(bypass_tenant_scope=True)
+            .outerjoin(EmployeeAttendanceShift,
+                       EmployeeAttendanceShift.id == Employee.shift_id)
+            .filter(Employee.school_id == school.id,
+                    Employee.status == 'active')
+            .order_by(Employee.full_name, Employee.id)
+            .all())
+    invalid = []
+    for emp_id, full_name, code, shift_id, shift in rows:
+        if shift_id is None:
+            reason = 'no_shift'
+        else:
+            reason = employee_shift_invalid_reason(shift, school.id)
+        if reason is None:
+            continue
+        invalid.append({
+            'id': emp_id,
+            'full_name': full_name,
+            'employee_code': code or '',
+            'reason': reason,
+            'reason_label': EMPLOYEE_SHIFT_INVALID_REASONS[reason],
+            'shift_name': (shift.name if shift is not None
+                           and shift.school_id == school.id else None),
+        })
+    return invalid
+
+
 def get_employee_shift(employee, school):
     """
     Return the EmployeeAttendanceShift for `employee`, else None.
@@ -326,25 +420,25 @@ def get_employee_shift(employee, school):
     Returns None when:
       - school.emp_enable_attendance_shifts is False/absent
       - employee.shift_id is NULL
-      - the shift no longer exists or is inactive
-      - the shift does not belong to the employee's school AND the resolving
-        school (cross-school rows can never influence a status, even if one was
-        somehow stored)
+      - the employee does not belong to the resolving school
+      - the shift fails the canonical rule (is_valid_employee_shift): missing,
+        another school's, inactive, or without a valid absence cutoff
+    Callers in shift mode treat None as fail-closed (no general fallback for
+    the absence cutoff).  Same single primary-key lookup as before — no extra
+    query on the AI Face path.
     """
     if not school or not getattr(school, 'emp_enable_attendance_shifts', False):
         return None
     shift_id = getattr(employee, 'shift_id', None)
     if not shift_id:
         return None
+    if getattr(employee, 'school_id', None) != getattr(school, 'id', None):
+        return None
     from app.models import EmployeeAttendanceShift
     shift = (EmployeeAttendanceShift.query
              .execution_options(bypass_tenant_scope=True)
              .get(shift_id))
-    if not shift or not shift.is_active:
-        return None
-    if shift.school_id != getattr(employee, 'school_id', None):
-        return None
-    if shift.school_id != getattr(school, 'id', None):
+    if not is_valid_employee_shift(shift, getattr(school, 'id', None)):
         return None
     return shift
 
@@ -352,11 +446,10 @@ def get_employee_shift(employee, school):
 def get_employee_shift_map(school, employees):
     """{employee_id: EmployeeAttendanceShift} for a SET of employees — ONE query.
 
-    The bulk form of get_employee_shift, for the manual daily sheet and payroll
-    generation, so neither performs a shift query per employee.  Applies exactly
-    the same rules: feature toggle off, no assignment, inactive shift or a shift
-    from another school all yield no entry (the caller then falls back to the
-    school-level employee settings).
+    The bulk form of get_employee_shift, for the manual daily sheet, automatic
+    absence and payroll generation, so none performs a shift query per
+    employee.  Applies exactly the same canonical rule: feature toggle off, no
+    assignment, or a shift failing is_valid_employee_shift yield no entry.
     """
     if not school or not getattr(school, 'emp_enable_attendance_shifts', False):
         return {}
@@ -372,7 +465,7 @@ def get_employee_shift_map(school, employees):
                     EmployeeAttendanceShift.school_id == school.id,
                     EmployeeAttendanceShift.is_active.is_(True))
             .all())
-    by_id = {s.id: s for s in rows}
+    by_id = {s.id: s for s in rows if is_valid_employee_shift(s, school.id)}
     return {
         e.id: by_id[e.shift_id]
         for e in employees

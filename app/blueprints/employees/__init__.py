@@ -278,19 +278,41 @@ def _form_context(employee=None):
                                    .filter_by(employee_id=employee.id, is_active=True)
                                    .first())
 
-    # ── Employee attendance shift (optional) ──────────────────────────────────
-    # Only ACTIVE shifts of THIS school are offered, and only while the school
-    # has employee shifts enabled. When the feature is off the dropdown is not
-    # rendered at all, so no shift can be assigned. An employee already holding
-    # an inactive shift keeps it listed so edit can preselect it rather than
-    # silently clearing the assignment.
+    # ── Employee attendance shift ─────────────────────────────────────────────
+    # Only shifts of THIS school that pass the canonical rule
+    # (is_valid_employee_shift) are offered. The selector is available in BOTH
+    # modes: with employee shift mode OFF the assignment is optional
+    # preparation (attendance keeps using the general employee times until the
+    # mode is enabled — get_employee_shift ignores it); with the mode ON it is
+    # required for active employees. One query loads every shift of the
+    # school, so an employee's CURRENT shift that is no longer valid
+    # (inactive / no valid absence cutoff) can be shown as such on edit
+    # instead of being silently replaced. A stored id that is not one of this
+    # school's shifts is reported without any detail of the foreign row.
+    emp_shift_mode = bool(school and getattr(school, 'emp_enable_attendance_shifts', False))
     emp_shifts = []
-    if school and getattr(school, 'emp_enable_attendance_shifts', False):
+    emp_cur_shift_invalid = None
+    if school:
         from app.models import EmployeeAttendanceShift
-        emp_shifts = (EmployeeAttendanceShift.query
-                      .filter_by(school_id=school.id, is_active=True)
-                      .order_by(EmployeeAttendanceShift.start_time)
-                      .all())
+        from app.utils.attendance_helpers import (EMPLOYEE_SHIFT_INVALID_REASONS,
+                                                  employee_shift_invalid_reason)
+        school_shifts = (EmployeeAttendanceShift.query
+                         .execution_options(bypass_tenant_scope=True)
+                         .filter_by(school_id=school.id)
+                         .order_by(EmployeeAttendanceShift.start_time)
+                         .all())
+        emp_shifts = [s for s in school_shifts
+                      if employee_shift_invalid_reason(s, school.id) is None]
+        cur_id = employee.shift_id if employee else None
+        if cur_id is not None and cur_id not in {s.id for s in emp_shifts}:
+            cur = next((s for s in school_shifts if s.id == cur_id), None)
+            reason = (employee_shift_invalid_reason(cur, school.id)
+                      if cur is not None else 'missing')
+            emp_cur_shift_invalid = {
+                'id': cur_id,
+                'name': cur.name if cur is not None else None,
+                'reason_label': EMPLOYEE_SHIFT_INVALID_REASONS[reason],
+            }
 
     # Institutes: study groups the instructor teaches (InstituteStudyGroup.
     # instructor_id) replace grades/sections. Never computed for a school.
@@ -325,42 +347,75 @@ def _form_context(employee=None):
         emp_class_other         = _ec.OTHER,
         emp_cur_job             = cur_job,
         emp_cur_dep             = cur_dep,
+        emp_shift_mode          = emp_shift_mode,
         emp_shifts              = emp_shifts,
         emp_cur_shift_id        = employee.shift_id if employee else None,
+        emp_cur_shift_invalid   = emp_cur_shift_invalid,
     )
 
 
-def _posted_employee_shift_id(school, employee=None):
-    """Resolve the posted ``shift_id`` to a shift owned by `school`, else None.
+_MSG_SHIFT_REQUIRED = 'يجب تعيين شفت صالح للموظف لأن نظام شفتات الموظفين مفعّل.'
+_MSG_SHIFT_INVALID = ('الشفت المحدد غير صالح لهذه المدرسة. يرجى اختيار شفت نشط '
+                      'وله وقت غياب تلقائي صحيح.')
 
-    Security: the submitted id is never trusted. It is looked up with an
-    explicit ``school_id`` filter, so a shift belonging to another school
-    resolves to None (the assignment is dropped) instead of being stored.
-    Returns the employee's current shift unchanged when the field is absent
-    from the submission, so a form that does not render the dropdown — the
-    feature is off, or the field is hidden — cannot clear an existing value.
+
+def _resolve_posted_employee_shift(school, employee, posted_status):
+    """Return ``(shift_id, error)`` for an employee save.
+
+    Security: the submitted id is never trusted and no client school_id is
+    read. A NEW assignment is accepted only when it is a shift of the trusted
+    current `school` passing the canonical rule (is_valid_employee_shift); a
+    foreign, inactive, missing or invalid shift is REJECTED with an error,
+    never stored and never silently swapped for another shift. This holds in
+    both modes.
+
+    * field absent → the stored value is kept (an unrelated edit through a form
+      without the field can never clear or change it);
+    * "" → no shift;
+    * an id equal to the stored one → kept as-is unless a valid shift is
+      REQUIRED (it is not a new assignment);
+    * Shift mode OFF → assignment is optional preparation for enabling the
+      mode; runtime ignores it until then (get_employee_shift).
+    * Shift mode ON → an ACTIVE employee must end with a valid shift, or the
+      save fails.
+    At most ONE scoped primary-key lookup.
     """
-    if 'shift_id' not in request.form:
-        return employee.shift_id if employee else None
-    if not school or not getattr(school, 'emp_enable_attendance_shifts', False):
-        return employee.shift_id if employee else None
+    current = employee.shift_id if employee else None
+    if not school:
+        return current, None
 
-    raw = (request.form.get('shift_id') or '').strip()
-    if not raw:
-        return None                      # explicit "— بدون شفت —"
-    if not raw.isdigit():
-        return None
+    if 'shift_id' not in request.form:
+        candidate = current
+    else:
+        raw = (request.form.get('shift_id') or '').strip()
+        if not raw:
+            candidate = None
+        elif raw.isascii() and raw.isdigit() and len(raw) <= 9:
+            candidate = int(raw)
+        else:
+            return current, _MSG_SHIFT_INVALID
+
+    required = (bool(getattr(school, 'emp_enable_attendance_shifts', False))
+                and posted_status == 'active')
+    if candidate is None:
+        return None, (_MSG_SHIFT_REQUIRED if required else None)
+    if not required and candidate == current:
+        return candidate, None
 
     from app.models import EmployeeAttendanceShift
+    from app.utils.attendance_helpers import is_valid_employee_shift
     shift = (EmployeeAttendanceShift.query
-             .filter_by(id=int(raw), school_id=school.id, is_active=True)
-             .filter(EmployeeAttendanceShift.absent_after_time.isnot(None))
+             .execution_options(bypass_tenant_scope=True)
+             .filter_by(id=candidate, school_id=school.id)
              .first())
-    if shift is None:
+    if not is_valid_employee_shift(shift, school.id):
         _log.warning('[employee-shift] rejected shift_id=%s for school_id=%s '
-                     '(not an employee shift of this school)', raw, school.id)
-        return None
-    return shift.id
+                     '(not a valid employee shift of this school)',
+                     candidate, school.id)
+        if candidate == current and 'shift_id' not in request.form:
+            return current, _MSG_SHIFT_REQUIRED
+        return current, _MSG_SHIFT_INVALID
+    return shift.id, None
 
 
 # Every field the institute teaching section can post. ANY of them marks a
@@ -719,24 +774,13 @@ def _handle_employee_post(employee):
     )
 
     # Resolve once, before uploads or ORM mutation.  Shift mode requires every
-    # active employee to have an explicitly selected, active, same-school shift.
+    # active employee to end with a valid, same-school shift (canonical rule).
     _posted_status = (request.form.get('status', employee.status)
                       if employee is not None else 'active')
-    _employee_shift_id = _posted_employee_shift_id(school, employee)
-    if (school and getattr(school, 'emp_enable_attendance_shifts', False)
-            and _posted_status == 'active' and _employee_shift_id is not None
-            and 'shift_id' not in request.form):
-        from app.models import EmployeeAttendanceShift
-        _kept_shift = (EmployeeAttendanceShift.query
-                       .filter_by(id=_employee_shift_id, school_id=school.id,
-                                  is_active=True)
-                       .filter(EmployeeAttendanceShift.absent_after_time.isnot(None))
-                       .first())
-        if _kept_shift is None:
-            _employee_shift_id = None
-    if (school and getattr(school, 'emp_enable_attendance_shifts', False)
-            and _posted_status == 'active' and _employee_shift_id is None):
-        flash('يجب تعيين شفت صالح للموظف لأن نظام شفتات الموظفين مفعّل.', 'danger')
+    _employee_shift_id, _shift_error = _resolve_posted_employee_shift(
+        school, employee, _posted_status)
+    if _shift_error:
+        flash(_shift_error, 'danger')
         return render_template(_tmpl, error_step='basic', **_form_context(employee))
 
     # ── Create-wizard limits — enforced BEFORE anything is created ────────────

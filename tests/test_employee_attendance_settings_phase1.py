@@ -398,6 +398,9 @@ class EmployeeAttendanceSettingsDbTest(unittest.TestCase):
                     school_id=school.id, name=f'Shift {tag} {self.suffix}',
                     start_time=__import__('datetime').time(7, 0),
                     late_after_time=__import__('datetime').time(9, 5),
+                    # Canonical rule: a valid shift needs an absence cutoff
+                    # after its late time (is_valid_employee_shift).
+                    absent_after_time=__import__('datetime').time(10, 0),
                     dismissal_time=__import__('datetime').time(17, 30),
                     is_active=True)
                 db.session.add(shift)

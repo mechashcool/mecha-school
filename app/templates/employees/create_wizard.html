@@ -444,18 +444,33 @@
           </div>
           {% endif %}
 
-          {% if school and school.emp_enable_attendance_shifts %}
+          {# Shift mode ON: required. Shift mode OFF: optional preparation —
+             attendance keeps the general employee times until the mode is
+             enabled. The server re-validates either way. #}
+          {% if emp_shift_mode or emp_shifts %}
+          {% set _posted_shift_ok = emp_shifts | selectattr('id', 'equalto', sf.get('shift_id', '')|int(0)) | list %}
           <div class="col-md-6">
-            <label class="form-label">الشفت <span class="text-danger">*</span></label>
-            <select name="shift_id" class="form-select" required>
-              <option value="" disabled {{ 'selected' if not sf.get('shift_id') }}>— اختر شفتاً —</option>
+            <label class="form-label">الشفت
+              {% if emp_shift_mode %}<span class="text-danger">*</span>{% else %}<span class="text-muted small">(اختياري)</span>{% endif %}
+            </label>
+            <select name="shift_id" class="form-select" {{ 'required' if emp_shift_mode }}>
+              <option value="" {{ 'disabled' if emp_shift_mode }} {{ 'selected' if not _posted_shift_ok }}>— {{ 'اختر شفتاً' if emp_shift_mode else 'بدون شفت' }} —</option>
               {% for shift in emp_shifts %}
               <option value="{{ shift.id }}" {{ 'selected' if sf.get('shift_id')|string == shift.id|string }}>
                 {{ shift.name }} ({{ shift.start_time.strftime('%H:%M') }})
               </option>
               {% endfor %}
             </select>
+            {% if emp_shift_mode and not emp_shifts %}
+            <div class="alert alert-warning py-2 mt-2 mb-0 small">
+              لا توجد شفتات صالحة ونشطة. أنشئ أو فعّل شفتاً صالحاً قبل حفظ موظف نشط.
+            </div>
+            {% endif %}
+            {% if emp_shift_mode %}
             <small class="text-muted">مطلوب لأن نظام شفتات الموظفين مفعّل.</small>
+            {% else %}
+            <small class="text-muted">شفتات الموظفين غير مفعّلة: الشفت المحفوظ للتحضير فقط، ويبقى الحضور على الأوقات العامة حتى التفعيل.</small>
+            {% endif %}
           </div>
           {% endif %}
 

@@ -100,22 +100,49 @@
             {% elif employee and employee.contract_type %}
             <input type="hidden" name="contract_type" value="{{ employee.contract_type }}">
             {% endif %}
-            {# Employee attendance shift — rendered only while the school has
-               employee shifts enabled AND has at least one active shift. When
-               it is not rendered the field is simply not posted, and the save
-               handler preserves any existing assignment. #}
-            {% if emp_shifts %}
+            {# Employee attendance shift. Shift mode ON: always rendered (even
+               with zero valid shifts), required for an active employee. Shift
+               mode OFF: rendered whenever there is something to choose or show,
+               optional — a saved shift is preparation only and is not used by
+               attendance until the mode is enabled. Exactly one option is
+               pre-selected by the server: the current valid shift, the current
+               INVALID shift (shown as such, never silently replaced), or the
+               placeholder — so the browser can never fall back to the first
+               shift. The save handler enforces the rule server-side. #}
+            {% if emp_shift_mode or emp_shifts or emp_cur_shift_invalid %}
             <div class="col-md-6">
-              <label class="form-label">الشفت</label>
-              <select name="shift_id" class="form-select" required>
-                <option value="" disabled>— اختر شفتاً —</option>
+              <label class="form-label">الشفت
+                {% if emp_shift_mode %}<span class="text-danger">*</span>{% else %}<span class="text-muted small">(اختياري)</span>{% endif %}
+              </label>
+              <select name="shift_id" class="form-select">
+                <option value="" {{ 'selected' if not emp_cur_shift_id }}>— {{ 'اختر شفتاً' if emp_shift_mode else 'بدون شفت' }} —</option>
+                {% if emp_cur_shift_invalid %}
+                <option value="{{ emp_cur_shift_invalid.id }}" selected>
+                  {{ emp_cur_shift_invalid.name or 'شفت غير متاح' }} — غير صالح
+                </option>
+                {% endif %}
                 {% for shift in emp_shifts %}
                 <option value="{{ shift.id }}" {{ 'selected' if emp_cur_shift_id == shift.id }}>
                   {{ shift.name }}{% if shift.start_time %} ({{ shift.start_time.strftime('%H:%M') }}){% endif %}
                 </option>
                 {% endfor %}
               </select>
+              {% if emp_cur_shift_invalid %}
+              <div class="text-danger small mt-1">
+                الشفت الحالي غير صالح: {{ emp_cur_shift_invalid.reason_label }}.
+                {% if emp_shift_mode %}يجب اختيار شفت صالح قبل حفظ موظف نشط.{% else %}يجب اختيار شفت صالح قبل تفعيل شفتات الموظفين.{% endif %}
+              </div>
+              {% endif %}
+              {% if emp_shift_mode and not emp_shifts %}
+              <div class="alert alert-warning py-2 mt-2 mb-0 small">
+                لا توجد شفتات صالحة ونشطة. أنشئ أو فعّل شفتاً صالحاً قبل حفظ موظف نشط.
+              </div>
+              {% endif %}
+              {% if emp_shift_mode %}
               <small class="text-muted">مطلوب للموظف النشط عند تفعيل نظام الشفتات.</small>
+              {% else %}
+              <small class="text-muted">شفتات الموظفين غير مفعّلة: الشفت المحفوظ للتحضير فقط، ويبقى الحضور على الأوقات العامة حتى التفعيل.</small>
+              {% endif %}
             </div>
             {% endif %}
             {% if school_cfg.field_visible('employees', 'base_salary') %}

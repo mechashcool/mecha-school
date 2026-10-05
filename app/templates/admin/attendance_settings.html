@@ -389,8 +389,8 @@
           <div>
             <div class="fw-700" style="font-size:14px">شفتات الموظفين</div>
             <div class="text-muted" style="font-size:12.5px">
-              عند التفعيل، يتبع كل موظف أوقات الشفت المعيَّن له؛ ومَن لا شفت له
-              يستخدم أوقات دوام الموظفين أعلاه.
+              عند التفعيل، يتبع كل موظف أوقات الشفت المعيَّن له؛ ولا يمكن التفعيل
+              قبل تعيين شفت صالح لكل موظف نشط.
             </div>
           </div>
           <div class="ms-auto form-check form-switch">
@@ -403,6 +403,41 @@
         </div>
       </div>
     </div>
+    {% if emp_shift_blockers %}
+    <div class="card mb-4 border-danger" id="empShiftBlockers">
+      <div class="card-header text-danger">
+        <i class="bi bi-exclamation-triangle me-1"></i>
+        موظفون نشطون يمنعون تفعيل شفتات الموظفين ({{ emp_shift_blockers|length }})
+      </div>
+      <div class="card-body p-0">
+        <p class="text-muted small px-3 pt-3 mb-2">
+          افتح كل موظف وعيِّن له شفتاً صالحاً (نشط، وله وقت غياب تلقائي بعد وقت التأخر/البداية)،
+          أو صحِّح الشفت نفسه، ثم أعد محاولة التفعيل.
+        </p>
+        <div class="table-wrapper">
+          <table class="table table-sm mb-0">
+            <thead>
+              <tr><th>الموظف</th><th>الرقم</th><th>السبب</th><th>الشفت الحالي</th><th></th></tr>
+            </thead>
+            <tbody>
+              {% for b in emp_shift_blockers %}
+              <tr>
+                <td>{{ b.full_name }}</td>
+                <td>{{ b.employee_code }}</td>
+                <td class="text-danger">{{ b.reason_label }}</td>
+                <td>{{ b.shift_name or '—' }}</td>
+                <td>
+                  <a href="{{ url_for('employees.edit', emp_id=b.id) }}"
+                     class="btn btn-sm btn-outline-secondary">تعديل</a>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    {% endif %}
     {% endif %}
 
     <div class="row g-4">
@@ -1297,6 +1332,9 @@ document.addEventListener('DOMContentLoaded', function() {
   /* Same rule for employees: derived from the SAVED
      settings.emp_enable_attendance_shifts rendered into #empShiftsToggle. */
   syncEmpShiftPane();
+  /* A refused employee-shift activation lists its blockers in the employees
+     tab — open that tab so the list is visible immediately. */
+  if (document.getElementById('empShiftBlockers')) showAttTab('employees');
 });
 
 /* Edit shift modal — identical to original */

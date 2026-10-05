@@ -132,6 +132,21 @@ def _is_role_assignable_by_current_user(role, existing_role_name=None):
     return False
 
 
+_MSG_TEACHER_NEEDS_EMPLOYEE_SHIFT = (
+    'نظام شفتات الموظفين مفعّل لهذه المدرسة، ولا يمكن إنشاء سجل موظف معلم من هنا '
+    'بدون شفت صالح. أنشئ المعلم من صفحة الموظفين مع اختيار شفت صالح وإنشاء حساب '
+    'الدخول له من هناك.')
+
+
+def _school_requires_employee_shift(school_id):
+    """True when `school_id` (server-resolved) has employee shift mode ON, so a
+    new ACTIVE Employee may only be created with a valid shift. Identity-map
+    lookup — normally no extra query (the caller already loaded the school)."""
+    school_obj = db.session.get(School, school_id) if school_id else None
+    return bool(school_obj
+                and getattr(school_obj, 'emp_enable_attendance_shifts', False))
+
+
 def _is_school_scoped_manager():
     """True for any non-super-admin user allowed into user management:
     the school manager role, or any other role granted manage_users.
@@ -791,6 +806,14 @@ def create_user():
         if assigned_school_id and not School.query.get(assigned_school_id):
             errors.append('Selected school is invalid.')
 
+        # A teacher account auto-creates an ACTIVE Employee below, and this form
+        # has no shift selector. In employee shift mode that Employee would have
+        # no valid shift, so the account must be created through the employee
+        # flow instead (fail closed — no user, no employee is created).
+        if (role_obj.name == 'teacher' and assigned_school_id
+                and _school_requires_employee_shift(assigned_school_id)):
+            errors.append(_MSG_TEACHER_NEEDS_EMPLOYEE_SHIFT)
+
         if errors:
             for e in errors:
                 flash(e, 'danger')
@@ -1136,6 +1159,13 @@ def edit_user(user_id):
                    .execution_options(bypass_tenant_scope=True)
                    .filter_by(user_id=user.id).first())
             if not emp:
+                # Same fail-closed rule as create_user: no ACTIVE Employee
+                # without a valid shift while employee shift mode is on.
+                if (user.school_id
+                        and _school_requires_employee_shift(user.school_id)):
+                    db.session.rollback()
+                    flash(_MSG_TEACHER_NEEDS_EMPLOYEE_SHIFT, 'danger')
+                    return redirect(url_for('admin.edit_user', user_id=user_id))
                 emp = Employee(
                     employee_id=code_generator.generate_employee_id(user.school_id),
                     full_name=user.full_name,
@@ -3012,35 +3042,21 @@ def attendance_settings():
         _requested_emp_shifts = bool(request.form.get('emp_enable_attendance_shifts'))
         if (is_school_obj and _requested_emp_shifts
                 and not getattr(settings_row, 'emp_enable_attendance_shifts', False)):
-            # One aggregate query validates every active employee and its joined
-            # assignment; no per-employee shift lookup.
-            from app.models import Employee, EmployeeAttendanceShift
-            _invalid_count = (Employee.query
-                .execution_options(bypass_tenant_scope=True)
-                .outerjoin(
-                    EmployeeAttendanceShift,
-                    db.and_(Employee.shift_id == EmployeeAttendanceShift.id,
-                            EmployeeAttendanceShift.school_id == settings_row.id,
-                            EmployeeAttendanceShift.is_active.is_(True)))
-                .filter(Employee.school_id == settings_row.id,
-                        Employee.status == 'active',
-                        db.or_(
-                            EmployeeAttendanceShift.id.is_(None),
-                            EmployeeAttendanceShift.start_time.is_(None),
-                            EmployeeAttendanceShift.absent_after_time.is_(None),
-                            EmployeeAttendanceShift.absent_after_time
-                            <= db.func.coalesce(
-                                EmployeeAttendanceShift.late_after_time,
-                                EmployeeAttendanceShift.start_time)))
-                .count())
-            if _invalid_count:
+            # ONE query lists every active employee of THIS school whose shift
+            # fails the canonical rule (list_invalid_shift_employees); the
+            # names and reasons are shown on the settings page after redirect.
+            from app.utils.attendance_helpers import list_invalid_shift_employees
+            _invalid = list_invalid_shift_employees(settings_row)
+            if _invalid:
                 db.session.rollback()
                 flash(
-                    'لا يمكن تفعيل شفتات الموظفين قبل تعيين شفت لجميع الموظفين النشطين. '
-                    f'يوجد حالياً {_invalid_count} موظف/موظفين بدون شفت صالح '
-                    'ومحدد له وقت غياب تلقائي.',
+                    'لا يمكن تفعيل شفتات الموظفين قبل تعيين شفت صالح لجميع الموظفين النشطين. '
+                    f'يوجد حالياً {len(_invalid)} موظف/موظفين بدون شفت صالح '
+                    'ومحدد له وقت غياب تلقائي. القائمة وأسبابها معروضة في تبويب '
+                    '"حضور وغياب الموظفين".',
                     'danger')
-                return redirect(url_for('admin.attendance_settings'))
+                return redirect(url_for('admin.attendance_settings',
+                                        emp_shift_blockers=1))
 
         for _field in _time_fields:
             if _field in request.form:
@@ -3103,13 +3119,22 @@ def attendance_settings():
         emp_active_shifts   = [s for s in emp_all if s.is_active]
         emp_inactive_shifts = [s for s in emp_all if not s.is_active]
 
+    # After a refused OFF→ON activation only: the active employees still
+    # blocking it, with the reason. Current school only; one query.
+    emp_shift_blockers = None
+    if (is_school_obj and request.args.get('emp_shift_blockers')
+            and not getattr(settings_row, 'emp_enable_attendance_shifts', False)):
+        from app.utils.attendance_helpers import list_invalid_shift_employees
+        emp_shift_blockers = list_invalid_shift_employees(settings_row)
+
     return render_template('admin/attendance_settings.html',
                            settings=settings_row,
                            is_school_obj=is_school_obj,
                            active_shifts=active_shifts,
                            inactive_shifts=inactive_shifts,
                            emp_active_shifts=emp_active_shifts,
-                           emp_inactive_shifts=emp_inactive_shifts)
+                           emp_inactive_shifts=emp_inactive_shifts,
+                           emp_shift_blockers=emp_shift_blockers)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
