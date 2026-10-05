@@ -166,6 +166,8 @@ def get_module_flags(school_id: int) -> dict:
         from app.models import SchoolModule
         rows = (SchoolModule.query
                 .execution_options(bypass_tenant_scope=True)
+                .with_entities(SchoolModule.module_key,
+                               SchoolModule.is_enabled)
                 .filter_by(school_id=school_id)
                 .all())
         return {r.module_key: bool(r.is_enabled) for r in rows}

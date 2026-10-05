@@ -210,6 +210,7 @@ def is_feature_enabled(school_id: int | None, feature_key: str) -> bool:
     from app.models import SchoolFeature
     row = (SchoolFeature.query
            .execution_options(bypass_tenant_scope=True)
+           .with_entities(SchoolFeature.is_enabled)
            .filter_by(school_id=school_id, feature_key=feature_key)
            .first())
     if row is None:
@@ -234,6 +235,8 @@ def get_enabled_features(school_id: int | None) -> set:
         from app.models import SchoolFeature
         rows = (SchoolFeature.query
                 .execution_options(bypass_tenant_scope=True)
+                .with_entities(SchoolFeature.feature_key,
+                               SchoolFeature.is_enabled)
                 .filter_by(school_id=school_id)
                 .all())
         if not rows:
