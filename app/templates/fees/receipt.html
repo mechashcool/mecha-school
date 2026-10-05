@@ -188,9 +188,22 @@ table.detail-tbl tr:last-child td { border-bottom: none; }
 table.detail-tbl tr:nth-child(even) td { background: #f8fbff; }
 .mono { font-family: 'Courier New', monospace; font-size: 12px; }
 
-/* Amounts: isolated LTR run so a figure always reads as the formatted number
-   followed by the school's currency symbol, regardless of the RTL flow. */
-.money { direction: ltr; unicode-bidi: isolate; display: inline-block; }
+/* Amounts: the number and the currency symbol are two flex items in an LTR
+   inline-flex box, so "<number> <symbol>" is a STRUCTURAL order (item 1 then
+   item 2) rather than a bidi outcome — the surrounding RTL flow can never
+   reorder them. Each item is additionally isolated so the Arabic symbol
+   shapes correctly on its own. */
+.money {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 4px;
+  direction: ltr;
+  unicode-bidi: isolate;
+  white-space: nowrap;
+}
+.money .num { direction: ltr; unicode-bidi: isolate; }
+.money .cur { direction: rtl; unicode-bidi: isolate; }
 
 /* ── Compact signature / stamp area ── */
 .sign-area {
@@ -357,17 +370,17 @@ table.detail-tbl tr:nth-child(even) td { background: #f8fbff; }
     <div class="amount-grid">
       <div class="ag-cell">
         <label>المبلغ المدفوع</label>
-        <div class="val paid"><span class="money">{{ '{:,.2f}'.format(paid_amount) }} {{ currency }}</span></div>
+        <div class="val paid"><span class="money"><span class="num">{{ '{:,.2f}'.format(paid_amount) }}</span><span class="cur">{{ currency }}</span></span></div>
       </div>
       <div class="ag-cell">
         <label>الرصيد المتبقي</label>
         <div class="val {{ 'rem-ok' if remaining <= 0 else 'rem-bad' }}">
-          <span class="money">{{ '{:,.2f}'.format(remaining) }} {{ currency }}</span>
+          <span class="money"><span class="num">{{ '{:,.2f}'.format(remaining) }}</span><span class="cur">{{ currency }}</span></span>
         </div>
       </div>
       <div class="ag-cell">
         <label>إجمالي المستحق</label>
-        <div class="val"><span class="money">{{ '{:,.2f}'.format(total_due) }} {{ currency }}</span></div>
+        <div class="val"><span class="money"><span class="num">{{ '{:,.2f}'.format(total_due) }}</span><span class="cur">{{ currency }}</span></span></div>
       </div>
     </div>
   </div>
@@ -381,9 +394,9 @@ table.detail-tbl tr:nth-child(even) td { background: #f8fbff; }
       <tr><th>رقم الطالب</th><td>{{ student.student_id or '—' }}</td></tr>
       <tr><th>نوع الرسم</th><td>{{ fee_type_name }}</td></tr>
       <tr><th>القسط</th><td>#{{ installment.installment_no }}</td></tr>
-      <tr><th>المبلغ المدفوع</th><td><span class="money">{{ '{:,.2f}'.format(paid_amount) }} {{ currency }}</span></td></tr>
+      <tr><th>المبلغ المدفوع</th><td><span class="money"><span class="num">{{ '{:,.2f}'.format(paid_amount) }}</span><span class="cur">{{ currency }}</span></span></td></tr>
       <tr><th>المبلغ كتابةً</th><td>{{ amount_words }}</td></tr>
-      <tr><th>الرصيد المتبقي</th><td><span class="money">{{ '{:,.2f}'.format(remaining) }} {{ currency }}</span></td></tr>
+      <tr><th>الرصيد المتبقي</th><td><span class="money"><span class="num">{{ '{:,.2f}'.format(remaining) }}</span><span class="cur">{{ currency }}</span></span></td></tr>
       <tr><th>تاريخ الاستحقاق</th><td>{{ installment.due_date.strftime('%Y-%m-%d') if installment.due_date else '—' }}</td></tr>
       <tr><th>تاريخ إصدار الإيصال</th><td>{{ print_date.strftime('%Y-%m-%d') }}</td></tr>
       <tr><th>طريقة الدفع</th><td>{{ payment_method_label }}</td></tr>

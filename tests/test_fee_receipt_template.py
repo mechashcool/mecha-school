@@ -86,19 +86,28 @@ class FeeReceiptTemplateTest(unittest.TestCase):
         self.assertNotIn('school-a-logo.png', b)
         self.assertNotIn('شكراً لثقتكم بنا — مدرسة أ', b)
 
-    # CASE 4 — IQD school currency symbol.
-    def test_iqd_currency_symbol(self):
+    # CASE 4 — IQD amounts render as "<number> د.ع", number first.
+    def test_iqd_currency_symbol_follows_the_amount(self):
         html = self._render()
-        self.assertIn('50,000.00 د.ع', html)
-        self.assertIn('100,000.00 د.ع', html)
-        self.assertIn('150,000.00 د.ع', html)
+        for amount in ('50,000.00', '100,000.00', '150,000.00'):
+            self.assertIn(
+                '<span class="num">%s</span><span class="cur">د.ع</span>' % amount,
+                html)
+
+    # Every money figure puts the number before the symbol — structural order,
+    # so the surrounding RTL flow cannot reorder it.
+    def test_every_money_value_is_number_then_currency(self):
+        html = self._render()
+        spans = re.findall(r'<span class="money">(.*?)</span></span>', html, re.S)
+        self.assertEqual(5, len(spans))
+        for inner in spans:
+            self.assertLess(inner.index('class="num"'), inner.index('class="cur"'))
 
     # CASE 4b — currency stays per-school (no hardcoded IQD).
     def test_non_iqd_currency_is_honoured(self):
         html = self._render(currency='$')
-        self.assertIn('50,000.00 $', html)
-        # No hardcoded IQD on the figures (the CSS comment is not document text).
-        self.assertNotIn('50,000.00 د.ع', html)
+        self.assertIn('<span class="num">50,000.00</span><span class="cur">$</span>', html)
+        self.assertNotIn('<span class="cur">د.ع</span>', html)
 
     # CASE 5/6 — approved structure + receipt values rendered as supplied.
     def test_approved_structure_and_values(self):
