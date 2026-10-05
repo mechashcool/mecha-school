@@ -26,6 +26,24 @@ ARABIC_MONTHS = [
 ]
 
 
+def _overview_custom_range(args):
+    """Return raw form values and a valid complete custom range, if supplied."""
+    raw_from = (args.get('date_from') or '').strip()
+    raw_to = (args.get('date_to') or '').strip()
+    if not (raw_from and raw_to):
+        return raw_from, raw_to, None, None
+    try:
+        date_from = date.fromisoformat(raw_from)
+        date_to = date.fromisoformat(raw_to)
+    except ValueError:
+        flash('صيغة التاريخ غير صحيحة. يرجى استخدام YYYY-MM-DD.', 'danger')
+        return raw_from, raw_to, None, None
+    if date_from > date_to:
+        flash('تاريخ البداية يجب ألا يكون بعد تاريخ النهاية.', 'danger')
+        return raw_from, raw_to, None, None
+    return raw_from, raw_to, date_from, date_to
+
+
 def _academic_year_for_date(school, tx_date):
     if not school:
         return None
@@ -83,27 +101,33 @@ def index():
     today  = date.today()
     year   = request.args.get('year', today.year, type=int)
     month  = request.args.get('month', type=int)
+    date_from_raw, date_to_raw, date_from, date_to = _overview_custom_range(request.args)
+    custom_range = date_from is not None and date_to is not None
     school = get_current_school()
     sid    = school.id if school else None
 
     rev_q = (db.session.query(
         func.coalesce(func.sum(Revenue.amount), 0).label('total')
     ).execution_options(include_all_years=True)
-     .filter(extract('year', Revenue.date) == year,
-             Revenue.refunded_at.is_(None)))
+     .filter(Revenue.refunded_at.is_(None)))
     if sid:
         rev_q = rev_q.filter(Revenue.school_id == sid)
 
     exp_q = (db.session.query(
         func.coalesce(func.sum(Expense.amount), 0).label('total')
-    ).execution_options(include_all_years=True)
-     .filter(extract('year', Expense.date) == year))
+    ).execution_options(include_all_years=True))
     if sid:
         exp_q = exp_q.filter(Expense.school_id == sid)
 
-    if month:
-        rev_q = rev_q.filter(extract('month', Revenue.date) == month)
-        exp_q = exp_q.filter(extract('month', Expense.date) == month)
+    if custom_range:
+        rev_q = rev_q.filter(Revenue.date >= date_from, Revenue.date <= date_to)
+        exp_q = exp_q.filter(Expense.date >= date_from, Expense.date <= date_to)
+    else:
+        rev_q = rev_q.filter(extract('year', Revenue.date) == year)
+        exp_q = exp_q.filter(extract('year', Expense.date) == year)
+        if month:
+            rev_q = rev_q.filter(extract('month', Revenue.date) == month)
+            exp_q = exp_q.filter(extract('month', Expense.date) == month)
 
     total_rev = float(rev_q.scalar() or 0)
     total_exp = float(exp_q.scalar() or 0)
@@ -113,19 +137,27 @@ def index():
         extract('month', Revenue.date).label('m'),
         func.sum(Revenue.amount).label('total')
     ).execution_options(include_all_years=True)
-     .filter(extract('year', Revenue.date) == year,
-             Revenue.refunded_at.is_(None)))
+     .filter(Revenue.refunded_at.is_(None)))
     if sid:
         rev_chart_q = rev_chart_q.filter(Revenue.school_id == sid)
+    if custom_range:
+        rev_chart_q = rev_chart_q.filter(Revenue.date >= date_from,
+                                         Revenue.date <= date_to)
+    else:
+        rev_chart_q = rev_chart_q.filter(extract('year', Revenue.date) == year)
     monthly_rev = {r.m: float(r.total) for r in rev_chart_q.group_by('m').all()}
 
     exp_chart_q = (db.session.query(
         extract('month', Expense.date).label('m'),
         func.sum(Expense.amount).label('total')
-    ).execution_options(include_all_years=True)
-     .filter(extract('year', Expense.date) == year))
+    ).execution_options(include_all_years=True))
     if sid:
         exp_chart_q = exp_chart_q.filter(Expense.school_id == sid)
+    if custom_range:
+        exp_chart_q = exp_chart_q.filter(Expense.date >= date_from,
+                                         Expense.date <= date_to)
+    else:
+        exp_chart_q = exp_chart_q.filter(extract('year', Expense.date) == year)
     monthly_exp = {r.m: float(r.total) for r in exp_chart_q.group_by('m').all()}
 
     chart_rev = [monthly_rev.get(m, 0) for m in range(1, 13)]
@@ -137,6 +169,11 @@ def index():
     if sid:
         recent_rev_q = recent_rev_q.filter_by(school_id=sid)
         recent_exp_q = recent_exp_q.filter_by(school_id=sid)
+    if custom_range:
+        recent_rev_q = recent_rev_q.filter(Revenue.date >= date_from,
+                                           Revenue.date <= date_to)
+        recent_exp_q = recent_exp_q.filter(Expense.date >= date_from,
+                                           Expense.date <= date_to)
     recent_rev = (recent_rev_q.filter(Revenue.amount > 0,
                                       Revenue.refunded_at.is_(None))
                   .order_by(Revenue.date.desc(), Revenue.id.desc()).limit(5).all())
@@ -149,6 +186,8 @@ def index():
                            chart_rev=chart_rev, chart_exp=chart_exp,
                            recent_rev=recent_rev, recent_exp=recent_exp,
                            year=year, month=month,
+                           date_from=date_from_raw, date_to=date_to_raw,
+                           custom_range=custom_range,
                            arabic_months=ARABIC_MONTHS)
 
 
