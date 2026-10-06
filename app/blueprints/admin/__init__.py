@@ -25,6 +25,9 @@ from app.utils.decorators import (admin_required, staff_required,
 from app.utils import code_generator
 from app.utils.attendance_helpers import get_local_date
 from app.utils.board_images import BoardImageError, optimize_board_image
+from app.utils.device_numbering import (DeviceNumberAllocationError,
+                                        DeviceNumberConflictError,
+                                        map_new_employee_to_devices)
 
 admin_bp = Blueprint('admin', __name__, template_folder='../../templates/admin')
 
@@ -145,6 +148,23 @@ def _school_requires_employee_shift(school_id):
     school_obj = db.session.get(School, school_id) if school_id else None
     return bool(school_obj
                 and getattr(school_obj, 'emp_enable_attendance_shifts', False))
+
+
+def _map_new_teacher_employee(emp):
+    """Bind a NEWLY created teacher Employee to its school's employee devices
+    (database only, flush, no commit). Returns an Arabic error message when
+    the caller must roll back, else None. The school is the Employee's own
+    (server-resolved) school, never the session's."""
+    if not emp.school_id:
+        return None
+    try:
+        map_new_employee_to_devices(emp.id, emp.school_id)
+    except DeviceNumberAllocationError as exc:
+        if isinstance(exc, DeviceNumberConflictError):
+            return str(exc)
+        return ('تعذر إنشاء رقم الموظف على جهاز الحضور. لم يتم حفظ الحساب. '
+                'يرجى المحاولة مرة أخرى.')
+    return None
 
 
 def _is_school_scoped_manager():
@@ -860,6 +880,14 @@ def create_user():
             db.session.add(emp)
             db.session.flush()
 
+            # Attendance-device binding of the new Employee (database only),
+            # in the same transaction as the account.
+            _derr = _map_new_teacher_employee(emp)
+            if _derr:
+                db.session.rollback()
+                flash(_derr, 'danger')
+                return redirect(url_for('admin.create_user'))
+
             # Assign homeroom sections (validates they belong to the same school)
             section_ids = _unique_ids(request.form.getlist('teacher_section_ids', type=int))
             if section_ids and assigned_school_id:
@@ -1177,6 +1205,13 @@ def edit_user(user_id):
                 )
                 db.session.add(emp)
                 db.session.flush()
+                # Only a NEWLY created Employee is bound; an existing one is
+                # never re-targeted by an edit.
+                _derr = _map_new_teacher_employee(emp)
+                if _derr:
+                    db.session.rollback()
+                    flash(_derr, 'danger')
+                    return redirect(url_for('admin.edit_user', user_id=user_id))
 
             new_section_ids = _unique_ids(request.form.getlist('teacher_section_ids', type=int))
             # Clear previous homeroom assignments for this teacher

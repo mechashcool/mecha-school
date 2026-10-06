@@ -117,7 +117,7 @@
           <div class="input-group mb-1">
             <select name="target_device_id" class="form-select" required>
               <option value="">— جهاز الهدف —</option>
-              {% for od in other_devices %}
+              {% for od in other_devices if od.device_scope in ('students', 'mixed') %}
               <option value="{{ od.id }}">{{ od.name }}</option>
               {% endfor %}
             </select>
@@ -253,6 +253,7 @@
             <label class="form-label">رقم التسجيل على الجهاز <span class="text-danger">*</span></label>
             <input type="text" name="employee_no_string" class="form-control"
                    pattern="[0-9]+" required placeholder="مثال: 1001" title="أرقام فقط">
+            <div class="form-text">أرقام الموظفين الجديدة تبدأ من 1000. الموظف المرتبط بجهاز آخر يُربط بنفس رقمه.</div>
           </div>
           <div class="mb-3">
             <label class="form-label">الموظف <span class="text-danger">*</span></label>

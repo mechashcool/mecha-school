@@ -26,8 +26,14 @@ from app.utils.employee_documents import (EMPLOYEE_DOC_MAX_BYTES, EMPLOYEE_DOC_T
                                           validate_document_meta)
 from app.utils import code_generator
 from app.utils.audit import log_action
+from app.utils.device_numbering import (DeviceNumberAllocationError,
+                                        DeviceNumberConflictError,
+                                        map_new_employee_to_devices)
 
 _log = logging.getLogger(__name__)
+
+_MSG_DEVICE_NUMBER_FAILED = ('تعذر إنشاء رقم الموظف على جهاز الحضور. لم يتم حفظ الموظف. '
+                             'يرجى المحاولة مرة أخرى.')
 
 employees_bp = Blueprint('employees', __name__,
                           template_folder='../../templates/employees')
@@ -1077,6 +1083,17 @@ def _handle_employee_post(employee):
                   'يرجى المحاولة مرة أخرى.', 'danger')
             return render_template(_tmpl, error_step='teacher', **_form_context(None))
 
+        # Attendance-device binding (database only — nothing is sent to a
+        # device): one employee-range number on every active employees/mixed
+        # device of this school, in the same transaction as the employee.
+        try:
+            map_new_employee_to_devices(employee.id, employee.school_id)
+        except DeviceNumberAllocationError as _dev_err:
+            db.session.rollback()
+            flash(str(_dev_err) if isinstance(_dev_err, DeviceNumberConflictError)
+                  else _MSG_DEVICE_NUMBER_FAILED, 'danger')
+            return render_template(_tmpl, error_step='basic', **_form_context(None))
+
     db.session.commit()
     for _g in _inst_created:
         log_action('create', 'institute_study_group', _g.id,
@@ -1580,8 +1597,16 @@ def unlink_account(emp_id):
 @permission_required('manage_employees')
 def sync_to_device(emp_id):
     """Redirect to the device's mappings page where sync is managed."""
+    # DeviceEmployeeMapping is not covered by the automatic tenant scope, so
+    # the employee is resolved inside the current school first and the
+    # mapping is filtered on the same school explicitly.
+    school = get_current_school()
+    if not school:
+        abort(404)
+    employee = Employee.query.filter_by(id=emp_id, school_id=school.id).first_or_404()
     mapping = (DeviceEmployeeMapping.query
-               .filter_by(employee_id=emp_id, is_active=True).first())
+               .filter_by(employee_id=employee.id, school_id=school.id, is_active=True)
+               .first())
     if mapping:
         return redirect(url_for('attendance_devices.mappings',
                                 device_id=mapping.device_id))

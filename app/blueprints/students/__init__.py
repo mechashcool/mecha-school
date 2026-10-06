@@ -45,6 +45,7 @@ from app.utils.buildings import (
 from app.utils.audit import log_action
 from app.utils.device_numbering import (DeviceNumberAllocationError,
                                         DeviceNumberConflictError,
+                                        STUDENT_DEVICE_SCOPES,
                                         ensure_student_device_mappings)
 
 students_bp = Blueprint('students', __name__,
@@ -936,10 +937,12 @@ def create():
         grades_q = grades_q.filter_by(school_id=school.id, academic_year_id=year.id)
     grades = grades_q.order_by(Grade.name).all()
 
+    # Students are only ever bound to students / mixed devices.
     active_devices = []
     if school and is_feature_enabled(school.id, 'attendance_devices.mappings'):
         active_devices = (AttendanceDevice.query
                          .filter_by(school_id=school.id, is_active=True)
+                         .filter(AttendanceDevice.device_scope.in_(STUDENT_DEVICE_SCOPES))
                          .order_by(AttendanceDevice.name).all())
 
     parent_role = Role.query.filter_by(name='parent').first()
@@ -1767,10 +1770,13 @@ def edit(student_id):
     selected_grade    = next((g for g in grades if g.id == selected_grade_id), None)
     selected_stage    = selected_grade.stage if selected_grade else None
 
+    # Students are only ever bound to students / mixed devices; existing
+    # bindings elsewhere are still listed via existing_device_mappings.
     active_devices = []
     if school and is_feature_enabled(school.id, 'attendance_devices.mappings'):
         active_devices = (AttendanceDevice.query
                          .filter_by(school_id=school.id, is_active=True)
+                         .filter(AttendanceDevice.device_scope.in_(STUDENT_DEVICE_SCOPES))
                          .order_by(AttendanceDevice.name).all())
     linked_parents = student.parents.all()
     existing_device_mappings = student.device_mappings.all()

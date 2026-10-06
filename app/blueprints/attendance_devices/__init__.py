@@ -39,7 +39,6 @@ from zoneinfo import ZoneInfo
 from flask import (Blueprint, abort, current_app, flash, jsonify, redirect,
                    render_template, request, url_for)
 from flask_login import current_user, login_required
-from sqlalchemy.exc import IntegrityError
 
 from app.models import (db, AttendanceDevice, DeviceEventLog,
                         DeviceStudentMapping, DeviceEmployeeMapping,
@@ -49,7 +48,9 @@ from app.utils.audit import log_action
 from app.utils.device_numbering import (DeviceNumberAllocationError,
                                         DeviceNumberChangeError,
                                         DeviceNumberConflictError,
+                                        add_manual_employee_mapping,
                                         change_student_device_number,
+                                        copy_student_mappings,
                                         ensure_student_device_mapping)
 from app.utils.decorators import (admin_required, permission_required,
                                    any_permission_required, super_admin_required,
@@ -726,12 +727,9 @@ def add_mapping(device_id):
             return redirect(url_for('attendance_devices.mappings', device_id=device_id))
 
     # ── Employees ─────────────────────────────────────────────────────────────
+    # The typed number is validated, canonicalised and checked against BOTH
+    # mapping tables of the school under the shared school lock by the helper.
     if scope in ('employees', 'mixed'):
-        emp_no = (request.form.get('employee_no_string') or '').strip()
-        if not emp_no or not emp_no.isdigit():
-            flash('رقم التسجيل يجب أن يكون أرقاماً فقط.', 'danger')
-            return redirect(url_for('attendance_devices.mappings', device_id=device_id))
-
         employee_id = request.form.get('employee_id', type=int)
         if not employee_id:
             flash('يرجى اختيار موظف.', 'danger')
@@ -742,25 +740,15 @@ def add_mapping(device_id):
             flash('الموظف غير موجود أو لا ينتمي لهذه المدرسة.', 'danger')
             return redirect(url_for('attendance_devices.mappings', device_id=device_id))
 
-        # For mixed devices also check that enroll_no is not taken by a student mapping
-        if scope == 'mixed':
-            stu_conflict = DeviceStudentMapping.query.filter_by(
-                device_id=dev.id, employee_no_string=emp_no).first()
-            if stu_conflict:
-                flash(f'الرقم {emp_no} مستخدم بالفعل لطالب على هذا الجهاز.', 'danger')
-                return redirect(url_for('attendance_devices.mappings', device_id=device_id))
-
-        mapping = DeviceEmployeeMapping(
-            school_id=school.id, device_id=dev.id,
-            enrollment_no=emp_no, employee_id=employee.id, is_active=True,
-        )
         try:
-            db.session.add(mapping)
+            mapping = add_manual_employee_mapping(
+                dev, employee.id, school.id, request.form.get('employee_no_string'))
             db.session.commit()
-            flash(f'تم ربط الرقم {emp_no} بالموظف {employee.full_name}.', 'success')
-        except IntegrityError:
+        except DeviceNumberChangeError as exc:
             db.session.rollback()
-            flash(f'الرقم {emp_no} مرتبط بموظف آخر في هذا الجهاز.', 'danger')
+            flash(str(exc), 'danger')
+            return redirect(url_for('attendance_devices.mappings', device_id=device_id))
+        flash(f'تم ربط الرقم {mapping.enrollment_no} بالموظف {employee.full_name}.', 'success')
         return redirect(url_for('attendance_devices.mappings', device_id=device_id))
 
     flash('نوع الجهاز غير مدعوم لإضافة ربط.', 'danger')
@@ -843,34 +831,35 @@ def delete_emp_mapping(mapping_id):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Student mapping copy helpers (unchanged)
+#  Student mapping copy helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _do_copy_mappings(source_dev, target_dev, school):
-    """Copy active student mappings from source to target (same school)."""
-    source_mappings = DeviceStudentMapping.query.filter_by(
-        device_id=source_dev.id, is_active=True
-    ).all()
+    """Copy active student mappings from source to target and commit.
 
-    copied = skipped = conflicts = 0
-    for src in source_mappings:
-        if DeviceStudentMapping.query.filter_by(
-            device_id=target_dev.id, employee_no_string=src.employee_no_string,
-        ).first():
-            skipped += 1
-            continue
-        if DeviceStudentMapping.query.filter_by(
-            device_id=target_dev.id, student_id=src.student_id,
-        ).first():
-            conflicts += 1
-            continue
-        db.session.add(DeviceStudentMapping(
-            school_id=school.id, device_id=target_dev.id,
-            employee_no_string=src.employee_no_string,
-            student_id=src.student_id, is_active=True,
-        ))
-        copied += 1
-    return copied, skipped, conflicts
+    Returns ``(copied, skipped, conflicts)``, or None after flashing the
+    reason when the copy was refused (target does not accept students, or a
+    failed write) — nothing is written in that case.
+    """
+    try:
+        result = copy_student_mappings(source_dev, target_dev, school.id)
+        db.session.commit()
+    except DeviceNumberAllocationError as exc:
+        db.session.rollback()
+        flash(str(exc) if isinstance(exc, DeviceNumberConflictError) else
+              'تعذر نسخ الربطات بسبب تعارض في الأرقام. لم يتم نسخ أي ربط.', 'danger')
+        return None
+    return result
+
+
+def _flash_copy_result(prefix, result):
+    copied, skipped, conflicts = result
+    parts = [prefix, f'عدد الروابط المنسوخة: {copied}']
+    if skipped:
+        parts.append(f'عدد الروابط المتخطاة (الرقم مستخدم لشخص آخر على الجهاز الهدف): {skipped}')
+    if conflicts:
+        parts.append(f'عدد التعارضات (طالب مرتبط مسبقاً): {conflicts}')
+    flash(' — '.join(parts), 'success' if copied > 0 else 'warning')
 
 
 @attendance_devices_bp.route('/<int:device_id>/mappings/copy-from', methods=['POST'])
@@ -888,16 +877,9 @@ def copy_mappings(device_id):
         id=source_id, school_id=school.id
     ).first_or_404()
 
-    copied, skipped, conflicts = _do_copy_mappings(source_dev, target_dev, school)
-    db.session.commit()
-
-    parts = [f'تم نسخ الربط بنجاح من الجهاز "{source_dev.name}".']
-    parts.append(f'عدد الروابط المنسوخة: {copied}')
-    if skipped:
-        parts.append(f'عدد الروابط المتخطاة (رقم موجود): {skipped}')
-    if conflicts:
-        parts.append(f'عدد التعارضات (طالب مرتبط مسبقاً): {conflicts}')
-    flash(' — '.join(parts), 'success' if copied > 0 else 'warning')
+    result = _do_copy_mappings(source_dev, target_dev, school)
+    if result is not None:
+        _flash_copy_result(f'تم نسخ الربط بنجاح من الجهاز "{source_dev.name}".', result)
     return redirect(url_for('attendance_devices.mappings', device_id=device_id))
 
 
@@ -919,16 +901,9 @@ def copy_mappings_to(device_id):
         id=target_id, school_id=school.id
     ).first_or_404()
 
-    copied, skipped, conflicts = _do_copy_mappings(source_dev, target_dev, school)
-    db.session.commit()
-
-    parts = [f'تم نسخ الربط بنجاح إلى الجهاز "{target_dev.name}".']
-    parts.append(f'عدد الروابط المنسوخة: {copied}')
-    if skipped:
-        parts.append(f'عدد الروابط المتخطاة (رقم موجود): {skipped}')
-    if conflicts:
-        parts.append(f'عدد التعارضات (طالب مرتبط مسبقاً): {conflicts}')
-    flash(' — '.join(parts), 'success' if copied > 0 else 'warning')
+    result = _do_copy_mappings(source_dev, target_dev, school)
+    if result is not None:
+        _flash_copy_result(f'تم نسخ الربط بنجاح إلى الجهاز "{target_dev.name}".', result)
     return redirect(url_for('attendance_devices.mappings', device_id=device_id))
 
 

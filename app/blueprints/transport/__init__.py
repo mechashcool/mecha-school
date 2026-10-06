@@ -18,6 +18,9 @@ from app.utils import code_generator
 from app.utils.decorators import (permission_required, get_current_school,
                                    historical_guard)
 from app.utils.audit import log_action
+from app.utils.device_numbering import (DeviceNumberAllocationError,
+                                        DeviceNumberConflictError,
+                                        map_new_employee_to_devices)
 
 transport_bp = Blueprint('transport', __name__,
                          template_folder='../../templates/transport')
@@ -751,6 +754,13 @@ def _stage_driver(fd, school, mode):
                    school_id=school.id)
     db.session.add(emp)
     db.session.flush()
+    # Attendance-device binding of the new driver Employee (database only);
+    # an error return makes _apply_driver_choice roll the whole stage back.
+    try:
+        map_new_employee_to_devices(emp.id, school.id)
+    except DeviceNumberAllocationError as exc:
+        return None, (str(exc) if isinstance(exc, DeviceNumberConflictError) else
+                      'تعذر إنشاء رقم السائق على جهاز الحضور. لم يتم حفظ أي تغيير.')
     user, username, password = _create_driver_account(emp, school, role)
     return {'employee': emp, 'new_employee_id': emp.id,
             'new_user_id': user.id, 'credentials': (username, password)}, None
