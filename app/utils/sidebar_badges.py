@@ -162,10 +162,23 @@ def get_badge_counts(*, live: bool = False) -> dict:
         from app.utils.decorators import get_current_school
         from app.utils.modules import get_enabled_modules
 
-        current_school = get_current_school()
-        sid = (current_school.id
-               if current_school and hasattr(current_school, 'id')
-               else getattr(current_user, 'school_id', None))
+        if (live and not current_user.is_super_admin
+                and hasattr(g, 'tenant_scope_school_id')):
+            # Live poll, school users only: reuse the school id _set_request_scope
+            # already resolved for this request instead of loading the full
+            # School row (and its selectin role cascade) via get_current_school()
+            # just to read .id. A school-less user (-1) falls back to
+            # current_user.school_id, exactly as the branch below does. Super
+            # admins keep the original path so a stale/deleted active_school_id
+            # still resolves to no current school.
+            scope_sid = g.tenant_scope_school_id
+            sid = (scope_sid if scope_sid and scope_sid > 0
+                   else getattr(current_user, 'school_id', None))
+        else:
+            current_school = get_current_school()
+            sid = (current_school.id
+                   if current_school and hasattr(current_school, 'id')
+                   else getattr(current_user, 'school_id', None))
 
         # Complaint + leave counts use bypass_tenant_scope + include_all_years
         # with explicit school filters, so they depend only on (school, [parent
