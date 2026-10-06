@@ -189,10 +189,10 @@ def _payment_receipt_expr():
                           cast(literal(_PAYMENT_RECEIPT_SQL_RE), Text))
 
 
-def payment_notes_by_installment(installments):
-    """``{installment_id: [payment, ...]}`` for the payment transactions that
-    carry a note (``Revenue.notes``), in payment order — ONE query for the whole
-    page, never one per installment.
+def _payments_by_installment(installments, *, notes_only):
+    """Shared ONE-query lookup behind payment_notes_by_installment and
+    payment_history_by_installment: ``{installment_id: [payment, ...]}`` in
+    payment order, never one query per installment.
 
     Each payment is ``{'date', 'amount', 'op_ref', 'note', 'refunded'}`` and is
     exactly one Revenue allocation: the note stays attached to its own
@@ -207,19 +207,19 @@ def payment_notes_by_installment(installments):
     ids = [i.id for i in installments if getattr(i, 'receipt_no', None)]
     if not ids:
         return {}
-    rows = (
+    q = (
         db.session.query(FeeInstallment.id, Revenue.date, Revenue.amount,
                          Revenue.description, Revenue.notes, Revenue.refunded_at)
         .select_from(Revenue)
         .join(FeeInstallment, and_(FeeInstallment.receipt_no == _payment_receipt_expr(),
                                    FeeInstallment.school_id == Revenue.school_id))
         .execution_options(include_all_years=True)
-        .filter(FeeInstallment.id.in_(ids),
-                Revenue.notes.isnot(None),
-                func.length(func.trim(Revenue.notes)) > 0)
-        .order_by(Revenue.date, Revenue.id)
-        .all()
+        .filter(FeeInstallment.id.in_(ids))
     )
+    if notes_only:
+        q = q.filter(Revenue.notes.isnot(None),
+                     func.length(func.trim(Revenue.notes)) > 0)
+    rows = q.order_by(Revenue.date, Revenue.id).all()
     out = {}
     for inst_id, paid_on, amount, description, note, refunded_at in rows:
         m = _PAYMENT_TXN_RE.search(description or '')
@@ -227,10 +227,25 @@ def payment_notes_by_installment(installments):
             'date': paid_on,
             'amount': amount,
             'op_ref': m.group(1) if m else None,
-            'note': note.strip(),
+            'note': (note or '').strip(),
             'refunded': refunded_at is not None,
         })
     return out
+
+
+def payment_notes_by_installment(installments):
+    """``{installment_id: [payment, ...]}`` for the payment transactions that
+    carry a note (``Revenue.notes``) — see _payments_by_installment."""
+    return _payments_by_installment(installments, notes_only=True)
+
+
+def payment_history_by_installment(installments):
+    """``{installment_id: [payment, ...]}`` for EVERY linked payment
+    transaction (active and refunded, with or without a note) — the per-payment
+    rows shown under an installment in the fees table. Display-only; same single
+    query and isolation as payment_notes_by_installment. ``note`` is '' when the
+    payment has none."""
+    return _payments_by_installment(installments, notes_only=False)
 
 
 def _period_paid_subquery(school, filters, *, per_installment=False):
@@ -1414,8 +1429,9 @@ def index():
     for _i in _page_inst:
         _inst_map.setdefault(_i.fee_record_id, []).append(_i)
     fee_entries = [(r, _inst_map.get(r.id, [])) for r in records.items]
-    # Per-transaction payment notes for the page's installments — one query.
-    payment_notes = payment_notes_by_installment(_page_inst)
+    # Per-transaction payment history (amount / receipt op / note / refund flag)
+    # for the page's installments — one query, grouped by installment.
+    payment_history = payment_history_by_installment(_page_inst)
 
     # Period amounts: one grouped query for the page + one aggregate for the
     # whole filtered set (never one query per row).
@@ -1427,7 +1443,7 @@ def index():
 
     return render_template('fees/index.html',
                            records=records, fee_entries=fee_entries,
-                           payment_notes=payment_notes,
+                           payment_history=payment_history,
                            overdue_mode=False, overdue_installments=[],
                            fee_types=fee_types,
                            years=years,

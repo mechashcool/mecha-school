@@ -2,23 +2,25 @@
   Shared fees-table macros — imported by fees/index.html and students/view.html.
 
   fees_table_body(fee_entries, show_student_col, installment_filter, period_paid,
-                  payment_notes)
+                  payment_history)
     fee_entries        : list of (FeeRecord, [FeeInstallment]) tuples
     show_student_col   : True on fees index, False on student profile
     installment_filter : 'all' or installment number string (fees index filter only)
     period_paid        : None, or {fee_record_id: amount collected in the selected
                          payment-date range} (fees index only) — adds the
                          "المدفوع ضمن الفترة" column
-    payment_notes      : None, or {installment_id: [payment]} from
-                         fees.payment_notes_by_installment — each payment's
-                         own note (Revenue.notes), shown under its installment
+    payment_history    : None, or {installment_id: [payment]} from
+                         fees.payment_history_by_installment — one entry per
+                         payment transaction (Revenue allocation) with its own
+                         amount, op_ref, note (Revenue.notes) and refund flag;
+                         shown in a collapsible table under its installment
 
   fees_modal_and_js()
     Renders the pay modal and all supporting JS (toggle, pay, print, AJAX).
     Call once per page, outside any card wrapper.
 #}
 
-{% macro fees_table_body(fee_entries, show_student_col=True, installment_filter='all', period_paid=None, payment_notes=None) %}
+{% macro fees_table_body(fee_entries, show_student_col=True, installment_filter='all', period_paid=None, payment_history=None) %}
 {% set _period = period_paid is not none %}
 {% set _cols = (8 if show_student_col else 7) + (1 if _period else 0) %}
 <div class="table-wrapper">
@@ -59,9 +61,14 @@
         {% endif %}
         <td>
           {{ rec.fee_type.name }}
-          {% if rec.notes and rec.notes.strip() %}
-          <i class="bi bi-sticky text-muted ms-1" title="يوجد ملاحظات للرسم — اعرض الأقساط"
-             aria-label="يوجد ملاحظات للرسم"></i>
+          {# Fee note (FeeRecord.notes) inline in its own row — truncated to one
+             line; the full text (autoescaped) is in the tooltip. #}
+          {% set _fee_note = rec.notes.strip() if rec.notes else '' %}
+          {% if _fee_note %}
+          <div class="row-note" title="ملاحظات الرسم: {{ _fee_note }}">
+            <i class="bi bi-sticky" aria-label="ملاحظات الرسم"></i>
+            <span class="row-note-text">{{ _fee_note }}</span>
+          </div>
           {% endif %}
         </td>
         <td class="fw-600">{{ '{:,.0f}'.format(rec.total_amount) }}</td>
@@ -113,14 +120,6 @@
       <tr id="inst_{{ rec.id }}" style="display:none;background:#f8fbff">
         <td colspan="{{ _cols }}" class="p-0">
           <div class="px-4 py-3">
-            {# Note entered when the fee was created (FeeRecord.notes). Rendered
-               only when present; autoescaped; line breaks preserved. #}
-            {% if rec.notes and rec.notes.strip() %}
-            <div class="fee-note mb-2">
-              <span class="fee-note-label"><i class="bi bi-sticky me-1"></i>ملاحظات الرسم:</span>
-              <span class="fee-note-text">{{ rec.notes.strip() }}</span>
-            </div>
-            {% endif %}
             <table class="table table-sm mb-0">
               <thead>
                 <tr>
@@ -137,8 +136,44 @@
                 {% set inst_received  = inst.received_amount|float if inst.received_amount else 0 %}
                 {% set inst_remaining = (inst.amount|float) - inst_received %}
                 {% set inst_cancelled = inst.status == 'cancelled' or rec.is_cancelled %}
+                {# Payment transactions of THIS installment (pre-grouped, one
+                   query per page). Expandable when the history adds something
+                   the summary row cannot show: several payments, a payment note,
+                   a refunded payment, a partial balance, or received money not
+                   linked to an identifiable payment. A single plain full payment
+                   keeps the clean summary row only. #}
+                {% set _txs = (payment_history or {}).get(inst.id, []) %}
+                {% set _tx = namespace(active=0, extra=False) %}
+                {% for p in _txs %}
+                  {% if not p.refunded %}{% set _tx.active = _tx.active + (p.amount|float) %}{% endif %}
+                  {% if p.note or p.refunded %}{% set _tx.extra = True %}{% endif %}
+                {% endfor %}
+                {% set _unlinked = inst_received - _tx.active %}
+                {% set _expandable = _txs|length > 1 or (_txs|length == 1 and (_tx.extra or inst_remaining > 0 or _unlinked > 0.005)) %}
+                {% set _legacy_note = inst.notes.strip() if inst.notes else '' %}
                 <tr>
-                  <td>القسط {{ inst.installment_no }}</td>
+                  <td>
+                    <div class="inst-name-cell">
+                      <span>القسط {{ inst.installment_no }}</span>
+                      {% if _expandable %}
+                      <button type="button" class="inst-tx-toggle" aria-expanded="false"
+                              aria-controls="instTx_{{ inst.id }}"
+                              onclick="toggleInstTx({{ inst.id }}, this)" title="تفاصيل الدفعات">
+                        <i class="bi bi-chevron-down"></i>تفاصيل الدفعات ({{ _txs|length }})
+                      </button>
+                      {% endif %}
+                    </div>
+                    {# Note stored on the installment itself (FeeInstallment.notes —
+                       written only by the old payment code path). Inline, one
+                       line, full text in the tooltip. #}
+                    {% if _legacy_note %}
+                    <div class="row-note"
+                         title="ملاحظة دفع سابقة (سُجّلت قبل حفظ ملاحظة مستقلة لكل دفعة): {{ _legacy_note }}">
+                      <i class="bi bi-sticky" aria-label="ملاحظة دفع سابقة"></i>
+                      <span class="row-note-text">{{ _legacy_note }}</span>
+                    </div>
+                    {% endif %}
+                  </td>
                   <td>{{ '{:,.0f}'.format(inst.amount) }}</td>
                   <td class="text-success">{{ '{:,.0f}'.format(inst_received) }}</td>
                   <td class="{{ 'text-muted' if inst_remaining <= 0 else 'text-danger' }}">
@@ -193,34 +228,65 @@
                   </td>
                   {% endif %}
                 </tr>
-                {# Payment notes — one line per payment TRANSACTION that has a
-                   note (Revenue.notes), so partial payments keep their own
-                   notes. A note saved on the installment by the old code path
-                   (overwritten by each payment) is shown once, labelled as
-                   legacy. Nothing is rendered when there is no note. #}
-                {% set _pnotes = (payment_notes or {}).get(inst.id, []) %}
-                {% set _legacy_note = inst.notes.strip() if inst.notes else '' %}
-                {% if _pnotes or _legacy_note %}
-                <tr class="pay-note-row">
+                {# Payment transactions — one row per Revenue allocation, each
+                   with its OWN date / amount / operation reference / note
+                   (Revenue.notes). Print opens the receipt of that exact
+                   operation (?op=); refund stays on the installment row because
+                   the backend refunds the installment as a whole. #}
+                {% if _expandable %}
+                <tr id="instTx_{{ inst.id }}" class="inst-tx-row" style="display:none">
                   <td colspan="{{ 9 if _can_act else 8 }}">
-                    {% for p in _pnotes %}
-                    <div class="pay-note">
-                      <span class="fee-note-label"><i class="bi bi-chat-left-text me-1"></i>ملاحظات الدفع</span>
-                      <span class="pay-note-meta">
-                        {{ p.date.strftime('%Y-%m-%d') if p.date }} · {{ '{:,.0f}'.format(p.amount) }}
-                        {% if p.op_ref %} · <code>{{ p.op_ref }}</code>{% endif %}
-                        {% if p.refunded %} · <span class="badge-status badge-overdue">مسترجعة</span>{% endif %}
-                      </span>
-                      <span class="fee-note-text">{{ p.note }}</span>
-                    </div>
-                    {% endfor %}
-                    {% if _legacy_note %}
-                    <div class="pay-note">
-                      <span class="fee-note-label"><i class="bi bi-chat-left-text me-1"></i>ملاحظة دفع سابقة</span>
-                      <span class="pay-note-meta">(سُجّلت قبل حفظ ملاحظة مستقلة لكل دفعة)</span>
-                      <span class="fee-note-text">{{ _legacy_note }}</span>
-                    </div>
-                    {% endif %}
+                    <table class="table table-sm inst-tx-table mb-0">
+                      <thead>
+                        <tr>
+                          <th>التاريخ</th><th>المبلغ المدفوع</th><th>رقم الوصل</th>
+                          <th>الملاحظة</th><th>الحالة</th>
+                          {% if _can_pay %}<th>الإجراءات</th>{% endif %}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {% for p in _txs %}
+                        <tr>
+                          <td>{{ p.date.strftime('%Y-%m-%d') if p.date else '—' }}</td>
+                          <td class="fw-600 {{ 'text-muted text-decoration-line-through' if p.refunded else 'text-success' }}">
+                            {{ '{:,.0f}'.format(p.amount) }}
+                          </td>
+                          <td>
+                            {% if p.op_ref %}<code>{{ p.op_ref }}</code>
+                            {% else %}<span class="text-muted" title="دفعة قديمة بدون مرجع عملية مستقل">—</span>{% endif %}
+                          </td>
+                          <td class="inst-tx-note">
+                            {% if p.note %}<span class="fee-note-text">{{ p.note }}</span>
+                            {% else %}<span class="text-muted">—</span>{% endif %}
+                          </td>
+                          <td>
+                            {% if p.refunded %}<span class="badge-status badge-overdue">مسترجعة</span>
+                            {% else %}<span class="badge-status badge-paid">مدفوعة</span>{% endif %}
+                          </td>
+                          {% if _can_pay %}
+                          <td>
+                            {% if p.op_ref %}
+                            <button type="button" class="btn btn-sm btn-outline-secondary fee-act fee-act-icon"
+                                    data-op="{{ p.op_ref }}"
+                                    onclick="printReceipt({{ inst.id }}, this.dataset.op)"
+                                    title="طباعة وصل هذه الدفعة" aria-label="طباعة وصل هذه الدفعة">
+                              <i class="bi bi-printer"></i>
+                            </button>
+                            {% endif %}
+                          </td>
+                          {% endif %}
+                        </tr>
+                        {% endfor %}
+                        {% if _unlinked > 0.005 %}
+                        <tr>
+                          <td colspan="{{ 6 if _can_pay else 5 }}" class="text-muted inst-tx-unlinked">
+                            <i class="bi bi-info-circle me-1"></i>
+                            مبلغ {{ '{:,.0f}'.format(_unlinked) }} من المستلم على هذا القسط سُجّل قبل ربط الدفعات بإيصالاتها، ولا يظهر كدفعة مستقلة.
+                          </td>
+                        </tr>
+                        {% endif %}
+                      </tbody>
+                    </table>
                   </td>
                 </tr>
                 {% endif %}
@@ -231,6 +297,7 @@
           </div>
         </td>
       </tr>
+      <!-- /inst_{{ rec.id }} -->
       {% else %}
       <tr>
         <td colspan="{{ _cols }}" class="text-center text-muted py-5">
@@ -356,14 +423,29 @@
   }
   .btn.fee-act.fee-act-icon { padding:0 9px; }
   .btn.fee-act i { font-size:13px; margin:0; }
-  .fee-note { background:#fff; border:1px solid #e3ebf3; border-radius:8px;
-              padding:6px 10px; font-size:12.5px; }
-  .fee-note-label { font-weight:600; color:#5b6b7b; }
   .fee-note-text { white-space:pre-line; overflow-wrap:anywhere; }
-  tr.pay-note-row > td { border-top:0; padding-top:0; background:transparent; }
-  .pay-note { font-size:12px; padding:2px 0 2px 0; display:flex; flex-wrap:wrap;
-              gap:4px 8px; align-items:baseline; }
-  .pay-note-meta { color:#7a8a99; font-size:11.5px; }
+  /* Inline fee / installment note: one line inside its own row, full text in
+     the tooltip, never widens the table. */
+  .row-note { display:flex; align-items:center; gap:4px; max-width:240px;
+              margin-top:2px; font-size:11.5px; color:#6b7a89; }
+  .row-note i { flex:0 0 auto; font-size:11px; }
+  .row-note-text { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* Per-installment payment transactions (collapsible, nested). */
+  .inst-name-cell { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; }
+  .inst-tx-toggle { border:1px solid #d6e2ee; background:#fff; color:#0f5e9c;
+                    border-radius:6px; padding:1px 7px; font-size:11.5px; line-height:1.6;
+                    display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
+  .inst-tx-toggle i { font-size:10px; transition:transform .15s; }
+  .inst-tx-toggle.open i { transform:rotate(180deg); }
+  tr.inst-tx-row > td { border-top:0; padding:0 0 8px 0; background:transparent; }
+  .inst-tx-table { font-size:12px; background:#fff; border:1px solid #e3ebf3;
+                   border-radius:8px; overflow:hidden; margin-inline-start:24px;
+                   width:calc(100% - 24px); }
+  .inst-tx-table > thead th { background:#f3f7fb; color:#5b6b7b; font-weight:600;
+                              font-size:11.5px; white-space:nowrap; }
+  .inst-tx-table td, .inst-tx-table th { padding:4px 8px; vertical-align:middle; }
+  .inst-tx-note { max-width:320px; }
+  .inst-tx-unlinked { font-size:11.5px; }
 </style>
 {# Pay modal — rendered once per page outside any card wrapper #}
 <div class="modal fade" id="payModal" tabindex="-1" aria-hidden="true">
@@ -512,6 +594,18 @@
     row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
   };
 
+  // Installment → its payment transactions (nested, collapsed by default).
+  window.toggleInstTx = function (instId, btn) {
+    var row = document.getElementById('instTx_' + instId);
+    if (!row) return;
+    var open = row.style.display === 'none';
+    row.style.display = open ? 'table-row' : 'none';
+    if (btn) {
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      btn.classList.toggle('open', open);
+    }
+  };
+
   // Row actions dropdown: render at viewport level (Popper strategy:'fixed') so
   // the menu is not clipped by the .table-wrapper overflow context.
   // NOTE: this partial's <script> runs BEFORE the Bootstrap bundle loads at the
@@ -594,8 +688,12 @@
     window.updatePayAmountWords();
   };
 
-  window.printReceipt = function (instId) {
+  // opRef (optional) = one payment operation → the receipt of exactly that
+  // transaction (same ?op= link as the post-payment receipt). Without it the
+  // installment-row reprint is unchanged.
+  window.printReceipt = function (instId, opRef) {
     var url = "{{ url_for('fees.generate_receipt', inst_id=0) }}".replace('/0', '/' + instId);
+    if (opRef) { url += '?op=' + encodeURIComponent(opRef); }
     var win = window.open(url, '_blank');
     if (win) { win.onload = function () { win.print(); }; }
   };

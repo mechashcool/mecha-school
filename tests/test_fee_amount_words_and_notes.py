@@ -250,9 +250,25 @@ class FeeNotesDbTest(unittest.TestCase):
         return resp.get_data(as_text=True)
 
     def _inst_block(self, html, fee_key):
-        m = re.search(rf'<tr id="inst_{self.ids[fee_key]}"[\s\S]*?</table>', html)
+        # The installments panel contains nested per-installment payment tables,
+        # so it is delimited by its explicit end marker, not the first </table>.
+        fid = self.ids[fee_key]
+        m = re.search(rf'<tr id="inst_{fid}"[\s\S]*?<!-- /inst_{fid} -->', html)
         self.assertIsNotNone(m, fee_key)
         return m.group(0)
+
+    def _fee_row(self, html, fee_key):
+        """The fee's own summary row (immediately before its installments panel)."""
+        end = html.index(f'<tr id="inst_{self.ids[fee_key]}"')
+        return html[html.rindex('<tr>', 0, end):end]
+
+    def _tx_rows(self, html, inst_id):
+        """[(date, row_html)] of the nested payment-transaction table of one
+        installment; None when the installment is not expandable."""
+        m = re.search(rf'<tr id="instTx_{inst_id}"[\s\S]*?</table>', html)
+        if m is None:
+            return None
+        return re.findall(r'<tr>\s*<td>(\d{4}-\d{2}-\d{2})</td>([\s\S]*?)</tr>', m.group(0))
 
     # ── fee note ──────────────────────────────────────────────────────────────
 
@@ -269,13 +285,15 @@ class FeeNotesDbTest(unittest.TestCase):
             self.assertEqual(rec.notes, 'ملاحظة الإنشاء')
             db.session.rollback()
 
-    def test_02_fee_note_shown_escaped_and_absent_when_empty(self):
+    def test_02_fee_note_shown_inline_escaped_and_absent_when_empty(self):
         html = self._fees_html()
-        noted = self._inst_block(html, 'fee_noted')
+        noted = self._fee_row(html, 'fee_noted')
         self.assertIn('ملاحظات الرسم:', noted)
         self.assertIn('خصم الأخوة\nيدفع نقداً &lt;b&gt;x&lt;/b&gt;', noted)
         self.assertNotIn('<b>x</b>', html)
-        self.assertNotIn('ملاحظات الرسم', self._inst_block(html, 'fee_plain'))
+        self.assertNotIn('ملاحظات الرسم', self._fee_row(html, 'fee_plain'))
+        # No standalone note box inside the installments panel any more.
+        self.assertNotIn('خصم الأخوة', self._inst_block(html, 'fee_noted'))
 
     # ── payment notes ─────────────────────────────────────────────────────────
 
@@ -293,26 +311,37 @@ class FeeNotesDbTest(unittest.TestCase):
             self.assertRegex(desc, r' - RCP-\d{8}-\w+ \[TXN:RCP-\d{8}-\w+\]$')
         # Installment notes column is no longer overwritten.
         self.assertIsNone(self._insts('fee_noted')[0][5])
-        block = self._inst_block(self._fees_html(), 'fee_noted')
-        notes = re.findall(r'<div class="pay-note">([\s\S]*?)</div>', block)
-        self.assertEqual(len(notes), 2)
-        self.assertIn('2026-09-10', notes[0]); self.assertIn('100,000', notes[0])
-        self.assertIn('الدفعة الأولى — نقداً من الأب', notes[0])
-        self.assertIn('2026-09-20', notes[1]); self.assertIn('150,000', notes[1])
-        self.assertIn('الدفعة الثانية &lt;i&gt;تحويل&lt;/i&gt;', notes[1])
-        self.assertIn('ملاحظات الدفع', notes[0])
+        html = self._fees_html()
+        block = self._inst_block(html, 'fee_noted')
+        self.assertNotIn('pay-note', block)                 # no loose note rows
+        self.assertIn('تفاصيل الدفعات (2)', block)
+        rows = self._tx_rows(html, inst1)
+        self.assertEqual([d for d, _ in rows], ['2026-09-10', '2026-09-20'])
+        first, second = rows[0][1], rows[1][1]
+        self.assertIn('100,000', first)
+        self.assertIn('الدفعة الأولى — نقداً من الأب', first)
+        self.assertIn('150,000', second)
+        self.assertIn('الدفعة الثانية &lt;i&gt;تحويل&lt;/i&gt;', second)
+        self.assertNotIn('<i>تحويل</i>', html)
         op_refs = re.findall(r'\[TXN:([^\]]+)\]', ' '.join(d for _, _, d in revs))
-        self.assertIn(op_refs[0], notes[0]); self.assertIn(op_refs[1], notes[1])
+        # Each row carries its own receipt reference + an exact-op print action.
+        self.assertIn(op_refs[0], first); self.assertIn(f'data-op="{op_refs[0]}"', first)
+        self.assertIn(op_refs[1], second); self.assertIn(f'data-op="{op_refs[1]}"', second)
+        self.assertNotIn(op_refs[1], first)
 
-    def test_04_payment_without_note_renders_no_row(self):
+    def test_04_payment_without_note_shows_empty_note_cell(self):
         client = self._client()
         inst = self._insts('fee_plain')[0][0]
         self._pay(client, inst, 50000)
         self._pay(client, inst, 25000, note='   ')
         self.assertEqual([n for _, n, _ in self._revenues()], [None, None])
-        block = self._inst_block(self._fees_html(), 'fee_plain')
-        self.assertNotIn('pay-note', block)
-        self.assertNotIn('ملاحظات الدفع', block)
+        html = self._fees_html()
+        self.assertNotIn('pay-note', self._inst_block(html, 'fee_plain'))
+        rows = self._tx_rows(html, inst)
+        self.assertEqual(len(rows), 2)
+        for _, row in rows:
+            self.assertIn('<td class="inst-tx-note">', row)
+            self.assertNotIn('fee-note-text', row)
 
     def test_05_cascaded_payment_is_one_transaction_with_one_note(self):
         client = self._client()
@@ -405,6 +434,56 @@ class FeeNotesDbTest(unittest.TestCase):
                 event.remove(db.engine, 'before_cursor_execute', _cnt)
             self.assertEqual(count['n'], 1)
             self.assertEqual(sum(len(v) for v in result.values()), 2)
+
+    # ── nested payment history ────────────────────────────────────────────────
+
+    def test_11_history_lists_every_payment_in_one_query_and_school_scoped(self):
+        from sqlalchemy import event
+        from app.blueprints.fees import payment_history_by_installment
+        client = self._client()
+        inst1 = self._insts('fee_noted')[0][0]
+        self._pay(client, inst1, 1000)                       # no note
+        self._pay(client, inst1, 2000, note='n2')
+        with self.app.test_request_context():
+            insts = (FeeInstallment.query.execution_options(**OPTS)
+                     .filter(FeeInstallment.fee_record_id.in_(
+                         [self.ids['fee_noted'], self.ids['fee_b']])).all())
+            count = {'n': 0}
+
+            def _cnt(conn, cursor, statement, *a):
+                if statement.lstrip().upper().startswith('SELECT'):
+                    count['n'] += 1
+            event.listen(db.engine, 'before_cursor_execute', _cnt)
+            try:
+                hist = payment_history_by_installment(insts)
+            finally:
+                event.remove(db.engine, 'before_cursor_execute', _cnt)
+            self.assertEqual(count['n'], 1)
+            self.assertEqual(list(hist), [inst1])            # nothing from school B
+            self.assertEqual([(p['amount'], p['note'], p['refunded']) for p in hist[inst1]],
+                             [(Decimal('1000.00'), '', False), (Decimal('2000.00'), 'n2', False)])
+            self.assertTrue(all(p['op_ref'] for p in hist[inst1]))
+
+    def test_12_single_full_payment_row_stays_clean(self):
+        client = self._client()
+        inst = self._insts('fee_plain')[0][0]
+        self._pay(client, inst, 300000)
+        html = self._fees_html()
+        self.assertIsNone(self._tx_rows(html, inst))
+        self.assertNotIn('تفاصيل الدفعات', self._inst_block(html, 'fee_plain'))
+
+    def test_13_multi_payment_completed_installment_expands(self):
+        client = self._client()
+        inst = self._insts('fee_plain')[0][0]
+        self._pay(client, inst, 100000)
+        self._pay(client, inst, 200000)
+        self.assertEqual(self._insts('fee_plain')[0][4], 'paid')
+        html = self._fees_html()
+        rows = self._tx_rows(html, inst)
+        self.assertEqual(len(rows), 2)
+        self.assertIn('100,000', rows[0][1]); self.assertIn('200,000', rows[1][1])
+        op_refs = re.findall(r'\[TXN:([^\]]+)\]', ' '.join(d for _, _, d in self._revenues()))
+        self.assertEqual(re.findall(r'data-op="([^"]+)"', ''.join(r for _, r in rows)), op_refs)
 
 
 if __name__ == '__main__':

@@ -2609,7 +2609,7 @@ def view(student_id):
     # Fee records — only loaded for users authorised to manage fees.
     # Scoped by student.id + student.school_id; spans all academic years.
     fee_records_with_inst = []
-    fee_payment_notes = {}
+    fee_payment_history = {}
     if current_user.has_permission('manage_fees'):
         _fee_records = (
             FeeRecord.query
@@ -2640,8 +2640,8 @@ def view(student_id):
             fee_records_with_inst = [
                 (fr, _inst_map.get(fr.id, [])) for fr in _fee_records
             ]
-            from app.blueprints.fees import payment_notes_by_installment
-            fee_payment_notes = payment_notes_by_installment(_all_inst)
+            from app.blueprints.fees import payment_history_by_installment
+            fee_payment_history = payment_history_by_installment(_all_inst)
 
     # Institute study groups the student is CURRENTLY enrolled in. Empty list
     # for a school-type institution, where the card is not rendered at all.
@@ -2652,7 +2652,7 @@ def view(student_id):
 
     return render_template('students/view.html', student=student, docs=docs,
                            fee_records_with_inst=fee_records_with_inst,
-                           fee_payment_notes=fee_payment_notes,
+                           fee_payment_history=fee_payment_history,
                            is_institute=institute_enabled(school),
                            institute_enrollments=institute_enrollments)
 
