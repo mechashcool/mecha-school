@@ -2532,17 +2532,17 @@ def cancel_fee_route(fee_id):
 @login_required
 @permission_required('record_payments')
 def generate_receipt(inst_id):
-    """Render the printable receipt for a paid installment.
+    """Serve the fee receipt of a paid installment as a real PDF.
 
-    Presentation only: the authorization, school scoping and the resolution of
-    every receipt value below are unchanged — the document is rendered as the
-    same kind of HTML print view the student financial statement already uses
-    (browser print → PDF), so both financial documents share one visual
-    identity. The receipt is browser/print-only; no API or mobile client
-    consumes this endpoint.
+    Generated server-side by ReportLab (app.utils.pdf_gen.generate_fee_receipt)
+    in the approved Core School receipt layout. A PDF opens in the browser's
+    PDF viewer, so the existing auto-print after payment no longer runs the
+    HTML print dialog that could freeze the reloading fees page. Authorization,
+    school scoping and the resolution of every receipt value are unchanged.
     """
     from app.models import SchoolSettings
-    from flask import abort
+    from app.utils.pdf_gen import generate_fee_receipt
+    from flask import abort, send_file
     
     inst = (
         FeeInstallment.query
@@ -2586,52 +2586,23 @@ def generate_receipt(inst_id):
     # Show a refund stamp when the resolved operation was reversed (fully/partly).
     _refund_status = _op_refund_status(inst, _resolved_op)
 
-    # ── Receipt figures — same sources/arithmetic the PDF generator used ──
-    fee_record = inst.fee_record
-    _total_paid = sum(
-        float(i.received_amount or 0)
-        for i in fee_record.installments.execution_options(include_all_years=True)
-    )
-    _total_due = float(fee_record.net_amount)
-    _remaining = _total_due - _total_paid
+    # Every figure (paid / remaining / total due, amount in words, payment
+    # method, school name / logo / currency, School.fee_receipt_footer) is
+    # derived inside the generator from the installment + owner school above,
+    # with the same sources and arithmetic as before.
+    pdf_bytes = generate_fee_receipt(inst, school_settings, print_date=date.today(),
+                                     actual_paid=_actual_paid,
+                                     receipt_no_override=_resolved_op,
+                                     refund_status=_refund_status)
+    if not pdf_bytes:
+        abort(500, "PDF generation failed")
 
-    from app.utils.arabic_numbers import amount_to_words_iqd
-    _words = amount_to_words_iqd(int(_actual_paid))
-    _amount_words = (_words + ' فقط لا غير') if _words else '—'
-
-    _logo_url = None
-    if getattr(school_settings, 'logo_path', None):
-        from app.utils.helpers import resolve_photo_url
-        _logo_url = resolve_photo_url(school_settings.logo_path)
-
-    # Fee-receipt-only footer. The legacy shared `receipt_footer` (class-schedule
-    # PDF) is deliberately NOT read here, so the two documents stay independent.
-    _school_footer = (getattr(school_settings, 'fee_receipt_footer', None) or '').strip() or None
-
-    return render_template(
-        'fees/receipt.html',
-        installment=inst,
-        student=fee_record.student,
-        fee_type_name=fee_record.fee_type.name,
-        receipt_no=_receipt_label or '—',
-        refund_status=_refund_status,
-        paid_amount=float(_actual_paid),
-        remaining=_remaining,
-        total_due=_total_due,
-        amount_words=_amount_words,
-        payment_method_label={
-            'cash':     'نقداً / Cash',
-            'transfer': 'تحويل بنكي / Bank Transfer',
-            'cheque':   'شيك / Cheque',
-            'card':     'بطاقة / Card',
-        }.get(inst.payment_method, inst.payment_method or '—'),
-        currency=(getattr(school_settings, 'currency_symbol', None) or 'د.ع'),
-        school_name=(getattr(school_settings, 'school_name_ar', None)
-                     or getattr(school_settings, 'school_name', None) or 'المدرسة'),
-        logo_url=_logo_url,
-        school_footer=_school_footer,
-        print_date=date.today(),
-    )
+    from io import BytesIO
+    buf = BytesIO(pdf_bytes)
+    buf.seek(0)
+    filename = f"receipt_{_receipt_label or inst.id}.pdf"
+    return send_file(buf, as_attachment=False, download_name=filename,
+                     mimetype='application/pdf')
 
 
 @fees_bp.route('/export/excel')

@@ -136,242 +136,364 @@ def _shape_arabic_text(text):
         return text
 
 
+def _rtl_paragraph(text, style, max_width, max_lines=None):
+    """A Paragraph for logical (possibly Arabic / mixed) text, wrapped to
+    `max_width` BEFORE bidi reordering so multi-line RTL text keeps its natural
+    line order (ReportLab would otherwise wrap the already-reversed visual
+    string and put the end of the sentence on the first line). Each line is
+    shaped + bidi-ordered with _shape_arabic_text, XML-escaped, and joined with
+    <br/>. Explicit newlines in `text` are kept. `max_lines` truncates."""
+    from xml.sax.saxutils import escape
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    font, size = style.fontName, style.fontSize
+    limit = max(max_width - 2, 10)
+    lines = []
+    for raw in ('' if text is None else str(text)).splitlines() or ['']:
+        words = raw.split()
+        current = []
+        for word in words:
+            trial = ' '.join(current + [word])
+            if current and stringWidth(_shape_arabic_text(trial), font, size) > limit:
+                lines.append(' '.join(current))
+                current = [word]
+            else:
+                current.append(word)
+        if current:
+            lines.append(' '.join(current))
+    if not lines:
+        lines = ['']
+    if max_lines and len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = lines[-1] + ' …'
+    from reportlab.platypus import Paragraph
+    return Paragraph('<br/>'.join(escape(_shape_arabic_text(l)) for l in lines), style)
+
+
 def generate_fee_receipt(installment, school_settings=None, print_date=None,
                          actual_paid=None, receipt_no_override=None,
                          refund_status=None) -> bytes | None:
     """
-    Generate a professional PDF receipt for a paid fee installment.
-    Portrait orientation, top half of A4 page.
+    Fee receipt as a real PDF (ReportLab) in the approved Core School layout:
+    one A4 portrait page — navy school header (dynamic logo + Arabic school
+    name + "إيصال استلام رسوم دراسية", optional refund stamp), the compact
+    information strip with the orange separator, the amount summary, the
+    receipt-details table, the enlarged stamp/signature area, the school's own
+    fee-receipt footer (School.fee_receipt_footer, omitted when empty) and the
+    fixed Core School line, which is always the last line.
 
-    `actual_paid`: the amount actually received in the specific payment
-    transaction this receipt represents (resolved by the caller from the
-    persisted Revenue record, not from temporary request data), shown as the
-    "Amount Paid" figure and its amount-in-words line. Falls back to
-    `installment.received_amount` (the installment's running total) when not
-    supplied, matching the previous behavior.
+    Branding (name / logo / currency / footer) comes from `school_settings`,
+    which the caller resolves from the installment's OWN school.
+    School.receipt_footer (class-schedule PDF) is never read here.
 
-    `receipt_no_override`: the payment operation's reference (op_ref) to show as
-    the receipt number, so each distinct payment operation prints as a distinct
-    receipt. Falls back to `installment.receipt_no` when not supplied
-    (historical untagged payments).
+    `actual_paid`: amount of the specific payment operation this receipt
+    represents (resolved by the caller from persisted Revenue rows); falls back
+    to installment.received_amount. `receipt_no_override`: that operation's
+    reference, shown as the receipt number; falls back to
+    installment.receipt_no. Arabic uses the project's registered Arabic font +
+    arabic_reshaper / python-bidi (_shape_arabic_text).
 
-    Returns bytes or None if ReportLab unavailable.
+    Returns bytes or None if ReportLab is unavailable.
     """
     if not _get_rl():
         return None
 
     from reportlab.lib.pagesizes import A4, portrait
-    from reportlab.lib.units import cm, inch
-    from reportlab.lib import colors
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, Frame, PageTemplate, HRFlowable
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.colors import HexColor
+    from reportlab.lib.units import mm
+    from reportlab.lib.colors import HexColor, white
+    from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import (SimpleDocTemplate, Table, TableStyle,
+                                    Paragraph, Spacer, Image, HRFlowable)
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
-    from flask import current_app
+    from xml.sax.saxutils import escape
 
     from app.utils.arabic_numbers import amount_to_words_iqd
 
-    arabic_font_registered = _register_arabic_fonts(pdfmetrics, TTFont)
+    has_ar = _register_arabic_fonts(pdfmetrics, TTFont)
+    F = 'Amiri' if has_ar else 'Helvetica'
+    FB = 'Amiri-Bold' if has_ar else 'Helvetica-Bold'
 
-    # Set pagesize=A4 in portrait mode
+    # ── Palette (same values as the approved receipt design) ────────────────
+    NAVY       = HexColor('#1a3a5c')
+    NAVY_HEAD  = HexColor('#14304e')   # solid stand-in for the header gradient
+    LOGO_BG    = HexColor('#3a5573')   # rgba(255,255,255,.15) over the navy
+    TITLE_SOFT = HexColor('#d1d9e2')   # rgba(255,255,255,.82) over the navy
+    INK        = HexColor('#1e2b3a')
+    MUTED      = HexColor('#9aabb8')
+    LINE       = HexColor('#dde8f4')
+    LINE_SOFT  = HexColor('#f0f4f8')
+    STRIP_BG   = HexColor('#f8fbff')
+    TH_BG      = HexColor('#f0f5fc')
+    ORANGE     = HexColor('#e8a020')
+    GREEN      = HexColor('#1aab6d')
+    RED        = HexColor('#e03e3e')
+    SIGN_LINE  = HexColor('#b0bec5')
+    FOOT_LINE  = HexColor('#e0e8f0')
+    FOOT_TEXT  = HexColor('#64748b')
+    STAMP_RED  = HexColor('#c0392b')
+    STAMP_BG   = HexColor('#fef0f0')
+
+    def ps(name, font=F, size=10, color=INK, align=TA_RIGHT, leading=None):
+        return ParagraphStyle(name, fontName=font, fontSize=size, textColor=color,
+                              alignment=align, leading=leading or size * 1.35)
+
+    # ── Page geometry: A4 portrait, 8 mm margins (print stylesheet) ─────────
     pagesize = portrait(A4)
-    page_width, page_height = pagesize
+    margin = 8 * mm
+    W = pagesize[0] - 2 * margin          # full-bleed width (header, strip)
+    INSET = 18                            # 24 CSS px section inset
+    SW = W - 2 * INSET                    # section width
 
-    # 480 pt gives enough vertical room for the redesigned header/footer plus
-    # the amount-in-words row (may wrap to 2 lines), while still ensuring
-    # single page output.
-    max_content_height = 480  # points - this ensures single page output
-    frame = Frame(1*cm, page_height - max_content_height - 1*cm, 
-                  page_width - 2*cm, max_content_height,
-                  leftPadding=0, bottomPadding=0, rightPadding=0, topPadding=0)
+    # ── Data — identical sources to the previous receipt ────────────────────
+    s = school_settings
+    school_name = (getattr(s, 'school_name_ar', None) or getattr(s, 'school_name', None)
+                   or 'المدرسة')
+    currency = (getattr(s, 'currency_symbol', None) or 'د.ع')
+    school_footer = (getattr(s, 'fee_receipt_footer', None) or '').strip() or None
 
-    buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=pagesize, 
-                           leftMargin=1*cm, rightMargin=1*cm,
-                           topMargin=1*cm, bottomMargin=1*cm)
-    doc.addPageTemplates([PageTemplate(frames=[frame])])
-
-    styles = getSampleStyleSheet()
-    
-    # Create Arabic-aware styles with explicit font assignment
-    # Only use Amiri font - no fallbacks to prevent square characters
-    # Use dark grey (#444444) for professional appearance
-    if arabic_font_registered:
-        arabic_style = ParagraphStyle('arabic', fontName='Amiri', fontSize=10, alignment=2, textColor=colors.black)
-        arabic_bold = ParagraphStyle('arabic_bold', fontName='Amiri-Bold', fontSize=10, alignment=2, textColor=colors.black)
-        data_style = ParagraphStyle('data_cell', fontName='Amiri', fontSize=8, textColor=colors.black, alignment=0)
-        school_name_style = ParagraphStyle('school_name', fontName='Amiri-Bold', fontSize=16, alignment=1, textColor=colors.black, leading=20)
-        receipt_title_style = ParagraphStyle('receipt_title', fontName='Amiri', fontSize=12, alignment=1, textColor=HexColor('#333333'), leading=16)
-    else:
-        # If Amiri font is not available, use default fonts but warn about Arabic issues
-        print("WARNING: Amiri font not loaded. Arabic text will display as squares.")
-        arabic_style = ParagraphStyle('arabic', fontSize=10, alignment=2, textColor=colors.black)
-        arabic_bold = ParagraphStyle('arabic_bold', fontSize=10, alignment=2, textColor=colors.black)
-        data_style = ParagraphStyle('data_cell', fontSize=8, textColor=colors.black, alignment=0)
-        school_name_style = ParagraphStyle('school_name', fontSize=16, alignment=1, textColor=colors.black, leading=20)
-        receipt_title_style = ParagraphStyle('receipt_title', fontSize=12, alignment=1, textColor=HexColor('#333333'), leading=16)
-
-    elements = []
-
-    # ---- Header: logo (centered) -> school name (centered, bold) -> receipt title (centered) ----
-    school_name_ar = school_settings.school_name_ar if school_settings and school_settings.school_name_ar else "المدرسة"
-
-    logo_flowable = None
-    if school_settings and school_settings.logo_path:
-        logo_path = _resolve_logo_for_pdf(school_settings.logo_path)
-        if logo_path:
-            try:
-                logo_flowable = Image(logo_path, width=2*cm, height=2*cm)
-                logo_flowable.hAlign = 'CENTER'
-            except Exception as e:
-                print(f"Error loading logo: {e}")
-                logo_flowable = None
-
-    if logo_flowable is not None:
-        elements.append(logo_flowable)
-        elements.append(Spacer(1, 0.15*cm))
-
-    elements.append(Paragraph(_shape_arabic_text(school_name_ar), school_name_style))
-    elements.append(Spacer(1, 0.1*cm))
-    elements.append(Paragraph(_shape_arabic_text("إيصال استلام رسوم دراسية"), receipt_title_style))
-    # Refund status stamp — this receipt's payment operation was later reversed.
-    if refund_status in ('refunded', 'partial'):
-        _refund_label = 'مسترجع بالكامل' if refund_status == 'refunded' else 'مسترجع جزئياً'
-        _refund_style = ParagraphStyle(
-            'refund_stamp',
-            fontName=('Amiri-Bold' if arabic_font_registered else 'Helvetica-Bold'),
-            fontSize=12, alignment=1, textColor=HexColor('#c0392b'), leading=16)
-        elements.append(Spacer(1, 0.1*cm))
-        elements.append(Paragraph(_shape_arabic_text(f'★ {_refund_label} ★'), _refund_style))
-    elements.append(Spacer(1, 0.2*cm))
-    elements.append(HRFlowable(width="100%", thickness=0.75, color=HexColor('#999999'), spaceBefore=0, spaceAfter=10))
-
-    # Receipt details table
-    issue_date = print_date if print_date is not None else datetime.now().date()
-    student = installment.fee_record.student
     fee_record = installment.fee_record
-    
-    # Calculate remaining balance after this payment
+    student = fee_record.student
+    issue_date = print_date if print_date is not None else datetime.now().date()
     total_paid = sum(
         float(i.received_amount or 0)
         for i in fee_record.installments.execution_options(include_all_years=True)
     )
-    remaining = float(fee_record.net_amount) - total_paid
-    
-    def process_arabic_text(text):
-        return _shape_arabic_text(text)
-    
-    def create_arabic_paragraph(text, style):
-        """Create a Paragraph with Amiri font for all text (headers and labels)."""
-        processed_text = process_arabic_text(text)
-        if arabic_font_registered:
-            # Always use Amiri font with black text
-            arabic_style_with_font = ParagraphStyle('arabic_cell', 
-                                                  fontName='Amiri', 
-                                                  fontSize=style.fontSize if hasattr(style, 'fontSize') else 8,
-                                                  alignment=style.alignment if hasattr(style, 'alignment') else 0,
-                                                  textColor=colors.black)
-            return Paragraph(processed_text, arabic_style_with_font)
-        else:
-            # Fallback style with black text
-            return Paragraph(processed_text, style)
-    
-    def create_data_paragraph(text):
-        """Create a data cell paragraph with Amiri font and black text."""
-        processed_text = process_arabic_text(text)
-        if arabic_font_registered:
-            return Paragraph(processed_text, data_style)
-        else:
-            return Paragraph(processed_text, ParagraphStyle('data_cell', fontSize=8, textColor=colors.black, alignment=0))
-    
-    # Amount actually received in THIS payment transaction — derived from the
-    # persisted Revenue record by the caller (not client/request input); falls
-    # back to the installment's running total when the caller has none.
-    _paid_amount = float(actual_paid) if actual_paid is not None else float(installment.received_amount or 0)
+    total_due = float(fee_record.net_amount)
+    remaining = total_due - total_paid
+    paid_amount = (float(actual_paid) if actual_paid is not None
+                   else float(installment.received_amount or 0))
+    _words = amount_to_words_iqd(int(paid_amount))
+    amount_words = (_words + ' فقط لا غير') if _words else '—'
+    receipt_no = receipt_no_override or installment.receipt_no or '—'
+    student_code = student.student_id or '—'
+    inst_label = f'#{installment.installment_no}'
+    method_label = {
+        'cash':     'نقداً / Cash',
+        'transfer': 'تحويل بنكي / Bank Transfer',
+        'cheque':   'شيك / Cheque',
+        'card':     'بطاقة / Card',
+    }.get(installment.payment_method, installment.payment_method or '—')
+    due_label = installment.due_date.strftime('%Y-%m-%d') if installment.due_date else '—'
 
-    # Amount in words — same figure as the "Amount Paid" row below, never the
-    # installment's running total.
-    _paid_int = int(_paid_amount)
-    _amount_words = amount_to_words_iqd(_paid_int)
-    _amount_words_text = (_amount_words + ' فقط لا غير') if _amount_words else '—'
+    def money(value, style):
+        """'<currency> <number>' with the currency visually on the LEFT of the
+        number (approved order). Built as an explicit visual string so bidi can
+        never swap the two parts."""
+        return Paragraph(f'{escape(_shape_arabic_text(currency))} {value:,.2f}', style)
 
-    # Right-aligned Arabic style for the amount-in-words data cell
-    if arabic_font_registered:
-        _words_cell_style = ParagraphStyle('_wcs', fontName='Amiri', fontSize=9,
-                                           alignment=2, textColor=colors.black)
-    else:
-        _words_cell_style = ParagraphStyle('_wcs', fontSize=9,
-                                           alignment=2, textColor=colors.black)
+    elements = []
 
-    _receipt_no_display = receipt_no_override or installment.receipt_no or '—'
-    data = [
-        [create_arabic_paragraph('رقم الإيصال / Receipt No', arabic_bold), create_data_paragraph(_receipt_no_display)],
-        [create_arabic_paragraph('اسم الطالب / Student Name', arabic_bold), create_data_paragraph(student.full_name)],
-        [create_arabic_paragraph('رقم الطالب / Student ID', arabic_bold), create_data_paragraph(student.student_id)],
-        [create_arabic_paragraph('نوع الرسم / Fee Type', arabic_bold), create_data_paragraph(fee_record.fee_type.name)],
-        [create_arabic_paragraph('القسط / Installment', arabic_bold), create_data_paragraph(f"#{installment.installment_no}")],
-        [create_arabic_paragraph('المبلغ المدفوع / Amount Paid', arabic_bold), create_data_paragraph(f"{_paid_amount:,.2f} {school_settings.currency_symbol if school_settings else 'د.ع'}")],
-        [create_arabic_paragraph('المبلغ كتابةً / Amount in Words', arabic_bold),
-         Paragraph(_shape_arabic_text(_amount_words_text), _words_cell_style)],
-        [create_arabic_paragraph('المبلغ المتبقي / Remaining Balance', arabic_bold), create_data_paragraph(f"{remaining:,.2f} {school_settings.currency_symbol if school_settings else 'د.ع'}")],
-        [create_arabic_paragraph('تاريخ الاستحقاق / Due Date', arabic_bold), create_data_paragraph(installment.due_date.strftime('%Y-%m-%d') if installment.due_date else '—')],
-        [create_arabic_paragraph('تاريخ إصدار الوصل / Receipt Issue Date', arabic_bold), create_data_paragraph(issue_date.strftime('%Y-%m-%d'))],
-        [create_arabic_paragraph('طريقة الدفع / Payment Method', arabic_bold), create_data_paragraph({
-            'cash': 'نقداً / Cash',
-            'transfer': 'تحويل بنكي / Bank Transfer',
-            'cheque': 'شيك / Cheque',
-            'card': 'بطاقة / Card'
-        }.get(installment.payment_method, installment.payment_method or '—'))],
+    # ── 1. Navy header: logo on the right, name + title, refund stamp left ──
+    logo = None
+    logo_path = _resolve_logo_for_pdf(getattr(s, 'logo_path', None)) if s else None
+    if logo_path:
+        try:
+            img = Image(logo_path, width=38, height=38, kind='proportional')
+            logo = Table([[img]], colWidths=[46], rowHeights=[46])
+            logo.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), LOGO_BG),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+                ('TOPPADDING', (0, 0), (-1, -1), 0), ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+                ('ROUNDEDCORNERS', [6, 6, 6, 6]),
+            ]))
+        except Exception as exc:
+            print(f'[PDF] Could not load receipt logo: {exc}')
+            logo = None
+
+    stamp = None
+    if refund_status in ('refunded', 'partial'):
+        _label = 'مسترجع بالكامل' if refund_status == 'refunded' else 'مسترجع جزئياً'
+        stamp = Table([[Paragraph(escape(_shape_arabic_text(f'★ {_label} ★')),
+                                  ps('stamp', FB, 11, STAMP_RED, TA_CENTER))]],
+                      colWidths=[104])
+        stamp.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), STAMP_BG),
+            ('BOX', (0, 0), (-1, -1), 1.5, STAMP_RED),
+            ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('ROUNDEDCORNERS', [6, 6, 6, 6]),
+        ]))
+
+    logo_w = 46 + 14 if logo is not None else 0
+    stamp_w = 104 + 14 if stamp is not None else 0
+    info_w = W - logo_w - stamp_w - 36          # 18 pt side padding each side
+    info = [
+        # info_w - 14: the narrowest content width this cell can get after
+        # padding, so ReportLab never re-wraps the already-ordered lines.
+        _rtl_paragraph(school_name, ps('school', FB, 17, white, leading=22), info_w - 14,
+                       max_lines=2),
+        Spacer(1, 2),
+        Paragraph(escape(_shape_arabic_text('إيصال استلام رسوم دراسية')),
+                  ps('title', FB, 12, TITLE_SOFT)),
     ]
-
-    tbl = Table(data, colWidths=[7*cm, 8*cm])
-    tbl.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (0, -1), HexColor("#c0c0c0")),  # Dark grey header
-        ('BACKGROUND', (1, 0), (-1, -1), HexColor("#c0c0c0")),  # Clean white data cells
-        ('GRID', (0, 0), (-1, -1), 1, HexColor("#000000")),  # Clean grey grid lines
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ('LEFTPADDING', (0, 0), (-1, -1), 6),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+    head_row, head_widths = [], []
+    if stamp is not None:
+        head_row.append(stamp); head_widths.append(stamp_w)
+    head_row.append(info); head_widths.append(info_w)
+    if logo is not None:
+        head_row.append(logo); head_widths.append(logo_w)
+    head_widths[0] += 18
+    head_widths[-1] += 18
+    header = Table([head_row], colWidths=head_widths)
+    header.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), NAVY_HEAD),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ALIGN', (-1, 0), (-1, 0), 'RIGHT'),
+        ('TOPPADDING', (0, 0), (-1, -1), 11), ('BOTTOMPADDING', (0, 0), (-1, -1), 11),
+        ('LEFTPADDING', (0, 0), (-1, -1), 7), ('RIGHTPADDING', (0, 0), (-1, -1), 7),
+        ('LEFTPADDING', (0, 0), (0, 0), 18), ('RIGHTPADDING', (-1, 0), (-1, 0), 18),
     ]))
-    elements.append(tbl)
-    elements.append(Spacer(1, 0.3*cm))  # Reduced spacer
+    elements.append(header)
 
-    # Signature section
-    elements.append(Spacer(1, 0.5*cm))  # Reduced spacer
-    signature_data = [
-        [create_arabic_paragraph('توقيع المستلم / Received By:', arabic_style), Paragraph('________________________', ParagraphStyle('sig_line', fontSize=8, textColor=colors.black)), create_arabic_paragraph('ختم المدرسة / School Stamp:', arabic_style), Paragraph('________________________', ParagraphStyle('sig_line', fontSize=8, textColor=colors.black))]
+    # ── 2. Compact information strip + orange separator (RTL order) ─────────
+    strip_items = [                                # rightmost first (RTL)
+        ('رقم الإيصال', receipt_no, True),
+        ('اسم الطالب', student.full_name, False),
+        ('رقم الطالب', student_code, False),
+        ('نوع الرسم', fee_record.fee_type.name, False),
+        ('القسط', inst_label, False),
     ]
-    signature_table = Table(signature_data, colWidths=[2.5*cm, 4*cm, 2.5*cm, 4*cm])  # Adjusted widths
-    signature_table.setStyle(TableStyle([
-        ('FONTSIZE', (0, 0), (-1, -1), 8),  # Smaller font
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+    cell_w = W / len(strip_items)
+    lab_style = ps('is_label', FB, 9, MUTED, TA_CENTER)
+    val_style = ps('is_val', FB, 12, INK, TA_CENTER, leading=15)
+    mono_style = ps('is_mono', 'Courier-Bold', 10.5, INK, TA_CENTER, leading=14)
+    strip_cells = []
+    for label, value, mono in reversed(strip_items):   # LTR column order
+        strip_cells.append([
+            Paragraph(escape(_shape_arabic_text(label)), lab_style),
+            (_rtl_paragraph(value, mono_style, cell_w - 16, max_lines=2) if mono
+             else _rtl_paragraph(value, val_style, cell_w - 16, max_lines=2)),
+        ])
+    strip = Table([strip_cells], colWidths=[cell_w] * len(strip_items))
+    strip.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), STRIP_BG),
+        ('LINEBELOW', (0, 0), (-1, -1), 3, ORANGE),
+        ('LINEBEFORE', (1, 0), (-1, -1), 1, LINE),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 15),  # Reduced padding
-        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),  # Black text
+        ('TOPPADDING', (0, 0), (-1, -1), 7), ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8), ('RIGHTPADDING', (0, 0), (-1, -1), 8),
     ]))
-    elements.append(signature_table)
+    elements.append(strip)
 
-    # ---- Footer: subtle divider -> system attribution -> generated timestamp ----
-    attribution_text = "تم إصدار هذا الوصل إلكترونيًا عبر نظام Core School — النواة الذكية للحلول التقنية"
-    generated_at = datetime.now().strftime('%Y-%m-%d %H:%M')
+    section_title_style = ps('sec_title', FB, 12.5, white)
 
-    if arabic_font_registered:
-        attribution_style = ParagraphStyle('attribution', fontName='Amiri', fontSize=7.5, textColor=HexColor('#777777'), alignment=1)
-        timestamp_style = ParagraphStyle('gen_timestamp', fontName='Amiri', fontSize=6, textColor=HexColor('#999999'), alignment=1)
-    else:
-        attribution_style = ParagraphStyle('attribution', fontSize=7.5, textColor=HexColor('#777777'), alignment=1)
-        timestamp_style = ParagraphStyle('gen_timestamp', fontSize=6, textColor=HexColor('#999999'), alignment=1)
+    # ── 3. Amount summary (title bar + 3 cells, RTL: paid · remaining · due) ─
+    ag_label = ps('ag_label', FB, 9, MUTED, TA_CENTER)
+    ag_val = lambda name, color: ps(name, FB, 15, color, TA_CENTER, leading=19)
+    summary_cells = [                               # LTR column order
+        [Paragraph(escape(_shape_arabic_text('إجمالي المستحق')), ag_label),
+         money(total_due, ag_val('ag_due', INK))],
+        [Paragraph(escape(_shape_arabic_text('الرصيد المتبقي')), ag_label),
+         money(remaining, ag_val('ag_rem', GREEN if remaining <= 0 else RED))],
+        [Paragraph(escape(_shape_arabic_text('المبلغ المدفوع')), ag_label),
+         money(paid_amount, ag_val('ag_paid', GREEN))],
+    ]
+    summary = Table(
+        [[Paragraph(escape(_shape_arabic_text('ملخص المبلغ')), section_title_style), '', ''],
+         summary_cells],
+        colWidths=[SW / 3] * 3)
+    summary.setStyle(TableStyle([
+        ('SPAN', (0, 0), (-1, 0)),
+        ('BACKGROUND', (0, 0), (-1, 0), NAVY),
+        ('TOPPADDING', (0, 0), (-1, 0), 5), ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+        ('LEFTPADDING', (0, 0), (-1, 0), 14), ('RIGHTPADDING', (0, 0), (-1, 0), 14),
+        ('BOX', (0, 1), (-1, -1), 1, LINE),
+        ('LINEBEFORE', (1, 1), (-1, -1), 1, LINE),
+        ('VALIGN', (0, 1), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 1), (-1, -1), 7), ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
+        ('ROUNDEDCORNERS', [6, 6, 6, 6]),
+    ]))
+    summary.hAlign = 'CENTER'
+    elements.append(Spacer(1, 8))
+    elements.append(summary)
 
-    elements.append(Spacer(1, 0.4*cm))
-    elements.append(HRFlowable(width="100%", thickness=0.5, color=HexColor('#cccccc'), spaceBefore=0, spaceAfter=6))
-    elements.append(Paragraph(process_arabic_text(attribution_text), attribution_style))
-    elements.append(Spacer(1, 0.05*cm))
-    elements.append(Paragraph(_shape_arabic_text(f"أُصدر في {generated_at}"), timestamp_style))
+    # ── 4. Receipt-details table (label column on the right, 34 %) ──────────
+    th_w, td_w = SW * 0.34, SW * 0.66
+    th_style = ps('th', FB, 11, NAVY)
+    td_style = ps('td', FB, 11.5, INK, leading=15)
+    td_mono = ps('td_mono', 'Courier-Bold', 10.5, INK, leading=14)
+    td_money = ps('td_money', FB, 11.5, INK, leading=15)
+    detail_rows = [
+        ('رقم الإيصال',         _rtl_paragraph(receipt_no, td_mono, td_w - 24)),
+        ('اسم الطالب',          _rtl_paragraph(student.full_name, td_style, td_w - 24)),
+        ('رقم الطالب',          _rtl_paragraph(student_code, td_style, td_w - 24)),
+        ('نوع الرسم',           _rtl_paragraph(fee_record.fee_type.name, td_style, td_w - 24)),
+        ('القسط',               _rtl_paragraph(inst_label, td_style, td_w - 24)),
+        ('المبلغ المدفوع',      money(paid_amount, td_money)),
+        ('المبلغ كتابةً',       _rtl_paragraph(amount_words, td_style, td_w - 24, max_lines=3)),
+        ('الرصيد المتبقي',      money(remaining, td_money)),
+        ('تاريخ الاستحقاق',     _rtl_paragraph(due_label, td_style, td_w - 24)),
+        ('تاريخ إصدار الإيصال', _rtl_paragraph(issue_date.strftime('%Y-%m-%d'), td_style, td_w - 24)),
+        ('طريقة الدفع',         _rtl_paragraph(method_label, td_style, td_w - 24)),
+    ]
+    detail_data = [[Paragraph(escape(_shape_arabic_text('تفاصيل الإيصال')), section_title_style), '']]
+    for label, value_para in detail_rows:
+        detail_data.append([value_para, Paragraph(escape(_shape_arabic_text(label)), th_style)])
+    detail = Table(detail_data, colWidths=[td_w, th_w])
+    detail_style = [
+        ('SPAN', (0, 0), (-1, 0)),
+        ('BACKGROUND', (0, 0), (-1, 0), NAVY),
+        ('TOPPADDING', (0, 0), (-1, 0), 5), ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+        ('LEFTPADDING', (0, 0), (-1, 0), 14), ('RIGHTPADDING', (0, 0), (-1, 0), 14),
+        ('BACKGROUND', (1, 1), (1, -1), TH_BG),
+        ('BOX', (0, 1), (-1, -1), 1, LINE),
+        ('LINEBELOW', (1, 1), (1, -2), 1, LINE),
+        ('LINEBELOW', (0, 1), (0, -2), 1, LINE_SOFT),
+        ('VALIGN', (0, 1), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 1), (-1, -1), 3.5), ('BOTTOMPADDING', (0, 1), (-1, -1), 4.5),
+        ('LEFTPADDING', (0, 1), (-1, -1), 12), ('RIGHTPADDING', (0, 1), (-1, -1), 12),
+        ('ROUNDEDCORNERS', [6, 6, 0, 0]),
+    ]
+    for r in range(2, len(detail_data), 2):        # even data rows (nth-child(even))
+        detail_style.append(('BACKGROUND', (0, r), (0, r), STRIP_BG))
+    detail.setStyle(TableStyle(detail_style))
+    detail.hAlign = 'CENTER'
+    elements.append(Spacer(1, 8))
+    elements.append(detail)
 
+    # ── 5. Enlarged stamp / signature area (RTL: stamp right, signature left)
+    sign_label = ps('sign_label', FB, 11, NAVY, TA_CENTER)
+
+    def sign_box(label):
+        return [Paragraph(escape(_shape_arabic_text(label)), sign_label),
+                Spacer(1, 30),
+                HRFlowable(width='72%', thickness=1, color=SIGN_LINE, hAlign='CENTER',
+                           spaceBefore=0, spaceAfter=0)]
+
+    sign = Table([[sign_box('توقيع المستلم'), sign_box('ختم المدرسة')]],
+                 colWidths=[SW / 2] * 2)
+    sign.setStyle(TableStyle([
+        ('BOX', (0, 0), (-1, -1), 1, LINE),
+        ('LINEBEFORE', (1, 0), (1, 0), 1, LINE),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('TOPPADDING', (0, 0), (-1, -1), 9), ('BOTTOMPADDING', (0, 0), (-1, -1), 11),
+        ('ROUNDEDCORNERS', [8, 8, 8, 8]),
+    ]))
+    sign.hAlign = 'CENTER'
+    elements.append(Spacer(1, 14))
+    elements.append(sign)
+
+    # ── 6. Footers: school fee-receipt footer (if any), then the fixed line ──
+    elements.append(Spacer(1, 8))
+    elements.append(HRFlowable(width='100%', thickness=1, color=FOOT_LINE,
+                               spaceBefore=0, spaceAfter=6))
+    if school_footer:
+        elements.append(_rtl_paragraph(school_footer,
+                                       ps('school_footer', FB, 10.5, FOOT_TEXT, TA_CENTER, leading=14),
+                                       W - 2 * INSET, max_lines=3))
+        elements.append(Spacer(1, 3))
+    elements.append(Paragraph(
+        escape(_shape_arabic_text('تم اصدار هذا الوصل الكترونيا بواسطة نظام Core School')),
+        ps('core_footer', FB, 10, SIGN_LINE, TA_CENTER)))
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=pagesize, leftMargin=margin, rightMargin=margin,
+                            topMargin=margin, bottomMargin=margin,
+                            title=f'إيصال استلام رسوم دراسية — {receipt_no}',
+                            author='Core School')
     doc.build(elements)
     return buf.getvalue()
 
