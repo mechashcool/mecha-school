@@ -533,75 +533,18 @@ def map_new_employee_to_devices(employee_id, school_id):
     return ensure_employee_device_mappings(devices, employee_id, school_id)
 
 
-def add_manual_employee_mapping(device, employee_id, school_id, raw_number):
-    """Stage ONE operator-typed employee mapping on ``device`` (flush only).
+def ensure_employee_device_mapping(device, employee_id, school_id):
+    """Return ``(mapping, created)`` for this employee on THIS device only.
 
-    * ASCII digits only, stored in canonical form ('01005' -> '1005').
-    * The employee's own existing number may be reused on a further device
-      (checked against both tables on this device).
-    * Any other number is a NEW number: it must lie in the employee range,
-      be free across both tables of the school, and is refused while the
-      employee already has a different number on another device.
-    * An employee already mapped to this device is refused.
-
-    Raises ``DeviceNumberChangeError`` with an Arabic message; after a failed
-    flush the caller must roll back.
+    Single-device form of ``ensure_employee_device_mappings``, used by the
+    manual "add employee mapping" action. The number is always chosen by the
+    server: the employee's one consistent existing number is reused (even a
+    legacy one below 1000), otherwise a new employee-range number is
+    allocated; inconsistent numbers are refused. An existing mapping on this
+    device is returned untouched with ``created=False``. Raises
+    ``DeviceNumberConflictError`` when the device does not accept employees.
     """
-    from app.models import db, DeviceEmployeeMapping
-
-    if (device.school_id != school_id
-            or getattr(device, 'device_scope', 'students') not in EMPLOYEE_DEVICE_SCOPES):
-        raise DeviceNumberChangeError('هذا الجهاز لا يقبل ربط الموظفين.')
-
-    value = numeric_device_number(raw_number)
-    if value is None or value <= 0 or value > MAX_DEVICE_NUMBER:
-        raise DeviceNumberChangeError(
-            f'رقم التسجيل يجب أن يكون عدداً صحيحاً موجباً بالأرقام 0-9 فقط '
-            f'ولا يتجاوز {MAX_DEVICE_NUMBER}.')
-    number = str(value)
-
-    lock_school_device_numbering(school_id)
-
-    own_rows = (db.session.query(DeviceEmployeeMapping.device_id,
-                                 DeviceEmployeeMapping.enrollment_no)
-                .execution_options(**_UNSCOPED)
-                .filter(DeviceEmployeeMapping.school_id == school_id,
-                        DeviceEmployeeMapping.employee_id == employee_id)
-                .all())
-    on_device = [n for dev_id, n in own_rows if dev_id == device.id]
-    if on_device:
-        raise DeviceNumberChangeError(
-            f'الموظف مرتبط مسبقاً بهذا الجهاز بالرقم {on_device[0]}. لم يتم إنشاء أي ربط.')
-    own_numbers = {_normalise_number(n) for _dev_id, n in own_rows}
-
-    if number in own_numbers:
-        used = _device_used_numbers([device.id], school_id,
-                                    exclude_employee_id=employee_id)[device.id]
-        if number in used:
-            raise DeviceNumberChangeError(
-                f'الرقم {number} مستخدم لشخص آخر على هذا الجهاز. لم يتم إنشاء أي ربط.')
-    else:
-        if own_numbers:
-            raise DeviceNumberChangeError(
-                f'لهذا الموظف رقم مسجل مسبقاً على جهاز آخر '
-                f'({"، ".join(sorted(own_numbers))}). يجب استخدام نفس الرقم لتوحيد '
-                f'رقم الموظف بين الأجهزة. لم يتم إنشاء أي ربط.')
-        if value < EMPLOYEE_DEVICE_NUMBER_MIN or value > EMPLOYEE_DEVICE_NUMBER_MAX:
-            raise DeviceNumberChangeError(
-                f'رقم الموظف الجديد يجب أن يكون بين {EMPLOYEE_DEVICE_NUMBER_MIN} '
-                f'و{EMPLOYEE_DEVICE_NUMBER_MAX}. لم يتم إنشاء أي ربط.')
-        if value in _school_used_numbers(school_id):
-            raise DeviceNumberChangeError(
-                f'الرقم {number} مستخدم لشخص آخر (طالب أو موظف) في هذه المدرسة. '
-                f'لم يتم إنشاء أي ربط.')
-
-    mapping = DeviceEmployeeMapping(school_id=school_id, device_id=device.id,
-                                    employee_id=employee_id, enrollment_no=number,
-                                    is_active=True)
-    db.session.add(mapping)
-    try:
-        db.session.flush()
-    except IntegrityError as exc:
-        raise DeviceNumberChangeError(
-            f'الرقم {number} مرتبط بشخص آخر في هذا الجهاز. لم يتم إنشاء أي ربط.') from exc
-    return mapping
+    result = ensure_employee_device_mappings([device], employee_id, school_id)
+    if not result:
+        raise DeviceNumberConflictError('هذا الجهاز لا يقبل ربط الموظفين.')
+    return result[0]

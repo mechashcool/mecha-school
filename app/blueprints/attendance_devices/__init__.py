@@ -48,9 +48,9 @@ from app.utils.audit import log_action
 from app.utils.device_numbering import (DeviceNumberAllocationError,
                                         DeviceNumberChangeError,
                                         DeviceNumberConflictError,
-                                        add_manual_employee_mapping,
                                         change_student_device_number,
                                         copy_student_mappings,
+                                        ensure_employee_device_mapping,
                                         ensure_student_device_mapping)
 from app.utils.decorators import (admin_required, permission_required,
                                    any_permission_required, super_admin_required,
@@ -727,8 +727,9 @@ def add_mapping(device_id):
             return redirect(url_for('attendance_devices.mappings', device_id=device_id))
 
     # ── Employees ─────────────────────────────────────────────────────────────
-    # The typed number is validated, canonicalised and checked against BOTH
-    # mapping tables of the school under the shared school lock by the helper.
+    # The employee device number is chosen by the server (existing number
+    # reused, else a new employee-range number); any employee_no_string sent
+    # by the browser is ignored. Only THIS device is mapped.
     if scope in ('employees', 'mixed'):
         employee_id = request.form.get('employee_id', type=int)
         if not employee_id:
@@ -741,14 +742,19 @@ def add_mapping(device_id):
             return redirect(url_for('attendance_devices.mappings', device_id=device_id))
 
         try:
-            mapping = add_manual_employee_mapping(
-                dev, employee.id, school.id, request.form.get('employee_no_string'))
+            mapping, created = ensure_employee_device_mapping(dev, employee.id, school.id)
             db.session.commit()
-        except DeviceNumberChangeError as exc:
+        except DeviceNumberAllocationError as exc:
             db.session.rollback()
-            flash(str(exc), 'danger')
+            flash(str(exc) if isinstance(exc, DeviceNumberConflictError) else
+                  'تعذر إنشاء رقم الموظف على الجهاز. يرجى المحاولة مرة أخرى.', 'danger')
             return redirect(url_for('attendance_devices.mappings', device_id=device_id))
-        flash(f'تم ربط الرقم {mapping.enrollment_no} بالموظف {employee.full_name}.', 'success')
+        if created:
+            flash(f'تم ربط الموظف {employee.full_name} بالرقم '
+                  f'{mapping.enrollment_no} على هذا الجهاز.', 'success')
+        else:
+            flash(f'الموظف {employee.full_name} مرتبط مسبقاً بهذا الجهاز '
+                  f'بالرقم {mapping.enrollment_no}.', 'warning')
         return redirect(url_for('attendance_devices.mappings', device_id=device_id))
 
     flash('نوع الجهاز غير مدعوم لإضافة ربط.', 'danger')
