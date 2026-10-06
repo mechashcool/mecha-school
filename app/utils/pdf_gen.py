@@ -136,6 +136,46 @@ def _shape_arabic_text(text):
         return text
 
 
+def _receipt_logo_source(logo_path: str | None):
+    """Image source for the fee-receipt logo — BytesIO, a local file path, or
+    None. Never raises: any failure just means "no logo" and the receipt is
+    still produced.
+
+    School logos are stored in the PRIVATE school-media Supabase bucket, so an
+    unauthenticated GET of the stored URL (_resolve_logo_for_pdf) fails there
+    and the logo silently disappeared. Supabase-stored logos are therefore read
+    server-side through the existing authenticated _supabase_fetch (service
+    key; the bucket/path come from the stored value, the host from our own
+    SUPABASE_URL config — never from the stored URL). The bytes are checked to
+    be a real image before use. Local static logos keep the legacy resolver.
+    """
+    if not logo_path:
+        return None
+    try:
+        from app.utils.upload_access import storage_ref_of
+        ref = storage_ref_of(logo_path)
+    except Exception:
+        ref = None
+    if ref is not None:
+        try:
+            from app.utils.helpers import _supabase_fetch
+            from PIL import Image as _PILImage
+            data, _content_type = _supabase_fetch(ref[1], bucket=ref[0])
+            if not data:
+                return None
+            with _PILImage.open(BytesIO(data)) as probe:
+                probe.verify()
+            return BytesIO(data)
+        except Exception as exc:
+            print(f'[PDF] Receipt logo unavailable ({type(exc).__name__}); '
+                  'receipt generated without it.')
+            return None
+    try:
+        return _resolve_logo_for_pdf(logo_path)
+    except Exception:
+        return None
+
+
 def _rtl_paragraph(text, style, max_width, max_lines=None):
     """A Paragraph for logical (possibly Arabic / mixed) text, wrapped to
     `max_width` BEFORE bidi reordering so multi-line RTL text keeps its natural
@@ -287,10 +327,10 @@ def generate_fee_receipt(installment, school_settings=None, print_date=None,
 
     # ── 1. Navy header: logo on the right, name + title, refund stamp left ──
     logo = None
-    logo_path = _resolve_logo_for_pdf(getattr(s, 'logo_path', None)) if s else None
-    if logo_path:
+    logo_src = _receipt_logo_source(getattr(s, 'logo_path', None)) if s else None
+    if logo_src is not None:
         try:
-            img = Image(logo_path, width=38, height=38, kind='proportional')
+            img = Image(logo_src, width=38, height=38, kind='proportional')
             logo = Table([[img]], colWidths=[46], rowHeights=[46])
             logo.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, -1), LOGO_BG),
