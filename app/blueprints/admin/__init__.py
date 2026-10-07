@@ -7,6 +7,7 @@ from flask import (Blueprint, render_template, redirect, url_for,
                    flash, request, jsonify)
 from flask_login import login_required, current_user
 from sqlalchemy import func, or_, extract
+from sqlalchemy.orm import selectinload
 from datetime import date, timedelta, datetime
 import json
 import logging
@@ -194,7 +195,9 @@ def _assignable_roles(existing_role_name=None, school_id=None):
     account is never broken even if its role was later unassigned from the
     school. Built-in system roles are never school-gated.
     """
-    roles = Role.query.order_by(Role.id).all()
+    roles = (Role.query
+             .options(selectinload(Role.schools))
+             .order_by(Role.id).all())
     return [
         role for role in roles
         if _is_role_assignable_by_current_user(role, existing_role_name)

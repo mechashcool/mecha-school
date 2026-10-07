@@ -631,7 +631,7 @@ class Role(db.Model):
     # from the Super Admin school-details page. Built-in system roles never use
     # this table and are always available (see is_available_to_school).
     schools     = db.relationship('School', secondary='role_schools',
-                                  lazy='selectin',
+                                  lazy='select',
                                   backref=db.backref('custom_roles', lazy='selectin'))
 
     @property
