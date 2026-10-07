@@ -60,6 +60,10 @@ DEFAULTS = {
     'lease_seconds':  int(os.environ.get('OUTBOX_LEASE_SECONDS', 300)),
     'max_attempts':   int(os.environ.get('OUTBOX_MAX_ATTEMPTS', 5)),
     'error_backoff':  float(os.environ.get('OUTBOX_ERROR_BACKOFF_SECONDS', 30)),
+    # Stale-lease recovery cadence ONLY (rows left 'processing' by a crashed
+    # worker). New and retry jobs are picked up by claim_batch on every sweep
+    # regardless of this value. 0 = reclaim every sweep (previous behaviour).
+    'reclaim_seconds': float(os.environ.get('OUTBOX_RECLAIM_SECONDS', 60)),
 }
 
 _stop = threading.Event()
@@ -205,8 +209,11 @@ def _log_delivery_row(row, token_row, status, result) -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def run_once(worker_id: str, *, batch_size: int, lease_seconds: int,
-             max_attempts: int) -> dict:
+             max_attempts: int, reclaim: bool = True) -> dict:
     """One sweep: reclaim stale leases, claim a batch, deliver it.
+
+    ``reclaim=False`` skips only the stale-lease reclaim (run() gates it to
+    OUTBOX_RECLAIM_SECONDS); claiming and delivery are unaffected.
 
     Returns a counts dict. Raises only on database-level failure, which the
     caller turns into a backoff.
@@ -229,8 +236,9 @@ def run_once(worker_id: str, *, batch_size: int, lease_seconds: int,
         stats['disabled'] = True
         return stats
 
-    stats['reclaimed'] = outbox.reclaim_stale(
-        worker_id, lease_seconds=lease_seconds)
+    if reclaim:
+        stats['reclaimed'] = outbox.reclaim_stale(
+            worker_id, lease_seconds=lease_seconds)
 
     rows = outbox.claim_batch(worker_id, limit=batch_size)
     stats['claimed'] = len(rows)
@@ -251,6 +259,8 @@ def run(app=None, *, batch_size=None, poll_seconds=None, lease_seconds=None,
     poll_seconds = poll_seconds or DEFAULTS['poll_seconds']
     lease_seconds = lease_seconds or DEFAULTS['lease_seconds']
     max_attempts = max_attempts or DEFAULTS['max_attempts']
+    reclaim_seconds = DEFAULTS['reclaim_seconds']
+    last_reclaim = None     # None → the first enabled sweep reclaims at once
 
     app = app or _build_app()
     worker_id = worker_identity()
@@ -267,15 +277,24 @@ def run(app=None, *, batch_size=None, poll_seconds=None, lease_seconds=None,
                         '— worker will idle and deliver nothing')
 
         log.warning('[outbox] worker %s started  batch=%d poll=%ss lease=%ss '
-                    'max_attempts=%d', worker_id, batch_size, poll_seconds,
-                    lease_seconds, max_attempts)
+                    'max_attempts=%d reclaim=%ss', worker_id, batch_size,
+                    poll_seconds, lease_seconds, max_attempts, reclaim_seconds)
 
         while not _stop.is_set():
             totals['loops'] += 1
             try:
+                do_reclaim = (last_reclaim is None
+                              or reclaim_seconds <= 0
+                              or time.monotonic() - last_reclaim >= reclaim_seconds)
                 stats = run_once(worker_id, batch_size=batch_size,
                                  lease_seconds=lease_seconds,
-                                 max_attempts=max_attempts)
+                                 max_attempts=max_attempts,
+                                 reclaim=do_reclaim)
+                # Restart the interval only after a reclaim actually ran and
+                # succeeded: run_once raises on a DB failure (caught below,
+                # timer untouched), and a disabled sweep touches nothing.
+                if do_reclaim and not stats.get('disabled'):
+                    last_reclaim = time.monotonic()
                 for key in ('reclaimed', 'claimed', 'sent', 'retry', 'dead'):
                     totals[key] += stats.get(key, 0)
                 totals['disabled_ticks'] = totals.get('disabled_ticks', 0) + (
