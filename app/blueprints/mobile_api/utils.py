@@ -17,6 +17,7 @@ from functools import wraps
 import jwt as pyjwt
 from flask import current_app, g, jsonify, request, url_for
 from flask_login import login_user
+from sqlalchemy.orm import joinedload
 
 from app.models import User, db
 
@@ -77,7 +78,11 @@ def jwt_required(token_type: str = 'access'):
             if payload.get('type') != token_type:
                 return jsonify({'ok': False, 'error': 'wrong_token_type'}), 401
 
-            user = db.session.get(User, int(payload['sub']))
+            user = db.session.get(
+                User,
+                int(payload['sub']),
+                options=[joinedload(User.role)]
+            )
             if not user or not user.is_active:
                 return jsonify({'ok': False, 'error': 'user_inactive'}), 401
 
