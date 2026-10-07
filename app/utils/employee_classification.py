@@ -131,6 +131,41 @@ def _load(school_id: int | None) -> dict:
     }
 
 
+_READ_MEMO_ATTR = '_employee_classification_read_cfg'
+
+
+def _load_read(school_id: int | None) -> dict:
+    """Read-only twin of ``_load()``: same result, but the stored config is
+    fetched at most once per request (``flask.g``, keyed by school_id).
+
+    The memo keeps the very object ``_load()`` would copy from (the session's
+    ``row.config``), so read callers see exactly what a fresh ``_load()``
+    returns today. Write helpers (``add_custom_*``) keep calling ``_load()``
+    directly, and ``_save()`` drops this school's entry so later reads in the
+    same request re-query as before. Outside a request: plain ``_load()``.
+    """
+    if not school_id:
+        return {'job_titles': [], 'specialties': {}}
+    from flask import g, has_request_context
+    if not has_request_context():
+        return _load(school_id)
+    memo = getattr(g, _READ_MEMO_ATTR, None)
+    if memo is None:
+        memo = {}
+        setattr(g, _READ_MEMO_ATTR, memo)
+    if school_id not in memo:
+        from app.models import SchoolModuleConfig
+        row = (SchoolModuleConfig.query
+               .filter_by(school_id=school_id, module_key=MODULE_KEY)
+               .first())
+        memo[school_id] = (row.config if row else None) or {}
+    cfg = memo[school_id]
+    return {
+        'job_titles':  list(cfg.get('job_titles') or []),
+        'specialties': dict(cfg.get('specialties') or {}),
+    }
+
+
 def _save(school_id: int, data: dict) -> None:
     """Upsert the school's custom-options row. Does NOT commit — caller commits.
 
@@ -150,6 +185,13 @@ def _save(school_id: int, data: dict) -> None:
         'specialties': dict(data.get('specialties') or {}),
     }
     row.updated_at = _dt.utcnow()
+    # Later reads in this request must re-query (and see the pending change via
+    # autoflush) exactly as before, so drop this school's read-memo entry.
+    from flask import g, has_request_context
+    if has_request_context():
+        memo = getattr(g, _READ_MEMO_ATTR, None)
+        if memo is not None:
+            memo.pop(school_id, None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -157,7 +199,7 @@ def _save(school_id: int, data: dict) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def custom_job_titles(school_id: int | None) -> list[str]:
-    return _load(school_id)['job_titles']
+    return _load_read(school_id)['job_titles']
 
 
 def selectable_job_titles(school_id: int | None) -> list[str]:
@@ -178,7 +220,7 @@ def specialties_for_title(school_id: int | None, job_title: str) -> list[str]:
     """
     out: list[str] = list(DEFAULT_SPECIALTIES.get(job_title, []))
     seen = {_norm_key(s) for s in out}
-    for s in _load(school_id)['specialties'].get(job_title, []):
+    for s in _load_read(school_id)['specialties'].get(job_title, []):
         if _norm_key(s) not in seen:
             seen.add(_norm_key(s))
             out.append(s)
