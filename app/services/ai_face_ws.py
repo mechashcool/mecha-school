@@ -889,11 +889,14 @@ def _handle_getnewlog_records(sn: str, records: list) -> tuple:
                 log.warning("[getnewlog] Unknown device sn=%s — skipping records", sn)
                 return 0, 0, 0, 0
 
-            school = (School.query
-                      .execution_options(bypass_tenant_scope=True)
-                      .filter_by(id=device.school_id)
-                      .first())
-            if not school:
+            # Existence only: the full row loaded here was expired by the
+            # heartbeat commit below and reloaded on first use anyway.
+            school_exists = (School.query
+                             .execution_options(bypass_tenant_scope=True)
+                             .with_entities(School.id)
+                             .filter_by(id=device.school_id)
+                             .first())
+            if not school_exists:
                 log.warning("[getnewlog] No school for device sn=%s", sn)
                 return 0, 0, 0, 0
 
@@ -903,6 +906,16 @@ def _handle_getnewlog_records(sn: str, records: list) -> tuple:
                 db.session.commit()
             except Exception:
                 db.session.rollback()
+
+            # Full row, loaded once AFTER the heartbeat commit — the same
+            # post-commit state record processing previously refreshed to.
+            school = (School.query
+                      .execution_options(bypass_tenant_scope=True)
+                      .filter_by(id=device.school_id)
+                      .first())
+            if not school:
+                log.warning("[getnewlog] No school for device sn=%s", sn)
+                return 0, 0, 0, 0
 
             return _process_record_list(sn, device, school, records, source_cmd="getnewlog")
 
@@ -1150,11 +1163,14 @@ def _handle_sendlog(payload: dict) -> str:
                 return _json_reply(ret="sendlog", result=True, count=count,
                                    logindex=logindex, cloudtime=_cloudtime(), access=1)
 
-            school = (School.query
-                      .execution_options(bypass_tenant_scope=True)
-                      .filter_by(id=device.school_id)
-                      .first())
-            if not school:
+            # Existence only: the full row loaded here was expired by the
+            # heartbeat commit below and reloaded on first use anyway.
+            school_exists = (School.query
+                             .execution_options(bypass_tenant_scope=True)
+                             .with_entities(School.id)
+                             .filter_by(id=device.school_id)
+                             .first())
+            if not school_exists:
                 log.warning("[sendlog] No school row for school_id=%d sn=%s",
                             device.school_id, sn)
                 return _json_reply(ret="sendlog", result=True, count=count,
@@ -1172,6 +1188,18 @@ def _handle_sendlog(payload: dict) -> str:
 
             log.info("[sendlog] device id=%d school_id=%d scope=%s count=%d",
                      device.id, device.school_id, device.device_scope, count)
+
+            # Full row, loaded once AFTER the heartbeat commit — the same
+            # post-commit state record processing previously refreshed to.
+            school = (School.query
+                      .execution_options(bypass_tenant_scope=True)
+                      .filter_by(id=device.school_id)
+                      .first())
+            if not school:
+                log.warning("[sendlog] No school row for school_id=%d sn=%s",
+                            device.school_id, sn)
+                return _json_reply(ret="sendlog", result=True, count=count,
+                                   logindex=logindex, cloudtime=_cloudtime(), access=1)
 
             processed, skipped, unmatched, errors = _process_record_list(
                 sn, device, school, records, source_cmd="sendlog"
