@@ -632,7 +632,7 @@ class Role(db.Model):
     # this table and are always available (see is_available_to_school).
     schools     = db.relationship('School', secondary='role_schools',
                                   lazy='select',
-                                  backref=db.backref('custom_roles', lazy='selectin'))
+                                  backref=db.backref('custom_roles', lazy='select'))
 
     @property
     def is_builtin(self):
