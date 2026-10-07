@@ -218,6 +218,11 @@ class School(db.Model):
     academic_years = db.relationship('AcademicYear', backref='school', lazy='dynamic')
     package        = db.relationship('FeaturePackage', foreign_keys=[package_id])
 
+    @classmethod
+    def institution_type_is_institute(cls, value) -> bool:
+        """The single institute rule, usable without a loaded School row."""
+        return (value or '').strip().lower() == cls.INSTITUTION_INSTITUTE
+
     @property
     def is_institute(self):
         """
@@ -226,7 +231,7 @@ class School(db.Model):
         NULL, '', 'school' and any unrecognised value all return False, so every
         existing row keeps its current behaviour without any backfill.
         """
-        return (self.institution_type or '').strip().lower() == self.INSTITUTION_INSTITUTE
+        return self.institution_type_is_institute(self.institution_type)
 
     @property
     def current_year(self):

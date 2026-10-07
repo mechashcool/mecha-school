@@ -138,6 +138,14 @@ def _user_institute() -> School | None:
     school_id = g.mobile_user.school_id
     if not school_id:
         return None
+    # Read only the classification first: a school-type institution (the
+    # common case) never needs the full 52-column row here.
+    institution_type = (db.session.query(School.institution_type)
+                        .filter(School.id == school_id)
+                        .execution_options(**_OPTS)
+                        .scalar())
+    if not School.institution_type_is_institute(institution_type):
+        return None
     school = db.session.get(School, school_id, execution_options=_OPTS)
     return school if school is not None and school.is_institute else None
 
