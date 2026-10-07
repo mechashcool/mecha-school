@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from flask import g, request
 from sqlalchemy import and_, func, insert, select
@@ -40,7 +41,7 @@ from sqlalchemy.orm import joinedload
 
 from app.models import (
     db, ChatRoom, ChatRoomMember, ChatMessage, ChatMessageRead,
-    ChatRoomSchedule, Employee, parent_students, teacher_subjects,
+    ChatRoomSchedule, Employee, School, parent_students, teacher_subjects,
     User, Section, Student,
 )
 from app.utils.modules import is_module_enabled
@@ -90,6 +91,21 @@ def _parse_after_id(raw: str | None) -> int | None:
 
 
 _UNSET = object()   # sentinel: "no prefetched schedule supplied" (None is meaningful)
+
+
+def _school_tz_source(user):
+    """The only thing get_local_now() reads from user.school is .timezone, so
+    read that one column instead of lazy-loading the 52-column School row.
+    No school_id → None with no query, exactly like the relationship. A
+    missing row or NULL/''/invalid timezone resolves to Asia/Baghdad inside
+    get_local_now() just as before. If get_local_now() ever reads more
+    School settings, pass the full School again."""
+    if user.school_id is None:
+        return None
+    timezone_value = (db.session.query(School.timezone)
+                      .filter(School.id == user.school_id)
+                      .scalar())
+    return SimpleNamespace(timezone=timezone_value)
 
 
 def _local_now_for(school, room_id=None):
@@ -404,7 +420,8 @@ def chat_rooms():
     page_room_ids = [room.id for room in rooms]
     unread_map = _unread_counts_for_rooms(page_room_ids, user.id)
     last_map   = _last_messages_for_rooms(page_room_ids)
-    today_dow  = (_local_now_for(user.school).weekday() + 1) % 7  # Sun=0 scheme
+    tz_source  = _school_tz_source(user)   # once per request (was user.school)
+    today_dow  = (_local_now_for(tz_source).weekday() + 1) % 7  # Sun=0 scheme
     sched_map  = {
         s.room_id: s
         for s in ChatRoomSchedule.query
@@ -419,7 +436,7 @@ def chat_rooms():
         can_send_flag = False
         if mem and not mem.is_blocked and not room.is_closed and room.allow_replies:
             if not room.is_announcement_only or mem.role in ('owner', 'admin'):
-                sched_ok, _ = _can_send_now(room, user.school,
+                sched_ok, _ = _can_send_now(room, tz_source,
                                             today_sch=sched_map.get(room.id))
                 can_send_flag = sched_ok
 
@@ -466,7 +483,7 @@ def chat_room_detail(room_id):
     can_send, send_reason = _member_can_send(mem, room)
     # Per-day schedule check — always evaluate today's row regardless of other days
     if can_send:
-        can_send, send_reason = _can_send_now(room, user.school)
+        can_send, send_reason = _can_send_now(room, _school_tz_source(user))
 
     members_out = []
     for m in room.members.all():
@@ -611,7 +628,7 @@ def chat_send_message(room_id):
         return err(reason, 403)
 
     # Per-day schedule check — always evaluate today's row regardless of other days
-    can_send, reason = _can_send_now(room, user.school)
+    can_send, reason = _can_send_now(room, _school_tz_source(user))
     if not can_send:
         return err(reason, 403)
 
