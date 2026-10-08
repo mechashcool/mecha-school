@@ -1304,12 +1304,12 @@ def teacher_create_exam():
     db.session.commit()
 
     # In-app Notification + FCM push to parents of active students in this section.
-    # P0: queued to the background dispatcher — the fan-out (per-parent rows +
-    # FCM HTTPS calls) no longer blocks this request. _notify_new_exam() is
-    # documented context-independent (bypass_tenant_scope=True + explicit
-    # school_id on every query), so it is safe in a background thread where no
-    # ORM tenant scope exists. Only primitives cross the thread boundary; the
-    # Exam is re-loaded inside the task with an explicit school_id equality.
+    # P0: queued to the background dispatcher — the fan-out no longer blocks
+    # this request. _notify_new_exam_bg() uses explicit school_id filters on
+    # every query (bypass_tenant_scope=True), so it is safe in a background
+    # thread where no ORM tenant scope exists; it batches the rows into one
+    # commit and hands FCM to send_push_batch. Only primitives cross the thread
+    # boundary; the Exam is re-loaded inside the task by id + school_id.
     # Best-effort: a notification failure must never fail the API response.
     _exam_id_for_log = new_exam.id  # PK retained after commit — safe to read
     try:
@@ -1508,12 +1508,19 @@ def teacher_grades():
 # ─── Background notification wrappers (P0) ────────────────────────────────────
 #
 # Both wrappers run on the async_dispatch background thread pool, where there is
-# NO request context and therefore NO implicit ORM tenant scope. They must never
-# trust an id alone: the source record is re-loaded with an explicit school_id
-# equality filter (bypass_tenant_scope=True + include_all_years=True so the
-# lookup is deterministic in the scope-less thread), and the delegated helpers
-# are the existing context-independent implementations whose queries all carry
-# their own explicit school/ownership filters.
+# NO request context and therefore NO implicit ORM tenant scope and NO
+# current_user. They must never trust an id alone: the source record is
+# re-loaded with an explicit school_id equality filter (bypass_tenant_scope=True
+# + include_all_years=True so the lookup is deterministic in the scope-less
+# thread), and every recipient query below carries its own explicit school
+# filter. Only primitives are passed in.
+#
+# Both delegate to _notify_parents_batched(), the same shape as
+# _notify_grade_results_mobile(): a fixed number of set-based recipient queries,
+# ONE Notification commit per job, and ONE send_push_batch task for the FCM
+# fan-out — never a commit or a Firebase round-trip per parent inside this job.
+# The web routes keep their own inline helpers (grades._notify_new_exam,
+# homework._notify_homework_parents); this path no longer calls either.
 
 # NOTE (P3): _notify_new_exam_bg and _notify_homework_bg are deliberately NOT
 # registered as durable-queue tasks. They create in-app Notification rows, and
@@ -1523,40 +1530,247 @@ def teacher_grades():
 # only loss window is a queued task at worker recycle. Pure-push tasks
 # (fcm.send_push_batch, chat.send_room_pushes) ARE durable: re-delivering a
 # tray notification is harmless, losing it is not.
+
+def _notify_parents_batched(*, school_id: int, student_ids, title: str, body: str,
+                            ntype: str, fcm_data: dict | None,
+                            active_parents_only: bool, created_by=None,
+                            dedup_since=None, log_tag: str) -> None:
+    """In-app Notification rows + one queued FCM batch for the linked parents of
+    `student_ids`. One row and one push per PARENT: a parent with several
+    children in the audience is notified once, carrying the lowest student_id
+    of those children.
+
+    Recipient queries (fixed count, independent of audience size):
+      1. parent_students links for all students    (Core SELECT, one IN query)
+      2. parent Users, explicit school_id equality (one IN query)
+      3. existing rows for this event — only when dedup_since is given
+
+    Isolation: a parent whose own account is not in `school_id` is skipped —
+    never notified — and the flush-time tenant guard re-checks every row.
+
+    Dedup identifies THIS event: an identical-text row counts as a duplicate
+    only when it was created at/after `dedup_since` (the source record's own
+    created_at), so an unrelated earlier homework/exam with the same text never
+    suppresses this one.
+
+    The rows are committed once; FCM work is handed to send_push_batch via
+    async_dispatch (durable Redis queue when enabled) as primitive tuples, so
+    no transaction is open across a Firebase call here. A notification failure
+    is logged and never touches the already-committed homework/exam.
+    """
+    import logging as _mlog
+    from sqlalchemy.orm import load_only
+    from app.services import async_dispatch
+    from app.services.fcm_service import is_enabled as _fcm_enabled, send_push_batch
+
+    _log = _mlog.getLogger('mecha.mobile')
+    student_ids = sorted({int(s) for s in (student_ids or [])})
+    if not student_ids:
+        return
+
+    # 1. Links → parent_user_id : lowest linked student_id in this audience.
+    parent_to_student: dict[int, int] = {}
+    for uid, sid in db.session.execute(
+        select(parent_students.c.user_id, parent_students.c.student_id).where(
+            parent_students.c.student_id.in_(student_ids)
+        )
+    ).fetchall():
+        if uid not in parent_to_student or sid < parent_to_student[uid]:
+            parent_to_student[uid] = sid
+    if not parent_to_student:
+        _log.info('%s no linked parents school_id=%s', log_tag, school_id)
+        return
+
+    # 2. Only parents whose OWN account belongs to this school. load_only keeps
+    # the row narrow; the loaded objects are handed to Notification.target_user
+    # so the flush guard validates them from the identity map, not per row.
+    users_q = (User.query
+               .execution_options(bypass_tenant_scope=True)
+               .options(load_only(User.id, User.school_id, User.is_active))
+               .filter(User.id.in_(list(parent_to_student)),
+                       User.school_id == school_id))
+    if active_parents_only:
+        users_q = users_q.filter(User.is_active.is_(True))
+    users = {u.id: u for u in users_q.all()}
+    skipped = len(parent_to_student) - len(users)
+    if skipped:
+        _log.warning('%s school_id=%s: %d linked parent(s) skipped '
+                     '(outside this school%s)', log_tag, school_id, skipped,
+                     ' or inactive' if active_parents_only else '')
+    if not users:
+        return
+
+    # 3. Event-scoped dedup (retry safety), one query.
+    already: set[int] = set()
+    if dedup_since is not None:
+        already = {
+            row[0] for row in (
+                db.session.query(Notification.target_user_id)
+                .execution_options(bypass_tenant_scope=True)
+                .filter(Notification.school_id == school_id,
+                        Notification.ntype == ntype,
+                        Notification.title == title,
+                        Notification.body == body,
+                        Notification.target_user_id.in_(list(users)),
+                        Notification.created_at >= dedup_since)
+                .all())
+        }
+
+    notif_rows: list[Notification] = []
+    push_items: list[tuple] = []
+    for uid in sorted(users):
+        if uid in already:
+            continue
+        notif_rows.append(Notification(
+            school_id=school_id, title=title, body=body, ntype=ntype,
+            target_user=users[uid], created_by=created_by))
+        if fcm_data is not None:
+            push_items.append((uid, title, body,
+                               {**fcm_data,
+                                'student_id': str(parent_to_student[uid])}))
+
+    if not notif_rows:
+        _log.info('%s all notifications already exist school_id=%s',
+                  log_tag, school_id)
+        return
+
+    try:
+        db.session.add_all(notif_rows)
+        db.session.commit()
+    except Exception:
+        # No push without its committed in-app row. The homework/exam itself
+        # was committed by the request before this job and is untouched.
+        db.session.rollback()
+        _log.exception('%s Notification batch commit FAILED school_id=%s rows=%d '
+                       '— rolled back, push NOT queued (source record unaffected)',
+                       log_tag, school_id, len(notif_rows))
+        return
+
+    if push_items:
+        if _fcm_enabled():
+            async_dispatch.submit(send_push_batch, push_items)
+        else:
+            _log.info('%s FCM disabled — push skipped school_id=%s',
+                      log_tag, school_id)
+
+    _log.warning('%s school_id=%s notif_rows=%d fcm_queued=%d',
+                 log_tag, school_id, len(notif_rows), len(push_items))
+
+
+def _active_audience_student_ids(school_id: int, section_id, group_id) -> list[int]:
+    """Active students targeted by a section OR an institute group, school-pinned.
+
+    Same audience rules as the web helpers: a section's active students, or the
+    students holding an ACTIVE enrollment in the group, re-filtered by school_id
+    and status. Neither target → [] (never a wider audience).
+    """
+    from app.utils.institute_groups import active_student_ids_in_group
+    q = (db.session.query(Student.id)
+         .execution_options(bypass_tenant_scope=True)
+         .filter(Student.school_id == school_id, Student.status == 'active'))
+    if group_id:
+        enrolled = active_student_ids_in_group(school_id, group_id)
+        if not enrolled:
+            return []
+        q = q.filter(Student.id.in_(enrolled))
+    elif section_id:
+        q = q.filter(Student.section_id == section_id)
+    else:
+        return []
+    return [r[0] for r in q.all()]
+
+
 def _notify_new_exam_bg(exam_id: int, school_id: int) -> None:
-    """Background wrapper for grades._notify_new_exam(). Never raises."""
+    """New-exam notification for the mobile teacher APIs. Never raises.
+
+    Audience and payload match grades._notify_new_exam(): active parents (in
+    this school) of the active students of the exam's section or institute
+    group; push for both. Siblings collapse to one notification per parent.
+    """
     import logging as _mlog
     try:
-        from app.blueprints.grades import _notify_new_exam
-        exam = (Exam.query
+        exam = (db.session.query(Exam.section_id, Exam.institute_group_id,
+                                 Exam.subject_id, Exam.exam_name, Exam.created_at)
                 .execution_options(bypass_tenant_scope=True, include_all_years=True)
-                .filter_by(id=exam_id, school_id=school_id)
+                .filter(Exam.id == exam_id, Exam.school_id == school_id)
                 .first())
-        if exam is None:
+        if exam is None or not school_id or (not exam.section_id
+                                             and not exam.institute_group_id):
             return
-        _notify_new_exam(exam)
+        _notify_parents_batched(
+            school_id=school_id,
+            student_ids=_active_audience_student_ids(
+                school_id, exam.section_id, exam.institute_group_id),
+            title='اختبار جديد',
+            body=f'تم جدولة اختبار جديد: {exam.exam_name or ""}.',
+            ntype='exam',
+            fcm_data={
+                'type':       'exam',
+                'screen':     'exams',
+                'route':      '/parent/exams',
+                'exam_id':    str(exam_id),
+                'subject_id': str(exam.subject_id or ''),
+                'ntype':      'exam',
+            },
+            active_parents_only=True,
+            created_by=None,
+            dedup_since=exam.created_at,
+            log_tag=f'[mobile-exam] exam_id={exam_id}',
+        )
     except Exception:
+        db.session.rollback()
         _mlog.getLogger('mecha.mobile').exception(
-            '[mobile-exam] background _notify_new_exam failed exam_id=%s school_id=%s',
+            '[mobile-exam] background notify failed exam_id=%s school_id=%s',
             exam_id, school_id,
         )
 
 
-def _notify_homework_bg(homework_id: int, school_id: int) -> None:
-    """Background wrapper for homework._notify_section_parents(). Never raises."""
+def _notify_homework_bg(homework_id: int, school_id: int,
+                        created_by: int | None = None) -> None:
+    """New-homework notification for the mobile teacher API. Never raises.
+
+    Audience, text and payload match homework._notify_homework_parents(): the
+    linked parents (in this school) of the active students of hw.section_id;
+    an institute row targets its group's active enrollments and stays in-app
+    only (FCM withheld, as on the web). `created_by` is the authoring user's id,
+    passed as a primitive — current_user does not exist in this thread.
+    """
     import logging as _mlog
     try:
-        from app.blueprints.homework import _notify_section_parents
-        hw = (Homework.query
+        hw = (db.session.query(Homework.section_id, Homework.institute_group_id,
+                               Homework.title, Homework.created_at, Subject.name)
               .execution_options(bypass_tenant_scope=True, include_all_years=True)
-              .filter_by(id=homework_id, school_id=school_id)
+              .outerjoin(Subject, (Subject.id == Homework.subject_id)
+                         & (Subject.school_id == school_id))
+              .filter(Homework.id == homework_id, Homework.school_id == school_id)
               .first())
         if hw is None:
             return
-        _notify_section_parents(hw, school_id)
+        is_institute_hw = bool(hw.institute_group_id)
+        _notify_parents_batched(
+            school_id=school_id,
+            student_ids=_active_audience_student_ids(
+                school_id, hw.section_id, hw.institute_group_id),
+            title='واجب جديد',
+            body=f'تم إضافة واجب جديد في مادة {hw.name or "غير محدد"}: {hw.title}',
+            ntype='homework',
+            fcm_data=None if is_institute_hw else {
+                'type':        'homework',
+                'ntype':       'homework',
+                'route':       '/parent/homework',
+                'homework_id': str(homework_id),
+                'section_id':  str(hw.section_id),
+                'screen':      'homework',
+            },
+            active_parents_only=False,
+            created_by=created_by,
+            dedup_since=hw.created_at,
+            log_tag=f'[mobile-hw] hw_id={homework_id}',
+        )
     except Exception:
+        db.session.rollback()
         _mlog.getLogger('mecha.mobile').exception(
-            '[mobile-hw] background _notify_section_parents failed hw_id=%s school_id=%s',
+            '[mobile-hw] background notify failed hw_id=%s school_id=%s',
             homework_id, school_id,
         )
 
@@ -2414,11 +2628,12 @@ def teacher_homework_create():
     # FCM + in-app Notification rows to parents of students in this section.
     # P0: queued to the background dispatcher — the per-parent fan-out no longer
     # blocks this request. The Homework row is re-loaded inside the task with an
-    # explicit school_id equality; only primitives cross the thread boundary.
+    # explicit school_id equality; only primitives cross the thread boundary
+    # (the author's user id included — current_user does not exist there).
     # Best-effort: a notification failure must never fail the API response.
     try:
         from app.services import async_dispatch
-        async_dispatch.submit(_notify_homework_bg, hw.id, emp.school_id)
+        async_dispatch.submit(_notify_homework_bg, hw.id, emp.school_id, user.id)
     except Exception:
         import logging as _log
         _log.getLogger('mecha.mobile').exception(
@@ -3331,8 +3546,8 @@ def teacher_institute_create_exam():
     db.session.add(exam)
     db.session.commit()
 
-    # Same post-commit notification path as the school mobile exam; the web
-    # _notify_new_exam() already targets a group's actively enrolled students.
+    # Same post-commit notification path as the school mobile exam;
+    # _notify_new_exam_bg() targets a group's actively enrolled students.
     try:
         from app.services import async_dispatch
         async_dispatch.submit(_notify_new_exam_bg, exam.id, school.id)
