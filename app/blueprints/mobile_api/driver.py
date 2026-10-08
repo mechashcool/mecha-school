@@ -191,10 +191,24 @@ def driver_trip_end(trip_id):
     if trip.status != 'active':
         return ok(trip=_trip_payload(trip))
 
-    trip.status = 'ended'
-    trip.ended_at = datetime.utcnow()
-    payload = _trip_payload(trip)
+    # Conditional UPDATE, not an ORM write: the auto-expiry scheduler
+    # (app/services/transport_trip_expiry.py) may end the trip between the read
+    # above and this write. Only the statement that still sees 'active' ends it,
+    # so ended_at is never overwritten and only the winner is audited.
+    now = datetime.utcnow()
+    payload = {**_trip_payload(trip), 'status': 'ended', 'ended_at': _utc_iso(now)}
+    won = db.session.execute(
+        update(TransportTrip)
+        .where(TransportTrip.id == trip.id,
+               TransportTrip.school_id == emp.school_id,
+               TransportTrip.driver_employee_id == emp.id,
+               TransportTrip.status == 'active')
+        .values(status='ended', ended_at=now)
+        .execution_options(synchronize_session=False)).rowcount == 1
     db.session.commit()
+    if not won:
+        # Lost the race: return the committed state (reloaded), unchanged.
+        return ok(trip=_trip_payload(trip))
     log_action('trip_end', 'transport_trip', payload['id'],
                details=f'route={payload["route_id"]} driver_employee={emp.id}')
     return ok(trip=payload)

@@ -744,6 +744,9 @@ def create_app(config_name=None):
         from app.services.fee_reminder import start_fee_reminder_scheduler
         start_fee_reminder_scheduler(app)
 
+        from app.services.transport_trip_expiry import start_transport_trip_expiry_scheduler
+        start_transport_trip_expiry_scheduler(app)
+
         # Durable push-queue consumer (P3) — no-op unless REDIS_URL is set and
         # DURABLE_PUSH_QUEUE_ENABLED is true. Never blocks startup.
         try:

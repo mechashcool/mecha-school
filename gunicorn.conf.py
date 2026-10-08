@@ -88,10 +88,11 @@ if max_requests == 0 and max_requests_jitter != 0:
 #       SQLALCHEMY_POOL_SIZE + SQLALCHEMY_MAX_OVERFLOW (default 5+10)
 #     connections. Total = workers × 15 must stay under the Postgres/Supabase
 #     connection budget (Supabase free tier: 60 direct).
-#   * Schedulers (auto-attendance, fee-reminder, hikvision) start in EVERY
-#     worker process — with 2+ workers they would tick twice. Keep them in one
-#     worker only: run the extra workers with ATTENDANCE_SCHEDULER_DISABLED=
-#     true / FEE_REMINDER_SCHEDULER_DISABLED=true, or move schedulers to a
+#   * Schedulers (auto-attendance, fee-reminder, hikvision, transport-trip
+#     expiry) start in EVERY worker process — with 2+ workers they would tick
+#     twice. Keep them in one worker only: run the extra workers with
+#     ATTENDANCE_SCHEDULER_DISABLED=true / FEE_REMINDER_SCHEDULER_DISABLED=true
+#     / TRANSPORT_TRIP_EXPIRY_DISABLED=true, or move schedulers to a
 #     dedicated process before scaling.
 #   * Rate limiting: Flask-Limiter storage defaults to per-worker memory://.
 #     Set RATELIMIT_STORAGE_URI to the Redis URL so login throttling is
