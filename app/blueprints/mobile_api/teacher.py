@@ -295,19 +295,51 @@ def _teacher_subjects(emp: Employee) -> list[dict]:
     return [{'id': s.id, 'name': s.name} for s in subjects]
 
 
-def _section_subjects(emp_id: int, section_id: int) -> list[dict]:
-    """Return subjects this teacher teaches in a specific section."""
-    rows = db.session.execute(
+def _section_subjects(emp: Employee, section_id: int) -> tuple[Section | None, list[Subject]]:
+    """The ONE rule for which subjects this teacher may use in ONE section —
+    shared by the subject picker and exam creation so they can never disagree.
+
+    Returns (section, subjects), or (None, []) when the section is not this
+    teacher's (or not in this school / active year): callers answer with the
+    same response whether it is foreign or nonexistent.
+
+      * subject-assigned section → exactly the teacher_subjects rows for
+        (this employee, this section);
+      * homeroom section (Section.teacher_id == emp.id) → those rows PLUS the
+        subjects of the section's own grade (Subject.grade_id == grade_id).
+        Subjects with a NULL grade_id are reachable only via an explicit row,
+        never through homeroom.
+
+    Three small indexed queries, set-based. Section and Subject run under the
+    mobile ORM scope (school + active year) and also pin school_id explicitly.
+    """
+    section = (Section.query
+               .filter(Section.id == section_id,
+                       Section.school_id == emp.school_id)
+               .first())
+    if section is None:
+        return None, []
+
+    pair_ids = [r.subject_id for r in db.session.execute(
         select(teacher_subjects.c.subject_id).where(
-            teacher_subjects.c.employee_id == emp_id,
-            teacher_subjects.c.section_id == section_id,
+            teacher_subjects.c.employee_id == emp.id,
+            teacher_subjects.c.section_id == section.id,
         ).distinct()
-    ).fetchall()
-    subject_ids = [r.subject_id for r in rows]
-    if not subject_ids:
-        return []
-    subjects = Subject.query.filter(Subject.id.in_(subject_ids)).order_by(Subject.name).all()
-    return [{'id': s.id, 'name': s.name} for s in subjects]
+    ).fetchall()]
+    is_homeroom = section.teacher_id == emp.id
+    if not is_homeroom and not pair_ids:
+        return None, []
+
+    allowed = []
+    if pair_ids:
+        allowed.append(Subject.id.in_(pair_ids))
+    if is_homeroom:
+        allowed.append(Subject.grade_id == section.grade_id)
+    subjects = (Subject.query
+                .filter(Subject.school_id == emp.school_id, db.or_(*allowed))
+                .order_by(Subject.name)
+                .all())
+    return section, subjects
 
 
 # ─── Profile / dashboard ──────────────────────────────────────────────────────
@@ -453,13 +485,30 @@ def teacher_subjects_list():
     Distinct subjects assigned to this teacher across all sections.
     Primary endpoint Flutter should use to populate subject pickers (Create Exam, etc.).
 
+    Optional ?section_id=<id> — only the subjects this teacher may use in THAT
+    section (see _section_subjects; the same rule POST /teacher/exams enforces).
+    404 when the section is not this teacher's. Without it (or blank) the
+    response is unchanged.
+
     Response:
       { "ok": true, "subjects": [ {"id": 2, "name": "الرياضيات"} ] }
     """
     emp = _get_employee()
     if not emp:
         return err('employee_profile_not_found', 404)
-    return ok(subjects=_teacher_subjects(emp))
+
+    raw_section = (request.args.get('section_id') or '').strip()
+    if not raw_section:
+        return ok(subjects=_teacher_subjects(emp))
+    try:
+        section_id = int(raw_section)
+    except ValueError:
+        return err('invalid section_id')
+
+    section, subjects = _section_subjects(emp, section_id)
+    if section is None:
+        return err('section_not_found', 404)
+    return ok(subjects=[{'id': s.id, 'name': s.name} for s in subjects])
 
 
 # ─── Students in a section ───────────────────────────────────────────────────
@@ -1259,26 +1308,18 @@ def teacher_create_exam():
         except (TypeError, ValueError):
             return err('duration_minutes must be a positive integer')
 
-    # Validate the (section_id, subject_id) pair against the teacher's assignments.
-    # Homeroom teachers can create exams for any school-scoped subject in their section.
-    # Subject-assigned teachers must have an explicit assignment for the pair.
-    _cr_homeroom_ids = {s.id for s in emp.sections_managed}
-    _cr_subj_rows = db.session.execute(
-        select(teacher_subjects.c.section_id, teacher_subjects.c.subject_id).where(
-            teacher_subjects.c.employee_id == emp.id
-        )
-    ).fetchall()
-    _cr_all_sections = _cr_homeroom_ids | {r.section_id for r in _cr_subj_rows}
-
-    if section_id not in _cr_all_sections:
+    # Validate the (section_id, subject_id) pair with the SAME rule the subject
+    # picker uses (_section_subjects): the exact teacher_subjects pair, or — in
+    # the teacher's homeroom section — a subject of that section's own grade.
+    # Ids must be JSON integers, as the previous set-membership checks required.
+    if isinstance(section_id, bool) or not isinstance(section_id, int):
         return err('forbidden — section not assigned to you', 403)
-    if section_id not in _cr_homeroom_ids:
-        if (section_id, subject_id) not in {(r.section_id, r.subject_id) for r in _cr_subj_rows}:
-            return err('forbidden — subject not assigned to you', 403)
-
-    subject = db.session.get(Subject, subject_id)
-    if not subject or subject.school_id != emp.school_id:
-        return err('subject_not_found', 404)
+    _cr_section, _cr_allowed = _section_subjects(emp, section_id)
+    if _cr_section is None:
+        return err('forbidden — section not assigned to you', 403)
+    if (isinstance(subject_id, bool) or not isinstance(subject_id, int)
+            or subject_id not in {s.id for s in _cr_allowed}):
+        return err('forbidden — subject not assigned to you', 403)
 
     try:
         exam_date_obj = _dt.strptime(exam_date_s, '%Y-%m-%d').date()
