@@ -1180,7 +1180,8 @@ def teacher_create_exam():
         "subject_id":   <int>,           required
         "exam_date":    "YYYY-MM-DD",    required
         "max_marks":    100,             optional — default 100
-        "pass_marks":   50,              optional — default 50
+        "pass_marks":   50,              optional — raw points, 0..max_marks;
+                                         default max_marks * 0.5
         "exam_name":    "...",           optional — free-text name
         "exam_type_id": <int>            optional — ExamType foreign key
       }
@@ -1197,7 +1198,7 @@ def teacher_create_exam():
     exam_date_s  = payload.get('exam_date')
     # Accept 'max_score' (Flutter spec) or legacy 'max_marks'
     max_marks    = payload.get('max_score') if payload.get('max_score') is not None else payload.get('max_marks', 100)
-    pass_marks   = payload.get('pass_marks', 50)
+    pass_marks   = payload.get('pass_marks')   # None → max_marks * 0.5 below
     exam_type_id = payload.get('exam_type_id')
     exam_time_s  = (payload.get('exam_time') or '').strip() or None
     dur_raw      = payload.get('duration_minutes')
@@ -1217,6 +1218,28 @@ def teacher_create_exam():
             return err('max_score must be greater than 0')
     except (TypeError, ValueError):
         return err('invalid value: max_score')
+    max_marks_dec = Decimal(str(max_marks_val))
+    if not max_marks_dec.is_finite():
+        return err('invalid value: max_score')
+
+    # pass_marks is RAW POINTS on the same scale as max_marks (pass/fail is
+    # marks >= pass_marks). An explicit value is kept exactly as sent and must
+    # satisfy 0 <= pass_marks <= max_marks — same rule and messages as the
+    # institute path. When omitted it defaults to half of THIS exam's maximum,
+    # so a 10-point exam gets 5, not the 100-point default of 50.
+    if pass_marks is None:
+        pass_marks_dec = (max_marks_dec * Decimal('0.5')).quantize(Decimal('0.01'))
+    else:
+        try:
+            if isinstance(pass_marks, bool):
+                raise ValueError
+            pass_marks_dec = Decimal(str(pass_marks))
+            if not pass_marks_dec.is_finite():
+                raise ValueError
+        except (InvalidOperation, ValueError, TypeError):
+            return err('max_score and pass_marks must be numbers')
+        if pass_marks_dec < 0 or pass_marks_dec > max_marks_dec:
+            return err('pass_marks must be between 0 and max_score')
 
     # Parse optional exam_time
     exam_time_obj = None
@@ -1296,7 +1319,7 @@ def teacher_create_exam():
         exam_time        = exam_time_obj,
         duration_minutes = dur_val,
         max_marks        = max_marks_val,
-        pass_marks       = float(pass_marks),
+        pass_marks       = pass_marks_dec,
         exam_name        = title,
         exam_type_id     = exam_type_id,
     )
