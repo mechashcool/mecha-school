@@ -625,6 +625,18 @@ def logs(device_id):
 #  Mappings — scope-aware list + add
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _device_number_sort_key(number, row_id):
+    """Display-only numeric sort key for a stored device number string.
+
+    "007" sorts as 7; missing/non-numeric values go after all numeric rows.
+    The stored value is never modified.
+    """
+    s = (number or '').strip()
+    if s.isdecimal():
+        return (0, int(s), s, row_id)
+    return (1, 0, s, row_id)
+
+
 @attendance_devices_bp.route('/<int:device_id>/mappings', methods=['GET'])
 @login_required
 @any_permission_required('view_attendance_devices', 'manage_attendance_devices')
@@ -663,6 +675,7 @@ def mappings(device_id):
                             .filter_by(device_id=dev.id, school_id=school.id)
                             .order_by(DeviceStudentMapping.employee_no_string)
                             .all())
+        student_mappings.sort(key=lambda m: _device_number_sort_key(m.employee_no_string, m.id))
         students = (Student.query
                     .filter_by(school_id=school.id, status='active')
                     .order_by(Student.full_name)
@@ -673,6 +686,7 @@ def mappings(device_id):
                              .filter_by(device_id=dev.id, school_id=school.id)
                              .order_by(DeviceEmployeeMapping.enrollment_no)
                              .all())
+        employee_mappings.sort(key=lambda m: _device_number_sort_key(m.enrollment_no, m.id))
         employees = (Employee.query
                      .filter_by(school_id=school.id, status='active')
                      .order_by(Employee.full_name)

@@ -146,6 +146,12 @@
         </div>
       </div>
       {% if student_mappings %}
+      <div class="card-body py-2 border-bottom">
+        <input type="search" class="form-control form-control-sm mapping-filter"
+               data-target="stuMappingsBody" data-empty="stuMappingsNoMatch"
+               placeholder="بحث باسم الطالب أو رقمه على الجهاز..." autocomplete="off"
+               aria-label="بحث في ربطات الطلاب الحالية">
+      </div>
       <div class="table-responsive">
         <table class="table table-hover mb-0">
           <thead class="table-light">
@@ -159,9 +165,10 @@
               <th></th>
             </tr>
           </thead>
-          <tbody>
+          <tbody id="stuMappingsBody">
             {% for m in student_mappings %}
-            <tr id="stu-row-{{ m.id }}">
+            <tr id="stu-row-{{ m.id }}"
+                data-search="{{ m.employee_no_string }} {{ m.student.full_name if m.student else '' }} {{ m.student.student_id if m.student else '' }}">
               <td>
                 <code>{{ m.employee_no_string }}</code>
                 <button type="button" class="btn btn-link btn-sm p-0 ms-1 stu-num-edit-btn"
@@ -215,6 +222,7 @@
             {% endfor %}
           </tbody>
         </table>
+        <div id="stuMappingsNoMatch" class="text-center text-muted small py-3 d-none">لا توجد نتائج مطابقة.</div>
       </div>
       {% else %}
       <div class="card-body text-center text-muted py-4">
@@ -291,6 +299,12 @@
         </div>
       </div>
       {% if employee_mappings %}
+      <div class="card-body py-2 border-bottom">
+        <input type="search" class="form-control form-control-sm mapping-filter"
+               data-target="empMappingsBody" data-empty="empMappingsNoMatch"
+               placeholder="بحث باسم الموظف أو رقمه على الجهاز..." autocomplete="off"
+               aria-label="بحث في ربطات الموظفين الحالية">
+      </div>
       <div class="table-responsive">
         <table class="table table-hover mb-0">
           <thead class="table-light">
@@ -305,9 +319,10 @@
               <th></th>
             </tr>
           </thead>
-          <tbody>
+          <tbody id="empMappingsBody">
             {% for m in employee_mappings %}
-            <tr id="emp-row-{{ m.id }}">
+            <tr id="emp-row-{{ m.id }}"
+                data-search="{{ m.enrollment_no }} {{ m.employee.full_name if m.employee else '' }} {{ m.employee.employee_id if m.employee else '' }}">
               <td><code>{{ m.enrollment_no }}</code></td>
               <td>{{ m.employee.full_name if m.employee else '—' }}</td>
               <td class="text-muted small">{{ m.employee.job_title if m.employee else '—' }}</td>
@@ -353,6 +368,7 @@
             {% endfor %}
           </tbody>
         </table>
+        <div id="empMappingsNoMatch" class="text-center text-muted small py-3 d-none">لا توجد نتائج مطابقة.</div>
       </div>
       {% else %}
       <div class="card-body text-center text-muted py-4">
@@ -441,6 +457,32 @@
   }
   attachLiveSearch('studentSearch',  'studentSelect');
   attachLiveSearch('employeeSearch', 'employeeSelect');
+
+  /* ── Filter current-mapping tables (rendered rows only) ──────────────────── */
+  function normSearch(v) {
+    return String(v || '').toLowerCase()
+      .replace(/[٠-٩]/g, function (d) { return String(d.charCodeAt(0) - 0x0660); })
+      .replace(/[۰-۹]/g, function (d) { return String(d.charCodeAt(0) - 0x06F0); })
+      .replace(/[ً-ْـ]/g, '')   // harakat + tatweel
+      .replace(/[أإآ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه')
+      .replace(/\s+/g, ' ').trim();
+  }
+  document.querySelectorAll('.mapping-filter').forEach(function (inp) {
+    const body  = document.getElementById(inp.dataset.target);
+    const empty = document.getElementById(inp.dataset.empty);
+    if (!body) return;
+    inp.addEventListener('input', function () {
+      const q = normSearch(this.value);
+      let shown = 0;
+      body.querySelectorAll('tr[data-search]').forEach(function (tr) {
+        if (tr.dataset.norm === undefined) tr.dataset.norm = normSearch(tr.dataset.search);
+        const hit = !q || tr.dataset.norm.includes(q);
+        tr.classList.toggle('d-none', !hit);
+        if (hit) shown++;
+      });
+      if (empty) empty.classList.toggle('d-none', shown > 0 || !q);
+    });
+  });
 
   /* ── Row status helpers ──────────────────────────────────────────────────── */
   function setStatus(cls, state) {
