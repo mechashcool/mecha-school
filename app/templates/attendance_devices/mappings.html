@@ -168,7 +168,7 @@
           <tbody id="stuMappingsBody">
             {% for m in student_mappings %}
             <tr id="stu-row-{{ m.id }}"
-                data-search="{{ m.employee_no_string }} {{ m.student.full_name if m.student else '' }} {{ m.student.student_id if m.student else '' }}">
+                data-search="{{ m.employee_no_string }} {{ m.student.full_name if m.student else '' }}">
               <td>
                 <code>{{ m.employee_no_string }}</code>
                 <button type="button" class="btn btn-link btn-sm p-0 ms-1 stu-num-edit-btn"
