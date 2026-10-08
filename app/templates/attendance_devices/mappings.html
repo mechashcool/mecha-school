@@ -171,13 +171,6 @@
                 data-search="{{ m.employee_no_string }} {{ m.student.full_name if m.student else '' }}">
               <td>
                 <code>{{ m.employee_no_string }}</code>
-                <button type="button" class="btn btn-link btn-sm p-0 ms-1 stu-num-edit-btn"
-                        data-action="{{ url_for('attendance_devices.change_mapping_number', mapping_id=m.id) }}"
-                        data-number="{{ m.employee_no_string }}"
-                        data-student="{{ m.student.full_name if m.student else '' }}"
-                        title="تعديل رقم الطالب في الجهاز" aria-label="تعديل رقم الطالب في الجهاز">
-                  <i class="bi bi-pencil-square"></i>
-                </button>
               </td>
               <td>{{ m.student.full_name if m.student else '—' }}</td>
               <td class="text-muted small">{{ m.student.student_id if m.student else '—' }}</td>
