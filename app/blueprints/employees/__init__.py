@@ -438,29 +438,80 @@ def _has_institute_group_payload(form):
 
 def _save_teacher_assignments(emp):
     """
-    Replace the teaching assignments for this employee.
-    Teaching  → teacher_subjects rows: delete-all then re-insert from form.
+    Reconcile this employee's ACTIVE-YEAR teaching assignments with the edit
+    form's flat selections. Returns True when rows were rewritten, False when
+    the selection was unchanged (nothing written). Raises ValueError with a
+    friendly message — before any write — when a posted id is foreign.
+
+      * Every posted section/subject must belong to the employee's own school
+        and its active academic year (explicit filters, ORM scope bypassed, so
+        a historical-year view cannot change the allow-lists). Foreign or
+        stale ids reject the whole save; nothing is silently dropped.
+      * The form shows only flat sets, so an UNCHANGED section set and subject
+        set means the operator did not touch assignments: the exact existing
+        rows are left as they are and never re-expanded.
+      * On a real change only the rows whose section is in the active year are
+        replaced (legacy subject × section product, Phase 1); previous-year
+        rows are never touched.
 
     "الصفوف الرئيسية / مشرف الصف" is retired from the employee form: any posted
     homeroom field is ignored, and existing Section.teacher_id assignments
     (which drive teacher access scope) are never cleared, added or changed
     here. Admin user management remains the place that manages them.
     """
-    teaching_section_ids = request.form.getlist('teaching_section_ids', type=int)
-    subject_ids          = request.form.getlist('subject_ids', type=int)
+    posted_sections = {i for i in request.form.getlist('teaching_section_ids', type=int) if i}
+    posted_subjects = {i for i in request.form.getlist('subject_ids', type=int) if i}
 
-    db.session.execute(
-        teacher_subjects.delete().where(
-            teacher_subjects.c.employee_id == emp.id
+    year = get_active_year(emp.school_id) if emp.school_id else None
+    if year is None:
+        if posted_sections or posted_subjects:
+            raise ValueError(_TA_ERR_NO_YEAR)
+        return False
+
+    allowed_sections = {
+        r[0] for r in db.session.query(Section.id)
+        .execution_options(bypass_tenant_scope=True)
+        .filter(Section.school_id == emp.school_id,
+                Section.academic_year_id == year.id).all()
+    }
+    allowed_subjects = {
+        r[0] for r in db.session.query(Subject.id)
+        .execution_options(bypass_tenant_scope=True)
+        .filter(Subject.school_id == emp.school_id,
+                Subject.academic_year_id == year.id).all()
+    }
+    if not posted_sections <= allowed_sections:
+        raise ValueError(_TA_ERR_SECTION)
+    if not posted_subjects <= allowed_subjects:
+        raise ValueError(_TA_ERR_SUBJECT)
+
+    # The employee's current active-year rows, reduced to the flat sets the
+    # form displayed (subjects outside this year are not offered by the form).
+    current_rows = (
+        db.session.query(teacher_subjects.c.section_id, teacher_subjects.c.subject_id)
+        .filter(teacher_subjects.c.employee_id == emp.id,
+                teacher_subjects.c.section_id.in_(allowed_sections))
+        .all()
+    ) if allowed_sections else []
+    current_sections = {r.section_id for r in current_rows}
+    current_subjects = {r.subject_id for r in current_rows} & allowed_subjects
+
+    if posted_sections == current_sections and posted_subjects == current_subjects:
+        return False
+
+    if current_sections:
+        db.session.execute(
+            teacher_subjects.delete().where(
+                teacher_subjects.c.employee_id == emp.id,
+                teacher_subjects.c.section_id.in_(current_sections),
+            )
         )
-    )
-    for section_id in set(teaching_section_ids):
-        for subject_id in set(subject_ids):
-            db.session.execute(teacher_subjects.insert().values(
-                employee_id=emp.id,
-                subject_id=subject_id,
-                section_id=section_id,
-            ))
+    rows = [{'employee_id': emp.id, 'subject_id': subject_id, 'section_id': section_id}
+            for section_id in sorted(posted_sections)
+            for subject_id in sorted(posted_subjects)]
+    if rows:
+        db.session.execute(teacher_subjects.insert(), rows)
+    return True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1217,11 +1268,16 @@ def _handle_employee_post(employee):
     # The create wizard already saved its assignments atomically (above) using
     # the grade→section pairs it submits; this path stays exactly as it was for
     # the employee edit form.
+    # The flag only says the panel was on the page; _save_teacher_assignments
+    # itself decides whether anything changed (unchanged → no write at all).
     if (not is_create) and request.form.get('save_teacher_section'):
         try:
-            _save_teacher_assignments(employee)
-            db.session.commit()
-            flash_msgs.append(('success', 'تم ربط الموظف بالمواد والصفوف والشعب.'))
+            if _save_teacher_assignments(employee):
+                db.session.commit()
+                flash_msgs.append(('success', 'تم ربط الموظف بالمواد والصفوف والشعب.'))
+        except ValueError as exc:
+            db.session.rollback()
+            flash_msgs.append(('danger', str(exc)))
         except Exception:
             db.session.rollback()
             _log.exception('Teacher assignment save failed employee_id=%s', employee.id)

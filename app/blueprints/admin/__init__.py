@@ -906,8 +906,11 @@ def create_user():
                  .update({'teacher_id': emp.id}, synchronize_session=False))
 
             # Assign teaching subjects × sections into teacher_subjects
+            # (legacy cross product, unchanged for now). Written only with an
+            # active year, so both id sets are always pinned to this school AND
+            # year — without one the year filter below would be skipped.
             subject_ids = _unique_ids(request.form.getlist('teacher_subject_ids', type=int))
-            if subject_ids and section_ids and assigned_school_id:
+            if subject_ids and section_ids and assigned_school_id and assigned_year:
                 subject_filter = [
                     Subject.id.in_(subject_ids),
                     Subject.school_id == assigned_school_id,
@@ -1234,41 +1237,12 @@ def edit_user(user_id):
                  .filter(*section_filter)
                  .update({'teacher_id': emp.id}, synchronize_session=False))
 
-            # Update subject assignments — clear then rebuild
-            db.session.execute(
-                teacher_subjects.delete().where(
-                    teacher_subjects.c.employee_id == emp.id
-                )
-            )
-            new_subject_ids = _unique_ids(request.form.getlist('teacher_subject_ids', type=int))
-            if new_subject_ids and new_section_ids and user.school_id:
-                subject_filter = [
-                    Subject.id.in_(new_subject_ids),
-                    Subject.school_id == user.school_id,
-                ]
-                section_filter = [
-                    Section.id.in_(new_section_ids),
-                    Section.school_id == user.school_id,
-                ]
-                if user_year:
-                    subject_filter.append(Subject.academic_year_id == user_year.id)
-                    section_filter.append(Section.academic_year_id == user_year.id)
-                valid_subj_ids = [r[0] for r in
-                    db.session.query(Subject.id)
-                              .execution_options(bypass_tenant_scope=True)
-                              .filter(*subject_filter)
-                              .all()]
-                valid_sec_ids = [r[0] for r in
-                    db.session.query(Section.id)
-                              .execution_options(bypass_tenant_scope=True)
-                              .filter(*section_filter)
-                              .all()]
-                rows = [
-                    {'employee_id': emp.id, 'subject_id': s, 'section_id': c}
-                    for s in valid_subj_ids for c in valid_sec_ids
-                ]
-                if rows:
-                    db.session.execute(teacher_subjects.insert(), rows)
+            # Teaching assignments (teacher_subjects) are deliberately NOT
+            # touched here. This screen manages the account and homeroom only;
+            # it used to delete every teacher_subjects row and rebuild them as
+            # posted subjects × HOMEROOM sections, so a routine account edit
+            # (password, permissions) destroyed the teacher's real teaching
+            # assignments. Those are owned by the employee form.
 
         # ── Building access restrictions (optional feature) ─────────────────
         _berr = _save_user_building_access(user, user.school_id)
