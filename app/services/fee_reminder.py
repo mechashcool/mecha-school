@@ -161,10 +161,21 @@ def _run_check() -> None:
     # instead of skipping disabled schools in Python keeps their rows off every
     # tick; _check_school still re-checks the flag, so the guard stays closed.
     # A NULL flag is excluded here exactly as `if not enabled` skips it there.
+    # Only the five columns _check_school reads (directly and via
+    # get_local_now's timezone lookup) are transferred, never the wide School
+    # row. Plain rows are also not expired by the per-reminder commits, so no
+    # School row is re-SELECTed later in the tick.
     all_schools = (
         School.query
         .execution_options(bypass_tenant_scope=True)
         .filter(School.fee_reminder_enabled.is_(True))
+        .with_entities(
+            School.id,
+            School.timezone,
+            School.fee_reminder_enabled,
+            School.fee_reminder_days_before,
+            School.fee_reminder_per_day,
+        )
         .all()
     )
 
