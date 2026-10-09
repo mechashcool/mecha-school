@@ -795,8 +795,10 @@ def _run_auto_absent_shiftless(school, year, settings, target_date,
             Student.section_id.is_(None),
             Student.section_id.notin_(covered_section_ids),
         ))
-    shiftless = q.all()
-    ids = [s.id for s in shiftless]
+    # Egress optimisation (as in _run_auto_absent): the first pass only needs
+    # the IDs.  Full Student rows are fetched below, under the same query `q`,
+    # only for the students missing an attendance record for target_date.
+    ids = [row.id for row in q.with_entities(Student.id).all()]
 
     _log.info(
         '[attendance-shift-fallback] school_id=%s date=%s covered_sections=%d '
@@ -816,7 +818,9 @@ def _run_auto_absent_shiftless(school, year, settings, target_date,
             .with_entities(StudentAttendance.student_id)
             .all()
     }
-    unmarked = [s for s in shiftless if s.id not in already_ids]
+    missing_ids = [sid for sid in ids if sid not in already_ids]
+    unmarked = (q.filter(Student.id.in_(missing_ids)).all()
+                if missing_ids else [])
 
     _log.info(
         '[attendance-shift-fallback] school_id=%s date=%s students_with_attendance=%d '
