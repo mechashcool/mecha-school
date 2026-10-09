@@ -11,7 +11,8 @@ Tests for School Manager access control.
    Super admin GET /admin/roles → allowed (200 OK).
 
 4. test_manager_teacher_gets_subject_assignment
-   School manager creates teacher with subject_ids → teacher_subjects rows created.
+   School manager creates teacher with subject_ids → NO teacher_subjects rows
+   (teaching assignments are managed only from Employee Management).
 
 5. test_teacher_dashboard_scoped_to_assignments
    Teacher user dashboard only surfaces assigned sections/subjects.
@@ -252,7 +253,9 @@ class SchoolManagerAccessTest(unittest.TestCase):
     # ── Test 4 ──────────────────────────────────────────────────────────────
 
     def test_manager_teacher_gets_subject_assignment(self):
-        """School manager creates teacher with teacher_subject_ids → teacher_subjects rows inserted."""
+        """School manager creates teacher with teacher_subject_ids → NO
+        teacher_subjects rows: School User Management never writes teaching
+        assignments (Employee Management owns them)."""
         from app.blueprints.admin import create_user
 
         ids = self.created
@@ -292,18 +295,15 @@ class SchoolManagerAccessTest(unittest.TestCase):
                    .filter_by(user_id=created_user.id).first())
             self.assertIsNotNone(emp, 'Employee record must exist')
 
-            # Verify teacher_subjects rows were created
+            # Verify NO teacher_subjects rows were created
             from sqlalchemy import select as sa_select
             ts_rows = db.session.execute(
                 sa_select(teacher_subjects).where(
                     teacher_subjects.c.employee_id == emp.id
                 )
             ).fetchall()
-            self.assertGreater(len(ts_rows), 0,
-                               'teacher_subjects must have at least one row')
-            row = ts_rows[0]
-            self.assertEqual(row.subject_id, ids['subject_id'])
-            self.assertEqual(row.section_id, ids['section_id'])
+            self.assertEqual(ts_rows, [],
+                             'User Management must not create teacher_subjects')
 
             logout_user()
 

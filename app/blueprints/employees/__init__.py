@@ -204,7 +204,7 @@ def _form_context(employee=None):
     # teacher step. Built from the SAME school+year scoped grade/section/subject
     # lists loaded above, so the client can never be offered anything belonging
     # to another school or year — and every id is still re-validated server-side
-    # on POST (_wizard_teacher_selection).
+    # on POST (_save_teacher_pairs).
     #
     # EVERY grade configured for the school is included, across every stage, even
     # when it has no sections or no subjects yet: the wizard shows an explicit
@@ -256,20 +256,36 @@ def _form_context(employee=None):
         gen_employee_username = code_generator.generate_parent_username()
         gen_employee_password = code_generator.generate_parent_password()
 
-    existing_subject_ids    = []
-    existing_section_ids    = []
+    # Exact teaching pairs for the edit form — never flattened. Only pairs the
+    # form can render (a section AND a subject of this form's year) are listed;
+    # _save_teacher_pairs reconciles exactly that same set, so an unchanged
+    # save is a no-op. A stored pair whose subject is NOT of its section's own
+    # grade (school-wide subject with no grade, or legacy cross-grade data) is
+    # kept under its exact section as an "extra" so it can be preserved or
+    # deliberately removed — it is never re-offered for other sections.
+    ta_pair_keys            = set()
+    ta_extra_subjects       = {}
     existing_homeroom_ids   = []
     linked_user             = None
     existing_device_mapping = None
 
     if employee:
+        section_grade = {s.id: s.grade_id for s in sections}
+        subject_by_id = {s.id: s for s in subjects}
         rows = db.session.execute(
             teacher_subjects.select().where(
                 teacher_subjects.c.employee_id == employee.id
             )
         ).fetchall()
-        existing_subject_ids = list({r.subject_id for r in rows})
-        existing_section_ids = list({r.section_id for r in rows})
+        for r in sorted(rows, key=lambda r: (r.section_id, r.subject_id)):
+            subj = subject_by_id.get(r.subject_id)
+            if r.section_id not in section_grade or subj is None:
+                continue        # another year / not representable — untouched
+            ta_pair_keys.add(f'{r.section_id}:{r.subject_id}')
+            if subj.grade_id != section_grade[r.section_id]:
+                ta_extra_subjects.setdefault(r.section_id, []).append(
+                    {'id': subj.id, 'name': subj.name,
+                     'general': subj.grade_id is None})
 
         existing_homeroom_ids = [
             s.id for s in Section.query.filter_by(teacher_id=employee.id).all()
@@ -336,8 +352,8 @@ def _form_context(employee=None):
         grade_map               = grade_map,
         sections                = sections,
         roles                   = roles,
-        existing_subject_ids    = existing_subject_ids,
-        existing_section_ids    = existing_section_ids,
+        ta_pair_keys            = ta_pair_keys,
+        ta_extra_subjects       = ta_extra_subjects,
         existing_homeroom_ids   = existing_homeroom_ids,
         linked_user             = linked_user,
         existing_device_mapping = existing_device_mapping,
@@ -436,96 +452,118 @@ def _has_institute_group_payload(form):
     return any(field in form for field in _INSTITUTE_GROUP_FIELDS)
 
 
-def _save_teacher_assignments(emp):
+def _parse_teacher_pairs(field_name='ta_pair[]'):
+    """Parse ``"<section_id>:<subject_id>"`` tokens into a set of int pairs.
+
+    Exact teaching assignments are posted one checkbox per (section, subject),
+    so each pair is explicit in the request and is never derived from two
+    independent lists. A malformed token rejects the whole submission rather
+    than being skipped.
     """
-    Reconcile this employee's ACTIVE-YEAR teaching assignments with the edit
-    form's flat selections. Returns True when rows were rewritten, False when
-    the selection was unchanged (nothing written). Raises ValueError with a
-    friendly message — before any write — when a posted id is foreign.
+    pairs = set()
+    for raw in request.form.getlist(field_name):
+        raw = (raw or '').strip()
+        if not raw:
+            continue
+        parts = raw.split(':')
+        if len(parts) != 2:
+            raise ValueError(_TA_ERR_READ)
+        try:
+            section_id, subject_id = int(parts[0]), int(parts[1])
+        except (TypeError, ValueError):
+            raise ValueError(_TA_ERR_READ)
+        if section_id <= 0 or subject_id <= 0:
+            raise ValueError(_TA_ERR_READ)
+        pairs.add((section_id, subject_id))
+    return pairs
 
-      * Every posted section/subject must belong to the employee's own school
-        and its active academic year (explicit filters, ORM scope bypassed, so
-        a historical-year view cannot change the allow-lists). Foreign or
-        stale ids reject the whole save; nothing is silently dropped.
-      * The form shows only flat sets, so an UNCHANGED section set and subject
-        set means the operator did not touch assignments: the exact existing
-        rows are left as they are and never re-expanded.
-      * On a real change only the rows whose section is in the active year are
-        replaced (legacy subject × section product, Phase 1); previous-year
-        rows are never touched.
 
-    "الصفوف الرئيسية / مشرف الصف" is retired from the employee form: any posted
-    homeroom field is ignored, and existing Section.teacher_id assignments
-    (which drive teacher access scope) are never cleared, added or changed
-    here. Admin user management remains the place that manages them.
+def _save_teacher_pairs(emp, school_id, year, pairs):
+    """Make this employee's ACTIVE-YEAR teaching rows exactly ``pairs``.
+
+    The ONE writer of teacher_subjects for the create wizard and the edit form.
+    Never commits — the caller owns the transaction. Never reads current_user
+    or the request's school: scope is passed in explicitly. Returns True when
+    rows were rewritten, False when nothing changed (zero writes).
+
+    Every pair is validated before anything is written; one bad pair rejects
+    the whole save with a ValueError carrying a friendly message:
+
+      * the section must belong to ``school_id`` and ``year``;
+      * the subject must belong to ``school_id`` and ``year``;
+      * the subject must belong to the section's own grade. A pair that is
+        ALREADY stored is exempt, so a school-wide (NULL-grade) subject or a
+        legacy cross-grade pair can be kept as it is — but never newly added.
+
+    Reconciliation covers only the pairs the forms can show: section AND
+    subject of this school's active year. Previous-year rows (and any
+    non-representable row) are never touched. Changed → one scoped DELETE of
+    the current pairs + one bulk INSERT of the new ones.
     """
-    posted_sections = {i for i in request.form.getlist('teaching_section_ids', type=int) if i}
-    posted_subjects = {i for i in request.form.getlist('subject_ids', type=int) if i}
-
-    year = get_active_year(emp.school_id) if emp.school_id else None
-    if year is None:
-        if posted_sections or posted_subjects:
+    pairs = set(pairs)
+    if not (school_id and year):
+        if pairs:
             raise ValueError(_TA_ERR_NO_YEAR)
         return False
 
-    allowed_sections = {
-        r[0] for r in db.session.query(Section.id)
+    section_grade = dict(
+        db.session.query(Section.id, Section.grade_id)
         .execution_options(bypass_tenant_scope=True)
-        .filter(Section.school_id == emp.school_id,
-                Section.academic_year_id == year.id).all()
-    }
-    allowed_subjects = {
-        r[0] for r in db.session.query(Subject.id)
+        .filter(Section.school_id == school_id,
+                Section.academic_year_id == year.id).all())
+    subject_grade = dict(
+        db.session.query(Subject.id, Subject.grade_id)
         .execution_options(bypass_tenant_scope=True)
-        .filter(Subject.school_id == emp.school_id,
-                Subject.academic_year_id == year.id).all()
-    }
-    if not posted_sections <= allowed_sections:
-        raise ValueError(_TA_ERR_SECTION)
-    if not posted_subjects <= allowed_subjects:
-        raise ValueError(_TA_ERR_SUBJECT)
+        .filter(Subject.school_id == school_id,
+                Subject.academic_year_id == year.id).all())
 
-    # The employee's current active-year rows, reduced to the flat sets the
-    # form displayed (subjects outside this year are not offered by the form).
-    current_rows = (
-        db.session.query(teacher_subjects.c.section_id, teacher_subjects.c.subject_id)
-        .filter(teacher_subjects.c.employee_id == emp.id,
-                teacher_subjects.c.section_id.in_(allowed_sections))
-        .all()
-    ) if allowed_sections else []
-    current_sections = {r.section_id for r in current_rows}
-    current_subjects = {r.subject_id for r in current_rows} & allowed_subjects
+    current = {
+        (r.section_id, r.subject_id) for r in (
+            db.session.query(teacher_subjects.c.section_id,
+                             teacher_subjects.c.subject_id)
+            .filter(teacher_subjects.c.employee_id == emp.id,
+                    teacher_subjects.c.section_id.in_(list(section_grade)),
+                    teacher_subjects.c.subject_id.in_(list(subject_grade)))
+            .all())
+    } if (section_grade and subject_grade) else set()
 
-    if posted_sections == current_sections and posted_subjects == current_subjects:
+    for section_id, subject_id in pairs:
+        if section_id not in section_grade:
+            raise ValueError(_TA_ERR_SECTION)
+        if subject_id not in subject_grade:
+            raise ValueError(_TA_ERR_SUBJECT)
+        if (subject_grade[subject_id] != section_grade[section_id]
+                and (section_id, subject_id) not in current):
+            raise ValueError(_TA_ERR_SUBJ_GRADE)
+
+    if pairs == current:
         return False
 
-    if current_sections:
+    if current:
         db.session.execute(
             teacher_subjects.delete().where(
                 teacher_subjects.c.employee_id == emp.id,
-                teacher_subjects.c.section_id.in_(current_sections),
+                teacher_subjects.c.section_id.in_({s for s, _ in current}),
+                teacher_subjects.c.subject_id.in_({j for _, j in current}),
             )
         )
-    rows = [{'employee_id': emp.id, 'subject_id': subject_id, 'section_id': section_id}
-            for section_id in sorted(posted_sections)
-            for subject_id in sorted(posted_subjects)]
-    if rows:
-        db.session.execute(teacher_subjects.insert(), rows)
+    if pairs:
+        db.session.execute(teacher_subjects.insert(), [
+            {'employee_id': emp.id, 'section_id': section_id, 'subject_id': subject_id}
+            for section_id, subject_id in sorted(pairs)])
     return True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Create-wizard teacher assignments (multi grade → multi section)
+#  Exact teaching assignments (section → subjects), create wizard + edit form
 #
-#  The "Add New Employee" wizard submits every teaching section as an explicit
-#  "<grade_id>:<section_id>" pair, so the grade a section was chosen under is
-#  part of the request instead of being inferred from the section id. Storage
-#  is unchanged: teaching → teacher_subjects rows (subject × section). Homeroom
-#  (Section.teacher_id) is retired from this form and managed only by School
-#  User Management.
-#
-#  Only the create wizard uses these helpers; the employee EDIT form uses
-#  _save_teacher_assignments above.
+#  Both forms post one checkbox per exact pair, ``ta_pair[]`` =
+#  "<section_id>:<subject_id>", and both save through _save_teacher_pairs
+#  above. teacher_subjects therefore stores exactly what the operator ticked —
+#  never a product of a section list and a subject list. The wizard's
+#  "<grade_id>:<section_id>" section boxes only drive which sections show
+#  subject checkboxes; they are not stored. Homeroom (Section.teacher_id) is
+#  retired from both forms and managed only by School User Management.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Generic Arabic messages — never echo the submitted ids, model names, or the
@@ -535,7 +573,8 @@ _TA_ERR_SECTION = ('الصفوف أو الشعب المحددة غير صالح�
                    'أو للعام الدراسي الحالي. يرجى إعادة الاختيار.')
 _TA_ERR_SUBJECT = ('المواد الدراسية المحددة غير صالحة أو لا تعود لهذه المدرسة '
                    'أو للعام الدراسي الحالي. يرجى إعادة الاختيار.')
-_TA_ERR_SUBJ_GRADE = 'إحدى المواد الدراسية المختارة لا تنتمي إلى الصفوف المحددة.'
+_TA_ERR_SUBJ_GRADE = ('إحدى المواد الدراسية المختارة لا تنتمي إلى صف الشعبة '
+                      'التي اختيرت لها. يرجى إعادة الاختيار.')
 _TA_ERR_NO_YEAR = 'لا يمكن حفظ تكليفات التدريسي بدون عام دراسي فعّال.'
 
 
@@ -562,112 +601,20 @@ def _parse_grade_section_pairs(field_name):
     return pairs
 
 
-def _wizard_teacher_selection(school, year):
-    """Validate the create-wizard teacher selection against the trusted context.
-
-    Every submitted grade, section, and subject is re-checked against THIS
-    school's own rows for THIS academic year, and every section must really
-    belong to the grade it was submitted under. Ids are never trusted from the
-    request: a forged grade/section/subject id from another school (or another
-    year, or a section paired with the wrong grade) is rejected before anything
-    is written.
-
-    Returns ``(teaching_section_ids, subject_ids)`` with duplicates removed, or
-    raises ``ValueError`` carrying a friendly Arabic message for the caller to
-    flash.
-
-    The retired "الصفوف الرئيسية / مشرف الصف" input (``wiz_homeroom[]``) is
-    never read: employee creation does not assign homeroom sections.
-    """
-    ts_pairs    = _parse_grade_section_pairs('wiz_teaching[]')
-    subject_ids = [i for i in request.form.getlist('subject_ids', type=int) if i]
-
-    if not (ts_pairs or subject_ids):
-        return [], []
-
-    if not (school and year):
-        raise ValueError(_TA_ERR_NO_YEAR)
-
-    # Allow-lists built from the trusted server-side school/year context. The
-    # explicit school_id + academic_year_id filters (with the ORM tenant scope
-    # bypassed) mirror the School User Management validation exactly, so the
-    # result cannot depend on implicit request-scope state.
-    valid_grade_ids = {
-        r[0] for r in db.session.query(Grade.id)
-        .execution_options(bypass_tenant_scope=True)
-        .filter(Grade.school_id == school.id,
-                Grade.academic_year_id == year.id).all()
-    }
-    section_grade = {
-        r[0]: r[1] for r in db.session.query(Section.id, Section.grade_id)
-        .execution_options(bypass_tenant_scope=True)
-        .filter(Section.school_id == school.id,
-                Section.academic_year_id == year.id).all()
-    }
-    # subject_id → its owning grade_id (None for school-wide subjects), scoped to
-    # this school and year. Used both to reject foreign subjects and to enforce
-    # that a subject really belongs to one of the selected teaching grades.
-    subject_grade = {
-        r[0]: r[1] for r in db.session.query(Subject.id, Subject.grade_id)
-        .execution_options(bypass_tenant_scope=True)
-        .filter(Subject.school_id == school.id,
-                Subject.academic_year_id == year.id).all()
-    }
-
-    def _clean_pairs(pairs):
-        """Verify each pair and collapse duplicate grade/section combinations."""
-        out, seen = [], set()
-        for grade_id, section_id in pairs:
-            if (grade_id not in valid_grade_ids
-                    or section_grade.get(section_id) != grade_id):
-                raise ValueError(_TA_ERR_SECTION)
-            if section_id in seen:
-                continue
-            seen.add(section_id)
-            out.append(section_id)
-        return out
-
-    teaching_ids = _clean_pairs(ts_pairs)
-
-    # Grades actually selected under "الشعب التي يدرسها".
-    teaching_grade_ids = {section_grade[s_id] for s_id in teaching_ids}
-
-    clean_subjects, seen_subjects = [], set()
-    for subject_id in subject_ids:
-        if subject_id not in subject_grade:
-            # Unknown, other-school, or other-year subject.
-            raise ValueError(_TA_ERR_SUBJECT)
-        if subject_grade[subject_id] not in teaching_grade_ids:
-            # Belongs to no selected teaching grade (or to none at all) — this
-            # catches a stale selection left over from a removed grade just as
-            # much as a deliberately forged id.
-            raise ValueError(_TA_ERR_SUBJ_GRADE)
-        if subject_id in seen_subjects:
-            continue
-        seen_subjects.add(subject_id)
-        clean_subjects.append(subject_id)
-
-    return teaching_ids, clean_subjects
-
-
 def _save_wizard_teacher_assignments(emp, school, year):
-    """Persist the validated create-wizard teacher assignments for *emp*.
+    """Persist the create wizard's exact teaching pairs for *emp*.
 
-    Uses the existing relationship only:
-      * teaching  → ``teacher_subjects`` (employee_id, subject_id, section_id)
-
-    ``Section.teacher_id`` (homeroom) is never written here. No commit — the
-    caller commits once, together with the employee, the linked user account,
-    the photo, and the documents.
+    Returns ``(ticked_section_ids, pairs)``: the sections ticked in the grade
+    cards (used only to warn about a section left without any subject) and the
+    exact pairs saved. ``Section.teacher_id`` (homeroom) is never written here.
+    No commit — the caller commits once, together with the employee, the
+    linked user account, the photo, and the documents.
     """
-    teaching_ids, subject_ids = _wizard_teacher_selection(school, year)
-
-    rows = [{'employee_id': emp.id, 'subject_id': subject_id, 'section_id': section_id}
-            for section_id in teaching_ids for subject_id in subject_ids]
-    if rows:
-        db.session.execute(teacher_subjects.insert(), rows)
-
-    return teaching_ids, subject_ids
+    ticked = [section_id for _grade_id, section_id
+              in _parse_grade_section_pairs('wiz_teaching[]')]
+    pairs = _parse_teacher_pairs()
+    _save_teacher_pairs(emp, school.id if school else None, year, pairs)
+    return ticked, pairs
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1112,9 +1059,10 @@ def _handle_employee_post(employee):
             _doc_saved += 1
 
         try:
-            _ts_ids, _subj_ids = _save_wizard_teacher_assignments(
+            _ts_ids, _ta_pairs = _save_wizard_teacher_assignments(
                 employee, school, year)
-            _ta_no_subject = bool(_ts_ids and not _subj_ids)
+            # A ticked section with no subject ticked under it stores nothing.
+            _ta_no_subject = bool(set(_ts_ids) - {sec for sec, _ in _ta_pairs})
             # Institutes: study groups, staged in the SAME transaction as the
             # employee — a later failure leaves no group and no assignment.
             if (getattr(school, 'is_institute', False)
@@ -1167,7 +1115,7 @@ def _handle_employee_post(employee):
             flash_msgs.append(('success', f'تم رفع {_doc_saved} مستند(ات) بنجاح.'))
         if _ta_no_subject:
             flash_msgs.append(('warning',
-                'لم يتم ربط الشعب التي يدرسها لعدم اختيار أي مادة دراسية. '
+                'لم يتم ربط بعض الشعب التي يدرسها لعدم اختيار أي مادة لها. '
                 'يمكنك إضافة المواد لاحقاً من صفحة تعديل الموظف.'))
 
     # ── Linked login account — EDIT flow only ─────────────────────────────────
@@ -1265,14 +1213,16 @@ def _handle_employee_post(employee):
                     db.session.commit()
 
     # ── Teacher assignments — EDIT flow only ─────────────────────────────────
-    # The create wizard already saved its assignments atomically (above) using
-    # the grade→section pairs it submits; this path stays exactly as it was for
-    # the employee edit form.
-    # The flag only says the panel was on the page; _save_teacher_assignments
-    # itself decides whether anything changed (unchanged → no write at all).
+    # The create wizard already saved its exact pairs atomically (above); the
+    # edit form posts the same ta_pair[] checkboxes and uses the same helper.
+    # The flag only says the panel was on the page; _save_teacher_pairs itself
+    # decides whether anything changed (unchanged exact pairs → no write).
     if (not is_create) and request.form.get('save_teacher_section'):
         try:
-            if _save_teacher_assignments(employee):
+            _ta_year = (get_active_year(employee.school_id)
+                        if employee.school_id else None)
+            if _save_teacher_pairs(employee, employee.school_id, _ta_year,
+                                   _parse_teacher_pairs()):
                 db.session.commit()
                 flash_msgs.append(('success', 'تم ربط الموظف بالمواد والصفوف والشعب.'))
         except ValueError as exc:

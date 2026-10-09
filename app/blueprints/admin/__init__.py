@@ -15,7 +15,7 @@ import logging
 from app.models import (db, User, Role, Permission, Employee, Student, Subject,
                          FeeInstallment, StudentAttendance, Revenue, Expense,
                          Notification, AcademicYear, School, Section, Grade,
-                         teacher_subjects, parent_students, Complaint, LeaveRequest,
+                         parent_students, Complaint, LeaveRequest,
                          EmployeeLeaveRequest,
                          SchoolVideo, SchoolAnnouncement, SchoolContentRead,
                          SchoolBuilding, UserBuildingAccess, MobileDeviceToken)
@@ -349,18 +349,6 @@ def _section_options(school, year):
             .execution_options(bypass_tenant_scope=True)
             .filter_by(school_id=school.id, academic_year_id=year.id)
             .order_by(Section.name)
-            .all())
-
-
-def _subject_options(school, year):
-    if not (school and year):
-        return []
-    from sqlalchemy.orm import joinedload
-    return (Subject.query
-            .execution_options(bypass_tenant_scope=True)
-            .options(joinedload(Subject.grade))
-            .filter_by(school_id=school.id, academic_year_id=year.id)
-            .order_by(Subject.name)
             .all())
 
 
@@ -762,7 +750,6 @@ def create_user():
                    if current_user.is_super_admin else [])
 
     all_sections = _section_options(school, year)
-    all_subjects = _subject_options(school, year)
 
     # Only super-admin can grant per-user extra permissions. School managers
     # create users with role permissions only.
@@ -905,39 +892,10 @@ def create_user():
                  .filter(*section_filter)
                  .update({'teacher_id': emp.id}, synchronize_session=False))
 
-            # Assign teaching subjects × sections into teacher_subjects
-            # (legacy cross product, unchanged for now). Written only with an
-            # active year, so both id sets are always pinned to this school AND
-            # year — without one the year filter below would be skipped.
-            subject_ids = _unique_ids(request.form.getlist('teacher_subject_ids', type=int))
-            if subject_ids and section_ids and assigned_school_id and assigned_year:
-                subject_filter = [
-                    Subject.id.in_(subject_ids),
-                    Subject.school_id == assigned_school_id,
-                ]
-                section_filter = [
-                    Section.id.in_(section_ids),
-                    Section.school_id == assigned_school_id,
-                ]
-                if assigned_year:
-                    subject_filter.append(Subject.academic_year_id == assigned_year.id)
-                    section_filter.append(Section.academic_year_id == assigned_year.id)
-                valid_subj_ids = [r[0] for r in
-                    db.session.query(Subject.id)
-                              .execution_options(bypass_tenant_scope=True)
-                              .filter(*subject_filter)
-                              .all()]
-                valid_sec_ids = [r[0] for r in
-                    db.session.query(Section.id)
-                              .execution_options(bypass_tenant_scope=True)
-                              .filter(*section_filter)
-                              .all()]
-                rows = [
-                    {'employee_id': emp.id, 'subject_id': s, 'section_id': c}
-                    for s in valid_subj_ids for c in valid_sec_ids
-                ]
-                if rows:
-                    db.session.execute(teacher_subjects.insert(), rows)
+            # Teaching assignments (teacher_subjects) are NOT created here.
+            # They are managed only from Employee Management, where each
+            # section gets its own exact subjects. The sections chosen above
+            # set homeroom (Section.teacher_id) only and grant no subject.
 
         # ── Building access restrictions (optional feature) ─────────────────
         _berr = _save_user_building_access(user, assigned_school_id)
@@ -974,8 +932,8 @@ def create_user():
                            roles=roles, user=None,
                            all_permissions=all_permissions,
                            all_students=all_students, all_schools=all_schools,
-                           all_sections=all_sections, all_subjects=all_subjects,
-                           teacher_section_ids=set(), teacher_subject_ids=set(),
+                           all_sections=all_sections,
+                           teacher_section_ids=set(), teacher_employee_id=None,
                            is_school_manager=is_school_manager,
                            safe_permissions=[],
                            preselect_school_id=preselect_school_id,
@@ -1045,29 +1003,24 @@ def edit_user(user_id):
     all_schools = (School.query.filter_by(is_active=True).order_by(School.id).all()
                    if current_user.is_super_admin else [])
 
-    # Sections and subjects for teacher role assignment
+    # Sections for the teacher HOMEROOM panel (Section.teacher_id only).
     all_sections = _section_options(school, year)
-    all_subjects = _subject_options(school, year)
 
-    # Current homeroom section IDs and subject IDs for this teacher (if applicable)
+    # Current homeroom section IDs for this teacher, and the linked Employee
+    # id so the form can link to Employee Management, the only place where
+    # teaching assignments (teacher_subjects) are managed.
     teacher_section_ids = set()
-    teacher_subject_ids = set()
+    teacher_employee_id = None
     if user.role and user.role.name == 'teacher':
         emp = (Employee.query
                .execution_options(bypass_tenant_scope=True)
                .filter_by(user_id=user.id).first())
         if emp:
+            teacher_employee_id = emp.id
             teacher_section_ids = {
                 s.id for s in
                 Section.query.execution_options(bypass_tenant_scope=True)
                              .filter_by(teacher_id=emp.id).all()
-            }
-            teacher_subject_ids = {
-                row[0] for row in
-                db.session.query(teacher_subjects.c.subject_id)
-                          .filter(teacher_subjects.c.employee_id == emp.id)
-                          .distinct()
-                          .all()
             }
 
     if request.method == 'POST':
@@ -1264,9 +1217,8 @@ def edit_user(user_id):
                            all_students=all_students,
                            all_schools=all_schools,
                            all_sections=all_sections,
-                           all_subjects=all_subjects,
                            teacher_section_ids=teacher_section_ids,
-                           teacher_subject_ids=teacher_subject_ids,
+                           teacher_employee_id=teacher_employee_id,
                            buildings_access_enabled=_buildings_access_enabled,
                            buildings_for_access=_active_buildings_for(user.school_id),
                            user_building_ids=_user_building_ids(user.id, user.school_id))

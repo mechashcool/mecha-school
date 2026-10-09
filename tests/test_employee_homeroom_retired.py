@@ -95,14 +95,15 @@ class EmployeeHomeroomRetiredTest(_Fixture):
     def test_create_ignores_forged_homeroom(self):
         """_save_wizard_teacher_assignments is the create flow's only
         assignment write; forged wiz_homeroom[] (valid AND malformed) is ignored
-        while teaching sections are saved as before."""
+        while the exact teaching pair is saved."""
         from app.blueprints.employees import _save_wizard_teacher_assignments
         from app.models import AcademicYear, Employee, School
         ids = self.ids
         pair = f'{ids["grade"]}:{ids["sec2"]}'
         with self.app.test_request_context('/employees/create', method='POST', data={
                 'wiz_homeroom[]': [pair, 'junk'],
-                'wiz_teaching[]': [pair], 'subject_ids': [ids['subj']]}):
+                'wiz_teaching[]': [pair],
+                'ta_pair[]': [f'{ids["sec2"]}:{ids["subj"]}']}):
             self._login('sadm')
             try:
                 new_emp = self._employee(ids['sch'], 'NEW')
@@ -115,7 +116,7 @@ class EmployeeHomeroomRetiredTest(_Fixture):
             finally:
                 logout_user()
 
-        self.assertEqual(result, ([ids['sec2']], [ids['subj']]))
+        self.assertEqual(result, ([ids['sec2']], {(ids['sec2'], ids['subj'])}))
         with self.app.app_context():
             sec2 = db.session.get(Section, ids['sec2'], execution_options=OPTS)
             self.assertIsNone(sec2.teacher_id, 'forged homeroom must be ignored')
@@ -134,7 +135,7 @@ class EmployeeHomeroomRetiredTest(_Fixture):
         html = self._call('edit', 'sadm', f'/employees/{ids["emp"]}/edit',
                           emp_id=ids['emp'])
         self._assert_removed(html)
-        self.assertIn('name="teaching_section_ids"', html)
+        self.assertIn('name="ta_pair[]"', html)
         self.assertIn('الشعب التي يُدرّسها', html)
 
         # Forged retired field: would move the homeroom from sec1 to sec2.
@@ -142,8 +143,7 @@ class EmployeeHomeroomRetiredTest(_Fixture):
                    emp_id=ids['emp'],
                    data={'full_name': 'HR Teacher', 'save_teacher_section': '1',
                          'homeroom_section_ids': [ids['sec2']],
-                         'teaching_section_ids': [ids['sec2']],
-                         'subject_ids': [ids['subj']]})
+                         'ta_pair[]': [f'{ids["sec2"]}:{ids["subj"]}']})
 
         with self.app.app_context():
             sec1 = db.session.get(Section, ids['sec1'], execution_options=OPTS)

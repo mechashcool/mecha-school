@@ -773,8 +773,9 @@ class SchoolManagerUsersTest(unittest.TestCase):
                              'Section teacher_id should point to the new Employee')
             logout_user()
 
-    def test_manager_can_create_teacher_linked_to_subject(self):
-        """Selected teacher subject IDs create scoped teacher_subjects links."""
+    def test_manager_create_teacher_writes_no_subject_links(self):
+        """Posted teacher subject IDs are ignored: School User Management never
+        writes teacher_subjects (Employee Management owns teaching pairs)."""
         from app.blueprints.admin import create_user
         from sqlalchemy import select as sa_select
 
@@ -821,9 +822,7 @@ class SchoolManagerUsersTest(unittest.TestCase):
                     teacher_subjects.c.employee_id == emp.id
                 )
             ).fetchall()
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0].subject_id, ids['subject_a_id'])
-            self.assertEqual(rows[0].section_id, ids['section_a_id'])
+            self.assertEqual(rows, [])
             logout_user()
 
 

@@ -350,7 +350,7 @@
 
       {# ── 3. Teacher Assignments ──────────────────────────────────────── #}
       {% if school_cfg.section_visible('employees', 'teacher_assignment') %}
-      {% set has_assignments = (existing_section_ids or existing_subject_ids) %}
+      {% set has_assignments = ta_pair_keys %}
       <div class="card mb-3">
         <div class="card-header d-flex justify-content-between align-items-center"
              role="button"
@@ -362,9 +362,20 @@
         </div>
         <div class="collapse{{ ' show' if has_assignments }}" id="collapseTeacher">
           <div class="card-body">
+
+            {% if sections %}
+            {# Posted only when the sections are actually on the page, so a form
+               rendered without them can never submit an empty assignment set. #}
             <input type="hidden" name="save_teacher_section" value="1">
 
-            {% if sections or subjects %}
+            {# ── Current exact assignments (all grades, kept in sync by JS) ── #}
+            <div class="mb-3">
+              <h6 class="fw-semibold mb-2">المواد والشعب التي يُدرّسها حالياً</h6>
+              <div id="taPairSummary" class="d-flex flex-column gap-1 small"></div>
+              <div id="taPairSummaryEmpty" class="text-muted small">
+                <i class="bi bi-dash-circle me-1"></i>لم تُحدَّد أي مادة لأي شعبة.
+              </div>
+            </div>
 
             {# ── Stage / Grade filter row ── #}
             <div class="row g-3 mb-3 align-items-end">
@@ -385,73 +396,67 @@
             {# Prompt shown before a grade is chosen #}
             <p id="taSelectHint" class="text-muted small mb-3">
               <i class="bi bi-arrow-up-circle me-1"></i>
-              اختر المرحلة والصف لعرض الشعب والمواد الخاصة بهذا الصف.
+              اختر المرحلة والصف، ثم حدّد لكل شعبة المواد التي يُدرّسها فيها.
             </p>
 
-            {# ── Teaching sections — one panel per grade in DOM ── #}
-            <div id="taSectionsWrap" style="display:none">
-              <h6 class="fw-semibold mb-2">الشعب التي يُدرّسها</h6>
+            {# ── One block per section: ONLY that section's grade subjects.
+                 Each checkbox is one exact "<section_id>:<subject_id>" pair.
+                 All grades stay in the DOM (hidden), so every ticked pair is
+                 submitted whichever grade is currently shown. ── #}
+            <div id="taPairsWrap" style="display:none">
               {% for grade in grades %}
               {% set gs = sections | selectattr('grade_id', 'equalto', grade.id) | list %}
-              {% if gs %}
-              <div class="ta-grade-sections" data-gid="{{ grade.id }}" style="display:none">
-                <div class="d-flex flex-wrap gap-2 mb-3">
-                  {% for sec in gs %}
-                  <div class="form-check form-check-inline">
-                    <input class="form-check-input" type="checkbox"
-                           name="teaching_section_ids" value="{{ sec.id }}"
-                           id="ts_sec_{{ sec.id }}"
-                           {{ 'checked' if sec.id in existing_section_ids }}>
-                    <label class="form-check-label" for="ts_sec_{{ sec.id }}">{{ sec.name }}</label>
-                  </div>
-                  {% endfor %}
-                </div>
-              </div>
-              {% endif %}
-              {% endfor %}
-            </div>
-
-            {# ── Subjects — one panel per grade in DOM ── #}
-            {% if subjects %}
-            <div id="taSubjectsWrap" style="display:none">
-              <h6 class="fw-semibold mb-2">المواد الدراسية</h6>
-              {% for grade in grades %}
               {% set gsubjs = subjects | selectattr('grade_id', 'equalto', grade.id) | list %}
-              {% if gsubjs %}
-              <div class="ta-grade-subjects" data-gid="{{ grade.id }}" style="display:none">
-                <div class="d-flex flex-wrap gap-2 mb-2">
-                  {% for subj in gsubjs %}
-                  <div class="form-check form-check-inline">
-                    <input class="form-check-input" type="checkbox"
-                           name="subject_ids" value="{{ subj.id }}"
-                           id="subj_{{ subj.id }}"
-                           {{ 'checked' if subj.id in existing_subject_ids }}>
-                    <label class="form-check-label" for="subj_{{ subj.id }}">{{ subj.name }}</label>
+              {% if gs %}
+              <div class="ta-grade-pairs" data-gid="{{ grade.id }}" style="display:none">
+                {% for sec in gs %}
+                {% set extras = ta_extra_subjects.get(sec.id, []) %}
+                <div class="border rounded p-2 mb-2 ta-sec-block">
+                  <div class="fw-semibold small mb-1">
+                    <i class="bi bi-diagram-3 me-1"></i>{{ grade.name }} / {{ sec.name }}
                   </div>
-                  {% endfor %}
+                  {% if gsubjs or extras %}
+                  <div class="d-flex flex-wrap gap-2">
+                    {% for subj in gsubjs %}
+                    {% set key = sec.id ~ ':' ~ subj.id %}
+                    <div class="form-check form-check-inline m-0">
+                      <input class="form-check-input ta-pair" type="checkbox"
+                             name="ta_pair[]" value="{{ key }}" id="tp_{{ sec.id }}_{{ subj.id }}"
+                             data-sec-label="{{ grade.name }} / {{ sec.name }}"
+                             data-subj-label="{{ subj.name }}"
+                             {{ 'checked' if key in ta_pair_keys }}>
+                      <label class="form-check-label" for="tp_{{ sec.id }}_{{ subj.id }}">{{ subj.name }}</label>
+                    </div>
+                    {% endfor %}
+                    {# Already-stored pairs whose subject is not of this grade —
+                       shown only here, under their own section, so they can be
+                       kept or removed. Never offered to any other section. #}
+                    {% for x in extras %}
+                    {% set key = sec.id ~ ':' ~ x.id %}
+                    <div class="form-check form-check-inline m-0">
+                      <input class="form-check-input ta-pair" type="checkbox"
+                             name="ta_pair[]" value="{{ key }}" id="tp_{{ sec.id }}_{{ x.id }}"
+                             data-sec-label="{{ grade.name }} / {{ sec.name }}"
+                             data-subj-label="{{ x.name }}"
+                             {{ 'checked' if key in ta_pair_keys }}>
+                      <label class="form-check-label" for="tp_{{ sec.id }}_{{ x.id }}">
+                        {{ x.name }}
+                        <span class="badge bg-light text-secondary border">
+                          {{ 'مادة عامة / بدون صف محدد' if x.general else 'مادة من صف آخر' }}
+                        </span>
+                      </label>
+                    </div>
+                    {% endfor %}
+                  </div>
+                  {% else %}
+                  <span class="text-muted small">لا توجد مواد دراسية مضافة لهذا الصف.</span>
+                  {% endif %}
                 </div>
+                {% endfor %}
               </div>
               {% endif %}
               {% endfor %}
-              {# Subjects with no grade_id — always shown once any grade is selected #}
-              {% set ung = subjects | selectattr('grade_id', 'none') | list %}
-              {% if ung %}
-              <div class="ta-ungrouped-subjects" style="display:none">
-                <div class="d-flex flex-wrap gap-2 mb-2">
-                  {% for subj in ung %}
-                  <div class="form-check form-check-inline">
-                    <input class="form-check-input" type="checkbox"
-                           name="subject_ids" value="{{ subj.id }}"
-                           id="subj_{{ subj.id }}"
-                           {{ 'checked' if subj.id in existing_subject_ids }}>
-                    <label class="form-check-label" for="subj_{{ subj.id }}">{{ subj.name }}</label>
-                  </div>
-                  {% endfor %}
-                </div>
-              </div>
-              {% endif %}
             </div>
-            {% endif %}
 
             {% else %}
             <p class="text-muted mb-0">
@@ -582,10 +587,38 @@
   var gradeSel  = document.getElementById('taGradeFilter');
   var stageCol  = document.getElementById('taStageCol');
   var hint      = document.getElementById('taSelectHint');
-  var secWrap   = document.getElementById('taSectionsWrap');
-  var subjWrap  = document.getElementById('taSubjectsWrap');
+  var pairsWrap = document.getElementById('taPairsWrap');
+  var summary   = document.getElementById('taPairSummary');
+  var summEmpty = document.getElementById('taPairSummaryEmpty');
 
   if (!stageSel) return;
+
+  // Read-only summary of every ticked exact pair, across ALL grades (hidden
+  // ones included), grouped by section in page order. Built with textContent,
+  // so no label is ever interpreted as HTML.
+  function renderSummary() {
+    if (!summary) return;
+    var bySec = [], index = {};
+    document.querySelectorAll('input.ta-pair:checked').forEach(function(cb) {
+      var sec = cb.dataset.secLabel || '';
+      if (!(sec in index)) { index[sec] = bySec.length; bySec.push({ sec: sec, subjects: [] }); }
+      bySec[index[sec]].subjects.push(cb.dataset.subjLabel || '');
+    });
+    summary.innerHTML = '';
+    bySec.forEach(function(row) {
+      var line = document.createElement('div');
+      var b = document.createElement('strong');
+      b.textContent = row.sec + ': ';
+      line.appendChild(b);
+      line.appendChild(document.createTextNode(row.subjects.join('، ')));
+      summary.appendChild(line);
+    });
+    if (summEmpty) summEmpty.style.display = bySec.length ? 'none' : '';
+  }
+  document.addEventListener('change', function(e) {
+    if (e.target && e.target.classList && e.target.classList.contains('ta-pair')) renderSummary();
+  });
+  renderSummary();
 
   // Collect unique stages in declaration order
   var stages = [], seen = {};
@@ -630,17 +663,11 @@
 
   function refreshContent(gradeId) {
     var show = gradeId !== null && gradeId !== '';
-    [secWrap, subjWrap].forEach(function(w) { if (w) w.style.display = show ? '' : 'none'; });
+    if (pairsWrap) pairsWrap.style.display = show ? '' : 'none';
     if (hint) hint.style.display = show ? 'none' : '';
 
-    ['ta-grade-sections', 'ta-grade-subjects'].forEach(function(cls) {
-      document.querySelectorAll('.' + cls).forEach(function(el) {
-        el.style.display = (String(el.dataset.gid) === String(gradeId)) ? '' : 'none';
-      });
-    });
-    // Ungrouped subjects: show whenever any grade is selected
-    document.querySelectorAll('.ta-ungrouped-subjects').forEach(function(el) {
-      el.style.display = show ? '' : 'none';
+    document.querySelectorAll('.ta-grade-pairs').forEach(function(el) {
+      el.style.display = (String(el.dataset.gid) === String(gradeId)) ? '' : 'none';
     });
   }
 
