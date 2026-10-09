@@ -403,54 +403,59 @@ def teacher_profile():
 @jwt_required()
 @role_required('teacher')
 def teacher_sections():
-    """All sections the teacher is associated with (homeroom + subject teaching)."""
+    """The teacher's TEACHING sections: a section is listed only when this
+    employee has at least one teacher_subjects row for it, and its
+    ``subjects`` are exactly those rows. Homeroom (Section.teacher_id) alone
+    never lists a section here — ``is_homeroom`` is only a display flag.
+
+    Set-based: the employee's pairs, the scoped sections, the scoped subjects
+    and one grouped student count. Section and Subject run under the mobile
+    ORM scope (school + active year), so pairs of another year drop out, and a
+    section whose pairs resolve to no current subject is not returned.
+    """
     emp = _get_employee()
     if not emp:
         return err('employee_profile_not_found', 404)
 
-    section_ids  = _teacher_section_ids(emp)
-    homeroom_ids = {s.id for s in emp.sections_managed}
-    sections     = (Section.query
-                    .options(joinedload(Section.grade))
-                    .filter(Section.id.in_(section_ids))
-                    .order_by(Section.id)
-                    .all()) if section_ids else []
+    pair_rows = db.session.execute(
+        select(teacher_subjects.c.section_id, teacher_subjects.c.subject_id)
+        .where(teacher_subjects.c.employee_id == emp.id)
+        .distinct()
+    ).fetchall()
+    pair_section_ids = {r.section_id for r in pair_rows}
+    sections = (Section.query
+                .options(joinedload(Section.grade))
+                .filter(Section.id.in_(pair_section_ids))
+                .order_by(Section.id)
+                .all()) if pair_section_ids else []
 
-    # P1: batch what was 3 queries per section (student count, subject-pair
-    # lookup, subject rows) into 3 queries total for the whole list. Every
-    # batch is bound to this teacher's OWN section ids (server-derived) and,
-    # for subjects, to this teacher's OWN teacher_subjects assignment rows —
-    # identical scope to the per-section queries replaced.
-    student_counts: dict[int, int] = {}
     subs_by_section: dict[int, list[dict]] = {}
     if sections:
-        sec_ids = [sec.id for sec in sections]
-        student_counts = dict(
-            db.session.query(Student.section_id, func.count(Student.id))
-            .filter(Student.section_id.in_(sec_ids), Student.status == 'active')
-            .group_by(Student.section_id)
-            .all()
-        )
-        pair_rows = db.session.execute(
-            select(teacher_subjects.c.section_id, teacher_subjects.c.subject_id)
-            .where(
-                teacher_subjects.c.employee_id == emp.id,
-                teacher_subjects.c.section_id.in_(sec_ids),
-            )
-            .distinct()
-        ).fetchall()
-        subj_ids = {r.subject_id for r in pair_rows}
+        visible = {sec.id for sec in sections}
+        subj_ids = {r.subject_id for r in pair_rows if r.section_id in visible}
         subj_map = {
             subj.id: subj
             for subj in Subject.query.filter(Subject.id.in_(subj_ids)).all()
         } if subj_ids else {}
         for r in pair_rows:
             subj = subj_map.get(r.subject_id)
-            if subj is not None:
+            if r.section_id in visible and subj is not None:
                 subs_by_section.setdefault(r.section_id, []).append(
                     {'id': subj.id, 'name': subj.name})
         for subj_list in subs_by_section.values():
-            subj_list.sort(key=lambda d: d['name'])   # same order as _section_subjects
+            subj_list.sort(key=lambda d: d['name'])   # same order as before
+        # No exact current subject → not a teaching section.
+        sections = [sec for sec in sections if sec.id in subs_by_section]
+
+    student_counts: dict[int, int] = {}
+    if sections:
+        student_counts = dict(
+            db.session.query(Student.section_id, func.count(Student.id))
+            .filter(Student.section_id.in_([sec.id for sec in sections]),
+                    Student.status == 'active')
+            .group_by(Student.section_id)
+            .all()
+        )
 
     return ok(
         sections=[
@@ -463,7 +468,7 @@ def teacher_sections():
                 'display_name':  f"{sec.grade.name} - شعبة {sec.name}" if sec.grade else sec.name,
                 'capacity':      sec.capacity,
                 'student_count': student_counts.get(sec.id, 0),
-                'is_homeroom':   sec.id in homeroom_ids,
+                'is_homeroom':   sec.teacher_id == emp.id,
                 'subjects':      subs_by_section.get(sec.id, []),
             }
             for sec in sections

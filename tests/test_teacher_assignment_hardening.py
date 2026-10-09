@@ -16,6 +16,10 @@ School User Management:
   7. admin edit leaves exact pairs AND existing homeroom untouched; the form
      has no section/subject inputs and links to Employee Management
 
+Mobile:
+  8. GET /teacher/sections lists a section only when the teacher has a
+     teacher_subjects row for it; homeroom alone never lists it
+
 Fixture (a school, an institute and a foreign institute) inherited from the
 institute attendance tests, as test_employee_homeroom_retired does.
 """
@@ -340,6 +344,44 @@ class TeacherAssignmentPairsTest(_Fixture):
             self.assertIsNone(sec_c.teacher_id, 'posted section ignored')
             u = db.session.get(User, ids['tuser'], execution_options=OPTS)
             self.assertTrue(u.check_password('NewPassword123'))
+
+
+    # ── 8. Mobile teacher sections come only from teacher_subjects ─────────
+
+    def test_08_mobile_sections_require_a_teaching_pair(self):
+        from app.blueprints.mobile_api.utils import encode_token
+        ids = self.ids
+        self._seed(self._p(('A', 'math'), ('B', 'sci')))
+        with self.app.app_context():
+            for key in ('A', 'C'):                   # homeroom: A (taught), C (not)
+                db.session.get(Section, ids[key], execution_options=OPTS).teacher_id = ids['emp']
+            db.session.commit()
+            token = encode_token(db.session.get(User, ids['tuser'], execution_options=OPTS),
+                                 'access')
+
+        def sections():
+            resp = self.app.test_client().get(
+                '/api/mobile/v1/teacher/sections',
+                headers={'Authorization': f'Bearer {token}'})
+            self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True)[:300])
+            return {sec['id']: sec for sec in resp.get_json()['sections']}
+
+        got = sections()
+        self.assertEqual(set(got), {ids['A'], ids['B']},
+                         'homeroom-only C and previous-year sections are not listed')
+        self.assertEqual([x['id'] for x in got[ids['A']]['subjects']], [ids['math']])
+        self.assertEqual([x['id'] for x in got[ids['B']]['subjects']], [ids['sci']])
+        self.assertTrue(got[ids['A']]['is_homeroom'])
+
+        self._seed(self._p(('B', 'sci')))           # A loses its only subject
+        got = sections()
+        self.assertEqual(set(got), {ids['B']}, 'a section with no subject disappears')
+        self.assertEqual([x['id'] for x in got[ids['B']]['subjects']], [ids['sci']])
+        with self.app.app_context():
+            for key in ('A', 'C'):
+                self.assertEqual(
+                    db.session.get(Section, ids[key], execution_options=OPTS).teacher_id,
+                    ids['emp'], 'homeroom data untouched')
 
 
 for _inherited in list(vars(_Fixture)):
