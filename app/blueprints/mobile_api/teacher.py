@@ -303,15 +303,14 @@ def _section_subjects(emp: Employee, section_id: int) -> tuple[Section | None, l
     teacher's (or not in this school / active year): callers answer with the
     same response whether it is foreign or nonexistent.
 
-      * subject-assigned section → exactly the teacher_subjects rows for
-        (this employee, this section);
-      * homeroom section (Section.teacher_id == emp.id) → those rows PLUS the
-        subjects of the section's own grade (Subject.grade_id == grade_id).
-        Subjects with a NULL grade_id are reachable only via an explicit row,
-        never through homeroom.
+      * section access — homeroom (Section.teacher_id == emp.id) OR at least
+        one teacher_subjects row for (this employee, this section);
+      * subjects — ONLY the teacher_subjects rows for (this employee, this
+        section), for every teacher. Homeroom grants access to the section,
+        never to extra subjects, so a homeroom section with no rows yields [].
 
-    Three small indexed queries, set-based. Section and Subject run under the
-    mobile ORM scope (school + active year) and also pin school_id explicitly.
+    At most three small indexed queries, set-based. Section and Subject run
+    under the mobile ORM scope (school + active year) and also pin school_id.
     """
     section = (Section.query
                .filter(Section.id == section_id,
@@ -326,17 +325,14 @@ def _section_subjects(emp: Employee, section_id: int) -> tuple[Section | None, l
             teacher_subjects.c.section_id == section.id,
         ).distinct()
     ).fetchall()]
-    is_homeroom = section.teacher_id == emp.id
-    if not is_homeroom and not pair_ids:
-        return None, []
+    if not pair_ids:
+        # No subject rows: still the teacher's section when homeroom, but
+        # with nothing to offer; otherwise not theirs at all.
+        return (section, []) if section.teacher_id == emp.id else (None, [])
 
-    allowed = []
-    if pair_ids:
-        allowed.append(Subject.id.in_(pair_ids))
-    if is_homeroom:
-        allowed.append(Subject.grade_id == section.grade_id)
     subjects = (Subject.query
-                .filter(Subject.school_id == emp.school_id, db.or_(*allowed))
+                .filter(Subject.school_id == emp.school_id,
+                        Subject.id.in_(pair_ids))
                 .order_by(Subject.name)
                 .all())
     return section, subjects
@@ -1309,8 +1305,8 @@ def teacher_create_exam():
             return err('duration_minutes must be a positive integer')
 
     # Validate the (section_id, subject_id) pair with the SAME rule the subject
-    # picker uses (_section_subjects): the exact teacher_subjects pair, or — in
-    # the teacher's homeroom section — a subject of that section's own grade.
+    # picker uses (_section_subjects): the exact teacher_subjects row for
+    # (employee, section, subject) — for homeroom teachers too.
     # Ids must be JSON integers, as the previous set-membership checks required.
     if isinstance(section_id, bool) or not isinstance(section_id, int):
         return err('forbidden — section not assigned to you', 403)
