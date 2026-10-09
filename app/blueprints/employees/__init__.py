@@ -128,6 +128,18 @@ def _is_allowed_account_role(role_id) -> bool:
     return bool(role and role.name in _ACCOUNT_ROLE_NAMES)
 
 
+def _linked_role_editable_here(linked_user) -> bool:
+    """Whether the employee page may touch the linked account's role AT ALL.
+
+    Only when the account CURRENTLY holds one of _ACCOUNT_ROLE_NAMES (the roles
+    this page can offer). Any other role — driver, accountant, a custom role —
+    has no matching option in the dropdown, so a browser would submit the first
+    offered role and silently re-role the account on an unrelated save. Such a
+    role is shown read-only and preserved, whatever role_id is posted.
+    """
+    return bool(linked_user.role and linked_user.role.name in _ACCOUNT_ROLE_NAMES)
+
+
 def _may_change_linked_account_role(linked_user) -> bool:
     """Whether current_user may change the ROLE of an employee's linked account.
 
@@ -1183,7 +1195,10 @@ def _handle_employee_post(employee):
                 new_role   = request.form.get('role_id', type=int)
                 user_active = request.form.get('user_is_active')
 
-                if new_role and new_role != linked_user.role_id:
+                # driver / accountant / custom role: shown read-only on this
+                # page, so any posted role_id is ignored and the role preserved.
+                if (new_role and new_role != linked_user.role_id
+                        and _linked_role_editable_here(linked_user)):
                     # Two separate checks: who the TARGET account currently is,
                     # then which role may be assigned to it. Only a super admin
                     # or school manager may re-role an account that is not

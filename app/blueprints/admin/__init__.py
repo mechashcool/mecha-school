@@ -18,7 +18,8 @@ from app.models import (db, User, Role, Permission, Employee, Student, Subject,
                          parent_students, Complaint, LeaveRequest,
                          EmployeeLeaveRequest,
                          SchoolVideo, SchoolAnnouncement, SchoolContentRead,
-                         SchoolBuilding, UserBuildingAccess, MobileDeviceToken)
+                         SchoolBuilding, UserBuildingAccess, MobileDeviceToken,
+                         DRIVER_ROLE)
 from app.utils.decorators import (admin_required, staff_required,
                                    permission_required, any_permission_required,
                                    get_current_school,
@@ -962,6 +963,12 @@ def edit_user(user_id):
         existing_role_name=user.role.name if user.role else None,
         school_id=None if current_user.is_super_admin else current_user.school_id)
 
+    # A driver account's role is fixed for school-scoped managers: shown
+    # read-only, and any posted role_id is ignored, so no ordinary save can turn
+    # a driver into a parent/teacher (which would break the driver app).
+    role_locked = bool(is_school_manager and user.role
+                       and user.role.name == DRIVER_ROLE)
+
     # Super-admin: full permission list. School managers cannot edit extra
     # permissions from School User Management.
     if current_user.is_super_admin:
@@ -1033,7 +1040,7 @@ def edit_user(user_id):
         user.phone     = request.form.get('phone', '').strip()
 
         new_role = user.role
-        new_role_id = request.form.get('role_id', type=int)
+        new_role_id = None if role_locked else request.form.get('role_id', type=int)
         if new_role_id:
             new_role = Role.query.get(new_role_id)
             # School managers cannot promote users to admin roles, and may only
@@ -1156,6 +1163,7 @@ def edit_user(user_id):
     _buildings_access_enabled = _school_buildings_enabled(user.school_id)
     return render_template('admin/user_form.html',
                            user=user, roles=roles,
+                           role_locked=role_locked,
                            all_permissions=all_permissions,
                            safe_permissions=safe_permissions,
                            is_school_manager=is_school_manager,

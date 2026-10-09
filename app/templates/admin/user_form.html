@@ -69,6 +69,11 @@
             </div>
             <div class="col-md-6">
               <label class="form-label">الدور <span class="text-danger">*</span></label>
+              {% if role_locked %}
+              {# Driver account: role is fixed here — no role_id is submitted
+                 (the server ignores one too). #}
+              <div class="form-control-plaintext fw-semibold">الدور: {{ user.role.label }}</div>
+              {% else %}
               <select name="role_id" class="form-select" required>
                 <option value="">— اختر الدور —</option>
                 {% for role in roles %}
@@ -81,6 +86,7 @@
                 </option>
                 {% endfor %}
               </select>
+              {% endif %}
               {% if is_school_manager %}
               <div class="form-text text-warning">
                 <i class="bi bi-shield-exclamation me-1"></i>
@@ -328,7 +334,8 @@
   const parentPanel       = document.getElementById('parentLinkPanel');
   const teacherPanel      = document.getElementById('teacherNotePanel');
   const buildingPanel     = document.getElementById('buildingAccessPanel');
-  if (!roleSelect) return;
+  // No role select when the role is shown read-only (driver account): the
+  // server-rendered panels stay as they are; the rest of the page still runs.
 
   const parentRoleIds = [
     {% for role in roles %}{% if role.name == 'parent' %}{{ role.id }}{% if not loop.last %},{% endif %}{% endif %}{% endfor %}
@@ -346,15 +353,17 @@
     // Building access does not apply to parents/teachers.
     if (buildingPanel)    buildingPanel.style.display    = (isParent || isTeacher) ? 'none' : '';
   }
-  roleSelect.addEventListener('change', togglePanels);
-  togglePanels();
+  if (roleSelect) {
+    roleSelect.addEventListener('change', togglePanels);
+    togglePanels();
+  }
 
   // Super-admin only: the school is chosen in this same form, so custom roles
   // that are not available to the selected school are hidden from the dropdown.
   // Built-in roles and the account's existing role are always kept. This is a
   // usability filter only — the server re-validates availability on submit.
   const schoolSelect = document.querySelector('select[name="school_id"]');
-  if (schoolSelect) {
+  if (roleSelect && schoolSelect) {
     function filterRolesBySchool() {
       const schoolId = schoolSelect.value;
       Array.from(roleSelect.options).forEach(opt => {

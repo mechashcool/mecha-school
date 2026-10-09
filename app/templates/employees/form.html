@@ -266,12 +266,20 @@
             <div class="row g-3">
               <div class="col-md-6">
                 <label class="form-label">الدور الوظيفي</label>
+                {% if linked_user.role_id in roles|map(attribute='id')|list %}
                 <select name="role_id" class="form-select">
                   {% for role in roles %}
                   <option value="{{ role.id }}"
                     {{ 'selected' if linked_user.role_id == role.id }}>{{ role.name }}</option>
                   {% endfor %}
                 </select>
+                {% else %}
+                {# Driver / accountant / custom role: no matching option here, so
+                   no role_id is submitted at all — the server also ignores one. #}
+                <div class="form-control-plaintext fw-semibold">
+                  الدور: {{ linked_user.role.label if linked_user.role else '—' }}
+                </div>
+                {% endif %}
               </div>
               <div class="col-md-6 d-flex align-items-end">
                 <div class="form-check">
