@@ -342,16 +342,6 @@ def _student_options(school, year):
     return query.order_by(Student.full_name).all()
 
 
-def _section_options(school, year):
-    if not (school and year):
-        return []
-    return (Section.query
-            .execution_options(bypass_tenant_scope=True)
-            .filter_by(school_id=school.id, academic_year_id=year.id)
-            .order_by(Section.name)
-            .all())
-
-
 # ── Building access helpers (optional per-school buildings feature) ───────────
 
 # Roles that never receive building restrictions (they use other scoping models).
@@ -749,7 +739,6 @@ def create_user():
     all_schools = (School.query.filter_by(is_active=True).order_by(School.id).all()
                    if current_user.is_super_admin else [])
 
-    all_sections = _section_options(school, year)
 
     # Only super-admin can grant per-user extra permissions. School managers
     # create users with role permissions only.
@@ -878,24 +867,10 @@ def create_user():
                 flash(_derr, 'danger')
                 return redirect(url_for('admin.create_user'))
 
-            # Assign homeroom sections (validates they belong to the same school)
-            section_ids = _unique_ids(request.form.getlist('teacher_section_ids', type=int))
-            if section_ids and assigned_school_id:
-                section_filter = [
-                    Section.id.in_(section_ids),
-                    Section.school_id == assigned_school_id,
-                ]
-                if assigned_year:
-                    section_filter.append(Section.academic_year_id == assigned_year.id)
-                (Section.query
-                 .execution_options(bypass_tenant_scope=True)
-                 .filter(*section_filter)
-                 .update({'teacher_id': emp.id}, synchronize_session=False))
-
-            # Teaching assignments (teacher_subjects) are NOT created here.
-            # They are managed only from Employee Management, where each
-            # section gets its own exact subjects. The sections chosen above
-            # set homeroom (Section.teacher_id) only and grant no subject.
+            # School User Management assigns NO sections: neither teaching
+            # (teacher_subjects — Employee Management only) nor homeroom
+            # (Section.teacher_id — the Sections pages). Any posted
+            # teacher_section_ids / teacher_subject_ids are ignored.
 
         # ── Building access restrictions (optional feature) ─────────────────
         _berr = _save_user_building_access(user, assigned_school_id)
@@ -932,8 +907,7 @@ def create_user():
                            roles=roles, user=None,
                            all_permissions=all_permissions,
                            all_students=all_students, all_schools=all_schools,
-                           all_sections=all_sections,
-                           teacher_section_ids=set(), teacher_employee_id=None,
+                           teacher_employee_id=None,
                            is_school_manager=is_school_manager,
                            safe_permissions=[],
                            preselect_school_id=preselect_school_id,
@@ -1003,13 +977,8 @@ def edit_user(user_id):
     all_schools = (School.query.filter_by(is_active=True).order_by(School.id).all()
                    if current_user.is_super_admin else [])
 
-    # Sections for the teacher HOMEROOM panel (Section.teacher_id only).
-    all_sections = _section_options(school, year)
-
-    # Current homeroom section IDs for this teacher, and the linked Employee
-    # id so the form can link to Employee Management, the only place where
-    # teaching assignments (teacher_subjects) are managed.
-    teacher_section_ids = set()
+    # The linked Employee id, so the form can link to Employee Management —
+    # the only place where a teacher's teaching assignments are managed.
     teacher_employee_id = None
     if user.role and user.role.name == 'teacher':
         emp = (Employee.query
@@ -1017,11 +986,6 @@ def edit_user(user_id):
                .filter_by(user_id=user.id).first())
         if emp:
             teacher_employee_id = emp.id
-            teacher_section_ids = {
-                s.id for s in
-                Section.query.execution_options(bypass_tenant_scope=True)
-                             .filter_by(teacher_id=emp.id).all()
-            }
 
     if request.method == 'POST':
         # Snapshot before mutation so custom-role availability is enforced only
@@ -1172,30 +1136,11 @@ def edit_user(user_id):
                     flash(_derr, 'danger')
                     return redirect(url_for('admin.edit_user', user_id=user_id))
 
-            new_section_ids = _unique_ids(request.form.getlist('teacher_section_ids', type=int))
-            # Clear previous homeroom assignments for this teacher
-            (Section.query
-             .execution_options(bypass_tenant_scope=True)
-             .filter_by(teacher_id=emp.id)
-             .update({'teacher_id': None}, synchronize_session=False))
-            if new_section_ids and user.school_id:
-                section_filter = [
-                    Section.id.in_(new_section_ids),
-                    Section.school_id == user.school_id,
-                ]
-                if user_year:
-                    section_filter.append(Section.academic_year_id == user_year.id)
-                (Section.query
-                 .execution_options(bypass_tenant_scope=True)
-                 .filter(*section_filter)
-                 .update({'teacher_id': emp.id}, synchronize_session=False))
-
-            # Teaching assignments (teacher_subjects) are deliberately NOT
-            # touched here. This screen manages the account and homeroom only;
-            # it used to delete every teacher_subjects row and rebuild them as
-            # posted subjects × HOMEROOM sections, so a routine account edit
-            # (password, permissions) destroyed the teacher's real teaching
-            # assignments. Those are owned by the employee form.
+            # Sections are deliberately NOT touched here: neither homeroom
+            # (Section.teacher_id — managed from the Sections pages; an account
+            # edit must never clear or move it) nor teaching assignments
+            # (teacher_subjects — managed only from Employee Management).
+            # Any posted teacher_section_ids / teacher_subject_ids are ignored.
 
         # ── Building access restrictions (optional feature) ─────────────────
         _berr = _save_user_building_access(user, user.school_id)
@@ -1216,8 +1161,6 @@ def edit_user(user_id):
                            is_school_manager=is_school_manager,
                            all_students=all_students,
                            all_schools=all_schools,
-                           all_sections=all_sections,
-                           teacher_section_ids=teacher_section_ids,
                            teacher_employee_id=teacher_employee_id,
                            buildings_access_enabled=_buildings_access_enabled,
                            buildings_for_access=_active_buildings_for(user.school_id),

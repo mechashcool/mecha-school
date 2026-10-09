@@ -12,8 +12,9 @@ Employee Management (the only writer):
   5. foreign section / foreign subject / malformed token rejected before writes
 
 School User Management:
-  6. admin create sets homeroom only and writes no teacher_subjects
-  7. admin edit (password + homeroom) leaves the exact pairs untouched
+  6. admin create writes neither teacher_subjects nor homeroom
+  7. admin edit leaves exact pairs AND existing homeroom untouched; the form
+     has no section/subject inputs and links to Employee Management
 
 Fixture (a school, an institute and a foreign institute) inherited from the
 institute attendance tests, as test_employee_homeroom_retired does.
@@ -278,15 +279,16 @@ class TeacherAssignmentPairsTest(_Fixture):
 
     # ── 6-7. School User Management never writes teacher_subjects ──────────
 
-    def test_06_admin_create_sets_homeroom_only(self):
+    def test_06_admin_create_assigns_no_sections(self):
         ids = self.ids
         username = f'tapnew_{self.suffix}'
         resp, flashes, writes = self._run('admin', 'create_user', '/admin/users/create', data={
             'username': username, 'email': f'{username}@example.test',
             'full_name': f'New Teacher {self.suffix}', 'password': 'Password123',
             'role_id': str(self.teacher_role_id),
+            # Legacy fields: both must be ignored.
             'teacher_section_ids': [str(ids['A'])],
-            'teacher_subject_ids': [str(ids['math'])],     # legacy field: ignored
+            'teacher_subject_ids': [str(ids['math'])],
         })
         self.assertEqual(resp.status_code, 302, flashes)
         self.assertEqual(writes, [])
@@ -299,12 +301,24 @@ class TeacherAssignmentPairsTest(_Fixture):
                 teacher_subjects.c.employee_id == emp.id)).fetchall()
             self.assertEqual(rows, [], 'no teaching assignment from User Management')
             sec_a = db.session.get(Section, ids['A'], execution_options=OPTS)
-            self.assertEqual(sec_a.teacher_id, emp.id, 'homeroom still assigned')
+            self.assertIsNone(sec_a.teacher_id, 'no homeroom from User Management')
 
-    def test_07_admin_edit_preserves_pairs(self):
+    def test_07_admin_edit_preserves_pairs_and_homeroom(self):
         ids = self.ids
         stored = self._p(('A', 'math'), ('B', 'sci'))
         self._seed(stored)
+        with self.app.app_context():
+            sec_a = db.session.get(Section, ids['A'], execution_options=OPTS)
+            sec_a.teacher_id = ids['emp']                 # existing homeroom
+            db.session.commit()
+
+        html, _f, _w = self._run('admin', 'edit_user', f'/admin/users/{ids["tuser"]}/edit',
+                                 method='GET', user_id=ids['tuser'])
+        for gone in ('teacher_section_ids', 'teacher_subject_ids', 'يشرف عليها'):
+            self.assertNotIn(gone, html)
+        self.assertIn(f'/employees/{ids["emp"]}/edit', html)
+        self.assertIn('إدارة المواد والشعب التي يُدرّسها', html)
+
         with self.app.app_context():
             u = db.session.get(User, ids['tuser'], execution_options=OPTS)
             data = {'username': u.username, 'email': u.email or '',
@@ -320,8 +334,12 @@ class TeacherAssignmentPairsTest(_Fixture):
         self.assertEqual(writes, [])
         self.assertEqual(self._rows(), stored | self._prev_row())
         with self.app.app_context():
+            sec_a = db.session.get(Section, ids['A'], execution_options=OPTS)
             sec_c = db.session.get(Section, ids['C'], execution_options=OPTS)
-            self.assertEqual(sec_c.teacher_id, ids['emp'], 'homeroom still updates')
+            self.assertEqual(sec_a.teacher_id, ids['emp'], 'existing homeroom kept')
+            self.assertIsNone(sec_c.teacher_id, 'posted section ignored')
+            u = db.session.get(User, ids['tuser'], execution_options=OPTS)
+            self.assertTrue(u.check_password('NewPassword123'))
 
 
 for _inherited in list(vars(_Fixture)):

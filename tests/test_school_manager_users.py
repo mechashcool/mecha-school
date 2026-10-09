@@ -23,9 +23,9 @@ Tests for school-manager scoped user management.
    Student IDs from a different school are silently excluded when creating a
    parent user via school manager.
 
-7. test_teacher_gets_section_assignment
-   When school manager creates a teacher and provides teacher_section_ids,
-   the linked Employee record's homeroom sections are set correctly.
+7. test_create_teacher_ignores_section_ids
+   When school manager creates a teacher and posts teacher_section_ids, the
+   homeroom is NOT set (sections are managed outside User Management).
 """
 import unittest
 from datetime import date
@@ -726,8 +726,10 @@ class SchoolManagerUsersTest(unittest.TestCase):
 
     # ── Test 7 ──────────────────────────────────────────────────────────────
 
-    def test_teacher_gets_section_assignment(self):
-        """When teacher_section_ids is provided, the Employee's homeroom is set."""
+    def test_create_teacher_ignores_section_ids(self):
+        """School User Management assigns no sections: a posted
+        teacher_section_ids must NOT set the homeroom (Section.teacher_id),
+        which is managed from the Sections pages."""
         from app.blueprints.admin import create_user
 
         ids = self.created
@@ -751,6 +753,10 @@ class SchoolManagerUsersTest(unittest.TestCase):
             )
             login_user(manager)
             self._run_before_request()
+            before = db.session.get(
+                Section, ids['section_a_id'],
+                execution_options={'bypass_tenant_scope': True},
+            ).teacher_id
 
             response = create_user()
             self.assertEqual(response.status_code, 302)
@@ -765,12 +771,14 @@ class SchoolManagerUsersTest(unittest.TestCase):
                    .filter_by(user_id=created_user.id).first())
             self.assertIsNotNone(emp, 'Employee record must exist')
 
+            db.session.expire_all()
             section = db.session.get(
                 Section, ids['section_a_id'],
                 execution_options={'bypass_tenant_scope': True},
             )
-            self.assertEqual(section.teacher_id, emp.id,
-                             'Section teacher_id should point to the new Employee')
+            self.assertEqual(section.teacher_id, before,
+                             'User Management must not change the homeroom')
+            self.assertNotEqual(section.teacher_id, emp.id)
             logout_user()
 
     def test_manager_create_teacher_writes_no_subject_links(self):
