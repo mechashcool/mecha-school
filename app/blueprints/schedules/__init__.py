@@ -125,6 +125,16 @@ def index():
     display_days = DAYS[:5]  # Sun-Thu
     display_day_indices = list(range(5))  # 0-4 for Sun-Thu
 
+    # Add-form values echoed back after a failed create (validated, never raw).
+    form_day = request.args.get('day_of_week', type=int)
+    form_start = _parse_hhmm(request.args.get('start_time'))
+    form_end = _parse_hhmm(request.args.get('end_time'))
+    form_defaults = {
+        'day_of_week': form_day if form_day in display_day_indices else 0,
+        'start_time': form_start.strftime('%H:%M') if form_start else '08:00',
+        'end_time': form_end.strftime('%H:%M') if form_end else '09:00',
+    }
+
     return render_template('schedules/index.html',
                            sections=sections, grades=grades,
                            sec_id=sec_id, grade_id=grade_id,
@@ -136,14 +146,30 @@ def index():
                            stages=STAGES,
                            schedule_grid=schedule_grid,
                            subjects=subjects, teachers=teachers,
-                           days=display_days, day_indices=display_day_indices)
+                           days=display_days, day_indices=display_day_indices,
+                           form_defaults=form_defaults)
 
 
-def _redirect_to_target(sec_id, grade_id):
+def _parse_hhmm(value):
+    """'HH:MM' (or 'HH:MM:SS') → datetime.time; None when malformed."""
+    from datetime import datetime
+    value = (value or '').strip()
+    for fmt in ('%H:%M', '%H:%M:%S'):
+        try:
+            return datetime.strptime(value, fmt).time()
+        except ValueError:
+            continue
+    return None
+
+
+def _redirect_to_target(sec_id, grade_id, **form_values):
+    """Back to the managed timetable. `form_values` (day_of_week / start_time /
+    end_time) are carried as query args so the add form keeps the user's input
+    after a validation or conflict failure."""
     if sec_id:
-        return redirect(url_for('schedules.index', section_id=sec_id))
+        return redirect(url_for('schedules.index', section_id=sec_id, **form_values))
     if grade_id:
-        return redirect(url_for('schedules.index', grade_id=grade_id))
+        return redirect(url_for('schedules.index', grade_id=grade_id, **form_values))
     return redirect(url_for('schedules.index'))
 
 
@@ -152,7 +178,6 @@ def _redirect_to_target(sec_id, grade_id):
 @historical_guard
 @permission_required('manage_schedules')
 def create():
-    from datetime import time as t
     sec_id     = request.form.get('section_id', type=int)
     grade_id   = request.form.get('grade_id', type=int)
     subject_id = request.form.get('subject_id', type=int)
@@ -171,10 +196,22 @@ def create():
         flash('يرجى ملء كافة الحقول المطلوبة.', 'danger')
         return _redirect_to_target(sec_id, grade_id)
 
-    sh, sm = map(int, start_str.split(':'))
-    eh, em = map(int, end_str.split(':'))
-    start_time = t(sh, sm)
-    end_time = t(eh, em)
+    start_time = _parse_hhmm(start_str)
+    end_time = _parse_hhmm(end_str)
+    if start_time is None or end_time is None:
+        flash('صيغة وقت الحصة غير صحيحة. يرجى إدخال الوقت بصيغة HH:MM.', 'danger')
+        return _redirect_to_target(sec_id, grade_id, day_of_week=day)
+
+    # Only validated values are echoed back into the form.
+    form_values = {'day_of_week': day,
+                   'start_time': start_time.strftime('%H:%M'),
+                   'end_time': end_time.strftime('%H:%M')}
+
+    # An inverted / zero-length range is never stored: it would corrupt the
+    # overlap check for every later lesson of that day.
+    if end_time <= start_time:
+        flash('وقت نهاية الحصة يجب أن يكون بعد وقت البداية.', 'danger')
+        return _redirect_to_target(sec_id, grade_id, **form_values)
 
     # Resolve the parent (section or grade) for school/year scoping.
     if sec_id:
@@ -218,22 +255,40 @@ def create():
     subject = Subject.query.filter_by(id=subject_id).first()
     if subject is None:
         flash('المادة المختارة غير صالحة.', 'danger')
-        return _redirect_to_target(sec_id, grade_id)
+        return _redirect_to_target(sec_id, grade_id, **form_values)
     if subject.grade_id and target_grade_id and subject.grade_id != target_grade_id:
         flash('المادة المختارة لا تنتمي إلى هذا الصف. يرجى اختيار مادة من مواد الصف.',
               'danger')
-        return _redirect_to_target(sec_id, grade_id)
+        return _redirect_to_target(sec_id, grade_id, **form_values)
 
-    # Check for an overlapping time slot in the same section/grade and day.
-    existing = overlap_filter.filter(
-        ((Schedule.start_time <= start_time) & (Schedule.end_time > start_time)) |
-        ((Schedule.start_time < end_time) & (Schedule.end_time >= end_time)) |
-        ((Schedule.start_time >= start_time) & (Schedule.end_time <= end_time))
-    ).first()
+    # The teacher must belong to the schedule's own school (explicit scope, so a
+    # forged employee id from another school is rejected before any write).
+    if teacher_id is not None:
+        teacher = (Employee.query
+                   .execution_options(bypass_tenant_scope=True)
+                   .filter_by(id=teacher_id, school_id=parent.school_id)
+                   .first())
+        if teacher is None:
+            flash('المعلم المختار غير صالح.', 'danger')
+            return _redirect_to_target(sec_id, grade_id, **form_values)
+
+    # Standard interval overlap in the same section/grade and day. Back-to-back
+    # lessons (end == next start) do not overlap. Legacy inverted rows
+    # (end <= start) are ignored so they cannot reserve the whole day.
+    existing = (overlap_filter
+                .filter(Schedule.start_time < end_time,
+                        Schedule.end_time > start_time,
+                        Schedule.end_time > Schedule.start_time)
+                .order_by(Schedule.start_time)
+                .first())
 
     if existing:
-        flash(f'عذراً، هذا الوقت محجوز مسبقاً في جدول {target_label}.', 'danger')
-        return _redirect_to_target(sec_id, grade_id)
+        blocking_subject = existing.subject.name if existing.subject else 'أخرى'
+        flash(f'هذا الوقت يتعارض مع حصة {blocking_subject} من '
+              f'{existing.start_time.strftime("%H:%M")} إلى '
+              f'{existing.end_time.strftime("%H:%M")} في جدول {target_label}.',
+              'danger')
+        return _redirect_to_target(sec_id, grade_id, **form_values)
 
     entry = Schedule(
         school_id        = parent.school_id,
@@ -254,6 +309,7 @@ def create():
     except Exception:
         db.session.rollback()
         flash('حدث خطأ غير متوقع، يرجى المحاولة مرة أخرى.', 'danger')
+        return _redirect_to_target(sec_id, grade_id, **form_values)
     return _redirect_to_target(sec_id, grade_id)
 
 

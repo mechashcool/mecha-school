@@ -126,7 +126,7 @@
         <label class="form-label">اليوم <span class="text-danger">*</span></label>
         <select name="day_of_week" class="form-select" required>
           {% for i, d in enumerate(days) %}
-          <option value="{{ i }}">{{ d }}</option>
+          <option value="{{ i }}" {{ 'selected' if i == form_defaults.day_of_week }}>{{ d }}</option>
           {% endfor %}
         </select>
       </div>
@@ -160,11 +160,13 @@
       </div>
       <div class="col-md-2">
         <label class="form-label">من <span class="text-danger">*</span></label>
-        <input type="time" name="start_time" class="form-control" required value="08:00">
+        <input type="time" name="start_time" class="form-control" required
+               value="{{ form_defaults.start_time }}">
       </div>
       <div class="col-md-2">
         <label class="form-label">إلى <span class="text-danger">*</span></label>
-        <input type="time" name="end_time" class="form-control" required value="09:00">
+        <input type="time" name="end_time" class="form-control" required
+               value="{{ form_defaults.end_time }}">
       </div>
       <div class="col-md-1">
         <label class="form-label">الغرفة</label>
