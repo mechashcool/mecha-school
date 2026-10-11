@@ -208,10 +208,17 @@
                 </span>
               </td>
               <td>
-                {% if h.is_active %}
-                <span class="badge bg-success">مفعّلة</span>
-                {% else %}
+                {# Display only: the manual switch wins, otherwise the state of
+                   the date range against school-local today.  is_active is never
+                   changed by the end date; attendance logic is unaffected. #}
+                {% if not h.is_active %}
                 <span class="badge bg-secondary">معطّلة</span>
+                {% elif h.start_date > local_today %}
+                <span class="badge bg-info text-dark">قادمة</span>
+                {% elif h.end_date >= local_today %}
+                <span class="badge bg-success">جارية</span>
+                {% else %}
+                <span class="badge bg-light text-dark border">منتهية</span>
                 {% endif %}
               </td>
               {# A started holiday (start_date <= school-local today) cannot be
