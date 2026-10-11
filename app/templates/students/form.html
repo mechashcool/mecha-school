@@ -718,39 +718,10 @@
 
 {% endblock %}
 {% block extra_js %}
+{# Shared Stage → Grade → Section cascade (rebuilds options; iOS-safe). #}
+{% include 'shared/_class_cascade_js.html' %}
 <script>
-(function () {
-  const stageEl   = document.getElementById('fStage');
-  const gradeEl   = document.getElementById('fGrade');
-  const sectionEl = document.getElementById('fSection');
-  if (!stageEl || !gradeEl || !sectionEl) return;
-
-  const gradeOpts   = Array.from(gradeEl.options).slice(1);
-  const sectionOpts = Array.from(sectionEl.options).slice(1);
-
-  function filterGrades() {
-    const stage = stageEl.value.trim();
-    for (const opt of gradeOpts) {
-      opt.hidden = stage ? opt.dataset.stage.trim() !== stage : false;
-    }
-    const sel = gradeEl.selectedOptions[0];
-    if (sel && sel.hidden) gradeEl.value = '';
-    filterSections();
-  }
-
-  function filterSections() {
-    const gradeId = gradeEl.value;
-    for (const opt of sectionOpts) {
-      opt.hidden = gradeId ? opt.dataset.gradeId !== gradeId : false;
-    }
-    const sel = sectionEl.selectedOptions[0];
-    if (sel && sel.hidden) sectionEl.value = '';
-  }
-
-  stageEl.addEventListener('change', filterGrades);
-  gradeEl.addEventListener('change', filterSections);
-  filterGrades();
-})();
+initClassCascade('fStage', 'fGrade', 'fSection');
 
   const addDocumentRowBtn = document.getElementById('add-document-row');
   const documentRows = document.getElementById('document-rows');

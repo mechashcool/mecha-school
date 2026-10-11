@@ -1,7 +1,13 @@
 {# Shared Stage → Grade → Section cascade — SINGLE source used by the internal
-   Add Student wizard and the admissions approval card. Pure client-side filtering
-   via data-stage / data-grade-id (no API, no server round-trip). Only the section
-   <select> carries name="section_id"; stage/grade are filter-only.
+   Add Student wizard, the Edit Student form and the admissions approval card.
+   Pure client-side filtering via data-stage / data-grade-id (no API, no server
+   round-trip). Only the section <select> carries name="section_id"; stage/grade
+   are filter-only.
+
+   The grade and section <select>s are REBUILT on every change from a master
+   copy of the server-rendered options — options are never just hidden. iOS
+   Safari's native picker ignores `hidden` / display:none on <option>, so a
+   hidden-only filter listed (and let users pick) sections of every grade.
 
    initClassCascade(stageId, gradeId, sectionId, opts):
      * filters grades by the chosen stage and sections by the chosen grade;
@@ -19,52 +25,86 @@ function initClassCascade(stageId, gradeId, sectionId, opts) {
   var sectionEl = document.getElementById(sectionId);
   if (!stageEl || !gradeEl || !sectionEl) return;
 
-  var gradeOpts = Array.prototype.slice.call(gradeEl.options, 1);
-  var sectionOpts = Array.prototype.slice.call(sectionEl.options, 1);
+  // Master copy of every rendered option after the placeholder (index 0).
+  function snapshot(selectEl) {
+    var items = [];
+    for (var i = 1; i < selectEl.options.length; i++) {
+      var o = selectEl.options[i];
+      items.push({
+        value: o.value,
+        text: o.textContent.trim(),
+        stage: o.getAttribute('data-stage'),
+        gradeId: o.getAttribute('data-grade-id')
+      });
+    }
+    return items;
+  }
+  var gradeItems = snapshot(gradeEl);
+  var sectionItems = snapshot(sectionEl);
+
+  function findItem(items, value) {
+    if (!value) return null;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].value === value) return items[i];
+    }
+    return null;
+  }
+
+  // Replace everything after the placeholder with the items that pass `keep`.
+  // `current` stays selected only if it is still one of the rebuilt options.
+  function rebuild(selectEl, items, keep, current) {
+    while (selectEl.options.length > 1) selectEl.remove(1);
+    var found = false;
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      if (!keep(it)) continue;
+      var o = document.createElement('option');
+      o.value = it.value;
+      o.textContent = it.text;
+      if (it.stage !== null) o.setAttribute('data-stage', it.stage);
+      if (it.gradeId !== null) o.setAttribute('data-grade-id', it.gradeId);
+      selectEl.appendChild(o);
+      if (it.value === current) found = true;
+    }
+    selectEl.value = found ? current : '';
+  }
 
   function filterSections() {
     var g = gradeEl.value;
-    for (var i = 0; i < sectionOpts.length; i++) {
-      sectionOpts[i].hidden = g ? (sectionOpts[i].dataset.gradeId !== g) : false;
-    }
-    var sel = sectionEl.selectedOptions[0];
-    if (sel && sel.hidden) sectionEl.value = '';
+    rebuild(sectionEl, sectionItems, function (it) {
+      return g ? it.gradeId === g : true;
+    }, sectionEl.value);
     if (opts.disableSectionUntilGrade) sectionEl.disabled = !g;
   }
   function filterGrades() {
     var st = (stageEl.value || '').trim();
-    for (var i = 0; i < gradeOpts.length; i++) {
-      var os = (gradeOpts[i].dataset.stage || '').trim();
-      gradeOpts[i].hidden = st ? (os !== st) : false;
-    }
-    var sel = gradeEl.selectedOptions[0];
-    if (sel && sel.hidden) gradeEl.value = '';
+    rebuild(gradeEl, gradeItems, function (it) {
+      return st ? (it.stage || '').trim() === st : true;
+    }, gradeEl.value);
     filterSections();
   }
 
   stageEl.addEventListener('change', filterGrades);
   gradeEl.addEventListener('change', filterSections);
 
-  // Restore from a preserved SECTION selection (wizard re-render after an error),
+  // Restore from a preserved SECTION selection (wizard / edit re-render),
   // otherwise derive the stage from a preselected GRADE (admissions preselect).
-  var selSection = sectionEl.selectedOptions[0];
-  if (selSection && selSection.value) {
-    var gid = selSection.dataset.gradeId, gOpt = null;
-    for (var i = 0; i < gradeOpts.length; i++) {
-      if (gradeOpts[i].value === gid) { gOpt = gradeOpts[i]; break; }
-    }
-    if (gOpt) {
-      gradeEl.value = gid;
-      if (gOpt.dataset.stage) stageEl.value = gOpt.dataset.stage.trim();
+  var initSection = findItem(sectionItems, sectionEl.value);
+  if (initSection) {
+    var gItem = findItem(gradeItems, initSection.gradeId);
+    if (gItem) {
+      gradeEl.value = gItem.value;
+      if (gItem.stage) stageEl.value = gItem.stage.trim();
     }
   } else {
-    var selGrade = gradeEl.selectedOptions[0];
-    if (selGrade && selGrade.value && selGrade.dataset.stage) {
-      stageEl.value = selGrade.dataset.stage.trim();
-    }
+    var selGrade = findItem(gradeItems, gradeEl.value);
+    if (selGrade && selGrade.stage) stageEl.value = selGrade.stage.trim();
   }
   filterGrades();
-  // Re-apply the preserved section (filterGrades may have cleared it).
-  if (selSection && selSection.value) sectionEl.value = selSection.value;
+  // Re-apply the preserved section; it only sticks if it survived the rebuild.
+  if (initSection) {
+    sectionEl.value = initSection.value;
+    if (sectionEl.value !== initSection.value) sectionEl.value = '';
+  }
 }
 </script>
