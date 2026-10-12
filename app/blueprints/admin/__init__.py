@@ -2938,21 +2938,32 @@ def attendance_settings():
         _emp_late = _proposed_times['emp_att_late_threshold']
         _emp_absence = _proposed_times['emp_att_absence_threshold']
         _emp_departure = _proposed_times['emp_att_departure_time']
+        # The employee times are posted with EVERY save of this form (also a
+        # General-tab save), so the message names the employee tab and the
+        # conflicting values, and the redirect reopens that tab.
+        _emp_prefix = 'أوقات «حضور وغياب الموظفين»: '
+        def _hm(t):
+            return t.strftime('%H:%M')
+
         _time_error = None
         if _emp_start is not None and _emp_late is not None and _emp_late <= _emp_start:
-            _time_error = 'وقت التأخير يجب أن يكون بعد وقت بداية الحضور.'
+            _time_error = (f'{_emp_prefix}وقت التأخير {_hm(_emp_late)} يجب أن يكون '
+                           f'بعد وقت بداية الحضور {_hm(_emp_start)}.')
         elif _emp_late is not None and _emp_absence is not None and _emp_absence <= _emp_late:
-            _time_error = 'وقت الغياب يجب أن يكون بعد وقت التأخير.'
+            _time_error = (f'{_emp_prefix}وقت الغياب {_hm(_emp_absence)} يجب أن يكون '
+                           f'بعد وقت التأخير {_hm(_emp_late)}.')
         elif _emp_late is None and _emp_start is not None and _emp_absence is not None \
                 and _emp_absence <= _emp_start:
-            _time_error = 'وقت الغياب يجب أن يكون بعد وقت بداية الحضور.'
+            _time_error = (f'{_emp_prefix}وقت الغياب {_hm(_emp_absence)} يجب أن يكون '
+                           f'بعد وقت بداية الحضور {_hm(_emp_start)}.')
         elif _emp_start is not None and _emp_departure is not None \
                 and _emp_departure < _emp_start:
-            _time_error = 'وقت الانصراف لا يمكن أن يكون قبل وقت بداية الحضور.'
+            _time_error = (f'{_emp_prefix}وقت الانصراف {_hm(_emp_departure)} لا يمكن أن '
+                           f'يكون قبل وقت بداية الحضور {_hm(_emp_start)}.')
         if _time_error:
             db.session.rollback()
             flash(_time_error, 'danger')
-            return redirect(url_for('admin.attendance_settings'))
+            return redirect(url_for('admin.attendance_settings', tab='employees'))
 
         _requested_emp_shifts = bool(request.form.get('emp_enable_attendance_shifts'))
         if (is_school_obj and _requested_emp_shifts

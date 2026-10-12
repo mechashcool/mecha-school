@@ -1335,6 +1335,10 @@ document.addEventListener('DOMContentLoaded', function() {
   /* A refused employee-shift activation lists its blockers in the employees
      tab — open that tab so the list is visible immediately. */
   if (document.getElementById('empShiftBlockers')) showAttTab('employees');
+  /* A refused save of invalid employee times redirects with ?tab=employees. */
+  if (new URLSearchParams(window.location.search).get('tab') === 'employees') {
+    showAttTab('employees');
+  }
 });
 
 /* Edit shift modal — identical to original */
