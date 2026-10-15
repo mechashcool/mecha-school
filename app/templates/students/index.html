@@ -177,6 +177,15 @@
   </div>
 </div>
 
+{# Display-only notice for the archived list. Shown server-side when the page
+   loads with status=archived and toggled by doSearch() when the live search
+   switches to/from the archived status. It triggers nothing. #}
+<div id="archivedNotice" class="alert alert-warning py-2 mb-3{{ '' if status == 'archived' else ' d-none' }}"
+     role="alert" style="font-size:13px">
+  <i class="bi bi-exclamation-triangle-fill me-1"></i>
+  قد يتم حذف الطلاب المؤرشفين نهائيًا بعد مرور 7 أيام من تاريخ الأرشفة.
+</div>
+
 <div class="card">
   <div class="table-wrapper">
     <table class="table table-hover">
@@ -516,6 +525,11 @@ function onStageChange(el) {
     if (activeXhr) { activeXhr.abort(); activeXhr = null; }
     const params = getFilterParams();
     params.set('page', page || 1);
+
+    const archivedNotice = document.getElementById('archivedNotice');
+    if (archivedNotice) {
+      archivedNotice.classList.toggle('d-none', params.get('status') !== 'archived');
+    }
 
     const url = `${SEARCH_URL}?${params.toString()}`;
     activeXhr = new XMLHttpRequest();
