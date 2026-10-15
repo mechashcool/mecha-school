@@ -17,6 +17,7 @@ from app.utils.decorators import (permission_required, any_permission_required,
                                    historical_guard, admin_required)
 from app.utils.helpers import generate_receipt_no
 from app.utils.audit import log_action
+from app.utils.student_removal import student_not_deleted_clause
 from app.utils.buildings import (
     apply_building_scope_to_students, apply_building_scope_to_fees,
     user_can_access_student, user_is_building_restricted,
@@ -1660,7 +1661,9 @@ def search_students_statement():
     Searches all students of the school regardless of academic year or active
     status, because the statement report spans multiple years and may include
     historical or transferred students. School and building isolation are still
-    applied server-side.
+    applied server-side. A student removed by the Super Admin permanent-delete
+    flow is never offered here; their fee rows stay untouched in every
+    financial report and refund history.
     """
     school = get_current_school()
     if not school:
@@ -1675,6 +1678,7 @@ def search_students_statement():
         .execution_options(include_all_years=True)
         .options(joinedload(Student.section).joinedload(Section.grade))
         .filter(Student.school_id == school.id)
+        .filter(student_not_deleted_clause())
         .filter(
             Student.full_name.ilike(f'%{term}%') |
             Student.student_id.ilike(f'%{term}%')

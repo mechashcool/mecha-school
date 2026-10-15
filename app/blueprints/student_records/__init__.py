@@ -13,6 +13,7 @@ from app.models import (db, Student, StudentRegistrationRecord, Section, Grade,
 from app.utils.decorators import (permission_required, any_permission_required,
                                    get_current_school, admin_required)
 from app.utils.school_stages import ALL_STAGES
+from app.utils.student_removal import student_not_deleted_clause
 
 student_records_bp = Blueprint(
     'student_records', __name__,
@@ -270,6 +271,7 @@ def search_students():
         Student.query
         .options(joinedload(Student.section).joinedload(Section.grade))
         .filter(Student.school_id == school.id)
+        .filter(student_not_deleted_clause())
     )
     query = query.filter(
         db.or_(
@@ -307,6 +309,7 @@ def get_student_data(student_id):
         .options(joinedload(Student.section).joinedload(Section.grade),
                  joinedload(Student.academic_year))
         .filter_by(id=student_id, school_id=school.id)
+        .filter(student_not_deleted_clause())
         .first_or_404()
     )
     return jsonify(_build_autofill(student, school))

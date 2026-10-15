@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from app.models import (db, TransportRoute, StudentTransport, Student,
                         Section, Grade, Employee, User, Role, DRIVER_ROLE)
 from app.utils import code_generator
+from app.utils.student_removal import student_not_deleted_clause
 from app.utils.decorators import (permission_required, get_current_school,
                                    historical_guard)
 from app.utils.audit import log_action
@@ -317,7 +318,10 @@ def add_student(route_id):
         flash('يرجى اختيار طالب.', 'danger')
         return redirect(url_for('transport.detail', route_id=route_id))
 
-    student = Student.query.get_or_404(student_id)
+    # A student removed by the Super Admin permanent-delete flow is a 404.
+    student = (Student.query
+               .filter(Student.id == student_id, student_not_deleted_clause())
+               .first_or_404())
     if school and student.school_id != school.id:
         abort(403)
 

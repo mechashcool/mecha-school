@@ -45,6 +45,7 @@ from app.models import (db, AttendanceDevice, DeviceEventLog,
                         Student, Employee)
 from app.services.hikvision import sync_device, test_connection
 from app.utils.audit import log_action
+from app.utils.student_removal import student_not_deleted_clause
 from app.utils.device_numbering import (DeviceNumberAllocationError,
                                         DeviceNumberChangeError,
                                         DeviceNumberConflictError,
@@ -720,7 +721,12 @@ def add_mapping(device_id):
     if scope in ('students', 'mixed'):
         student_id = request.form.get('student_id', type=int)
         if student_id:
-            student = Student.query.filter_by(id=student_id, school_id=school.id).first()
+            # A student removed by the Super Admin permanent-delete flow is
+            # never re-mapped to a device.
+            student = (Student.query
+                       .filter_by(id=student_id, school_id=school.id)
+                       .filter(student_not_deleted_clause())
+                       .first())
             if not student:
                 flash('الطالب غير موجود أو لا ينتمي لهذه المدرسة.', 'danger')
                 return redirect(url_for('attendance_devices.mappings', device_id=device_id))

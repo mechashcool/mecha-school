@@ -25,6 +25,7 @@ from app.utils.decorators import (admin_required, staff_required,
                                    get_current_school,
                                    get_active_year, get_view_year, super_admin_required)
 from app.utils import code_generator
+from app.utils.student_removal import student_not_deleted_clause
 from app.utils.attendance_helpers import get_local_date
 from app.utils.board_images import BoardImageError, optimize_board_image
 from app.utils.device_numbering import (DeviceNumberAllocationError,
@@ -646,8 +647,8 @@ def _build_dashboard_context():
         notif_q = notif_q.filter_by(school_id=school_id)
     recent_notifications = notif_q.order_by(Notification.created_at.desc()).limit(5).all()
 
-    # Recent students
-    recent_q = Student.query
+    # Recent students (never one removed by the Super Admin permanent-delete flow)
+    recent_q = Student.query.filter(student_not_deleted_clause())
     if school_id:
         recent_q = recent_q.filter_by(school_id=school_id)
     if year_id:
@@ -837,9 +838,12 @@ def create_user():
             student_ids = _unique_ids(request.form.getlist('student_ids', type=int))
             if student_ids:
                 # Validate students belong to the same school
+                # A student removed by the Super Admin permanent-delete flow
+                # can never be linked to a parent again.
                 q = (Student.query
                      .execution_options(bypass_tenant_scope=True)
-                     .filter(Student.id.in_(student_ids)))
+                     .filter(Student.id.in_(student_ids),
+                             student_not_deleted_clause()))
                 if assigned_school_id:
                     q = q.filter(Student.school_id == assigned_school_id)
                 if assigned_year:
@@ -1100,9 +1104,11 @@ def edit_user(user_id):
         if new_role and new_role.name == 'parent':
             student_ids = _unique_ids(request.form.getlist('student_ids', type=int))
             if student_ids:
+                # Removed (Super Admin permanent-delete) students are never linkable.
                 q = (Student.query
                      .execution_options(bypass_tenant_scope=True)
-                     .filter(Student.id.in_(student_ids)))
+                     .filter(Student.id.in_(student_ids),
+                             student_not_deleted_clause()))
                 if user.school_id:
                     q = q.filter(Student.school_id == user.school_id)
                 if user_year:

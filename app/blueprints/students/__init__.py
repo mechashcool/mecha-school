@@ -9,6 +9,7 @@ from flask import (Blueprint, render_template, redirect, url_for,
                    flash, request, abort, jsonify, session, current_app,
                    send_from_directory)
 from flask_login import login_required, current_user
+from sqlalchemy import false
 from sqlalchemy.orm import joinedload
 from app.models import (db, Student, Section, Grade, AcademicYear, StudentDocument,
                         parent_students, User, Role, AttendanceDevice, DeviceStudentMapping,
@@ -47,11 +48,32 @@ from app.utils.device_numbering import (DeviceNumberAllocationError,
                                         DeviceNumberConflictError,
                                         STUDENT_DEVICE_SCOPES,
                                         ensure_student_device_mappings)
+from app.utils.student_removal import (EDITABLE_STUDENT_STATUSES,
+                                       OUTCOME_BLOCKED_OUTSTANDING,
+                                       OUTCOME_PHYSICAL_DELETE,
+                                       STUDENT_STATUS_DELETED,
+                                       remove_student_permanently,
+                                       student_not_deleted_clause)
 
 students_bp = Blueprint('students', __name__,
                          template_folder='../../templates/students')
 # Display-only student photo URL for templates (display copy, else original).
 students_bp.add_app_template_global(student_photo_url, 'student_photo_url')
+
+
+def _get_operational_student_or_404(student_id, *options):
+    """Load a student by id for a school-facing page or action.
+
+    A student removed by the Super Admin permanent-delete flow (kept only as a
+    financial-history reference) is a 404 here, so it can never be opened,
+    edited, archived, restored or unlinked through its URL. School scoping is
+    still applied by the ORM criteria and by each caller's own checks.
+    """
+    query = Student.query.execution_options(include_all_years=True)
+    if options:
+        query = query.options(*options)
+    return (query.filter(Student.id == student_id, student_not_deleted_clause())
+            .first_or_404())
 
 # Maximum number of documents a student may have uploaded through the Add
 # Student form. Mirrored by the client-side row limit in create_wizard.html.
@@ -305,8 +327,7 @@ def _authorize_student_document_action(student_id):
     historical-year read-only mode and CSRF come from the route decorators and
     CSRFProtect.
     """
-    student = (Student.query.execution_options(include_all_years=True)
-               .get_or_404(student_id))
+    student = _get_operational_student_or_404(student_id)
     school = get_current_school()
     if school and student.school_id and student.school_id != school.id:
         abort(403)
@@ -592,6 +613,21 @@ def validate_rfid_for_student(raw, school_id, exclude_student_id=None):
     return tag
 
 
+def _apply_student_status_filter(query, status):
+    """Status filter shared by the students list, its live search and export.
+
+    * no status        → every status except archived (and never removed ones)
+    * a known status   → exactly that status (``archived`` = the archive list)
+    * anything else    → no rows. This includes ``deleted``: a student removed
+      by the Super Admin flow can never be listed through a crafted parameter.
+    """
+    if not status:
+        return query.filter(Student.status.notin_(('archived', STUDENT_STATUS_DELETED)))
+    if status in EDITABLE_STUDENT_STATUSES:
+        return query.filter(Student.status == status)
+    return query.filter(false())
+
+
 @students_bp.route('/')
 @login_required
 @permission_required('view_students')
@@ -639,13 +675,7 @@ def index():
     if rfid:
         query = query.filter(Student.rfid_tag_id == rfid)
 
-    if status == 'archived':
-        query = query.filter_by(status='archived')
-    elif status:
-        query = query.filter_by(status=status)
-    else:
-        # Archived students are hidden from the default list; use status=archived to view them
-        query = query.filter(Student.status != 'archived')
+    query = _apply_student_status_filter(query, status)
 
     # Optional building filter (only meaningful when buildings are enabled).
     if buildings_on and building_id:
@@ -794,12 +824,7 @@ def search():
     if rfid:
         query = query.filter(Student.rfid_tag_id == rfid)
 
-    if status == 'archived':
-        query = query.filter_by(status='archived')
-    elif status:
-        query = query.filter_by(status=status)
-    else:
-        query = query.filter(Student.status != 'archived')
+    query = _apply_student_status_filter(query, status)
 
     if buildings_on and building_id:
         if allowed_building_ids is None or building_id in allowed_building_ids:
@@ -1601,11 +1626,8 @@ def create_success(student_id):
     """
     from datetime import date
     school = get_current_school()
-    student = (Student.query
-               .options(joinedload(Student.section).joinedload(Section.grade))
-               .execution_options(include_all_years=True)
-               .filter_by(id=student_id)
-               .first_or_404())
+    student = _get_operational_student_or_404(
+        student_id, joinedload(Student.section).joinedload(Section.grade))
     if school and student.school_id != school.id:
         abort(403)
     # Building scope — a restricted user cannot view students outside their buildings.
@@ -1687,7 +1709,7 @@ def create_success(student_id):
 @historical_guard
 @permission_required('edit_student')
 def edit(student_id):
-    student = Student.query.execution_options(include_all_years=True).get_or_404(student_id)
+    student = _get_operational_student_or_404(student_id)
     school  = get_current_school()
     year    = get_active_year(school.id) if school else None
 
@@ -2045,7 +2067,11 @@ def edit(student_id):
             if form_cfg.field_visible('guardian_relation'):
                 student.guardian_relation = request.form.get('guardian_relation', '').strip()
 
-        student.status = request.form.get('status', student.status)
+        # Allow-list: an unknown value (including the Super Admin-only
+        # 'deleted') leaves the current status unchanged.
+        _posted_status = request.form.get('status', student.status)
+        if _posted_status in EDITABLE_STUDENT_STATUSES:
+            student.status = _posted_status
 
         # ── Building assignment (only when feature enabled) ──────────────────
         if buildings_on:
@@ -2590,11 +2616,8 @@ def delete_document(student_id, doc_id):
 @login_required
 @permission_required('view_students')
 def view(student_id):
-    student = (Student.query
-               .options(joinedload(Student.section).joinedload(Section.grade))
-               .execution_options(include_all_years=True)
-               .filter(Student.id == student_id)
-               .first_or_404())
+    student = _get_operational_student_or_404(
+        student_id, joinedload(Student.section).joinedload(Section.grade))
     school  = get_current_school()
 
     if school and student.school_id and student.school_id != school.id:
@@ -2670,8 +2693,10 @@ def view(student_id):
 @feature_required('students.delete')
 def archive(student_id):
     """Set a student's status to archived (or any non-active status).
-    This is the safe, data-preserving alternative to hard delete for school managers."""
-    student = Student.query.execution_options(include_all_years=True).get_or_404(student_id)
+    This is the safe, data-preserving alternative to hard delete for school managers.
+    A student removed by the Super Admin permanent-delete flow is a 404 here,
+    so it can never be restored through this route."""
+    student = _get_operational_student_or_404(student_id)
     school  = get_current_school()
 
     if school and student.school_id and student.school_id != school.id:
@@ -2684,8 +2709,7 @@ def archive(student_id):
         return redirect(url_for('students.index'))
 
     new_status = request.form.get('status', 'archived')
-    _valid_statuses = {'archived', 'withdrawn', 'transferred', 'graduated', 'active'}
-    if new_status not in _valid_statuses:
+    if new_status not in EDITABLE_STUDENT_STATUSES:
         new_status = 'archived'
 
     _labels = {'archived': 'مؤرشف', 'withdrawn': 'مسحوب',
@@ -2703,88 +2727,47 @@ def archive(student_id):
 @permission_required('delete_student')
 @feature_required('students.delete')
 def delete(student_id):
-    """Permanent hard delete — super_admin only.
-    School managers must use the archive route instead."""
+    """Super Admin permanent delete (two-case policy, see app/utils/student_removal.py).
+
+    * No protected financial history → the student and every student-owned
+      child row are physically deleted.
+    * Paid / receipted installments or refund / cancellation events exist →
+      the row is kept for the school's financial history and removed from every
+      operational list; refused while an active fee still has a balance due.
+
+    Requires a selected school, and the student must belong to it. School
+    managers must use the archive route instead.
+    """
     if not current_user.is_super_admin:
         flash('الحذف النهائي مقتصر على مسؤول النظام الأعلى فقط. '
               'استخدم خيار الأرشفة لإخفاء الطالب من القوائم النشطة.', 'danger')
         return redirect(url_for('students.view', student_id=student_id))
 
-    student = Student.query.execution_options(include_all_years=True).get_or_404(student_id)
-    school  = get_current_school()
+    school = get_current_school()
+    if school is None:
+        flash('يرجى اختيار المدرسة أولاً قبل تنفيذ الحذف النهائي للطالب.', 'danger')
+        return redirect(url_for('students.index'))
 
-    if school and student.school_id and student.school_id != school.id:
-        abort(403)
+    # Scoped from the start to the selected school: a student of another school
+    # (or one already removed) is simply not found — nothing is disclosed.
+    student = (Student.query.execution_options(include_all_years=True)
+               .filter(Student.id == student_id,
+                       Student.school_id == school.id,
+                       student_not_deleted_clause())
+               .first_or_404())
 
-    name = student.full_name
-    sid  = student.id
+    sid, code, school_id = student.id, student.student_id, student.school_id
 
-    from sqlalchemy import text
     from sqlalchemy.exc import SQLAlchemyError
 
-    # One transaction: every child row and the student itself, or nothing.
+    # One transaction: the whole outcome is applied, or nothing.
     try:
-        # ── Financial-audit guard ──────────────────────────────────────────────
-        # fee_refund_events is an auditable refund / fee-cancellation ledger, and its
-        # rows are referenced by revenues this delete deliberately PRESERVES
-        # (Revenue.refund_event_id). Purging it would destroy that audit linkage, so
-        # such a student is blocked here with a clear message instead of failing with
-        # a server error later. Archiving stays available.
-        # Raw SQL on purpose (same reason as the deletes below): the model is
-        # year-scoped, so an ORM count would silently miss other years' events.
-        refund_events = db.session.execute(
-            text("SELECT COUNT(*) FROM fee_refund_events WHERE student_id = :sid"),
-            {'sid': sid},
-        ).scalar() or 0
-        if refund_events:
-            flash('لا يمكن الحذف النهائي لهذا الطالب لارتباطه بسجلات استرجاع أو '
-                  'إلغاء رسوم ضمن السجل المالي للمدرسة، وهي سجلات لا يجوز حذفها. '
-                  'استخدم خيار الأرشفة لإخفاء الطالب من القوائم النشطة.', 'danger')
+        outcome = remove_student_permanently(student)
+        if outcome == OUTCOME_BLOCKED_OUTSTANDING:
+            db.session.rollback()   # nothing was written; releases the row locks
+            flash('لا يمكن حذف الطالب حالياً لوجود مبالغ مستحقة عليه. يرجى تسوية أو '
+                  'إلغاء الرسوم أولاً من السجل المالي، ثم إعادة المحاولة.', 'danger')
             return redirect(url_for('students.view', student_id=sid))
-
-        # Remove M2M parent links (no DB-side CASCADE)
-        db.session.execute(
-            parent_students.delete().where(parent_students.c.student_id == sid)
-        )
-
-        # Explicitly delete all child records via raw SQL to bypass:
-        # a) lazy='dynamic' cascade unreliability
-        # b) ORM year-scope filtering that leaves cross-year rows orphaned
-        #
-        # fee_reminder_logs points at BOTH students and fee_installments, so it
-        # must be cleared before the installments below (same ordering rule as
-        # SCHOOL_DELETE_ORDER in app/utils/school_cleanup.py).
-        db.session.execute(
-            text("DELETE FROM fee_reminder_logs WHERE student_id = :sid"), {'sid': sid})
-        db.session.execute(
-            text("DELETE FROM fee_installments"
-                 " WHERE fee_record_id IN (SELECT id FROM fee_records WHERE student_id = :sid)"),
-            {'sid': sid},
-        )
-        # student_registration_records / student_transport / device_student_mappings
-        # are student-owned rows that already die with the student elsewhere
-        # (school_cleanup deletes the first two as student child tables; the last
-        # two also carry a DB-side ON DELETE CASCADE). They are removed explicitly
-        # here because each one additionally has a Student backref whose default
-        # "de-associate" behaviour would otherwise try to NULL a NOT NULL
-        # student_id during the flush, before the database cascade can run.
-        for tbl in ('complaints', 'leave_requests', 'student_attendance', 'fee_records',
-                    'exam_results', 'student_documents', 'student_suspensions',
-                    'student_registration_records', 'student_transport',
-                    'device_student_mappings'):
-            db.session.execute(text(f"DELETE FROM {tbl} WHERE student_id = :sid"), {'sid': sid})
-
-        # Admission requests are the SCHOOL's own audit trail, not the student's
-        # record: the row (status, decision, documents) is kept and only the
-        # optional pointer is cleared. approved_student_id is nullable and the
-        # admissions screen already renders an approved request without it.
-        db.session.execute(
-            text("UPDATE student_registration_requests SET approved_student_id = NULL"
-                 " WHERE approved_student_id = :sid"),
-            {'sid': sid},
-        )
-
-        db.session.delete(student)
         db.session.commit()
     except SQLAlchemyError:
         # Nothing is half-deleted: the whole transaction is rolled back and the
@@ -2796,7 +2779,18 @@ def delete(student_id):
               'لم يتم حذف أي شيء. يمكنك استخدام خيار الأرشفة بدلاً من الحذف.', 'danger')
         return redirect(url_for('students.view', student_id=sid))
 
-    flash(f'تم حذف الطالب {name} وجميع سجلاته بشكل نهائي.', 'success')
+    if outcome == OUTCOME_PHYSICAL_DELETE:
+        log_action('delete', 'student', sid,
+                   f'outcome={outcome} student_pk={sid} student_code={code} '
+                   f'school_id={school_id} — حذف نهائي للطالب بواسطة مسؤول النظام الأعلى')
+        flash('تم حذف الطالب نهائياً بنجاح.', 'success')
+    else:
+        log_action('delete', 'student', sid,
+                   f'outcome={outcome} student_pk={sid} student_code={code} '
+                   f'school_id={school_id} — إزالة الطالب من النظام التشغيلي بواسطة '
+                   f'مسؤول النظام الأعلى مع الاحتفاظ بسجلاته المالية')
+        flash('تم حذف الطالب من النظام التشغيلي مع الاحتفاظ بسجلاته المالية السابقة.',
+              'success')
     return redirect(url_for('students.index'))
 
 
@@ -2806,7 +2800,7 @@ def delete(student_id):
 @permission_required('edit_student')
 def unlink_parent(student_id):
     """Remove a parent ↔ student link from the parent_students junction."""
-    student = Student.query.execution_options(include_all_years=True).get_or_404(student_id)
+    student = _get_operational_student_or_404(student_id)
     school  = get_current_school()
     if school and student.school_id and student.school_id != school.id:
         abort(403)
@@ -2839,7 +2833,13 @@ def export_excel():
     year   = get_view_year(school.id) if school else None
     status = request.args.get('status', 'active')
 
-    query = Student.query.filter_by(status=status)
+    # Exactly one known status. Anything else — including 'deleted' — exports
+    # nothing, so a removed student can never be exported through a crafted
+    # status parameter.
+    if status in EDITABLE_STUDENT_STATUSES:
+        query = Student.query.filter(Student.status == status)
+    else:
+        query = Student.query.filter(false())
     if request.args.get('all_years', '0') == '1':
         query = query.execution_options(include_all_years=True)
     if school:

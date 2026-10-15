@@ -6,6 +6,7 @@ from app.models import db, StudentAttendance, Student, Section, SchoolSettings, 
 from app.utils.decorators import (permission_required, get_teacher_section_ids,
                                    admin_required, get_current_school, get_active_year, get_view_year,
                                    historical_guard)
+from app.utils.student_removal import student_not_deleted_clause
 from app.utils.attendance_helpers import (determine_check_in_status,
                                            get_local_now, get_local_date,
                                            is_holiday_date, get_off_dates,
@@ -1090,7 +1091,11 @@ def mark_absent_today():
 @permission_required('take_attendance')
 def student_profile(student_id):
     """Full attendance history + summary for one student."""
-    student  = Student.query.get_or_404(student_id)
+    # A student removed by the Super Admin permanent-delete flow (kept only as a
+    # financial-history reference) is a 404 here; their attendance rows stay.
+    student  = (Student.query
+                .filter(Student.id == student_id, student_not_deleted_clause())
+                .first_or_404())
     settings = SchoolSettings.get()
 
     if _is_teacher() and student.section_id not in get_teacher_section_ids(current_user):

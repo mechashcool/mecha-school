@@ -12,6 +12,7 @@ from sqlalchemy.orm import joinedload
 from app.models import Section, Student, StudentMiddleRecord, db
 from app.utils.decorators import get_current_school, permission_required, any_permission_required
 from app.utils.school_stages import ALL_STAGES
+from app.utils.student_removal import student_not_deleted_clause
 
 SUBJECTS = [
     ('islamic_education', 'التربية الإسلامية'),
@@ -230,6 +231,7 @@ def new():
         student = (Student.query
                .options(joinedload(Student.section).joinedload(Section.grade))
                .filter_by(id=student_id, school_id=school.id)
+               .filter(student_not_deleted_clause())
                .first())
         if not student:
             flash('الطالب غير موجود أو لا ينتمي لهذه المدرسة.', 'danger')
@@ -268,6 +270,7 @@ def new():
             Student.query
             .options(joinedload(Student.section).joinedload(Section.grade))
             .filter(Student.school_id == school.id)
+            .filter(student_not_deleted_clause())
             .filter(
                 db.or_(
                     Student.full_name.ilike(f'%{q}%'),
@@ -285,6 +288,7 @@ def new():
         student = (Student.query
                    .options(joinedload(Student.section).joinedload(Section.grade))
                    .filter_by(id=sid, school_id=school.id)
+                   .filter(student_not_deleted_clause())
                    .first())
         if student:
             prefill = _build_autofill(student, school, academic_year)
