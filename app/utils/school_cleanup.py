@@ -15,6 +15,7 @@ from app.models import (
     InstituteAttendanceRecord, InstituteAttendanceSession,
     InstituteGroupEnrollment, InstituteGroupSchedule,
     InstituteInstructorAttendance, InstituteStudyGroup,
+    InstituteStudyRequest, InstituteStudyRequestImage,
     InventoryCategory, InventoryCount, InventoryItem, InventoryItemStock,
     InventoryMovement, InventoryWarehouse,
     LeaveRequest, Notification, NotificationRead, PayrollItem, PayrollSettings,
@@ -104,6 +105,8 @@ LINKED_SCHOOL_MODELS = (
     (InstituteAttendanceSession, 'جلسات حضور المجموعات'),
     (InstituteAttendanceRecord, 'سجلات حضور المجموعات'),
     (InstituteInstructorAttendance, 'حضور المدرسين في الحصص'),
+    (InstituteStudyRequest, 'طلبات أرسل درسي'),
+    (InstituteStudyRequestImage, 'صور طلبات أرسل درسي'),
 )
 
 
@@ -176,6 +179,13 @@ SCHOOL_DELETE_ORDER = (
     (ExpenseCategory, 'تصنيفات المصروفات'),
     (Complaint, 'الشكاوى'),
     (LeaveRequest, 'طلبات الغياب'),
+    # Institute study requests: images RESTRICT-reference (request id,
+    # school_id), requests RESTRICT-reference students(id, school_id) and hold
+    # no-ondelete FKs to users / academic_years / schools — images first, both
+    # before Student, User and AcademicYear. Rows only; stored objects are not
+    # touched (same as every other upload-bearing table here).
+    (InstituteStudyRequestImage, 'صور طلبات أرسل درسي'),
+    (InstituteStudyRequest, 'طلبات أرسل درسي'),
     # ── Inventory (must precede User and AcademicYear) ─────────────────────────
     # InventoryCount.counted_by and InventoryMovement.created_by → users.id with
     # NO ondelete, so the whole inventory block has to be removed BEFORE User.

@@ -1,0 +1,91 @@
+{% extends "shared/base.html" %}
+{% block title %}طلبات «أرسل درسي»{% endblock %}
+{% block page_title %}طلبات «أرسل درسي»{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">طلب «أرسل درسي» #{{ req.id }}</h1>
+    <p class="page-subtitle">{{ student_name }}</p>
+  </div>
+  <a href="{{ url_for('admin.institute_study_requests_list') }}" class="btn btn-outline-secondary">
+    <i class="bi bi-arrow-right me-1"></i>رجوع
+  </a>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <div class="text-muted">الطالب</div>
+            <div class="fw-600">{{ student_name }}</div>
+            <div class="text-muted small">{{ student_code }}</div>
+          </div>
+          <div class="col-md-6">
+            <div class="text-muted">المجموعات</div>
+            <div class="fw-600">{{ groups|join('، ') or '-' }}</div>
+          </div>
+          <div class="col-md-6">
+            <div class="text-muted">ولي الأمر</div>
+            <div class="fw-600">{{ parent_name or '-' }}</div>
+          </div>
+          <div class="col-md-6">
+            <div class="text-muted">تاريخ الإرسال</div>
+            <div class="fw-600">{{ req.created_at|to_baghdad }}</div>
+          </div>
+          <div class="col-12">
+            <div class="text-muted">ملاحظة ولي الأمر</div>
+            <div style="white-space:pre-wrap">{{ req.note or '-' }}</div>
+          </div>
+        </div>
+        <hr>
+        <div class="text-muted mb-2">الصور ({{ images|length }})</div>
+        <div class="row g-2">
+          {% for img in images %}
+          {% set src = upload_url(img.file_path) %}
+          <div class="col-6 col-md-4">
+            <a href="{{ src }}" target="_blank" rel="noopener">
+              <img src="{{ src }}" alt="صورة {{ loop.index }}" loading="lazy"
+                   class="img-fluid rounded border" style="width:100%;object-fit:contain;max-height:260px">
+            </a>
+          </div>
+          {% else %}
+          <div class="col-12 text-muted">لا توجد صور.</div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="mb-3">الحالة:
+          {% if req.status == 'pending' %}
+            <span class="badge-status badge-pending">{{ status_labels.get(req.status) }}</span>
+          {% else %}
+            <span class="badge-status badge-active">{{ status_labels.get(req.status, req.status) }}</span>
+          {% endif %}
+        </h5>
+        {% if req.viewed_at %}
+        <div class="text-muted small mb-3">
+          تم الاطلاع {{ req.viewed_at|to_baghdad }}{% if viewer_name %} — {{ viewer_name }}{% endif %}
+        </div>
+        {% endif %}
+        <form method="POST">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() if csrf_token is defined else '' }}">
+          <div class="mb-3">
+            <label class="form-label">ملاحظة الإدارة <span class="text-muted small">(اختيارية — تظهر لولي الأمر)</span></label>
+            <textarea name="admin_note" class="form-control" rows="5" maxlength="{{ max_note }}"
+                      placeholder="مثال: سيتم شرح هذا الموضوع في المحاضرة القادمة">{{ req.admin_note or '' }}</textarea>
+          </div>
+          <button class="btn btn-primary">
+            <i class="bi bi-check2-circle me-1"></i>{{ 'تم الاطلاع' if req.status == 'pending' else 'حفظ الملاحظة' }}
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

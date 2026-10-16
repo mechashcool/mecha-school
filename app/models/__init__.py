@@ -1885,6 +1885,142 @@ class LeaveRequest(db.Model):
         return f'<LeaveRequest {self.id} student={self.student_id}>'
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+#  INSTITUTE STUDY REQUESTS — "أرسل درسي"  (institute institutions only)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# A parent sends images of a lesson (plus an optional note) to the institute
+# ADMINISTRATION for one of their linked children. Not an approval workflow:
+# status is only pending (جديد) → viewed (تم الاطلاع).
+#
+# Storage: the images live in Supabase Storage (bucket `uploads`); PostgreSQL
+# holds only one metadata row per image. image_count is denormalised on the
+# request on purpose so a list never has to COUNT() the image table; it is
+# maintained by the (later) upload/delete code in the same transaction.
+#
+# Cross-school safety follows the institute pattern: the student link and the
+# image → request link are COMPOSITE foreign keys against UNIQUE (id, school_id)
+# keys, so PostgreSQL itself rejects a mixed-school row. The academic year and
+# the users are validated by the central write guard (app/utils/scoping.py).
+# Every relationship that touches a composite key is viewonly, so SQLAlchemy
+# never writes school_id through two paths. Nothing cascades: image rows are
+# removed explicitly before their request, so their file_path values are
+# always available to whoever deletes them.
+
+class InstituteStudyRequest(db.Model):
+    __tablename__ = 'institute_study_requests'
+    __school_scoped__ = True
+    __year_scoped__ = True
+
+    STATUS_PENDING = 'pending'
+    STATUS_VIEWED  = 'viewed'
+    STATUSES = (STATUS_PENDING, STATUS_VIEWED)
+
+    id               = db.Column(db.Integer, primary_key=True)
+    school_id        = db.Column(db.Integer, nullable=False)
+    academic_year_id = db.Column(db.Integer,
+                                 db.ForeignKey('academic_years.id',
+                                               name='fk_inst_study_request_academic_year'),
+                                 nullable=False, index=True)
+    student_id       = db.Column(db.Integer, nullable=False)
+    parent_id        = db.Column(db.Integer,
+                                 db.ForeignKey('users.id', name='fk_inst_study_request_parent'),
+                                 nullable=False)
+    note             = db.Column(db.Text, nullable=True)
+    status           = db.Column(db.String(20), nullable=False,
+                                 default=STATUS_PENDING, server_default=STATUS_PENDING)
+    admin_note       = db.Column(db.Text, nullable=True)
+    viewed_by        = db.Column(db.Integer,
+                                 db.ForeignKey('users.id', name='fk_inst_study_request_viewed_by'),
+                                 nullable=True)
+    viewed_at        = db.Column(db.DateTime, nullable=True)
+    image_count      = db.Column(db.SmallInteger, nullable=False,
+                                 default=0, server_default='0')
+    created_at       = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at       = db.Column(db.DateTime, nullable=False, default=datetime.utcnow,
+                                 onupdate=datetime.utcnow)
+
+    school        = db.relationship(
+        'School', viewonly=True,
+        primaryjoin='foreign(InstituteStudyRequest.school_id) == School.id')
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    student       = db.relationship(
+        'Student', viewonly=True,
+        primaryjoin='foreign(InstituteStudyRequest.student_id) == Student.id')
+    parent        = db.relationship('User', foreign_keys=[parent_id])
+    viewer        = db.relationship('User', foreign_keys=[viewed_by])
+    # Lazy 'select' (never joined): listing requests must not touch the image
+    # table; images load only when one request's detail is opened.
+    images        = db.relationship(
+        'InstituteStudyRequestImage', viewonly=True, lazy='select',
+        primaryjoin=('foreign(InstituteStudyRequestImage.request_id) '
+                     '== InstituteStudyRequest.id'),
+        order_by='InstituteStudyRequestImage.sort_order')
+
+    __table_args__ = (
+        db.ForeignKeyConstraint(['school_id'], ['schools.id'],
+                                name='fk_inst_study_request_school'),
+        # Same-school ownership of the student (students.uq_student_id_school).
+        # RESTRICT: a student with requests is never silently orphaned.
+        db.ForeignKeyConstraint(
+            ['student_id', 'school_id'], ['students.id', 'students.school_id'],
+            name='fk_inst_study_request_student_school', ondelete='RESTRICT'),
+        db.CheckConstraint("status IN ('pending', 'viewed')",
+                           name='ck_inst_study_request_status'),
+        db.CheckConstraint('image_count >= 0',
+                           name='ck_inst_study_request_image_count'),
+        # Parent side of the image composite FK.
+        db.UniqueConstraint('id', 'school_id', name='uq_inst_study_request_id_school'),
+        # Administration list: one school, by status, newest first.
+        db.Index('ix_inst_study_request_school_status_created',
+                 'school_id', 'status', 'created_at'),
+        # Parent history: one child, newest first.
+        db.Index('ix_inst_study_request_student_created', 'student_id', 'created_at'),
+    )
+
+    def __repr__(self):
+        return (f'<InstituteStudyRequest {self.id} student={self.student_id} '
+                f'status={self.status}>')
+
+
+class InstituteStudyRequestImage(db.Model):
+    """Metadata of ONE stored image of an InstituteStudyRequest — never the
+    bytes. School-scoped only: its academic year is the request's."""
+    __tablename__ = 'institute_study_request_images'
+    __school_scoped__ = True
+
+    id         = db.Column(db.Integer, primary_key=True)
+    request_id = db.Column(db.Integer, nullable=False)
+    school_id  = db.Column(db.Integer, nullable=False)
+    file_path  = db.Column(db.String(500), nullable=False)
+    mime       = db.Column(db.String(50), nullable=True)
+    size_bytes = db.Column(db.Integer, nullable=True)
+    sort_order = db.Column(db.SmallInteger, nullable=False, default=0, server_default='0')
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    request = db.relationship(
+        'InstituteStudyRequest', viewonly=True,
+        primaryjoin='foreign(InstituteStudyRequestImage.request_id) == InstituteStudyRequest.id')
+
+    __table_args__ = (
+        db.ForeignKeyConstraint(['school_id'], ['schools.id'],
+                                name='fk_inst_study_request_image_school'),
+        # An image can only join a request of the SAME school.
+        db.ForeignKeyConstraint(
+            ['request_id', 'school_id'],
+            ['institute_study_requests.id', 'institute_study_requests.school_id'],
+            name='fk_inst_study_request_image_request_school', ondelete='RESTRICT'),
+        # One row per stored object; also the index behind the file-access
+        # owner lookup (resolve_upload_owner filters on file_path).
+        db.UniqueConstraint('file_path', name='uq_inst_study_request_image_file_path'),
+        # Detail page: the request's images in display order.
+        db.Index('ix_inst_study_request_image_request_sort', 'request_id', 'sort_order'),
+    )
+
+    def __repr__(self):
+        return f'<InstituteStudyRequestImage {self.id} request={self.request_id}>'
+
+
 class Employee(db.Model):
     __tablename__ = 'employees'
     __school_scoped__ = True

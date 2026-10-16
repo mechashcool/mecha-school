@@ -26,7 +26,7 @@ def _models():
         FeeType, Grade, InstituteAttendanceRecord,
         InstituteAttendanceSession, InstituteGroupEnrollment,
         InstituteGroupSchedule, InstituteInstructorAttendance,
-        InstituteStudyGroup,
+        InstituteStudyGroup, InstituteStudyRequest, InstituteStudyRequestImage,
         InstituteSuspensionGroup, InstituteSuspensionScope,
         InventoryCategory, InventoryCount, InventoryItem,
         InventoryItemStock, InventoryMovement, InventoryWarehouse,
@@ -77,6 +77,10 @@ def _models():
         # Transport trip lifecycle rows — school-scoped only (a route is not
         # tied to an academic year).
         TransportTrip,
+        # Institute study requests ("أرسل درسي"): the request is school+year
+        # scoped like LeaveRequest; its image rows are school-scoped ONLY —
+        # their year is the request's.
+        InstituteStudyRequest, InstituteStudyRequestImage,
     )
     # Student, StudentDocument, StudentSuspension are school-scoped only —
     # they persist across academic years so that a year rollover does not
@@ -102,6 +106,7 @@ def _models():
         InventoryCount, InventoryItem, InventoryItemStock, InventoryMovement,
         PayrollItem, Revenue,
         SalaryRecord, Schedule, Section, StudentAttendance, Subject, LeaveRequest,
+        InstituteStudyRequest,
     )
     return school_scoped, year_scoped
 
@@ -512,11 +517,11 @@ def _validate_relationship_scope(session_, obj):
     from app.models import (
         AcademicYear, Complaint, Employee, EmployeeAttendance, EmployeeDocument,
         EmployeeEvaluation, Exam, ExamResult, Expense, FeeInstallment,
-        FeeRecord, Grade, InstituteStudyGroup, InventoryCategory,
-        InventoryCount, InventoryItem,
+        FeeRecord, Grade, InstituteStudyGroup, InstituteStudyRequest,
+        InventoryCategory, InventoryCount, InventoryItem,
         InventoryItemStock, InventoryMovement, InventoryWarehouse,
         LeaveRequest, PayrollItem, Revenue, RevenueCategory,
-        SalaryRecord, Schedule,
+        SalaryRecord, Schedule, School,
         Section, Student, StudentAttendance, StudentDocument, StudentSuspension,
         Subject, ExpenseCategory, Notification, User,
     )
@@ -667,6 +672,27 @@ def _validate_relationship_scope(session_, obj):
             parent = obj.parent or load(User, obj.parent_id)
             require(parent and parent.school_id == obj.school_id,
                     'Parent request must match parent school')
+    elif isinstance(obj, InstituteStudyRequest):
+        # academic_year_id ↔ school_id is already checked above for every
+        # year-scoped row. The student link is also a composite FK in the DB.
+        student = obj.student or load(Student, obj.student_id)
+        require(student and student.school_id == obj.school_id,
+                'Study request must match student school')
+        parent = obj.parent or load(User, obj.parent_id)
+        require(parent and parent.school_id == obj.school_id,
+                'Study request must match parent school')
+        if obj.viewed_by is not None:
+            # Same-school staff, or the platform super admin.
+            viewer = obj.viewer or load(User, obj.viewed_by)
+            require(viewer and (viewer.school_id == obj.school_id
+                                or viewer.is_super_admin),
+                    'Study request viewer must belong to the same school')
+        if obj in session_.new:
+            # Institutes only. Checked on INSERT so a later reclassification
+            # of the institution never blocks updating an existing row.
+            school = load(School, obj.school_id)
+            require(school is not None and school.is_institute,
+                    'Study requests are available to institutes only')
     elif isinstance(obj, InventoryItem):
         category = obj.category or load(InventoryCategory, obj.category_id)
         require(category and category.school_id == obj.school_id,
@@ -796,6 +822,18 @@ def _before_flush(session_, flush_context, instances):
                 if req is None or req.school_id != getattr(obj, 'school_id', None):
                     raise ValueError(
                         'Registration document must belong to the same school as its request')
+            # Study-request images are school-scoped only (not year-scoped), so
+            # the year-scoped validator does not see them. The composite FK
+            # enforces the same rule in PostgreSQL; this fails earlier, closed.
+            elif cls_name == 'InstituteStudyRequestImage':
+                from app.models import InstituteStudyRequest as _ISReq
+                req = session_.get(
+                    _ISReq, obj.request_id,
+                    execution_options={'bypass_tenant_scope': True},
+                )
+                if req is None or req.school_id != getattr(obj, 'school_id', None):
+                    raise ValueError(
+                        'Study request image must belong to the same school as its request')
             # Transport driver identity — fail closed on any cross-school link,
             # regardless of the code path that set it. A foreign key alone only
             # proves the row exists, not that it belongs to this school.

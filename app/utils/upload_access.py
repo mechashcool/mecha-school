@@ -47,6 +47,10 @@ from flask import current_app, url_for
 _PUBLIC_PATH_SEGMENTS = ('/identity/',)
 _PUBLIC_PATH_PREFIXES: tuple[str, ...] = ()
 
+# Institute study-request ("أرسل درسي") images — see _study_request_image_access.
+STUDY_REQUEST_IMAGE_KIND = 'institute_study_request_image'
+STUDY_REQUEST_ADMIN_PERMISSION = 'manage_leave_requests'
+
 
 def object_path_of(value: str | None) -> str | None:
     """Normalise any stored upload value to a static-relative ``uploads/...`` path.
@@ -129,6 +133,7 @@ def resolve_upload_owner(value: str | None) -> dict | None:
     the value (which callers treat as "deny").
     """
     import app.models as m
+    from sqlalchemy import and_
 
     op = object_path_of(value)
     candidates = [c for c in {value, op} if c]
@@ -234,10 +239,63 @@ def resolve_upload_owner(value: str | None) -> dict | None:
     if row:
         return owner(row, employee_id=getattr(row, 'id', None), kind='employee_photo')
 
+    # Institute study-request ("أرسل درسي") images. Last, so the common kinds
+    # above never pay for it; one indexed lookup (UNIQUE file_path) joined to
+    # the request on BOTH id and school_id, so the owner can only be a request
+    # of the image's own school.
+    try:
+        row = (m.db.session.query(m.InstituteStudyRequestImage.school_id,
+                                  m.InstituteStudyRequest.student_id,
+                                  m.InstituteStudyRequest.parent_id)
+               .join(m.InstituteStudyRequest, and_(
+                   m.InstituteStudyRequest.id
+                   == m.InstituteStudyRequestImage.request_id,
+                   m.InstituteStudyRequest.school_id
+                   == m.InstituteStudyRequestImage.school_id))
+               .filter(m.InstituteStudyRequestImage.file_path.in_(candidates))
+               .execution_options(bypass_tenant_scope=True, include_all_years=True)
+               .first())
+    except Exception:
+        row = None
+    if row:
+        return owner(row, student_id=row.student_id, parent_id=row.parent_id,
+                     kind=STUDY_REQUEST_IMAGE_KIND)
+
     return None
 
 
 # ── Authorisation ─────────────────────────────────────────────────────────────
+
+def _study_request_image_access(user, role: str, owner: dict) -> bool:
+    """Institute study-request images: the requesting family and the
+    institute administration ONLY — no same-school-staff fallback.
+
+    Called after the school-isolation check. Parent → only a child linked to
+    this account. Teacher / investor → never. Any other role → only with
+    manage_leave_requests (admin tiers pass via has_permission), then narrowed
+    by building scope exactly like every other student-tied file.
+    """
+    stu_id = owner.get('student_id')
+    if stu_id is None:
+        return False
+    if role == 'parent':
+        return stu_id in _student_ids_for_parent(user)
+    if role in ('teacher', 'investor_viewer'):
+        return False
+    if not user.has_permission(STUDY_REQUEST_ADMIN_PERMISSION):
+        return False
+    # Building narrowing — same rule as user_can_access_student(); the student
+    # row is loaded only when the account is actually building-restricted.
+    from app.models import db, School, Student
+    from app.utils.buildings import user_allowed_building_ids
+    opts = {'bypass_tenant_scope': True}
+    school = db.session.get(School, owner.get('school_id'), execution_options=opts)
+    allowed = user_allowed_building_ids(user, school)
+    if allowed is None:
+        return True
+    student = db.session.get(Student, stu_id, execution_options=opts)
+    return student is not None and student.building_id in allowed
+
 
 def _teacher_can_access(user, owner: dict) -> bool:
     """Teacher scope: own employee-tied files, homework in-school, or a student in
@@ -291,6 +349,11 @@ def can_access_upload(user, value: str | None) -> bool:
         return False
 
     role = user.role.name if getattr(user, 'role', None) else ''
+
+    # Institute study-request images have their own closed rule (no generic
+    # same-school-staff access, teachers always denied).
+    if owner.get('kind') == STUDY_REQUEST_IMAGE_KIND:
+        return _study_request_image_access(user, role, owner)
 
     # Read-only investor accounts never access documents.
     if role == 'investor_viewer':

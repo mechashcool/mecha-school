@@ -810,6 +810,20 @@
     </li>
     {% endif %}
 
+    {# ═══ "أرسل درسي" — institutes only, administration only (never a teacher).
+         No pending badge on purpose: it would cost a COUNT on every page. #}
+    {% if school and school.is_institute
+          and current_user.has_permission('manage_leave_requests')
+          and not (current_user.role and current_user.role.name == 'teacher') %}
+    <li class="nav-item">
+      <a href="{{ url_for('admin.institute_study_requests_list') }}"
+         class="{{ 'active' if request.endpoint in
+           ('admin.institute_study_requests_list', 'admin.institute_study_request_detail') }}">
+        <i class="bi bi-images"></i> أرسل درسي
+      </a>
+    </li>
+    {% endif %}
+
     {# ═══ Reports — single top-level link ═══════════════════════════════ #}
     {% if 'reports' in enabled_modules and current_user.has_permission('view_reports') %}
     <li class="nav-item">

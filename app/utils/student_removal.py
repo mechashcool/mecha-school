@@ -47,13 +47,15 @@ OUTCOME_BLOCKED_OUTSTANDING = 'blocked_outstanding_balance'
 # fee_reminder_logs points at both students and fee_installments, so it goes
 # before the installments; installments go before their fee_records.
 # The institute tables RESTRICT-reference students(id, school_id) and
-# student_middle_records has a no-ondelete FK — all three must be cleared
-# explicitly or the student delete fails.
+# student_middle_records has a no-ondelete FK — all of them must be cleared
+# explicitly or the student delete fails. A tombstone (CASE B) keeps the
+# student's institute study requests, like its other academic history.
 _PHYSICAL_DELETE_TABLES = (
     'complaints', 'leave_requests', 'student_attendance', 'fee_records',
     'exam_results', 'student_documents', 'student_suspensions',
     'student_registration_records', 'student_middle_records',
     'institute_attendance_records', 'institute_group_enrollments',
+    'institute_study_requests',
     'student_transport', 'device_student_mappings',
 )
 
@@ -139,6 +141,13 @@ def _physical_delete(student) -> None:
     db.session.execute(
         text("DELETE FROM fee_installments"
              " WHERE fee_record_id IN (SELECT id FROM fee_records WHERE student_id = :sid)"),
+        params)
+    # Study-request image rows carry no student_id and RESTRICT-reference their
+    # request, so they go first (rows only; stored objects are not touched).
+    db.session.execute(
+        text("DELETE FROM institute_study_request_images"
+             " WHERE request_id IN (SELECT id FROM institute_study_requests"
+             "                      WHERE student_id = :sid)"),
         params)
     # The ORM backrefs of student_registration_records / student_transport /
     # device_student_mappings would otherwise try to NULL a NOT NULL

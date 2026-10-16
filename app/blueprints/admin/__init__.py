@@ -3855,3 +3855,6 @@ def school_board_announcement_delete(ann_id):
         return redirect(url_for('admin.school_board_announcements'))
     flash('تم حذف الإعلان بنجاح.', 'success')
     return redirect(url_for('admin.school_board_announcements'))
+
+# "أرسل درسي" administration routes (registered on admin_bp).
+from . import institute_study_requests  # noqa: E402, F401

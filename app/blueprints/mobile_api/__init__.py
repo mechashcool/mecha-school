@@ -24,3 +24,4 @@ mobile_api_bp = Blueprint('mobile_api', __name__)
 
 # Import route modules after creating the blueprint to avoid circular imports.
 from . import auth, common, parent, teacher, teacher_leave, chat, school_board, badges, notifications, investor, driver  # noqa: E402, F401
+from . import parent_study_requests  # noqa: E402, F401
