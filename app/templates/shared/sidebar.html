@@ -289,10 +289,9 @@
       </a>
     </li>
     {% endif %}
-    {#- Institutes record teacher attendance per lesson; the daily employee
-        attendance item is school-only. -#}
-    {% if 'employees' in enabled_modules and school_cfg.action_enabled('employee_attendance', 'view_report')
-          and not (school and school.is_institute) %}
+    {#- The daily employee attendance report (employee_attendance) applies to
+        schools and institutes alike. -#}
+    {% if 'employees' in enabled_modules and school_cfg.action_enabled('employee_attendance', 'view_report') %}
     <li class="nav-section-label">الحضور</li>
     <li class="nav-item">
       <a href="{{ url_for('employees.attendance_report') }}"
@@ -647,15 +646,20 @@
         {% if 'employees' in enabled_modules and current_user.has_permission('manage_employees') %}
         {#- Institutes only: per-lesson teacher attendance lives at the same
             URL the school's daily sheet uses (employees.manual_attendance
-            branches on School.is_institute). Institutes get "حضور المدرسين" INSTEAD of the daily
-            "حضور الموظفين"; a school renders exactly the original items. -#}
+            branches on School.is_institute), and the daily employee sheet
+            lives at employees.daily_attendance. Institutes get BOTH
+            "حضور المدرسين" and "حضور الموظفين"; a school renders exactly the
+            original items. -#}
         {% set _inst_teacher_att = school and school.is_institute %}
         {% set _inst_teacher_endpoints = ('employees.manual_attendance',
                                           'employees.lesson_attendance_report') %}
+        {% set _inst_daily_endpoints = ('employees.daily_attendance',
+                                        'employees.attendance_report',
+                                        'employees.attendance_report_detail') %}
         <li class="nav-item">
           <a href="{{ url_for('employees.index') }}"
              class="{{ 'active' if request.blueprint == 'employees' and request.endpoint != 'employees.attendance_report' and request.endpoint != 'employees.attendance_report_detail'
-                                   and not (_inst_teacher_att and request.endpoint in _inst_teacher_endpoints) }}">
+                                   and not (_inst_teacher_att and request.endpoint in _inst_teacher_endpoints + _inst_daily_endpoints) }}">
             <i class="bi bi-person-badge"></i> الموظفون
           </a>
         </li>
@@ -671,6 +675,14 @@
         <li class="nav-item">
           <a href="{{ url_for('employees.attendance_report') }}"
              class="{{ 'active' if request.endpoint in ['employees.attendance_report', 'employees.attendance_report_detail'] }}">
+            <i class="bi bi-calendar-check"></i> حضور الموظفين
+          </a>
+        </li>
+        {% endif %}
+        {% if school_cfg.action_enabled('employee_attendance', 'view_report') and _inst_teacher_att %}
+        <li class="nav-item">
+          <a href="{{ url_for('employees.daily_attendance') }}"
+             class="{{ 'active' if request.endpoint in _inst_daily_endpoints }}">
             <i class="bi bi-calendar-check"></i> حضور الموظفين
           </a>
         </li>

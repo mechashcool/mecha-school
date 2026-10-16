@@ -2188,18 +2188,50 @@ def lesson_attendance_report():
     )
 
 
+def _daily_attendance_endpoint(school) -> str:
+    """Endpoint of the daily employee sheet for this institution.
+
+    A school keeps its original /attendance/manual. An institute's
+    /attendance/manual is the per-lesson teacher page, so its daily sheet
+    lives at /attendance/daily; every daily-flow redirect goes through here.
+    """
+    return ('employees.daily_attendance' if _is_institute(school)
+            else 'employees.manual_attendance')
+
+
+@employees_bp.route('/attendance/daily')
+@login_required
+@permission_required('manage_employees')
+def daily_attendance():
+    """Institutes only: the daily employee sheet (employee, date).
+
+    The same page, list and save as a school's /attendance/manual, writing
+    employee_attendance only — never institute_instructor_attendance. A school
+    is sent to its original daily sheet.
+    """
+    school = get_current_school()
+    if not _is_institute(school):
+        return redirect(url_for('employees.manual_attendance', **request.args))
+    return _daily_attendance_sheet(school)
+
+
 @employees_bp.route('/attendance/manual')
 @login_required
 @permission_required('manage_employees')
 def manual_attendance():
     """Manual employee attendance entry page."""
-    from app.utils.attendance_helpers import get_local_date
-
     school = get_current_school()
-    # Institutes record teacher attendance PER LESSON instead of the daily
-    # school-style sheet below; a school never enters this branch.
+    # Institutes record teacher attendance PER LESSON here; their daily
+    # employee sheet is /attendance/daily. A school never enters this branch.
     if _is_institute(school):
         return _institute_lesson_attendance_page(school)
+    return _daily_attendance_sheet(school)
+
+
+def _daily_attendance_sheet(school):
+    """Render the daily employee sheet shared by schools and institutes."""
+    from app.utils.attendance_helpers import get_local_date
+
     today  = get_local_date(school)   # School carries att_* and timezone settings
     employees   = _all_employees(school)
     departments = sorted({e.department for e in employees if e.department})
@@ -2222,9 +2254,6 @@ def manual_attendance_list():
     from app.utils.attendance_helpers import get_local_now
 
     school     = get_current_school()
-    # The daily sheet does not exist for an institute (see manual_attendance).
-    if _is_institute(school):
-        return jsonify({'error': 'not_found'}), 404
     settings   = school
     date_str   = request.args.get('date', '')
     department = request.args.get('department', '').strip()
@@ -2312,14 +2341,9 @@ def manual_attendance_save():
     from app.utils.employee_attendance_helper import is_final_employee_auto_absence
 
     school = get_current_school()
-    # An institute must never write a daily school-style employee_attendance
-    # row from this form; its lesson attendance has its own save route.
-    if _is_institute(school):
-        _log.warning('[emp-manual-att] refused daily save for institute '
-                     'school_id=%s user_id=%s', school.id,
-                     getattr(current_user, 'id', None))
-        flash('يُسجَّل حضور المدرسين في المعاهد لكل حصة من هذه الصفحة.', 'warning')
-        return redirect(url_for('employees.manual_attendance'))
+    # Schools and institutes share this daily save (employee_attendance only);
+    # an institute's per-lesson teacher statuses have their own save route.
+    daily_endpoint = _daily_attendance_endpoint(school)
     year   = get_active_year(school.id) if school else None
 
     if not school or not year:
@@ -2329,7 +2353,7 @@ def manual_attendance_save():
                      getattr(school, 'id', None), getattr(year, 'id', None),
                      getattr(current_user, 'id', None))
         flash('لا توجد سنة دراسية نشطة.', 'danger')
-        return redirect(url_for('employees.manual_attendance'))
+        return redirect(url_for(daily_endpoint))
 
     settings  = school
     date_str  = request.form.get('att_date', '').strip()
@@ -2358,7 +2382,7 @@ def manual_attendance_save():
                      '(school_id=%s date=%s user_id=%s raw_ids=%r) — nothing to save',
                      school.id, att_date, getattr(current_user, 'id', None), raw_ids)
         flash('لم يتم إرسال أي موظفين.', 'warning')
-        return redirect(url_for('employees.manual_attendance', date=att_date.isoformat()))
+        return redirect(url_for(daily_endpoint, date=att_date.isoformat()))
 
     # Security: validate every submitted ID belongs to this school
     employees = (Employee.query
@@ -2558,7 +2582,7 @@ def manual_attendance_save():
         _log.exception('[emp-manual-att] commit failed date=%s school_id=%s '
                        'created=%d updated=%d', att_date, school.id, created, updated)
         flash('حدث خطأ أثناء الحفظ. يرجى المحاولة مرة أخرى.', 'danger')
-        return redirect(url_for('employees.manual_attendance', date=att_date.isoformat()))
+        return redirect(url_for(daily_endpoint, date=att_date.isoformat()))
 
     # Send notifications after confirmed commit.  Each call is individually
     # guarded so a single failure does not prevent the rest from being sent.
@@ -2589,4 +2613,4 @@ def manual_attendance_save():
     redirect_kwargs = {'date': att_date.isoformat()}
     if att_dept:
         redirect_kwargs['department'] = att_dept
-    return redirect(url_for('employees.manual_attendance', **redirect_kwargs))
+    return redirect(url_for(daily_endpoint, **redirect_kwargs))

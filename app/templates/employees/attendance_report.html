@@ -14,7 +14,9 @@
        routes for accountants; this only removes dead links from the report UI. #}
     {% if not current_user.is_accountant %}
     {% if not is_historical_year %}
-    <a href="{{ url_for('employees.manual_attendance') }}" class="btn btn-primary btn-sm">
+    {#- An institute's /attendance/manual is per-lesson teacher attendance;
+        its daily employee sheet is employees.daily_attendance. -#}
+    <a href="{{ url_for('employees.daily_attendance' if school and school.is_institute else 'employees.manual_attendance') }}" class="btn btn-primary btn-sm">
       <i class="bi bi-pencil-square me-1"></i>تسجيل يدوي
     </a>
     {% endif %}
