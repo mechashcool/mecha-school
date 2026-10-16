@@ -811,7 +811,8 @@
     {% endif %}
 
     {# ═══ "أرسل درسي" — institutes only, administration only (never a teacher).
-         No pending badge on purpose: it would cost a COUNT on every page. #}
+         Static pending badge (bounded id query in inject_globals, no COUNT, no
+         data-badge so the live poller never touches it); 100+ shows "99+". #}
     {% if school and school.is_institute
           and current_user.has_permission('manage_leave_requests')
           and not (current_user.role and current_user.role.name == 'teacher') %}
@@ -820,6 +821,10 @@
          class="{{ 'active' if request.endpoint in
            ('admin.institute_study_requests_list', 'admin.institute_study_request_detail') }}">
         <i class="bi bi-images"></i> أرسل درسي
+        {% set _study_badge = sidebar_counts.pending_study_requests or 0 %}
+        {% if _study_badge %}
+        <span class="nav-badge">{{ '99+' if _study_badge >= 100 else _study_badge }}</span>
+        {% endif %}
       </a>
     </li>
     {% endif %}

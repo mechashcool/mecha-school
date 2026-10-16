@@ -17,6 +17,9 @@ login_manager = LoginManager()
 migrate = Migrate()
 csrf = CSRFProtect()
 
+# "أرسل درسي" sidebar badge: rows read at most; reaching it renders "99+".
+STUDY_REQUEST_BADGE_CAP = 100
+
 
 def create_app(config_name=None):
     """Application factory."""
@@ -388,6 +391,42 @@ def create_app(config_name=None):
                 db.session.rollback()
                 _pending_reg = 0
             sidebar_counts['pending_registration_requests'] = _pending_reg
+
+            # "أرسل درسي" pending badge — same visibility as the sidebar item
+            # (selected institute, manage_leave_requests, never a teacher; the
+            # item lives in the non-super-admin nav, so never a super admin).
+            # Static, server-rendered; no polling. ONE bounded query: at most
+            # STUDY_REQUEST_BADGE_CAP ids via the (school_id, status, created_at)
+            # index, never a COUNT. The students EXISTS (PK probe, no columns
+            # loaded) mirrors the inbox, which hides tombstoned students'
+            # requests. All years, like the inbox; images are never touched.
+            _pending_study = 0
+            try:
+                if (not current_user.is_super_admin
+                        and not (current_user.role and current_user.role.name == 'teacher')
+                        and current_user.has_permission('manage_leave_requests')):
+                    from app.utils.decorators import get_current_school
+                    _inst = get_current_school()
+                    if _inst is not None and getattr(_inst, 'is_institute', False):
+                        from sqlalchemy import and_, exists
+                        from app.models import InstituteStudyRequest, Student
+                        from app.utils.student_removal import student_not_deleted_clause
+                        _R = InstituteStudyRequest
+                        _pending_study = len(
+                            db.session.query(_R.id)
+                            .execution_options(include_all_years=True)
+                            .filter(_R.school_id == _inst.id,
+                                    _R.status == _R.STATUS_PENDING,
+                                    exists().where(and_(
+                                        Student.id == _R.student_id,
+                                        Student.school_id == _R.school_id,
+                                        student_not_deleted_clause())))
+                            .limit(STUDY_REQUEST_BADGE_CAP)
+                            .all())
+            except Exception:
+                db.session.rollback()
+                _pending_study = 0
+            sidebar_counts['pending_study_requests'] = _pending_study
 
         # True when a school user is viewing a historical (non-current) year.
         # Injected into all templates so they can hide write-action buttons.

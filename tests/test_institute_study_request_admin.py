@@ -244,7 +244,9 @@ class StudyRequestAdminTest(unittest.TestCase):
         self.assertEqual(len(self._ids_on_page(resp2)), 13)
         for sql in (few, many):
             self.assertFalse(any(IMG_TABLE in st for st in sql))
-            self.assertEqual(sum(f'FROM {REQ_TABLE}' in st for st in sql), 1)
+            # The list query + the bounded sidebar badge query (LIMIT, ids only).
+            self.assertEqual(sum(f'FROM {REQ_TABLE}' in st and 'LIMIT' in st for st in sql), 2)
+            self.assertEqual(sum(f'FROM {REQ_TABLE}' in st and 'JOIN' in st for st in sql), 1)
             self.assertFalse(any('count(' in st.lower() and REQ_TABLE in st for st in sql))
         self.assertEqual(len(few), len(many))              # not N+1
         self.assertNotIn('ن' * 81, resp.get_data(as_text=True))   # note preview only
