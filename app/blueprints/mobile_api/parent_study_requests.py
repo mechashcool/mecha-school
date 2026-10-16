@@ -1,8 +1,9 @@
 """
 Mobile API — "أرسل درسي" (institute study requests), parent side
 ==================================================================
-A parent sends 1–5 lesson images plus an optional note, for one of their
-ACTIVE children, to the institute ADMINISTRATION. Institutes only.
+A parent sends up to 5 lesson images and/or a note — at least one of the two
+(content_required otherwise) — for one of their ACTIVE children, to the
+institute ADMINISTRATION. Institutes only.
 
 POST   /parent/children/<id>/study-requests             create (multipart)
 GET    /parent/children/<id>/study-requests             history (paginated)
@@ -23,7 +24,8 @@ Database pressure:
     image rows, no COUNT, no URLs) with limit+1 pagination — no total COUNT;
   * image rows are read only by the detail route;
   * create = one bounded pending-limit read, one request INSERT, one image
-    INSERT batch, ONE commit;
+    INSERT batch (none, and no storage call, for a note-only request), ONE
+    commit;
   * image bytes never reach PostgreSQL — Supabase Storage (bucket `uploads`)
     holds them, the table holds metadata only.
 
@@ -217,8 +219,9 @@ def parent_create_study_request(student_id):
 
     files = [f for f in (request.files.getlist('images[]')
                          or request.files.getlist('images')) if f and f.filename]
-    if not files:
-        return err('images_required')
+    # A note alone is a valid request; only an empty submission is refused.
+    if not files and note is None:
+        return err('content_required')
     if len(files) > MAX_IMAGES:
         return err('too_many_images')
 

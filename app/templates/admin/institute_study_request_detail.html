@@ -40,6 +40,8 @@
             <div style="white-space:pre-wrap">{{ req.note or '-' }}</div>
           </div>
         </div>
+        {# Note-only requests have no images: no gallery at all. #}
+        {% if images %}
         <hr>
         <div class="text-muted mb-2">الصور ({{ images|length }})</div>
         <div class="row g-2">
@@ -51,10 +53,9 @@
                    class="img-fluid rounded border" style="width:100%;object-fit:contain;max-height:260px">
             </a>
           </div>
-          {% else %}
-          <div class="col-12 text-muted">لا توجد صور.</div>
           {% endfor %}
         </div>
+        {% endif %}
       </div>
     </div>
   </div>

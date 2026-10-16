@@ -292,6 +292,20 @@ class StudyRequestAdminTest(unittest.TestCase):
         self.assertEqual(html.count('/media-proxy/'), 6)              # link + img × 3
         self.assertNotIn('isr.invalid', html)
 
+    def test_16b_note_only_request_detail_and_list(self):
+        rid = self._insert(n=0, note='سؤال بدون صور')
+        client = self._login('admin_a')
+        self.assertIn(rid, self._ids_on_page(client.get(LIST)))
+        resp = client.get(f'{LIST}/{rid}')
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn('سؤال بدون صور', html)                # the note stays visible
+        self.assertNotIn('الصور (', html)                    # no empty gallery
+        self.assertNotIn('alt="صورة', html)                  # no gallery image tags
+        # Marking it viewed works the same as for a request with images.
+        self.assertEqual(client.post(f'{LIST}/{rid}', data={'admin_note': 'تم'}).status_code, 302)
+        self.assertEqual(self._row(rid).status, 'viewed')
+
     def test_17_teacher_cannot_reach_attachment(self):
         rid = self._insert(n=1)
         with self.app.app_context():

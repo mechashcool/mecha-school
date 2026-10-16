@@ -284,8 +284,62 @@ class StudyRequestMobileApiTest(unittest.TestCase):
         self.assertEqual(self._rows(student_id=self.ids['child_a']), [])
         self.assertEqual(self.storage.uploaded, [])
 
-    def test_06_zero_images_rejected(self):
-        self._assert_rejected(self._post(images=[]), 'images_required')
+    def test_06_no_images_and_no_note_rejected(self):
+        for label, note in (('missing', None), ('empty', ''), ('whitespace', '  \n\t ')):
+            with self.subTest(note=label):
+                resp = self._post(images=[], note=note)
+                self._assert_rejected(resp, 'content_required')
+                self.assertEqual(self.storage.calls, 0)
+
+    # ── note-only submissions ────────────────────────────────────────────────
+
+    def test_06b_note_only_created_without_images_or_storage(self):
+        from sqlalchemy.orm import Session
+        real_commit, commits = Session.commit, []
+
+        def _counting_commit(session, *a, **kw):
+            commits.append(1)
+            return real_commit(session, *a, **kw)
+        statements = self._capture_sql()
+        with mock.patch.object(Session, 'commit', _counting_commit):
+            resp = self._post(images=[], note='  شرح الدرس الثالث  ')
+        create_sql = list(statements)
+        self.assertEqual(resp.status_code, 201, resp.get_data(as_text=True)[:300])
+        self.assertEqual(len(commits), 1)                            # one commit
+        body = resp.get_json()['request']
+        self.assertEqual(body['image_count'], 0)
+        self.assertEqual(body['note'], 'شرح الدرس الثالث')
+        self.assertEqual(body['status'], 'pending')
+        self.assertTrue(body['can_delete'])
+        (row,) = self._rows(student_id=self.ids['child_a'])
+        self.assertEqual(row.image_count, 0)
+        self.assertEqual(self._img_count(request_id=row.id), 0)
+        self.assertEqual(self.storage.calls, 0)                      # no upload at all
+        self.assertFalse(any(IMG_TABLE in st for st in create_sql))  # no image SQL
+        # Detail: images is an empty list.
+        detail = self._call('get', 'p1_a', self._url(rid=row.id)).get_json()['request']
+        self.assertEqual(detail['images'], [])
+        self.assertEqual(detail['image_count'], 0)
+
+    def test_06c_image_only_and_image_plus_note_still_succeed(self):
+        resp = self._post()                                          # 1 image, no note
+        self.assertEqual(resp.status_code, 201, resp.get_data(as_text=True)[:300])
+        self.assertEqual(resp.get_json()['request']['image_count'], 1)
+        self.assertIsNone(resp.get_json()['request']['note'])
+        resp = self._post(images=[(f'{i}.png', _png()) for i in range(5)], note='مع ملاحظة')
+        self.assertEqual(resp.status_code, 201, resp.get_data(as_text=True)[:300])
+        self.assertEqual(resp.get_json()['request']['image_count'], 5)
+        self.assertEqual(resp.get_json()['request']['note'], 'مع ملاحظة')
+        self.assertEqual(self.storage.calls, 6)
+
+    def test_06d_note_only_pending_request_deleted_normally(self):
+        rid = self._post(images=[], note='سؤال فقط').get_json()['request']['id']
+        resp = self._call('delete', 'p1_a', self._url(rid=rid))
+        self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True)[:300])
+        self.assertEqual(resp.get_json()['message'], 'study_request_deleted')
+        self.assertEqual(self._rows(id=rid), [])
+        self.assertEqual(self.storage.deleted, [])                   # nothing to remove
+        self.assertEqual(self.storage.calls, 0)
 
     def test_07_six_images_rejected(self):
         self._assert_rejected(self._post(images=[(f'{i}.png', _png()) for i in range(6)]),
