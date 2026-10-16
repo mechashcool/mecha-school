@@ -1790,15 +1790,30 @@ def _notify_new_exam_bg(exam_id: int, school_id: int) -> None:
         )
 
 
+def institute_homework_fcm_data(homework_id: int, group_id: int) -> dict:
+    """The push payload of an INSTITUTE homework notification. Same keys as the
+    school homework payload minus section_id (an institute row has none), plus
+    the study group. String values, as FCM data requires; _notify_parents_batched
+    adds each parent's own student_id."""
+    return {
+        'type':               'homework',
+        'ntype':              'homework',
+        'route':              '/parent/homework',
+        'screen':             'homework',
+        'homework_id':        str(homework_id),
+        'institute_group_id': str(group_id),
+    }
+
+
 def _notify_homework_bg(homework_id: int, school_id: int,
                         created_by: int | None = None) -> None:
     """New-homework notification for the mobile teacher API. Never raises.
 
     Audience, text and payload match homework._notify_homework_parents(): the
     linked parents (in this school) of the active students of hw.section_id;
-    an institute row targets its group's active enrollments and stays in-app
-    only (FCM withheld, as on the web). `created_by` is the authoring user's id,
-    passed as a primitive — current_user does not exist in this thread.
+    an institute row targets its group's active enrollments with the institute
+    payload (no section_id). `created_by` is the authoring user's id, passed as
+    a primitive — current_user does not exist in this thread.
     """
     import logging as _mlog
     try:
@@ -1819,7 +1834,8 @@ def _notify_homework_bg(homework_id: int, school_id: int,
             title='واجب جديد',
             body=f'تم إضافة واجب جديد في مادة {hw.name or "غير محدد"}: {hw.title}',
             ntype='homework',
-            fcm_data=None if is_institute_hw else {
+            fcm_data=institute_homework_fcm_data(
+                homework_id, hw.institute_group_id) if is_institute_hw else {
                 'type':        'homework',
                 'ntype':       'homework',
                 'route':       '/parent/homework',
@@ -1827,7 +1843,9 @@ def _notify_homework_bg(homework_id: int, school_id: int,
                 'section_id':  str(hw.section_id),
                 'screen':      'homework',
             },
-            active_parents_only=False,
+            # School rows keep their historical audience; an institute row uses
+            # the institute rule (active parents only), as on the web.
+            active_parents_only=is_institute_hw,
             created_by=created_by,
             dedup_since=hw.created_at,
             log_tag=f'[mobile-hw] hw_id={homework_id}',
@@ -3881,12 +3899,13 @@ def _parse_date_field(raw, field):
 
 
 def _notify_institute_homework(hw, school_id):
-    """The web institute homework notification (in-app rows for the parents
-    of the group's actively enrolled students; FCM stays withheld there).
+    """The web institute homework notification — the SAME single flow the web
+    uses (in-app rows for the parents of the group's actively enrolled
+    students + one queued FCM batch, no Firebase call in this request).
     Runs after the homework commit; never fails the request."""
     try:
         from app.blueprints.homework import _notify_homework_parents
-        _notify_homework_parents(hw, school_id)
+        _notify_homework_parents(hw, school_id, created_by=g.mobile_user.id)
     except Exception:
         db.session.rollback()
         _inst_log.exception('[mobile-inst-hw] notify failed hw_id=%s', hw.id)

@@ -3245,6 +3245,9 @@ class NotificationOutbox(db.Model):
     # Automatic school absence (cutoff passed, no attendance row): GET
     # /attendance/, "mark absent today", the scheduler and shift-mode runs.
     EVENT_SCHOOL_ATTENDANCE_AUTO_ABSENCE = 'school_attendance_auto_absence'
+    # "أرسل درسي": the administration FIRST marks a parent's study request
+    # viewed (pending → viewed, one-way). Delivered to the submitting parent.
+    EVENT_INSTITUTE_STUDY_REQUEST_VIEWED = 'institute_study_request_viewed'
 
     id = db.Column(db.BigInteger, primary_key=True)
 

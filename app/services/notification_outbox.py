@@ -117,6 +117,15 @@ def auto_absence_enabled() -> bool:
     return _flag('AUTO_ABSENCE_OUTBOX_ENABLED')
 
 
+def study_request_enabled() -> bool:
+    """"أرسل درسي" viewed push jobs. Fifth independent flag, default FALSE.
+
+    Gates ONLY the push jobs; the parent's in-app Notification row for the
+    viewed transition is written whether or not this is on.
+    """
+    return _flag('STUDY_REQUEST_OUTBOX_ENABLED')
+
+
 def any_enabled() -> bool:
     """True when ANY producer is switched on — the worker's gate.
 
@@ -125,7 +134,7 @@ def any_enabled() -> bool:
     completely inert when no flag is set.
     """
     return (enabled() or aiface_enabled() or manual_enabled()
-            or auto_absence_enabled())
+            or auto_absence_enabled() or study_request_enabled())
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -634,6 +643,109 @@ def stage_auto_absence_deliveries(school, items, *, on_date, now=None) -> int:
                 staged += 1
 
     return staged
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  "أرسل درسي" — institute study request viewed
+# ═════════════════════════════════════════════════════════════════════════════
+
+STUDY_REQUEST_VIEWED_TITLE = 'تم الاطلاع على درسك'
+STUDY_REQUEST_VIEWED_BODY = 'تم اطلاع الإدارة على الدرس الذي أرسلته.'
+STUDY_REQUEST_VIEWED_BODY_WITH_NOTE = (
+    'تم اطلاع الإدارة على الدرس الذي أرسلته. توجد ملاحظة من الإدارة.')
+
+
+def _study_request_dedup_key(request_id: int, user_id: int, token_id: int) -> str:
+    """Stable per (request, parent, device). No timestamp: pending → viewed is
+    one-way (no writer ever sets a request back to pending), so the transition
+    happens at most once per request and any second staging collides on the
+    UNIQUE index instead of delivering twice."""
+    key = (f'{NotificationOutbox.EVENT_INSTITUTE_STUDY_REQUEST_VIEWED}:'
+           f'{request_id}:{user_id}:{token_id}')
+    return key[:_MAX_DEDUP_KEY]
+
+
+def stage_study_request_viewed_delivery(*, school_id: int, request_id: int,
+                                        student_id: int, parent,
+                                        has_admin_note: bool, created_by=None,
+                                        now=None) -> int:
+    """Stage the parent notification work for ONE first pending → viewed
+    transition of a study request. Does NOT commit.
+
+    Adds to the CURRENT session so the caller commits it together with the
+    viewed update: either both exist or neither does. Any exception propagates
+    so the caller can roll back. No network I/O.
+
+      * ONE in-app ``Notification`` for `parent` — the submitting parent only —
+        written whatever the push flag says;
+      * when study_request_enabled(): one push job per ACTIVE token of that
+        parent registered in THIS school (one query).
+
+    `parent` is the already-loaded User (the caller selects it with the
+    request); attaching it as `target_user` lets the flush-time tenant guard
+    validate it without loading it again. The admin note text is never put in
+    the title, body or payload — only whether one exists.
+
+    Returns the number of push jobs staged (0 is legitimate: flag off, or no
+    registered device).
+    """
+    if parent is None or not school_id or not request_id:
+        raise ValueError('outbox: school, request and parent are required')
+    # Fail closed: never stage a delivery to an account of another school.
+    if parent.school_id != school_id:
+        raise ValueError(
+            f'outbox: parent {parent.id} does not belong to school {school_id} '
+            '— refusing to stage a cross-school delivery')
+
+    now = now or datetime.utcnow()
+    title = STUDY_REQUEST_VIEWED_TITLE
+    body = (STUDY_REQUEST_VIEWED_BODY_WITH_NOTE if has_admin_note
+            else STUDY_REQUEST_VIEWED_BODY)
+
+    db.session.add(Notification(
+        school_id=school_id, title=title, body=body,
+        ntype='study_request', target_user=parent, created_by=created_by))
+
+    if not study_request_enabled():
+        return 0
+
+    token_ids = [row[0] for row in
+                 db.session.query(MobileDeviceToken.id)
+                 .execution_options(**OPTS)
+                 .filter(MobileDeviceToken.user_id == parent.id,
+                         MobileDeviceToken.school_id == school_id,
+                         MobileDeviceToken.is_active.is_(True))
+                 .order_by(MobileDeviceToken.id.asc())
+                 .all()]
+    if not token_ids:
+        return 0
+
+    payload = json.dumps({
+        'type':           'study_request',
+        'ntype':          'study_request',
+        'action':         'viewed',
+        'screen':         'study_requests',
+        'student_id':     str(student_id),
+        'request_id':     str(request_id),
+        'has_admin_note': '1' if has_admin_note else '0',
+    }, ensure_ascii=False)
+
+    db.session.add_all([
+        NotificationOutbox(
+            school_id=school_id,
+            event_type=NotificationOutbox.EVENT_INSTITUTE_STUDY_REQUEST_VIEWED,
+            user_id=parent.id,
+            device_token_id=token_id,
+            title=title, body=body, data_json=payload,
+            ntype='study_request',
+            dedup_key=_study_request_dedup_key(request_id, parent.id, token_id),
+            status=NotificationOutbox.STATUS_PENDING,
+            attempts=0,
+            next_attempt_at=now,
+            created_at=now,
+        )
+        for token_id in token_ids])
+    return len(token_ids)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

@@ -230,6 +230,19 @@ class Config:
         .strip().lower() == 'true'
     )
 
+    # ── Durable push for "أرسل درسي" (institute study request viewed) ─────────
+    # Fifth independent flag, default FALSE. Controls ONLY whether push jobs
+    # are staged when the administration first marks a study request viewed.
+    # The parent's in-app Notification row is written regardless of this flag
+    # (the business event happened). While true, the push jobs commit in the
+    # SAME transaction as the viewed update and the shared worker
+    # (app/services/outbox_worker.py) delivers them — no Firebase call in the
+    # admin request, and no inline fallback.
+    STUDY_REQUEST_OUTBOX_ENABLED = (
+        os.environ.get('STUDY_REQUEST_OUTBOX_ENABLED', 'false')
+        .strip().lower() == 'true'
+    )
+
     # ── Redis coordination (P3) — OPTIONAL ────────────────────────────────────
     # When REDIS_URL is unset (the default) every Redis-backed feature silently
     # degrades to the existing in-process behaviour: pushes use the P0 thread

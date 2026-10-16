@@ -373,7 +373,7 @@ class StudyRequestAdminTest(unittest.TestCase):
 
     # ── 26-28: parent visibility, no notifications, no migration ─────────────
 
-    def test_26_27_parent_sees_result_and_no_notification(self):
+    def test_26_27_parent_sees_result_and_one_viewed_notification(self):
         rid = self._insert(n=1)
         with self.app.app_context():
             notes_before = (Notification.query.execution_options(**OPTS)
@@ -384,6 +384,9 @@ class StudyRequestAdminTest(unittest.TestCase):
             token = encode_token(parent)
             notes_after = (Notification.query.execution_options(**OPTS)
                            .filter_by(school_id=self.ids['school_a']).count())
+            viewed = (Notification.query.execution_options(**OPTS)
+                      .filter_by(school_id=self.ids['school_a'], ntype='study_request')
+                      .all())
         resp = self.app.test_client().get(
             f"/api/mobile/v1/parent/children/{self.ids['child_a']}/study-requests/{rid}",
             headers={'Authorization': f'Bearer {token}'})
@@ -392,7 +395,12 @@ class StudyRequestAdminTest(unittest.TestCase):
         self.assertEqual(body['admin_note'], 'تمت المراجعة')
         self.assertIsNotNone(body['viewed_at'])
         self.assertFalse(body['can_delete'])
-        self.assertEqual(notes_after, notes_before)
+        # The first view notifies the submitting parent once; the admin note
+        # text itself is never part of the notification.
+        self.assertEqual(notes_after, notes_before + 1)
+        self.assertEqual([(n.target_user_id, n.title) for n in viewed],
+                         [(self.ids['parent_a'], 'تم الاطلاع على درسك')])
+        self.assertNotIn('تمت المراجعة', viewed[0].body)
 
     def test_28_no_new_migration(self):
         versions = os.path.join(os.path.dirname(__file__), '..', 'migrations', 'versions')

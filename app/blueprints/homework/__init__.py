@@ -33,7 +33,6 @@ from app.utils.decorators import get_current_school, get_active_year
 from app.utils.helpers import save_uploaded_file, resolve_photo_url
 from app.utils.homework_attachments import HomeworkImageError, prepare_homework_upload
 from app.utils.institute_groups import (active_groups_for_form,
-                                        active_student_ids_in_group,
                                         institute_enabled, instructor_groups)
 
 homework_bp = Blueprint('homework', __name__,
@@ -228,28 +227,75 @@ def _no_groups_message(is_admin: bool) -> str:
         'راجع إدارة المعهد لإسناد مجموعة إليك.')
 
 
-def _notify_homework_parents(hw: Homework, school_id: int) -> None:
-    """Create in-app Notification rows (+ FCM push for school homework) for the
-    parents of the students this homework ACTUALLY targets.
+def _notify_institute_homework_parents(hw: Homework, school_id: int, title: str,
+                                       body: str, created_by=None) -> None:
+    """Institute homework: in-app rows + ONE queued FCM batch for the linked
+    parents of the students holding an ACTIVE enrollment in
+    hw.institute_group_id. Never a grade, a section, the whole institute or
+    another instructor's students.
+
+    Delegates to the mobile teacher infrastructure's _notify_parents_batched,
+    so there is a single batched parent flow for institute homework whether it
+    was created on the web (instructor or administration) or from the mobile
+    teacher API:
+
+      * audience: _active_audience_student_ids() — the group's active
+        enrollments, re-filtered by school_id and status='active';
+      * recipients: one row per parent (siblings collapse), only parents whose
+        own account belongs to this school and is active — a corrupt link to
+        another school's parent is skipped, never notified;
+      * dedup: scoped to THIS homework (created_at), one query — an older
+        homework with identical text never suppresses this one;
+      * FCM: handed to send_push_batch through async_dispatch after the rows
+        commit — no Firebase call inside the request.
+
+    The payload carries the group, never a section (an institute row has none);
+    the helper adds the parent's own student_id. Never raises.
+    """
+    import logging
+    try:
+        from app.blueprints.mobile_api.teacher import (
+            _active_audience_student_ids, _notify_parents_batched,
+            institute_homework_fcm_data)
+        _notify_parents_batched(
+            school_id=school_id,
+            student_ids=_active_audience_student_ids(
+                school_id, None, hw.institute_group_id),
+            title=title,
+            body=body,
+            ntype='homework',
+            fcm_data=institute_homework_fcm_data(hw.id, hw.institute_group_id),
+            active_parents_only=True,
+            created_by=created_by,
+            dedup_since=hw.created_at,
+            log_tag=f'[homework-notify] institute hw_id={hw.id}',
+        )
+    except Exception:
+        db.session.rollback()
+        logging.getLogger('mecha.homework').exception(
+            '[homework-notify] institute notify failed homework_id=%s', hw.id)
+
+
+def _notify_homework_parents(hw: Homework, school_id: int, created_by=None) -> None:
+    """Create in-app Notification rows + FCM push for the parents of the
+    students this homework ACTUALLY targets.
 
     School homework  → the active students of hw.section_id. Unchanged.
-    Institute homework → ONLY the students holding an ACTIVE enrollment in
-    hw.institute_group_id. Never a grade, a section, the whole institute or
-    another instructor's students: the audience comes from
-    active_student_ids_in_group(), the same query the group roster uses, and is
-    additionally re-filtered by school_id and status='active'.
+    Institute homework → _notify_institute_homework_parents() (batched, push
+    queued off the request). `created_by` is only used by the institute branch
+    (the mobile teacher API passes its JWT user; the web falls back to
+    current_user).
 
-    Commits Notification rows first; FCM fires after so in-app rows are saved even
-    if FCM fails.  One push per parent even if the parent has multiple children in
-    the same section (deduplication via parent_to_student dict).
+    School path: commits Notification rows first; FCM fires after so in-app rows
+    are saved even if FCM fails.  One push per parent even if the parent has
+    multiple children in the same section (deduplication via parent_to_student
+    dict).
     """
     import logging
     _hw_log = logging.getLogger('mecha.homework')
 
     from app.models import Student, parent_students
     from sqlalchemy import select as _sel
-
-    is_institute_hw = bool(hw.institute_group_id)
 
     subject_name = hw.subject.name if hw.subject else 'غير محدد'
     title = 'واجب جديد'
@@ -258,19 +304,13 @@ def _notify_homework_parents(hw: Homework, school_id: int) -> None:
     _hw_log.info('[homework-notify] homework_id=%s section_id=%s group_id=%s title=%r',
                  hw.id, hw.section_id, hw.institute_group_id, hw.title)
 
-    if is_institute_hw:
-        enrolled_ids = active_student_ids_in_group(school_id, hw.institute_group_id)
-        student_ids = [
-            s.id for s in Student.query.filter(
-                Student.id.in_(enrolled_ids),
-                Student.school_id == school_id,
-                Student.status == 'active').all()
-        ] if enrolled_ids else []
-        if not student_ids:
-            _hw_log.info('[homework-notify] no active enrolled students in group_id=%s',
-                         hw.institute_group_id)
-            return
-    elif hw.section_id:
+    if hw.institute_group_id:
+        if created_by is None and current_user.is_authenticated:
+            created_by = current_user.id
+        _notify_institute_homework_parents(hw, school_id, title, body, created_by)
+        return
+
+    if hw.section_id:
         student_ids = [
             s.id for s in
             Student.query.filter_by(section_id=hw.section_id, status='active').all()
@@ -336,19 +376,6 @@ def _notify_homework_parents(hw: Homework, school_id: int) -> None:
         return
 
     # FCM push — after commit so in-app rows are saved regardless of push outcome.
-    #
-    # Institute homework deliberately stops here, with the in-app Notification
-    # rows already committed to exactly the right parents. The push payload
-    # deep-links to the mobile parent homework screen, which resolves homework
-    # by the child's section_id; an institute student has no section, so the
-    # push would open an empty screen. The mobile API is out of scope for this
-    # phase, so the untestable channel fails closed rather than delivering a
-    # dead link. The in-app notification is unaffected.
-    if is_institute_hw:
-        _hw_log.info('[homework-notify] institute homework_id=%s — in-app only, '
-                     'FCM withheld until the mobile API supports study groups', hw.id)
-        return
-
     try:
         from app.services.fcm_service import is_enabled, send_push_to_user
         if not is_enabled():
