@@ -31,7 +31,12 @@ from app.models import (db, Employee, Grade, Homework, Section, Subject,
                         AcademicYear, Notification, teacher_subjects)
 from app.utils.decorators import get_current_school, get_active_year
 from app.utils.helpers import save_uploaded_file, resolve_photo_url
-from app.utils.homework_attachments import HomeworkImageError, prepare_homework_upload
+from app.utils.homework_attachments import (
+    FIELD_REMOVE, HomeworkAttachmentError, HomeworkImageError,
+    add_new_attachments, apply_attachment_edit, collect_homework_attachments,
+    discard_unreferenced_uploads, load_extra_images, plan_attachment_edit,
+    prepare_homework_attachments, prepare_homework_upload,
+    store_homework_attachments)
 from app.utils.institute_groups import (active_groups_for_form,
                                         institute_enabled, instructor_groups)
 
@@ -142,6 +147,22 @@ def _hw_exists(school_id: int, year_id: int, teacher_id, subject_id,
         publish_date=pub_dt,
         is_active=True,
     ).first() is not None
+
+
+def _belongs_to_school(model, ident: int, school_id: int) -> bool:
+    """True when the Section / Subject ``ident`` is this school's, in any
+    academic year. bypass_tenant_scope also drops the year filter on purpose
+    (a historical homework keeps its own year's section); school_id is
+    re-applied explicitly."""
+    return (model.query.execution_options(bypass_tenant_scope=True)
+            .filter_by(id=ident, school_id=school_id).first()) is not None
+
+
+def _extra_images_of(hw, school_id: int) -> list:
+    """Image #2/#3 rows of one homework — no query unless it has images."""
+    if hw is None or hw.attachment_type != 'image':
+        return []
+    return load_extra_images([hw.id], school_id).get(hw.id, [])
 
 
 def _get_school_and_year():
@@ -551,9 +572,14 @@ def index():
         q = q.filter(Homework.subject_id == f_subject_id)
 
     pagination = _paginate_index(q)
+    # Image #2/#3 of every image homework on this page: ONE query, none when
+    # the page has no image homework (legacy rows simply have no extra rows).
+    extra_images = load_extra_images(
+        [h.id for h in pagination.items if h.attachment_type == 'image'], school.id)
     return render_template('homework/index.html',
                            homework_list=pagination.items,
                            pagination=pagination,
+                           extra_images=extra_images,
                            emp=emp,
                            is_admin=is_admin,
                            resolve_photo_url=resolve_photo_url,
@@ -750,29 +776,59 @@ def create():
                 errors.append('المادة المحددة لا تنتمي إلى الصف المحدد.')
 
         # ── Attachment validation ────────────────────────────────────────────
-        # Images are validated from their bytes and optimised to WebP here,
-        # before any Storage write; PDFs pass through unchanged.
         attach_path = attach_type = None
         upload = None
-        if file and file.filename:
-            ext = _ext(file.filename)
-            if ext not in _ATTACH_ALL:
-                errors.append('نوع الملف غير مسموح. الأنواع المقبولة: jpg, jpeg, png, webp, pdf.')
-            else:
-                attach_type = _attachment_type(file.filename)
+        prepared = None
+        if is_institute:
+            # Institute: the original single attachment, unchanged. Images are
+            # validated from their bytes and optimised to WebP here, before
+            # any Storage write; PDFs pass through unchanged.
+            if file and file.filename:
+                ext = _ext(file.filename)
+                if ext not in _ATTACH_ALL:
+                    errors.append('نوع الملف غير مسموح. الأنواع المقبولة: jpg, jpeg, png, webp, pdf.')
+                else:
+                    attach_type = _attachment_type(file.filename)
+                    if not errors:
+                        try:
+                            upload = prepare_homework_upload(file)
+                        except HomeworkImageError as exc:
+                            errors.append(str(exc))
+        else:
+            # School: up to 3 images OR one PDF. Counts and raw sizes are
+            # checked first; every image is decoded and optimised before the
+            # first Storage write, so a bad image #2 stores nothing.
+            try:
+                incoming = collect_homework_attachments(request.files)
                 if not errors:
-                    try:
-                        upload = prepare_homework_upload(file)
-                    except HomeworkImageError as exc:
-                        errors.append(str(exc))
+                    prepared = prepare_homework_attachments(incoming)
+            except HomeworkAttachmentError as exc:
+                errors.append(exc.message)
 
         if errors:
             return _re_render(errors)
 
         # ── Save attachment ──────────────────────────────────────────────────
+        # School images are stored ONCE even for «جميع الشعب»; every generated
+        # row references the same objects (homework_images.file_path is not
+        # unique for exactly this reason).
+        stored_paths: list[str] = []
         if upload is not None:
             attach_path = save_uploaded_file(upload, subfolder='homework',
                                              allowed_exts=_ATTACH_ALL)
+        elif prepared is not None and prepared.blobs:
+            try:
+                stored_paths = store_homework_attachments(prepared)
+            except HomeworkAttachmentError as exc:
+                return _re_render([exc.message])
+            attach_path, attach_type = stored_paths[0], prepared.mode
+
+        def _record_extra_images(rows):
+            # Image #2/#3 rows need the homework ids; one flush for the batch.
+            if len(stored_paths) > 1:
+                db.session.flush()
+                for row in rows:
+                    add_new_attachments(row, prepared.mode, stored_paths)
 
         teacher_id = emp.id if emp else None
 
@@ -802,9 +858,14 @@ def create():
                     db.session.add(hw)
                     created_hws.append(hw)
 
+                _record_extra_images(created_hws)
                 db.session.commit()
 
                 created = len(created_hws)
+                if not created:
+                    # Every section was a duplicate: nothing references the
+                    # files this request stored.
+                    discard_unreferenced_uploads(stored_paths)
                 if skipped and not created:
                     flash('الواجب موجود بالفعل لجميع الشعب المحددة.', 'warning')
                 elif skipped:
@@ -827,6 +888,7 @@ def create():
                 target_group_id = group.id if group else None
                 if _hw_exists(school.id, year.id, teacher_id, subject_id,
                               section_id, title, pub_dt, target_group_id):
+                    discard_unreferenced_uploads(stored_paths)
                     flash('هذا الواجب موجود بالفعل لهذه المجموعة الدراسية.'
                           if is_institute else
                           'هذا الواجب موجود بالفعل لهذه الشعبة.', 'warning')
@@ -850,6 +912,7 @@ def create():
                     is_active=True,
                 )
                 db.session.add(hw)
+                _record_extra_images([hw])
                 db.session.commit()
 
                 try:
@@ -863,6 +926,7 @@ def create():
         except Exception:
             db.session.rollback()
             current_app.logger.exception('[homework] create failed')
+            discard_unreferenced_uploads(stored_paths)
             flash('حدث خطأ أثناء حفظ الواجب. يرجى المحاولة مجدداً.', 'danger')
             return render_template('homework/form.html',
                                    sections=sections, subjects=subjects,
@@ -991,34 +1055,75 @@ def edit(hw_id):
                 errors.append('لا يمكنك تعيين واجب لشعبة غير مرتبطة بك.')
             if subject_id and subject_id not in _teacher_subject_ids(emp):
                 errors.append('لا يمكنك تعيين واجب لمادة غير مرتبطة بك.')
+        if not is_institute:
+            # Every role, admins included: a posted section / subject must be
+            # this school's (any of its years — the homework may be historical).
+            if section_id and not _belongs_to_school(Section, section_id, school.id):
+                errors.append('الشعبة المحددة غير صالحة.')
+            if subject_id and not _belongs_to_school(Subject, subject_id, school.id):
+                errors.append('المادة المحددة غير صالحة.')
 
         new_attach_path = new_attach_type = None
         upload = None
-        if file and file.filename:
-            ext = _ext(file.filename)
-            if ext not in _ATTACH_ALL:
-                errors.append('نوع الملف غير مسموح. الأنواع المقبولة: jpg, jpeg, png, webp, pdf.')
-            else:
-                new_attach_type = _attachment_type(file.filename)
-                if not errors:
-                    try:
-                        upload = prepare_homework_upload(file)
-                    except HomeworkImageError as exc:
-                        errors.append(str(exc))
+        keep = None          # school: None = attachments untouched by this edit
+        extras: list = []
+        prepared = None
+        if is_institute:
+            # Institute: the original single attachment, unchanged.
+            if file and file.filename:
+                ext = _ext(file.filename)
+                if ext not in _ATTACH_ALL:
+                    errors.append('نوع الملف غير مسموح. الأنواع المقبولة: jpg, jpeg, png, webp, pdf.')
+                else:
+                    new_attach_type = _attachment_type(file.filename)
+                    if not errors:
+                        try:
+                            upload = prepare_homework_upload(file)
+                        except HomeworkImageError as exc:
+                            errors.append(str(exc))
+        else:
+            # School: the attachment logic runs ONLY when this request
+            # explicitly adds, removes or clears attachments. A title / text /
+            # date edit never reads, re-encodes or rewrites the attachment.
+            try:
+                incoming = collect_homework_attachments(request.files)
+                remove_tokens = request.form.getlist(FIELD_REMOVE)
+                if incoming.mode or remove_tokens or clear_attach:
+                    # Lock the row and plan against its committed state, so two
+                    # concurrent edits cannot both pass the 3-image limit.
+                    db.session.refresh(hw, with_for_update=True)
+                    extras = load_extra_images([hw.id], school.id).get(hw.id, [])
+                keep = plan_attachment_edit(hw, extras, incoming, remove_tokens,
+                                            clear_attach)
+                if keep is not None and not errors:
+                    prepared = prepare_homework_attachments(incoming)
+            except HomeworkAttachmentError as exc:
+                errors.append(exc.message)
 
-        if errors:
-            for e in errors:
+        def _form_error(messages):
+            for e in messages:
                 flash(e, 'danger')
             return render_template('homework/form.html',
                                    sections=sections, subjects=subjects,
                                    grades=grades, stages=stages,
                                    groups=groups, is_institute=is_institute,
                                    posted=request.form,
+                                   extra_images=([] if is_institute
+                                                 else _extra_images_of(hw, school.id)),
                                    hw=hw, today=date.today())
 
+        if errors:
+            return _form_error(errors)
+
+        stored_paths: list[str] = []
         if upload is not None:
             new_attach_path = save_uploaded_file(upload, subfolder='homework',
                                                  allowed_exts=_ATTACH_ALL)
+        elif prepared is not None and prepared.blobs:
+            try:
+                stored_paths = store_homework_attachments(prepared)
+            except HomeworkAttachmentError as exc:
+                return _form_error([exc.message])
 
         # school_id, academic_year_id and teacher_id are never reassigned here,
         # so an edit cannot move an assignment to another institution, year or
@@ -1031,14 +1136,27 @@ def edit(hw_id):
         hw.publish_date = pub_dt
         hw.due_date    = due_dt
         hw.description = description or None
-        if new_attach_path:
-            hw.attachment_path = new_attach_path
-            hw.attachment_type = new_attach_type
-        elif clear_attach:
-            hw.attachment_path = None
-            hw.attachment_type = None
+        if is_institute:
+            if new_attach_path:
+                hw.attachment_path = new_attach_path
+                hw.attachment_type = new_attach_type
+            elif clear_attach:
+                hw.attachment_path = None
+                hw.attachment_type = None
+        elif keep is not None:
+            apply_attachment_edit(hw, extras, keep,
+                                  prepared.mode if prepared else None, stored_paths)
 
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            if is_institute:
+                raise
+            current_app.logger.exception('[homework] edit failed hw_id=%s', hw_id)
+            discard_unreferenced_uploads(stored_paths)
+            flash('حدث خطأ أثناء حفظ الواجب. يرجى المحاولة مجدداً.', 'danger')
+            return redirect(url_for('homework.edit', hw_id=hw_id))
         flash('تم تحديث الواجب بنجاح.', 'success')
         return redirect(url_for('homework.index'))
 
@@ -1046,6 +1164,8 @@ def edit(hw_id):
                            sections=sections, subjects=subjects, grades=grades,
                            stages=stages, groups=groups,
                            is_institute=is_institute, posted=None,
+                           extra_images=([] if is_institute
+                                         else _extra_images_of(hw, school.id)),
                            hw=hw, today=date.today())
 
 

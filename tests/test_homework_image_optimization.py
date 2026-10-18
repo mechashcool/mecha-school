@@ -8,11 +8,16 @@ longest side without upscaling, WebP q80, alpha kept); PDF / other uploads are
 returned untouched.
 
 Route level — web POST /homework/create, /homework/<id>/edit and mobile
-POST /api/mobile/v1/teacher/homework, PUT /teacher/homework/<id>:
-only the optimised WebP reaches Storage (image/webp, .webp object); PDFs are
-stored byte-identical as before; invalid images never reach Storage, the DB or
-the notification path; edits without a new file never reprocess; mobile JSON
-field names unchanged; authorization and cross-school behaviour unchanged.
+POST /api/mobile/v1/teacher/homework, PUT /teacher/homework/<id> (normal
+SCHOOL homework): only the optimised WebP reaches Storage (image/webp, .webp
+object) using the school homework policy (<= 768 px, WebP q85 — see
+tests/test_homework_multi_images.py for the multi-image rules); PDFs up to
+5 MiB are stored byte-identical, larger ones are refused before Storage;
+invalid images never reach Storage, the DB or the notification path; edits
+without a new file never reprocess; the legacy mobile JSON fields are
+unchanged (one additive ``images`` list); authorization and cross-school
+behaviour unchanged. The helper above (prepare_homework_upload, 1600 / q80)
+is now used by INSTITUTE homework only.
 
 Storage and notifications are recording mocks: no network, no files written.
 Run with ``-s`` to see the size / timing table.
@@ -48,13 +53,14 @@ TYPE_ERR = 'نوع الملف غير مسموح'
 
 MOBILE_CREATE_KEYS = {'id', 'title', 'description', 'subject_id', 'subject_name',
                       'section_id', 'section_name', 'grade_name', 'publish_date',
-                      'due_date', 'attachment_url', 'attachment_name', 'attachment_type'}
+                      'due_date', 'attachment_url', 'attachment_name', 'attachment_type',
+                      'images'}
 MOBILE_UPDATE_KEYS = MOBILE_CREATE_KEYS - {'publish_date'}
 PARENT_ITEM_KEYS = {'id', 'homework_id', 'title', 'subject', 'subject_name',
                     'teacher_name', 'grade_name', 'section_name', 'assigned_at',
                     'publish_date', 'due_date', 'description', 'status',
                     'attachment_url', 'attachment_type', 'file_name', 'file_size',
-                    'is_pdf', 'submitted_status'}
+                    'is_pdf', 'submitted_status', 'images'}
 
 
 # ── synthetic images (no production files) ───────────────────────────────────
@@ -541,7 +547,8 @@ class HomeworkImageRouteTest(unittest.TestCase):
         img = _decode(data)
         self.assertEqual((img.format, img.size), ('WEBP', size))    # 9
         self.assertNotEqual(data, raw)                              # original never stored
-        self.assertEqual(data, optimize_board_image(raw).data)      # 12
+        # School homework policy (768 px, q85) on the same shared optimiser.
+        self.assertEqual(data, optimize_board_image(raw, max_side=768, quality=85).data)
         return data
 
     def _assert_nothing_happened(self, before):
@@ -552,13 +559,13 @@ class HomeworkImageRouteTest(unittest.TestCase):
 
     # ── 1-3, 7, 8: web create ────────────────────────────────────────────────
 
-    def test_01_07_web_create_jpeg_stored_as_1600_webp(self):
+    def test_01_07_web_create_jpeg_stored_as_768_webp(self):
         raw = _enc(_photo(4000, 3000), 'JPEG', quality=92)
         form = self._web_form(file=('photo.jpg', raw))
         resp = self._web(
             'teacher_a').post('/homework/create', data=form, content_type='multipart/form-data')
         self.assertEqual(resp.status_code, 302, resp.get_data(as_text=True)[:400])
-        data = self._assert_webp_stored(raw, (1600, 1200))
+        data = self._assert_webp_stored(raw, (768, 576))
         self.assertLess(len(data), len(raw) // 4)
         (row,) = self._hw_by_title(form['title'])
         self.assertEqual((row.attachment_path, row.attachment_type), (FAKE_URL, 'image'))
@@ -566,9 +573,9 @@ class HomeworkImageRouteTest(unittest.TestCase):
 
     def test_02_03_08_web_create_png_and_webp(self):
         for name, raw, size in (
-                ('page.png', _enc(_worksheet(2480, 3508, photographed=False), 'PNG'), (1131, 1600)),
-                ('pic.webp', _enc(_photo(3000, 2000), 'WEBP', quality=95), (1600, 1067)),
-                ('small.png', _enc(_photo(800, 600), 'PNG'), (800, 600))):
+                ('page.png', _enc(_worksheet(2480, 3508, photographed=False), 'PNG'), (543, 768)),
+                ('pic.webp', _enc(_photo(3000, 2000), 'WEBP', quality=95), (768, 512)),
+                ('small.png', _enc(_photo(600, 450), 'PNG'), (600, 450))):
             with self.subTest(name):
                 self.storage.reset_mock()
                 form = self._web_form(file=(name, raw))
@@ -585,7 +592,7 @@ class HomeworkImageRouteTest(unittest.TestCase):
         resp = self._web('admin_a').post('/homework/create', data=form,
                                          content_type='multipart/form-data')
         self.assertEqual(resp.status_code, 302)
-        self._assert_webp_stored(raw, (1600, 1200))
+        self._assert_webp_stored(raw, (768, 576))
         self.optimize.assert_called_once()
         rows = self._hw_by_title(form['title'])
         self.assertEqual(len(rows), 2)
@@ -599,7 +606,7 @@ class HomeworkImageRouteTest(unittest.TestCase):
         resp = self._web_edit(self._web('teacher_a'), self.ids['hw_a'], title='Edited',
                               file=('new.jpg', raw))
         self.assertEqual(resp.status_code, 302)
-        self._assert_webp_stored(raw, (1200, 1600))
+        self._assert_webp_stored(raw, (576, 768))
         row = self._hw(self.ids['hw_a'])
         self.assertEqual((row.title, row.attachment_path, row.attachment_type),
                          ('Edited', FAKE_URL, 'image'))
@@ -615,7 +622,7 @@ class HomeworkImageRouteTest(unittest.TestCase):
         self.assertEqual(set(body['homework']), MOBILE_CREATE_KEYS)
         self.assertEqual(body['homework']['attachment_type'], 'image')
         self.assertTrue(body['homework']['attachment_url'])
-        self._assert_webp_stored(raw, (1600, 1200))
+        self._assert_webp_stored(raw, (768, 576))
         row = self._hw(body['homework']['id'])
         self.assertEqual((row.attachment_path, row.attachment_type), (FAKE_URL, 'image'))
         self.dispatch.assert_called_once()
@@ -627,7 +634,7 @@ class HomeworkImageRouteTest(unittest.TestCase):
         body = resp.get_json()
         self.assertEqual(set(body), {'ok', 'homework'})
         self.assertEqual(set(body['homework']), MOBILE_UPDATE_KEYS)
-        self._assert_webp_stored(raw, (1131, 1600))
+        self._assert_webp_stored(raw, (543, 768))
         row = self._hw(self.ids['hw_a'])
         self.assertEqual((row.title, row.attachment_path, row.attachment_type),
                          ('M edited', FAKE_URL, 'image'))
@@ -712,22 +719,25 @@ class HomeworkImageRouteTest(unittest.TestCase):
             with self.subTest(path):
                 self.storage.reset_mock()
                 self.assertIn(call().status_code, (200, 201, 302))
-                self._assert_webp_stored(raw, (1600, 1200))
+                self._assert_webp_stored(raw, (768, 576))
         row = self._hw(self.ids['hw_a'])
         self.assertEqual((row.attachment_path, row.attachment_type), (FAKE_URL, 'image'))
 
-    def test_pdf_over_5mb_stored_byte_identical_on_all_paths(self):
+    def test_pdf_over_5mb_refused_on_all_paths(self):
         big_pdf = PDF + b'0' * (6 * 1024 * 1024)
+        msg = 'حجم ملف PDF أكبر من الحد المسموح (5 MB).'
         for path, call in self._four_paths('big.pdf', big_pdf):
             with self.subTest(path):
-                self.storage.reset_mock()
-                self.assertIn(call().status_code, (200, 201, 302))
-                data, obj, ctype = self._stored()
-                self.assertEqual((data, ctype), (big_pdf, 'application/pdf'))
-                self.assertTrue(obj.startswith('homework/') and obj.endswith('.pdf'), obj)
+                before = self._snapshot()
+                resp = call()
+                if path.startswith('web'):
+                    self.assertEqual(resp.status_code, 200)
+                    self.assertIn(msg, resp.get_data(as_text=True))
+                else:   # legacy 'attachment' field → legacy {ok, error} message
+                    self.assertEqual((resp.status_code, resp.get_json()),
+                                     (400, {'ok': False, 'error': msg}))
+                self._assert_nothing_happened(before)
         self.optimize.assert_not_called()
-        row = self._hw(self.ids['hw_a'])
-        self.assertEqual((row.attachment_path, row.attachment_type), (FAKE_URL, 'pdf'))
 
     def test_disallowed_extension_errors_unchanged(self):
         before = self._snapshot()

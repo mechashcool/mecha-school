@@ -875,12 +875,27 @@ def parent_child_homework(student_id):
     else:
         rows = q.all()
 
+    # Image #2/#3 of every image homework in this response: ONE query (none
+    # when no row is an image homework).
+    from app.utils.homework_attachments import (image_paths, images_payload,
+                                                load_extra_images)
+    extras = load_extra_images(
+        [hw.id for hw in rows if hw.attachment_type == 'image'], user.school_id)
+
+    def school_item(hw):
+        # The unchanged legacy item plus the additive images list (image #1 =
+        # the same attachment_url; [] for a PDF or no attachment).
+        item = _parent_homework_item(hw)
+        item['images'] = images_payload(image_paths(hw, extras.get(hw.id)), photo_url,
+                                        primary_url=item['attachment_url'])
+        return item
+
     return ok(
         student_id=s.id,
         section=s.section.name if s.section else None,
         count=len(rows),
         **page_meta,
-        homework=[_parent_homework_item(hw) for hw in rows],
+        homework=[school_item(hw) for hw in rows],
     )
 
 

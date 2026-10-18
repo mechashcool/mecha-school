@@ -53,8 +53,14 @@ def _has_alpha(img) -> bool:
             or (img.mode in ('P', 'L', 'RGB') and 'transparency' in img.info))
 
 
-def optimize_board_image(raw: bytes) -> OptimizedImage:
-    """Validate and optimise one board image. Raises BoardImageError."""
+def optimize_board_image(raw: bytes, *, max_side: int = BOARD_IMAGE_MAX_SIDE,
+                         quality: int = BOARD_IMAGE_WEBP_QUALITY) -> OptimizedImage:
+    """Validate and optimise one board image. Raises BoardImageError.
+
+    ``max_side`` / ``quality`` default to the board policy, so every existing
+    caller gets byte-identical output. Only school homework images pass their
+    own values (app.utils.homework_attachments.optimize_homework_image).
+    """
     from PIL import Image, ImageOps
 
     try:
@@ -79,7 +85,7 @@ def optimize_board_image(raw: bytes) -> OptimizedImage:
             if source_format == 'JPEG':
                 # Let libjpeg decode at a reduced scale (never below the
                 # target size) — same result, far less memory for big photos.
-                img.draft(img.mode, (BOARD_IMAGE_MAX_SIDE, BOARD_IMAGE_MAX_SIDE))
+                img.draft(img.mode, (max_side, max_side))
             img.load()                                   # full decode: corrupt -> error
             oriented = ImageOps.exif_transpose(img)      # returns a new image
             out = oriented.convert('RGBA' if _has_alpha(oriented) else 'RGB')
@@ -88,8 +94,8 @@ def optimize_board_image(raw: bytes) -> OptimizedImage:
         except Exception:
             raise BoardImageError(MSG_INVALID) from None
 
-    if max(out.size) > BOARD_IMAGE_MAX_SIDE:
-        out.thumbnail((BOARD_IMAGE_MAX_SIDE, BOARD_IMAGE_MAX_SIDE),
+    if max(out.size) > max_side:
+        out.thumbnail((max_side, max_side),
                       Image.Resampling.LANCZOS)          # keeps aspect, never upscales
 
     extra = {'icc_profile': icc_profile} if icc_profile else {}
@@ -99,12 +105,12 @@ def optimize_board_image(raw: bytes) -> OptimizedImage:
         out.save(buf, format='WEBP', method=4, **extra, **kw)   # no exif/xmp -> stripped
         return buf.getvalue()
 
-    data = _encode(quality=BOARD_IMAGE_WEBP_QUALITY)
+    data = _encode(quality=quality)
     lossless = False
     if len(data) > len(raw):
         # Flat graphics (logos, simple PNG posters) can grow under lossy
         # WebP; one lossless attempt, keep whichever is smaller.
-        alt = _encode(lossless=True, quality=BOARD_IMAGE_WEBP_QUALITY)
+        alt = _encode(lossless=True, quality=quality)
         if len(alt) < len(data):
             data, lossless = alt, True
     return OptimizedImage(data, out.width, out.height, source_format, lossless)

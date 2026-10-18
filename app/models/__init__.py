@@ -4192,10 +4192,54 @@ class Homework(db.Model):
             ondelete='SET NULL (institute_group_id)'),
         db.Index('ix_homework_school_year_group',
                  'school_id', 'academic_year_id', 'institute_group_id'),
+        # Parent key of the same-school composite FK on homework_images.
+        db.UniqueConstraint('id', 'school_id', name='uq_homework_id_school'),
     )
 
     def __repr__(self):
         return f'<Homework {self.id} — {self.title}>'
+
+
+class HomeworkImage(db.Model):
+    """Image #2 / #3 of a NORMAL-SCHOOL homework — metadata only, never bytes.
+
+    Image #1 always stays on Homework.attachment_path (attachment_type
+    'image'), so clients that only read attachment_url keep seeing the first
+    image. sort_order 1 = image #2, 2 = image #3; a homework with a PDF, no
+    attachment or a single image has no rows here. Rows that existed before
+    this table (legacy single attachments) were never copied in.
+
+    file_path is deliberately NOT unique: «جميع الشعب» uploads each image once
+    and every generated homework row references the same stored object.
+    School-scoped only — its academic year is the homework's.
+    """
+    __tablename__ = 'homework_images'
+    __school_scoped__ = True
+
+    id          = db.Column(db.Integer, primary_key=True)
+    homework_id = db.Column(db.Integer, nullable=False)
+    school_id   = db.Column(db.Integer, nullable=False)
+    file_path   = db.Column(db.String(500), nullable=False)
+    sort_order  = db.Column(db.SmallInteger, nullable=False)
+    created_at  = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        # Same-school by constraint: an image row can only reference a homework
+        # of its own school. Deleting the homework deletes its image rows.
+        db.ForeignKeyConstraint(
+            ['homework_id', 'school_id'], ['homework.id', 'homework.school_id'],
+            name='fk_homework_image_homework_school', ondelete='CASCADE'),
+        # At most image #2 and #3 per homework (max 3 images in total); also
+        # the index behind the batched per-page image load.
+        db.UniqueConstraint('homework_id', 'sort_order',
+                            name='uq_homework_image_homework_sort'),
+        db.CheckConstraint('sort_order IN (1, 2)', name='ck_homework_image_sort_order'),
+        # File-access owner lookup (resolve_upload_owner filters on file_path).
+        db.Index('ix_homework_images_file_path', 'file_path'),
+    )
+
+    def __repr__(self):
+        return f'<HomeworkImage {self.id} homework={self.homework_id} #{self.sort_order + 1}>'
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

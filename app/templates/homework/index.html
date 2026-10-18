@@ -232,7 +232,22 @@
         {% if hw.attachment_path %}
         <div class="mb-2">
           {% set att_url = upload_url(hw.attachment_path) %}
-          {% if hw.attachment_type == 'image' %}
+          {# Image #2/#3 (school homework only), loaded for the whole page in
+             one query. Homework without extra rows renders exactly as before. #}
+          {% set hw_extra = (extra_images|default({})).get(hw.id, []) %}
+          {% if hw.attachment_type == 'image' and hw_extra %}
+          <div class="d-flex gap-1">
+            {% for path in [hw.attachment_path] + hw_extra|map(attribute='file_path')|list %}
+            {% set img_url = att_url if loop.first else upload_url(path) %}
+            <a href="{{ img_url }}" target="_blank" class="flex-fill" style="min-width:0">
+              <img src="{{ img_url }}" alt="مرفق {{ loop.index }}" class="img-fluid rounded"
+                   loading="lazy" decoding="async"
+                   style="height:80px;object-fit:cover;width:100%"
+                   onerror="this.style.display='none'">
+            </a>
+            {% endfor %}
+          </div>
+          {% elif hw.attachment_type == 'image' %}
           <a href="{{ att_url }}" target="_blank">
             <img src="{{ att_url }}" alt="مرفق" class="img-fluid rounded"
                  loading="lazy" decoding="async"

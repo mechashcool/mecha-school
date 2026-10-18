@@ -2483,6 +2483,22 @@ def _hw_attachment_url(hw: Homework) -> str | None:
     return photo_url(hw.attachment_path)
 
 
+def _hw_attachment_err(exc, legacy: bool):
+    """School homework attachment refusal. A caller that used only the legacy
+    ``attachment`` field keeps the exact error strings that contract always
+    returned; ``attachments[]`` callers get a stable code plus the Arabic
+    message (same {ok, error} envelope, one additive key)."""
+    if legacy:
+        return err(exc.legacy_error, exc.status)
+    return jsonify({'ok': False, 'error': exc.code, 'message': exc.message}), exc.status
+
+
+def _school_hw_images(hw, extras, att_url):
+    """Additive ``images`` list of a SCHOOL homework (image #1 first)."""
+    from app.utils.homework_attachments import image_paths, images_payload
+    return images_payload(image_paths(hw, extras), photo_url, primary_url=att_url)
+
+
 @mobile_api_bp.route('/teacher/homework', methods=['GET'])
 @jwt_required()
 @role_required('teacher')
@@ -2521,6 +2537,13 @@ def teacher_homework_list():
     # Institute rows only: one batched name lookup; a school page runs none.
     group_names = _group_names(emp.school_id,
                                {hw.institute_group_id for hw in rows})
+    # School image homework only: image #2/#3 of the whole page in ONE query.
+    from app.utils.homework_attachments import load_extra_images
+    extras = load_extra_images(
+        [hw.id for hw in rows
+         if hw.institute_group_id is None and hw.attachment_type == 'image'],
+        emp.school_id)
+    att_urls = {hw.id: _hw_attachment_url(hw) for hw in rows}
 
     return ok(
         total=total,
@@ -2542,14 +2565,16 @@ def teacher_homework_list():
                 'publish_date':    hw.publish_date.isoformat() if hw.publish_date else None,
                 'due_date':        hw.due_date.isoformat() if hw.due_date else None,
                 'description':     hw.description,
-                'attachment_url':  _hw_attachment_url(hw),
+                'attachment_url':  att_urls[hw.id],
                 'attachment_type': hw.attachment_type,
                 'created_at':      hw.created_at.isoformat() if hasattr(hw, 'created_at') and hw.created_at else None,
-                # Additive, institute homework only: a school item keeps its
-                # exact previous key set.
+                # Additive, institute homework only: an institute item gets
+                # group_id / group_name and never images; a school item gets
+                # the additive images list.
                 **({'group_id':   hw.institute_group_id,
                     'group_name': group_names.get(hw.institute_group_id)}
-                   if hw.institute_group_id else {}),
+                   if hw.institute_group_id else
+                   {'images': _school_hw_images(hw, extras.get(hw.id), att_urls[hw.id])}),
             }
             for hw in rows
         ],
@@ -2564,20 +2589,26 @@ def teacher_homework_create():
     Create a new homework assignment from the mobile app.
 
     Body: application/json  OR  multipart/form-data.
-    Multipart adds an optional 'attachment' file field (jpg/jpeg/png/webp/pdf).
+    Multipart adds optional attachments: up to 3 images (jpg/jpeg/png/webp)
+    OR exactly one PDF, through 'attachments[]' (several files) or the legacy
+    single 'attachment' field.
 
     Fields:
-        title        str   required
-        section_id   int   required
-        subject_id   int   required
-        due_date     str   YYYY-MM-DD  required
-        publish_date str   YYYY-MM-DD  optional (defaults to today)
-        description  str   optional
-        attachment   file  optional (multipart only)
+        title          str   required
+        section_id     int   required
+        subject_id     int   required
+        due_date       str   YYYY-MM-DD  required
+        publish_date   str   YYYY-MM-DD  optional (defaults to today)
+        description    str   optional
+        attachments[]  file  optional, repeatable (multipart only)
+        attachment     file  optional, legacy (multipart only)
     """
     from app.utils.school_config import get_school_config
-    from app.utils.helpers import save_uploaded_file
-    from app.utils.homework_attachments import HomeworkImageError, prepare_homework_upload
+    from app.utils.homework_attachments import (
+        MODE_IMAGE, HomeworkAttachmentError, add_new_attachments,
+        collect_homework_attachments, discard_unreferenced_uploads,
+        images_payload, prepare_homework_attachments,
+        store_homework_attachments, uses_legacy_field)
     from datetime import datetime as _dt
 
     user = g.mobile_user
@@ -2596,10 +2627,8 @@ def teacher_homework_create():
     )
     if is_multipart:
         data        = request.form
-        attachment  = request.files.get('attachment')
     else:
         data        = request.get_json(silent=True) or {}
-        attachment  = None
 
     title        = (data.get('title')       or '').strip()
     section_id   = data.get('section_id')
@@ -2666,30 +2695,18 @@ def teacher_homework_create():
     if not year:
         return err('no active academic year', 400)
 
-    # Handle optional attachment upload
-    att_path = None
-    att_type = None
-    if attachment and attachment.filename:
-        _HOMEWORK_EXTS = {'jpg', 'jpeg', 'png', 'webp', 'pdf'}
-        # Images are validated from their bytes and optimised to WebP before
-        # any Storage write; PDFs pass through unchanged.
+    # Optional attachments: every file is validated (count, type, raw size,
+    # real decode) and every image optimised BEFORE the first Storage write.
+    stored: list[str] = []
+    mode = None
+    if is_multipart:
         try:
-            upload = prepare_homework_upload(attachment)
-        except HomeworkImageError as exc:
-            return err(str(exc))
-        uploaded = save_uploaded_file(
-            upload,
-            subfolder='homework',
-            allowed_exts=_HOMEWORK_EXTS,
-        )
-        if uploaded is None:
-            return err('invalid_attachment — allowed: jpg, jpeg, png, webp, pdf')
-        orig_ext = (
-            attachment.filename.rsplit('.', 1)[-1].lower()
-            if '.' in attachment.filename else ''
-        )
-        att_path = uploaded
-        att_type = 'pdf' if orig_ext == 'pdf' else 'image'
+            prepared = prepare_homework_attachments(
+                collect_homework_attachments(request.files))
+            stored = store_homework_attachments(prepared)
+        except HomeworkAttachmentError as exc:
+            return _hw_attachment_err(exc, uses_legacy_field(request.files))
+        mode = prepared.mode
 
     hw = Homework(
         school_id=emp.school_id,
@@ -2702,11 +2719,21 @@ def teacher_homework_create():
         publish_date=pub_dt,
         due_date=due_dt,
         is_active=True,
-        attachment_path=att_path,
-        attachment_type=att_type,
+        attachment_path=stored[0] if stored else None,
+        attachment_type=mode if stored else None,
     )
-    db.session.add(hw)
-    db.session.commit()
+    try:
+        db.session.add(hw)
+        if len(stored) > 1:
+            db.session.flush()                    # homework id for image #2/#3
+            add_new_attachments(hw, mode, stored)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        import logging as _log
+        _log.getLogger('mecha.mobile').exception('[mobile-hw] create failed')
+        discard_unreferenced_uploads(stored)
+        return err('server_error', 500)
 
     # FCM + in-app Notification rows to parents of students in this section.
     # P0: queued to the background dispatcher — the per-parent fan-out no longer
@@ -2741,6 +2768,8 @@ def teacher_homework_create():
             'attachment_url':  att_url,
             'attachment_name': att_name,
             'attachment_type': hw.attachment_type,
+            'images':          images_payload(stored if mode == MODE_IMAGE else [],
+                                              photo_url, primary_url=att_url),
         },
     ), 201
 
@@ -2755,11 +2784,23 @@ def teacher_homework_update(homework_id):
                their own homework within their own school.
 
     Body (PUT/PATCH): application/json  OR  multipart/form-data.
-    Multipart adds an optional 'attachment' file field (jpg/jpeg/png/webp/pdf).
+    Multipart attachment controls (all optional; without any of them the
+    stored attachment is left exactly as it is):
+        attachment              legacy single file — REPLACES every current
+                                attachment (the original contract)
+        attachments[]           new files: images are ADDED to the current
+                                images (max 3 in total) and replace a PDF; a
+                                PDF replaces every current attachment
+        remove_attachments[]    'primary' (image #1 / the PDF) or an image id
+        clear_attachment=1      remove every current attachment
     """
     from app.utils.school_config import get_school_config
-    from app.utils.helpers import save_uploaded_file
-    from app.utils.homework_attachments import HomeworkImageError, prepare_homework_upload
+    from app.utils.homework_attachments import (
+        FIELD_CLEAR, FIELD_REMOVE, HomeworkAttachmentError,
+        apply_attachment_edit, collect_homework_attachments,
+        discard_unreferenced_uploads, load_extra_images, plan_attachment_edit,
+        prepare_homework_attachments, store_homework_attachments,
+        uses_legacy_field)
 
     user = g.mobile_user
     cfg  = get_school_config(user.school_id)
@@ -2849,44 +2890,51 @@ def teacher_homework_update(homework_id):
         if (section_id, subject_id) not in {(r.section_id, r.subject_id) for r in _upd_subj_rows}:
             return err('forbidden — subject not assigned to you', 403)
 
-    # Attachment replacement (multipart only).
-    # NOTE: the old file is NOT deleted from Supabase Storage — the project
-    # does not yet have a storage-delete helper.
-    new_path = hw.attachment_path
-    new_type = hw.attachment_type
+    # Attachments (multipart only). Untouched unless this request explicitly
+    # adds, removes or clears them. Replaced/removed files stay in Storage,
+    # as before (they may be shared by «جميع الشعب» rows).
+    keep = None
+    extras: list = []
+    stored: list[str] = []
+    new_mode = None
     if is_multipart:
-        attachment_file = request.files.get('attachment')
-        if attachment_file and attachment_file.filename:
-            _HOMEWORK_EXTS = {'jpg', 'jpeg', 'png', 'webp', 'pdf'}
-            try:
-                upload = prepare_homework_upload(attachment_file)
-            except HomeworkImageError as exc:
-                return err(str(exc))
-            uploaded = save_uploaded_file(
-                upload,
-                subfolder='homework',
-                allowed_exts=_HOMEWORK_EXTS,
-            )
-            if uploaded is None:
-                return err('invalid_attachment — allowed: jpg, jpeg, png, webp, pdf')
-            orig_ext = (
-                attachment_file.filename.rsplit('.', 1)[-1].lower()
-                if '.' in attachment_file.filename else ''
-            )
-            new_path = uploaded
-            new_type = 'pdf' if orig_ext == 'pdf' else 'image'
+        remove_tokens = request.form.getlist(FIELD_REMOVE)
+        clear = request.form.get(FIELD_CLEAR) == '1'
+        try:
+            incoming = collect_homework_attachments(request.files)
+            if incoming.mode or remove_tokens or clear:
+                # Lock the row; plan against its committed state.
+                db.session.refresh(hw, with_for_update=True)
+                extras = load_extra_images([hw.id], emp.school_id).get(hw.id, [])
+            keep = plan_attachment_edit(hw, extras, incoming, remove_tokens, clear)
+            if keep is not None:
+                prepared = prepare_homework_attachments(incoming)
+                stored = store_homework_attachments(prepared)
+                new_mode = prepared.mode
+        except HomeworkAttachmentError as exc:
+            return _hw_attachment_err(exc, uses_legacy_field(request.files))
 
     hw.title           = title
     hw.description     = description
     hw.section_id      = section_id
     hw.subject_id      = subject_id
     hw.due_date        = due_dt
-    hw.attachment_path = new_path
-    hw.attachment_type = new_type
-    db.session.commit()
+    try:
+        if keep is not None:
+            apply_attachment_edit(hw, extras, keep, new_mode, stored)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        import logging as _log
+        _log.getLogger('mecha.mobile').exception(
+            '[mobile-hw] update failed hw_id=%s', homework_id)
+        discard_unreferenced_uploads(stored)
+        return err('server_error', 500)
 
     att_url  = _hw_attachment_url(hw)
     att_name = hw.attachment_path.rstrip('/').rsplit('/', 1)[-1] if hw.attachment_path else None
+    current_extras = (load_extra_images([hw.id], emp.school_id).get(hw.id)
+                      if hw.attachment_type == 'image' else None)
 
     return ok(
         homework={
@@ -2902,6 +2950,7 @@ def teacher_homework_update(homework_id):
             'attachment_url':  att_url,
             'attachment_name': att_name,
             'attachment_type': hw.attachment_type,
+            'images':          _school_hw_images(hw, current_extras, att_url),
         }
     )
 

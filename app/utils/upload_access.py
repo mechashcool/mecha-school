@@ -209,6 +209,20 @@ def resolve_upload_owner(value: str | None) -> dict | None:
     if row:
         return owner(row, section_id=getattr(row, 'section_id', None), kind='homework')
 
+    # Image #2/#3 of a school homework: the SAME owner and rules as the
+    # homework itself (kind 'homework', the homework's school and section).
+    row = first('HomeworkImage', 'file_path')
+    if row:
+        try:
+            hw = (m.Homework.query
+                  .execution_options(bypass_tenant_scope=True, include_all_years=True)
+                  .filter(m.Homework.id == row.homework_id,
+                          m.Homework.school_id == row.school_id)
+                  .first())
+        except Exception:
+            hw = None
+        return owner(row, section_id=getattr(hw, 'section_id', None), kind='homework')
+
     # External-registration intake files (documents + submitted student photo).
     # No Student exists yet, so ownership is the request's school only; same-school
     # staff (not parent/teacher/investor) may view — enforced by can_access_upload.

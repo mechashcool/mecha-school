@@ -23,7 +23,7 @@ def _models():
         EmployeeAttendance, EmployeeDocument, EmployeeEvaluation,
         EmployeeLeaveRequest, Exam,
         ExamResult, Expense, ExpenseCategory, FeeInstallment, FeeRecord,
-        FeeType, Grade, InstituteAttendanceRecord,
+        FeeType, Grade, HomeworkImage, InstituteAttendanceRecord,
         InstituteAttendanceSession, InstituteGroupEnrollment,
         InstituteGroupSchedule, InstituteInstructorAttendance,
         InstituteStudyGroup, InstituteStudyRequest, InstituteStudyRequestImage,
@@ -81,6 +81,9 @@ def _models():
         # scoped like LeaveRequest; its image rows are school-scoped ONLY —
         # their year is the request's.
         InstituteStudyRequest, InstituteStudyRequestImage,
+        # Image #2/#3 of a school homework — school-scoped only, like
+        # InstituteStudyRequestImage: its year is the homework's.
+        HomeworkImage,
     )
     # Student, StudentDocument, StudentSuspension are school-scoped only —
     # they persist across academic years so that a year rollover does not
@@ -834,6 +837,17 @@ def _before_flush(session_, flush_context, instances):
                 if req is None or req.school_id != getattr(obj, 'school_id', None):
                     raise ValueError(
                         'Study request image must belong to the same school as its request')
+            # Homework images are school-scoped only, like the study-request
+            # images above; the composite FK enforces the same rule in PostgreSQL.
+            elif cls_name == 'HomeworkImage':
+                from app.models import Homework as _HWHomework
+                hw = session_.get(
+                    _HWHomework, obj.homework_id,
+                    execution_options={'bypass_tenant_scope': True},
+                )
+                if hw is None or hw.school_id != getattr(obj, 'school_id', None):
+                    raise ValueError(
+                        'Homework image must belong to the same school as its homework')
             # Transport driver identity — fail closed on any cross-school link,
             # regardless of the code path that set it. A foreign key alone only
             # proves the row exists, not that it belongs to this school.

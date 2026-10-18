@@ -219,7 +219,79 @@
       </div>
 
       {# ── Attachment ─────────────────────────────────────────────────────── #}
-      {% if school_cfg.field_visible('homework', 'attachment') %}
+      {% if school_cfg.field_visible('homework', 'attachment') and not is_institute %}
+      {# School: up to 3 images OR one PDF. The server enforces every rule;
+         remove tokens are 'primary' (attachment_path) or an image row id. #}
+      {% set extra_images = extra_images|default([]) %}
+      {% macro image_tile(token, path, n) %}
+      {% set u = upload_url(path) %}
+      <div class="border rounded p-1 text-center bg-white" style="width:136px">
+        <a href="{{ u }}" target="_blank">
+          <img src="{{ u }}" alt="صورة {{ n }}" class="rounded"
+               style="width:126px;height:96px;object-fit:cover"
+               loading="lazy" decoding="async" onerror="this.alt='تعذر تحميل الصورة'">
+        </a>
+        <div class="form-check d-inline-flex align-items-center gap-1 mt-1 mb-0">
+          <input class="form-check-input" type="checkbox" name="remove_attachments[]"
+                 value="{{ token }}" id="rmAtt{{ n }}">
+          <label class="form-check-label small text-danger" for="rmAtt{{ n }}">حذف</label>
+        </div>
+      </div>
+      {% endmacro %}
+      <div class="card mb-3">
+        <div class="card-header fw-bold">
+          <i class="bi bi-paperclip text-secondary me-1"></i>المرفقات (اختياري)
+        </div>
+        <div class="card-body">
+
+          {% if hw and hw.attachment_path %}
+          <div class="mb-3 p-3 bg-light rounded">
+            <p class="small fw-bold mb-2">المرفقات الحالية:</p>
+            {% if hw.attachment_type == 'image' %}
+            <div class="d-flex flex-wrap gap-2">
+              {{ image_tile('primary', hw.attachment_path, 1) }}
+              {% for img in extra_images %}
+              {{ image_tile(img.id, img.file_path, loop.index + 1) }}
+              {% endfor %}
+            </div>
+            {% else %}
+            {% set att_url = upload_url(hw.attachment_path) %}
+            {% if hw.attachment_type == 'pdf' %}
+            <a href="{{ att_url }}" target="_blank" class="btn btn-sm btn-outline-danger mb-2">
+              <i class="bi bi-file-earmark-pdf-fill me-1"></i>عرض PDF الحالي
+            </a>
+            {% else %}
+            <a href="{{ att_url }}" target="_blank" class="btn btn-sm btn-outline-secondary mb-2">
+              <i class="bi bi-paperclip me-1"></i>المرفق الحالي
+            </a>
+            {% endif %}
+            <div class="form-check mt-1">
+              <input class="form-check-input" type="checkbox" name="remove_attachments[]"
+                     value="primary" id="rmAttPrimary">
+              <label class="form-check-label small text-danger" for="rmAttPrimary">
+                حذف المرفق الحالي
+              </label>
+            </div>
+            {% endif %}
+          </div>
+          {% endif %}
+
+          <label class="form-label">
+            {% if hw and hw.attachment_path %}إضافة مرفقات{% else %}رفع مرفقات{% endif %}
+          </label>
+          <input type="file" name="attachments[]" class="form-control"
+                 accept=".jpg,.jpeg,.png,.webp,.pdf" multiple>
+          <div class="form-text">يمكن إرفاق حتى 3 صور أو ملف PDF واحد بحد أقصى 5 MB.</div>
+          <div class="form-text">يتم ضغط الصور تلقائياً مع الحفاظ على وضوحها.</div>
+          {% if hw and hw.attachment_path %}
+          <div class="form-text">
+            تُضاف الصور الجديدة إلى الصور الحالية (وتحلّ محلّ ملف PDF إن وُجد)، ويستبدل ملف PDF الجديد جميع المرفقات الحالية.
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% elif school_cfg.field_visible('homework', 'attachment') %}
+      {# Institute: the original single attachment, unchanged. #}
       <div class="card mb-3">
         <div class="card-header fw-bold">
           <i class="bi bi-paperclip text-secondary me-1"></i>المرفق (اختياري)
