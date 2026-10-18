@@ -39,7 +39,7 @@
       <div class="mb-3">
         <label class="form-label">العنوان</label>
         <input type="text" name="title" class="form-control"
-               value="{{ form_data.get('title', video.title if is_edit else '') }}">
+               value="{{ form_data.get('title', (video.title or '') if is_edit else '') }}">
       </div>
 
       {# ── Description ───────────────────────────────────────────────── #}
@@ -70,7 +70,7 @@
         <label class="form-label">الوسائط الحالية</label>
         {% if video.media_type == 'image' %}
         <div>
-          <img src="{{ _board_media_url }}" alt="{{ video.title }}"
+          <img src="{{ _board_media_url }}" alt="{{ video.title or '' }}"
                style="max-height:160px;max-width:100%;border-radius:6px;border:1px solid #dee2e6">
         </div>
         {% else %}
