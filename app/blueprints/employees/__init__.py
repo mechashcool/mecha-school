@@ -1342,7 +1342,7 @@ def index():
         query = query.filter(Employee.job_title == job_filter)
     if dep_filter:
         query = query.filter(Employee.department == dep_filter)
-    employees = (query.order_by(Employee.created_at.desc())
+    employees = (query.order_by(Employee.created_at.desc(), Employee.id.desc())
                  .paginate(page=page, per_page=20, error_out=False))
     filter_ctx = _employee_filter_context(school)
     return render_template('employees/index.html',
@@ -1405,7 +1405,7 @@ def search():
         query = query.filter(Employee.job_title == job_filter)
     if dep_filter:
         query = query.filter(Employee.department == dep_filter)
-    paginated = query.order_by(Employee.created_at.desc()).paginate(
+    paginated = query.order_by(Employee.created_at.desc(), Employee.id.desc()).paginate(
         page=page, per_page=20, error_out=False)
 
     from app.utils.helpers import resolve_photo_url as _rpu
@@ -1430,6 +1430,7 @@ def search():
         'total':      paginated.total,
         'page':       paginated.page,
         'pages':      paginated.pages,
+        'per_page':   paginated.per_page,
         'has_next':   paginated.has_next,
         'has_prev':   paginated.has_prev,
         'next_num':   paginated.next_num,

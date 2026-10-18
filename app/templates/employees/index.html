@@ -366,9 +366,44 @@
     </table>
   </div>
   <div id="emp-pagination-wrapper"
-       class="{{ '' if employees.pages > 1 else 'd-none' }} card-footer d-flex justify-content-between align-items-center">
-    <small class="text-muted" id="emp-page-info">عرض {{ employees.items|length }} من {{ employees.total }}</small>
-    <nav><ul class="pagination pagination-sm mb-0" id="emp-pagination"></ul></nav>
+       class="{{ '' if employees.pages > 1 else 'd-none' }} card-footer d-flex flex-wrap gap-2 justify-content-between align-items-center">
+    {% set _first = (employees.page - 1) * employees.per_page + 1 %}
+    <small class="text-muted" id="emp-page-info">
+      {%- if employees.items -%}
+      عرض {{ _first }}–{{ _first + employees.items|length - 1 }} من {{ employees.total }}
+      {%- else -%}
+      عرض 0 من {{ employees.total }}
+      {%- endif -%}
+    </small>
+    {# Server-rendered links keep the current search/filters in the URL; the
+       live-search JS replaces them with data-page links after a search. #}
+    {% set _pargs = {'q': search or None, 'job_title': filter_job or None,
+                     'department': filter_dep or None} %}
+    <nav aria-label="ترقيم صفحات الموظفين">
+      <ul class="pagination pagination-sm mb-0 flex-wrap" id="emp-pagination">
+        {% if employees.pages > 1 %}
+        {% if employees.has_prev %}
+        <li class="page-item">
+          <a class="page-link" href="{{ url_for('employees.index', page=employees.prev_num, **_pargs) }}">السابق</a>
+        </li>
+        {% endif %}
+        {% for p in employees.iter_pages() %}
+          {% if p %}
+          <li class="page-item {{ 'active' if p == employees.page }}">
+            <a class="page-link" href="{{ url_for('employees.index', page=p, **_pargs) }}">{{ p }}</a>
+          </li>
+          {% else %}
+          <li class="page-item disabled"><span class="page-link">…</span></li>
+          {% endif %}
+        {% endfor %}
+        {% if employees.has_next %}
+        <li class="page-item">
+          <a class="page-link" href="{{ url_for('employees.index', page=employees.next_num, **_pargs) }}">التالي</a>
+        </li>
+        {% endif %}
+        {% endif %}
+      </ul>
+    </nav>
   </div>
 </div>
 {% endblock %}
@@ -487,12 +522,16 @@
       return;
     }
     paginationWrap.classList.remove('d-none');
-    pageInfo.textContent = `عرض ${data.items ? data.items.length : 0} من ${data.total}`;
+    const shown = data.items ? data.items.length : 0;
+    const first = (data.page - 1) * data.per_page + 1;
+    pageInfo.textContent = shown
+      ? `عرض ${first}–${first + shown - 1} من ${data.total}`
+      : `عرض 0 من ${data.total}`;
 
     // Build simple prev / numbered / next
     let html = '';
     if (data.has_prev) {
-      html += `<li class="page-item"><a class="page-link" href="#" data-page="${data.prev_num}">‹</a></li>`;
+      html += `<li class="page-item"><a class="page-link" href="#" data-page="${data.prev_num}">السابق</a></li>`;
     }
     // Show up to 7 pages around current
     const p = data.page, total = data.pages;
@@ -505,7 +544,7 @@
       }
     }
     if (data.has_next) {
-      html += `<li class="page-item"><a class="page-link" href="#" data-page="${data.next_num}">›</a></li>`;
+      html += `<li class="page-item"><a class="page-link" href="#" data-page="${data.next_num}">التالي</a></li>`;
     }
     paginationEl.innerHTML = html;
   }
