@@ -111,8 +111,9 @@
                      data-max="{{ exam.max_marks }}" data-pass="{{ exam.pass_marks }}"
                      data-index="{{ loop.index }}"
                      min="0" max="{{ exam.max_marks }}" step="0.5"
-                     value="{{ (_p.get('marks_' ~ student.id) if _p else None)
-                               or (res.marks if res else '') }}"
+                     value="{{ _p.get('marks_' ~ student.id)
+                               if (_p and ('marks_' ~ student.id) in _p)
+                               else (res.marks if res else '') }}"
                      placeholder="أدخل الدرجة">
             </td>
             <td>
@@ -195,10 +196,18 @@ const gradeMap = [
 
 document.querySelectorAll('.marks-input').forEach(inp => {
   inp.addEventListener('input', function() {
+    const idx     = this.dataset.index;
+    if (this.value.trim() === '') {
+      // An empty box is "not entered" (saving removes the grade), never 0.
+      document.getElementById('grade_' + idx).textContent = '—';
+      const passEl = document.getElementById('pass_' + idx);
+      passEl.textContent = '—';
+      passEl.className   = 'badge-status';
+      return;
+    }
     const marks   = parseFloat(this.value) || 0;
     const max     = parseFloat(this.dataset.max);
     const pass    = parseFloat(this.dataset.pass);
-    const idx     = this.dataset.index;
     const pct     = (marks / max) * 100;
 
     let letter = 'F';

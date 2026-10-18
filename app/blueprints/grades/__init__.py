@@ -1066,6 +1066,7 @@ def enter_results(exam_id):
             by_id      = {st.id: st for st in students}
             max_allowed = float(exam.max_marks)
             parsed = []          # (student, marks) — built, not written
+            cleared = []         # stored results whose box was emptied
 
             for key, raw in request.form.items():
                 if not key.startswith('marks_'):
@@ -1076,9 +1077,14 @@ def enter_results(exam_id):
                     continue
                 value = (raw or '').strip()
                 if value == '':
-                    # Empty stays "not entered": no row is created and any
-                    # existing row is left exactly as it is. This preserves the
-                    # current distinction between an unentered mark and 0.
+                    # Empty means "not entered", never 0. An emptied box of a
+                    # current roster student that already has a result removes
+                    # that result, so the student is ungraded again. Only rows
+                    # of the editable roster can be cleared; a blank for any
+                    # other id is ignored as before. Applied only after every
+                    # row has validated.
+                    if sid in roster_ids and sid in existing:
+                        cleared.append(existing[sid])
                     continue
                 if sid not in roster_ids:
                     # A forged id, a student of another group, an ended
@@ -1146,6 +1152,9 @@ def enter_results(exam_id):
                     ))
                 graded_students.append(student)
 
+            for res in cleared:
+                db.session.delete(res)
+
             db.session.commit()
 
             results = ExamResult.query.filter_by(exam_id=exam_id)\
@@ -1163,8 +1172,17 @@ def enter_results(exam_id):
 
         graded_students = []
         for student in students:
-            marks_str = request.form.get(f'marks_{student.id}', '')
+            field = f'marks_{student.id}'
+            if field not in request.form:
+                # No input was submitted for this student (for example one
+                # added to the section after the page loaded): leave as is.
+                continue
+            marks_str = request.form.get(field, '').strip()
             if marks_str == '':
+                # An emptied box means "not entered", never 0: remove any
+                # stored result so the student is ungraded again.
+                if student.id in existing:
+                    db.session.delete(existing[student.id])
                 continue
             marks = float(marks_str)
             grade = calculate_grade_letter(marks, float(exam.max_marks))
