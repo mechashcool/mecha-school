@@ -325,6 +325,108 @@ def _notify_student_parents(student, school_id, title, body, fcm_data=None):
         _notify_parent(pid, school_id, title, body, fcm_data)
 
 
+# Upper bound for one admin group leave (a whole section fits comfortably).
+MAX_GROUP_LEAVE_STUDENTS = 200
+
+
+def _parse_leave_student_ids(form):
+    """Read the selected student ids from the admin leave form.
+
+    Group mode posts ``student_ids`` (one value per selected student); the
+    direct-search mode and older clients post a single ``student_id``.
+    Returns (ids, invalid): ids de-duplicated in submitted order; invalid=True
+    when any submitted value is not a positive integer (the caller rejects the
+    whole submission rather than silently dropping values).
+    """
+    raw = [v.strip() for v in form.getlist('student_ids') if v and v.strip()]
+    if not raw:
+        single = (form.get('student_id') or '').strip()
+        raw = [single] if single else []
+    ids = []
+    for value in raw:
+        # ASCII digits only and within PostgreSQL INTEGER range.
+        if not (value.isascii() and value.isdigit() and len(value) <= 10):
+            return [], True
+        ident = int(value)
+        if not 0 < ident <= 2_147_483_647:
+            return [], True
+        ids.append(ident)
+    return _unique_ids(ids), False
+
+
+def _leave_building_scope(query, school_id):
+    """Narrow a Student query to the current user's buildings in this school
+    (no-op when the buildings feature is off or the user is unrestricted)."""
+    from app.utils.buildings import apply_building_scope_to_students
+    school = (School.query.execution_options(bypass_tenant_scope=True)
+              .filter_by(id=school_id).first())
+    if school is None:
+        return query
+    return apply_building_scope_to_students(query, current_user, school)
+
+
+def _leave_students_for_ids(school_id, student_ids):
+    """Active students of THIS school (building-scoped for the current user)
+    among ``student_ids`` — one query. The caller compares the result size with
+    the request to reject any foreign, inactive or unknown id."""
+    query = (Student.query
+             .execution_options(bypass_tenant_scope=True)
+             .filter(Student.id.in_(student_ids),
+                     Student.school_id == school_id,
+                     Student.status == 'active'))
+    return _leave_building_scope(query, school_id).all()
+
+
+def _queue_leave_parent_notifications(students, school_id):
+    """Add one in-app Notification per (linked parent, student) — same title,
+    body and ntype as _notify_student_parents — WITHOUT committing, so the rows
+    commit atomically with the leave requests. Parent links are read in one
+    query and pinned to parents of this school. Returns the FCM push items for
+    _send_leave_parent_pushes(), to be sent only after the commit succeeds.
+    """
+    by_id = {s.id: s for s in students}
+    if not by_id:
+        return []
+    links = (db.session.query(parent_students.c.user_id, parent_students.c.student_id)
+             .join(User, User.id == parent_students.c.user_id)
+             .filter(parent_students.c.student_id.in_(list(by_id)),
+                     User.school_id == school_id)
+             .all())
+    title = 'طلب إجازة من الإدارة'
+    push_items = []
+    for pid, sid in links:
+        student = by_id[sid]
+        body = f'أضافت الإدارة طلب إجازة للطالب {student.full_name}.'
+        db.session.add(Notification(
+            school_id=school_id,
+            title=title,
+            body=body,
+            ntype='parent_request',
+            target_user_id=pid,
+            created_by=current_user.id,
+        ))
+        push_items.append((pid, title, body, {
+            'type':       'leave_request_update',
+            'student_id': str(sid),
+            'screen':     'leave_requests',
+        }))
+    return push_items
+
+
+def _send_leave_parent_pushes(push_items):
+    """Hand committed leave notifications to FCM off the request thread."""
+    if not push_items:
+        return
+    try:
+        from app.services import async_dispatch
+        from app.services.fcm_service import is_enabled, send_push_batch
+        if is_enabled():
+            async_dispatch.submit(send_push_batch, push_items)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            '[leave-notify] FCM dispatch failed items=%d', len(push_items))
+
+
 def _unique_ids(ids):
     seen = set()
     result = []
@@ -1932,17 +2034,31 @@ def leave_request_create_admin():
         stage_val   = request.form.get('stage', '').strip()
         grade_id    = request.form.get('grade_id', type=int)
         section_id  = request.form.get('section_id', type=int)
-        student_id  = request.form.get('student_id', type=int)
+        student_ids, ids_invalid = _parse_leave_student_ids(request.form)
+        is_group    = len(student_ids) > 1
         leave_type  = request.form.get('leave_type', '').strip()
         from_date   = _parse_leave_date(request.form.get('from_date'))
         to_date     = _parse_leave_date(request.form.get('to_date'))
         notes       = request.form.get('notes', '').strip() or None
         status_val  = request.form.get('status', 'pending').strip()
-        attachment, upload_error = _admin_save_leave_attachment(
-            f'admin-leave-{school_id}')
 
         errors = []
-        grade = section = student = None
+        grade = section = None
+        students = []
+
+        # One stored file cannot belong to several leave rows: upload ownership
+        # resolves a path to a single LeaveRequest/student, so a shared path
+        # would be authorised against an arbitrary student of the group. Group
+        # leaves therefore refuse attachments — checked BEFORE any upload.
+        attachment = upload_error = None
+        if is_group:
+            upload = request.files.get('attachment')
+            if upload and upload.filename:
+                errors.append('لا يمكن إرفاق ملف مع إجازة لأكثر من طالب. '
+                              'أضف المرفق لكل طالب على حدة.')
+        else:
+            attachment, upload_error = _admin_save_leave_attachment(
+                f'admin-leave-{school_id}')
 
         if not active_year:
             errors.append('لا يوجد عام دراسي نشط.')
@@ -1972,18 +2088,30 @@ def leave_request_create_admin():
         elif section_id and not grade:
             errors.append('الشعبة لا تنتمي للصف المحدد.')
 
-        # Student is always required; must belong to this school and be active.
-        if student_id:
-            student = (Student.query
-                       .execution_options(bypass_tenant_scope=True)
-                       .filter_by(id=student_id, school_id=school_id, status='active')
-                       .first())
-            if not student:
-                errors.append('الطالب غير موجود أو لا ينتمي لهذه المدرسة.')
-            elif section and student.section_id != section.id:
-                errors.append('الطالب لا ينتمي للشعبة المحددة.')
-        else:
+        # At least one student is required; every one must be an active student
+        # of this school (one scoped query) and, when a section is chosen,
+        # belong to it. A group (2+ students) is limited to one selected
+        # section. Any bad id rejects the whole submission — nothing is created.
+        if ids_invalid:
+            errors.append('قائمة الطلاب المحددين غير صالحة.')
+        elif not student_ids:
             errors.append('يرجى اختيار الطالب.')
+        elif is_group and not section_id:
+            errors.append('الإجازة لأكثر من طالب تتطلب اختيار الشعبة.')
+        elif len(student_ids) > MAX_GROUP_LEAVE_STUDENTS:
+            errors.append(f'لا يمكن إضافة الإجازة لأكثر من '
+                          f'{MAX_GROUP_LEAVE_STUDENTS} طالب في المرة الواحدة.')
+        else:
+            found = {s.id: s for s in _leave_students_for_ids(school_id, student_ids)}
+            students = [found[sid] for sid in student_ids if sid in found]
+            if len(students) != len(student_ids):
+                errors.append('بعض الطلاب المحددين غير موجودين أو لا ينتمون لهذه المدرسة.'
+                              if is_group else
+                              'الطالب غير موجود أو لا ينتمي لهذه المدرسة.')
+            elif section and any(s.section_id != section.id for s in students):
+                errors.append('بعض الطلاب المحددين لا ينتمون للشعبة المحددة.'
+                              if is_group else
+                              'الطالب لا ينتمي للشعبة المحددة.')
 
         if leave_type not in LEAVE_TYPES:
             errors.append('نوع الإجازة غير صالح.')
@@ -2006,49 +2134,51 @@ def leave_request_create_admin():
                                    grades_data=grades_data,
                                    type_labels=LEAVE_TYPES,
                                    status_labels=LEAVE_STATUS,
-                                   form_data=request.form), 422
+                                   form_data=request.form,
+                                   selected_student_ids=student_ids), 422
 
-        leave_obj = LeaveRequest(
-            parent_id=None,
-            student_id=student.id,
-            school_id=school_id,
-            academic_year_id=active_year.id,
-            leave_type=leave_type,
-            from_date=from_date,
-            to_date=to_date,
-            notes=notes,
-            attachment_path=attachment,
-            status=status_val,
-            source='admin',
-            created_by_user_id=current_user.id,
-        )
-        if status_val in ('approved', 'rejected'):
-            leave_obj.reviewed_by = current_user.id
-            leave_obj.reviewed_at = datetime.utcnow()
+        # One normal LeaveRequest row per student, identical leave data, all
+        # committed together with their parent notifications (all or nothing).
+        reviewed_at = (datetime.utcnow()
+                       if status_val in ('approved', 'rejected') else None)
+        leave_objs = []
+        for student in students:
+            leave_obj = LeaveRequest(
+                parent_id=None,
+                student_id=student.id,
+                school_id=school_id,
+                academic_year_id=active_year.id,
+                leave_type=leave_type,
+                from_date=from_date,
+                to_date=to_date,
+                notes=notes,
+                attachment_path=attachment,
+                status=status_val,
+                source='admin',
+                created_by_user_id=current_user.id,
+            )
+            if reviewed_at:
+                leave_obj.reviewed_by = current_user.id
+                leave_obj.reviewed_at = reviewed_at
+            leave_objs.append(leave_obj)
 
-        db.session.add(leave_obj)
-        _notify_student_parents(
-            student,
-            school_id,
-            title='طلب إجازة من الإدارة',
-            body=f'أضافت الإدارة طلب إجازة للطالب {student.full_name}.',
-            fcm_data={
-                'type':       'leave_request_update',
-                'student_id': str(student.id),
-                'screen':     'leave_requests',
-            },
-        )
+        db.session.add_all(leave_objs)
+        push_items = _queue_leave_parent_notifications(students, school_id)
         db.session.commit()
+        _send_leave_parent_pushes(push_items)
         # If admin created leave as already-approved, write attendance records now
         if status_val == 'approved':
-            try:
-                from app.services.leave_attendance import sync_student_leave
-                sync_student_leave(leave_obj)
-            except Exception:
-                import logging
-                logging.getLogger(__name__).exception(
-                    '[leave-att] sync_student_leave failed leave_id=%s', leave_obj.id)
-        flash('تم إضافة طلب الإجازة بنجاح.', 'success')
+            from app.services.leave_attendance import sync_student_leave
+            for leave_obj in leave_objs:
+                try:
+                    sync_student_leave(leave_obj)
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        '[leave-att] sync_student_leave failed leave_id=%s', leave_obj.id)
+        if is_group:
+            flash(f'تمت إضافة الإجازة بنجاح لـ {len(leave_objs)} طلاب.', 'success')
+        else:
+            flash('تم إضافة طلب الإجازة بنجاح.', 'success')
         return redirect(url_for('admin.leave_requests_list'))
 
     return render_template('admin/leave_request_create_admin.html',
@@ -2056,7 +2186,8 @@ def leave_request_create_admin():
                            grades_data=grades_data,
                            type_labels=LEAVE_TYPES,
                            status_labels=LEAVE_STATUS,
-                           form_data={})
+                           form_data={},
+                           selected_student_ids=[])
 
 
 @admin_bp.route('/students/<int:student_id>/leave-archive')
@@ -2317,7 +2448,9 @@ def api_leave_sections_for_grade():
 @login_required
 @permission_required('manage_leave_requests')
 def api_leave_students_for_section():
-    """Return students in a section (JSON) — scoped by school."""
+    """Return the active students of a section (JSON) — scoped by school and
+    the user's buildings: exactly the students the create route accepts, so
+    "select all" never picks a student the submission would reject."""
     school_id = _admin_scope_id()
     section_id = request.args.get('section_id', type=int)
     if not school_id or not section_id:
@@ -2328,11 +2461,11 @@ def api_leave_students_for_section():
                .first())
     if not section:
         return jsonify([])
-    students = (Student.query
-                .execution_options(bypass_tenant_scope=True)
-                .filter_by(section_id=section.id, school_id=school_id)
-                .order_by(Student.full_name)
-                .all())
+    query = (Student.query
+             .execution_options(bypass_tenant_scope=True)
+             .filter_by(section_id=section.id, school_id=school_id, status='active'))
+    students = (_leave_building_scope(query, school_id)
+                .order_by(Student.full_name).all())
     return jsonify([
         {'id': s.id, 'name': s.full_name, 'code': s.student_id}
         for s in students
@@ -2343,21 +2476,21 @@ def api_leave_students_for_section():
 @login_required
 @permission_required('manage_leave_requests')
 def api_leave_students_search():
-    """Search active students by name or code (JSON) — scoped by school."""
+    """Search active students by name or code (JSON) — scoped by school and
+    the user's buildings."""
     school_id = _admin_scope_id()
     q = request.args.get('q', '').strip()
     if not school_id or len(q) < 2:
         return jsonify([])
-    students = (Student.query
-                .execution_options(bypass_tenant_scope=True)
-                .filter_by(school_id=school_id, status='active')
-                .filter(or_(
-                    Student.full_name.ilike(f'%{q}%'),
-                    Student.student_id.ilike(f'%{q}%'),
-                ))
-                .order_by(Student.full_name)
-                .limit(20)
-                .all())
+    query = (Student.query
+             .execution_options(bypass_tenant_scope=True)
+             .filter_by(school_id=school_id, status='active')
+             .filter(or_(
+                 Student.full_name.ilike(f'%{q}%'),
+                 Student.student_id.ilike(f'%{q}%'),
+             )))
+    students = (_leave_building_scope(query, school_id)
+                .order_by(Student.full_name).limit(20).all())
     return jsonify([
         {'id': s.id, 'name': s.full_name, 'code': s.student_id}
         for s in students
