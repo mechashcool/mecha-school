@@ -58,16 +58,12 @@
         <select name="section_id" id="sectionSelect" class="form-select" disabled>
           <option value="">اختر الشعبة</option>
         </select>
-        <div class="form-text">اختيار الشعبة يُحمّل قائمة طلاب الشعبة ويتيح تحديد أكثر من طالب. بدون شعبة يمكن البحث المباشر عن طالب واحد.</div>
+        <div class="form-text">المرحلة والصف والشعبة للتصفية فقط: يمكن تحديد طلاب من شعب وصفوف مختلفة، ويبقى الطلاب المحددون عند تغيير التصفية. بدون شعبة يمكن البحث المباشر.</div>
       </div>
 
-      {# ── Student selection — dual mode ── #}
+      {# ── Student selection — browse by section or search; one global selection ── #}
       <div class="mb-3">
         <label class="form-label">الطالب / الطلاب <span class="text-danger">*</span></label>
-
-        {# Always-submitted hidden field #}
-        <input type="hidden" name="student_id"      id="studentIdHidden"      value="{{ form_data.get('student_id', '') }}">
-        <input type="hidden" name="student_display" id="studentDisplayHidden" value="{{ form_data.get('student_display', '') }}">
 
         {# Search mode — default when no section is selected #}
         <div id="searchWrapper">
@@ -81,13 +77,9 @@
             </div>
           </div>
           <div id="searchSelected" class="mt-1 small text-success fw-600" style="min-height:18px;"></div>
-          <div id="searchError"    class="mt-1 small text-danger"  style="display:none;">
-            يرجى اختيار الطالب من نتائج البحث.
-          </div>
         </div>
 
-        {# Section mode — multi-select within the selected section only.
-           Each selected student is submitted as one student_ids value. #}
+        {# Section mode — browse the selected section's students #}
         <div id="dropdownWrapper" style="display:none">
           <select id="sectionStudentSelect" class="form-select" disabled>
             <option value="">— اختر طالباً لإضافته —</option>
@@ -96,17 +88,22 @@
             <button type="button" id="selectAllBtn" class="btn btn-sm btn-outline-primary" disabled>
               <i class="bi bi-check2-all me-1"></i>تحديد كل طلاب الشعبة
             </button>
+          </div>
+        </div>
+
+        {# Global selection — kept across stage/grade/section/search changes.
+           Each selected student is submitted as one student_ids value. #}
+        <div class="mt-3">
+          <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+            <div class="small fw-600">الطلاب المحددون (<span id="selectedCount">0</span>)</div>
             <button type="button" id="clearAllBtn" class="btn btn-sm btn-outline-secondary" disabled>
               <i class="bi bi-x-lg me-1"></i>إلغاء تحديد الكل
             </button>
           </div>
-          <div class="mt-3">
-            <div class="small fw-600 mb-2">الطلاب المحددون (<span id="selectedCount">0</span>)</div>
-            <div id="selectedChips" class="d-flex flex-wrap gap-2"></div>
-            <div id="selectedEmpty" class="small text-muted">لم يتم تحديد أي طالب بعد.</div>
-          </div>
+          <div id="selectedChips" class="d-flex flex-wrap gap-2"></div>
+          <div id="selectedEmpty" class="small text-muted">لم يتم تحديد أي طالب بعد.</div>
           <div id="selectedInputs"></div>
-          <div id="dropdownError" class="mt-1 small text-danger" style="display:none;">
+          <div id="selectionError" class="mt-1 small text-danger" style="display:none;">
             يرجى اختيار طالب واحد على الأقل.
           </div>
         </div>
@@ -176,26 +173,24 @@
   var gradeEl   = document.getElementById('gradeSelect');
   var sectionEl = document.getElementById('sectionSelect');
 
-  var studentIdInput      = document.getElementById('studentIdHidden');
-  var studentDisplayInput = document.getElementById('studentDisplayHidden');
-
-  // Search-mode elements (single student, no section)
+  // Search mode (no section selected)
   var searchWrapper  = document.getElementById('searchWrapper');
   var searchInput    = document.getElementById('studentSearchInput');
   var searchDropdown = document.getElementById('searchDropdown');
   var searchSelected = document.getElementById('searchSelected');
-  var searchError    = document.getElementById('searchError');
 
-  // Section-mode elements (multi-select within the selected section)
+  // Section mode (browse the selected section)
   var dropdownWrapper  = document.getElementById('dropdownWrapper');
   var sectionStudentEl = document.getElementById('sectionStudentSelect');
-  var dropdownError    = document.getElementById('dropdownError');
   var selectAllBtn     = document.getElementById('selectAllBtn');
+
+  // Global selection area
   var clearAllBtn      = document.getElementById('clearAllBtn');
   var selectedCountEl  = document.getElementById('selectedCount');
   var selectedChipsEl  = document.getElementById('selectedChips');
   var selectedEmptyEl  = document.getElementById('selectedEmpty');
   var selectedInputsEl = document.getElementById('selectedInputs');
+  var selectionError   = document.getElementById('selectionError');
 
   var attachmentInput = document.getElementById('attachmentInput');
   var attachmentNote  = document.getElementById('attachmentGroupNote');
@@ -205,51 +200,45 @@
   var searchUrl   = '{{ url_for("admin.api_leave_students_search") }}';
 
   var STUDENT_PLACEHOLDER = '— اختر طالباً لإضافته —';
-  var CHANGE_CONFIRM = 'تغيير الاختيار سيُلغي تحديد الطلاب المحددين. هل تريد المتابعة؟';
 
   var _searchTimer = null;
 
-  // Students of the currently loaded section, in display order, and the
-  // selected subset. Only ids from sectionStudents can ever be selected.
-  var sectionStudents = [];   // [{id: '12', label: 'name (code)'}]
+  // Global selection: ids in selection order plus a display label per id.
+  // Stage / grade / section / search are only filters for FINDING students —
+  // changing them never touches this selection. Only a chip's ×, "clear all"
+  // or a new page load remove students. The server validates every id again.
   var selected = [];          // ['12', '15', ...]
+  var labels = {};            // {'12': 'name (code)'}
+
+  // Students of the currently browsed section (dropdown + "select all").
+  var sectionStudents = [];   // [{id: '12', name: ..., code: ...}]
+
+  function labelOf(s) {
+    return s.name + (s.code ? ' (' + s.code + ')' : '');
+  }
 
   // ── Mode switching ─────────────────────────────────────────────────────────
 
   function showSearchMode() {
     searchWrapper.style.display = 'block';
     dropdownWrapper.style.display = 'none';
-    searchError.style.display = 'none';
-    dropdownError.style.display = 'none';
   }
 
   function showDropdownMode() {
     searchWrapper.style.display = 'none';
     dropdownWrapper.style.display = 'block';
-    searchError.style.display = 'none';
-    dropdownError.style.display = 'none';
   }
 
-  // ── Section multi-select ───────────────────────────────────────────────────
-
-  function findStudent(id) {
-    for (var i = 0; i < sectionStudents.length; i++) {
-      if (sectionStudents[i].id === id) return sectionStudents[i];
-    }
-    return null;
-  }
+  // ── Global selection ───────────────────────────────────────────────────────
 
   function renderSelected() {
     selectedChipsEl.innerHTML = '';
     selectedInputsEl.innerHTML = '';
     selected.forEach(function (id) {
-      var s = findStudent(id);
-      if (!s) return;
-
       var chip = document.createElement('span');
       chip.className = 'leave-chip';
       var name = document.createElement('span');
-      name.textContent = s.label;
+      name.textContent = labels[id] || id;
       var remove = document.createElement('button');
       remove.type = 'button';
       remove.setAttribute('aria-label', 'إزالة');
@@ -271,22 +260,34 @@
       if (opt.value) opt.disabled = selected.indexOf(opt.value) !== -1;
     });
 
+    var allSectionSelected = sectionStudents.every(function (s) {
+      return selected.indexOf(s.id) !== -1;
+    });
     selectedCountEl.textContent = selected.length;
     selectedEmptyEl.style.display = selected.length ? 'none' : 'block';
-    selectAllBtn.disabled = !sectionStudents.length || selected.length === sectionStudents.length;
+    selectAllBtn.disabled = !sectionStudents.length || allSectionSelected;
     clearAllBtn.disabled = !selected.length;
-    if (selected.length) dropdownError.style.display = 'none';
+    if (selected.length) selectionError.style.display = 'none';
     updateAttachmentState();
   }
 
-  function addStudent(id) {
-    if (!findStudent(id) || selected.indexOf(id) !== -1) return;
-    selected.push(id);
+  // Adds to the selection (never replaces it); duplicates are ignored.
+  function addStudents(list) {
+    list.forEach(function (s) {
+      var id = String(s.id);
+      labels[id] = labelOf(s);
+      if (selected.indexOf(id) === -1) selected.push(id);
+    });
     renderSelected();
   }
 
   function removeStudent(id) {
     selected = selected.filter(function (x) { return x !== id; });
+    renderSelected();
+  }
+
+  function clearSelection() {
+    selected = [];
     renderSelected();
   }
 
@@ -299,58 +300,41 @@
     attachmentNote.style.display = group ? 'block' : 'none';
   }
 
-  function loadSectionStudents(sid, preselect) {
+  // ── Browsing pickers (reset these, never the selection) ────────────────────
+
+  function resetSectionPicker() {
+    sectionStudents = [];
+    sectionStudentEl.innerHTML = '<option value="">' + STUDENT_PLACEHOLDER + '</option>';
+    sectionStudentEl.disabled = true;
+    renderSelected();
+  }
+
+  function resetSearch() {
+    clearTimeout(_searchTimer);
+    searchInput.value = '';
+    searchSelected.textContent = '';
+    searchDropdown.style.display = 'none';
+    searchDropdown.innerHTML = '';
+  }
+
+  function loadSectionStudents(sid) {
     return fetch(studentsUrl + '?section_id=' + encodeURIComponent(sid))
       .then(function (r) { return r.json(); })
       .then(function (data) {
         // Ignore a late response for a section that is no longer selected.
         if (sectionEl.value !== String(sid)) return;
         sectionStudents = data.map(function (s) {
-          return { id: String(s.id), label: s.name + (s.code ? ' (' + s.code + ')' : '') };
+          return { id: String(s.id), name: s.name, code: s.code };
         });
         sectionStudents.forEach(function (s) {
           var opt = document.createElement('option');
           opt.value = s.id;
-          opt.textContent = s.label;
+          opt.textContent = labelOf(s);
           sectionStudentEl.appendChild(opt);
         });
         sectionStudentEl.disabled = sectionStudents.length === 0;
-        selected = (preselect || []).map(String).filter(function (id, i, arr) {
-          return findStudent(id) && arr.indexOf(id) === i;
-        });
         renderSelected();
       });
-  }
-
-  // ── Student reset ──────────────────────────────────────────────────────────
-
-  function clearStudent() {
-    studentIdInput.value = '';
-    studentDisplayInput.value = '';
-    searchInput.value = '';
-    searchSelected.textContent = '';
-    searchDropdown.style.display = 'none';
-    searchDropdown.innerHTML = '';
-    searchInput.classList.remove('is-invalid');
-    sectionStudentEl.innerHTML = '<option value="">' + STUDENT_PLACEHOLDER + '</option>';
-    sectionStudentEl.disabled = true;
-    sectionStudentEl.classList.remove('is-invalid');
-    searchError.style.display = 'none';
-    dropdownError.style.display = 'none';
-    sectionStudents = [];
-    selected = [];
-    renderSelected();
-  }
-
-  // Changing stage/grade/section discards the selection; ask first when
-  // students are selected and restore the previous value on cancel.
-  function confirmSelectionReset(el) {
-    if (selected.length && !window.confirm(CHANGE_CONFIRM)) {
-      el.value = el.dataset.prev || '';
-      return false;
-    }
-    el.dataset.prev = el.value;
-    return true;
   }
 
   // ── Cascade helpers ────────────────────────────────────────────────────────
@@ -358,13 +342,12 @@
   function resetSelect(el, placeholder) {
     el.innerHTML = '<option value="">' + placeholder + '</option>';
     el.disabled = true;
-    el.dataset.prev = '';
   }
 
   function populateGrades(stage) {
     resetSelect(gradeEl, 'اختر الصف');
     resetSelect(sectionEl, 'اختر الشعبة');
-    clearStudent();
+    resetSectionPicker();
     showSearchMode();
     if (!stage) return;
     var matching = GRADES.filter(function (g) { return g.stage === stage; });
@@ -391,67 +374,53 @@
       });
   }
 
-  // ── Stage change ───────────────────────────────────────────────────────────
+  // ── Filter changes: refresh the pickers only ───────────────────────────────
 
   stageEl.addEventListener('change', function () {
-    if (!confirmSelectionReset(this)) return;
     populateGrades(this.value);
   });
 
-  // ── Grade change ───────────────────────────────────────────────────────────
-
   gradeEl.addEventListener('change', function () {
-    if (!confirmSelectionReset(this)) return;
     resetSelect(sectionEl, 'اختر الشعبة');
-    clearStudent();
+    resetSectionPicker();
     showSearchMode();
     var gid = this.value;
     if (!gid) return;
     loadSections(gid);
   });
 
-  // ── Section change ─────────────────────────────────────────────────────────
-
   sectionEl.addEventListener('change', function () {
-    if (!confirmSelectionReset(this)) return;
-    clearStudent();
+    resetSectionPicker();
     var sid = this.value;
     if (!sid) {
       showSearchMode();
       return;
     }
+    resetSearch();
     showDropdownMode();
-    loadSectionStudents(sid, []);
+    loadSectionStudents(sid);
   });
 
   // ── Section-mode selection ─────────────────────────────────────────────────
 
   sectionStudentEl.addEventListener('change', function () {
-    if (this.value) addStudent(this.value);
+    var id = this.value;
+    var match = sectionStudents.filter(function (s) { return s.id === id; });
+    if (match.length) addStudents(match);
     this.value = '';
-    sectionStudentEl.classList.remove('is-invalid');
   });
 
   selectAllBtn.addEventListener('click', function () {
-    selected = sectionStudents.map(function (s) { return s.id; });
-    renderSelected();
+    addStudents(sectionStudents);
   });
 
-  clearAllBtn.addEventListener('click', function () {
-    selected = [];
-    renderSelected();
-  });
+  clearAllBtn.addEventListener('click', clearSelection);
 
-  // ── Search-mode autocomplete ───────────────────────────────────────────────
+  // ── Search-mode autocomplete (adds to the selection) ───────────────────────
 
   searchInput.addEventListener('input', function () {
     var q = this.value.trim();
-    // Clear previously selected student when typing again
-    studentIdInput.value = '';
-    studentDisplayInput.value = '';
     searchSelected.textContent = '';
-    searchInput.classList.remove('is-invalid');
-    searchError.style.display = 'none';
 
     if (q.length < 2) {
       searchDropdown.style.display = 'none';
@@ -476,18 +445,14 @@
           data.forEach(function (s) {
             var item = document.createElement('div');
             item.style.cssText = 'padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #f0f0f0;';
-            item.textContent = s.name + ' (' + s.code + ')';
+            item.textContent = labelOf(s);
             item.addEventListener('mousedown', function (e) {
               e.preventDefault();
-              studentIdInput.value = s.id;
-              var display = s.name + ' (' + s.code + ')';
-              studentDisplayInput.value = display;
-              searchInput.value = display;
-              searchSelected.textContent = '✓ تم اختيار الطالب';
+              addStudents([s]);
+              searchInput.value = '';
+              searchSelected.textContent = '✓ تمت إضافة الطالب';
               searchDropdown.style.display = 'none';
               searchDropdown.innerHTML = '';
-              searchInput.classList.remove('is-invalid');
-              searchError.style.display = 'none';
             });
             searchDropdown.appendChild(item);
           });
@@ -505,65 +470,38 @@
   // ── Form submit guard ──────────────────────────────────────────────────────
 
   document.getElementById('adminLeaveForm').addEventListener('submit', function (e) {
-    if (dropdownWrapper.style.display !== 'none') {
-      // Section mode submits student_ids only.
-      studentIdInput.value = '';
-      if (!selected.length) {
-        e.preventDefault();
-        sectionStudentEl.classList.add('is-invalid');
-        dropdownError.style.display = 'block';
-      }
-    } else if (!studentIdInput.value) {
+    if (!selected.length) {
       e.preventDefault();
-      searchInput.classList.add('is-invalid');
-      searchError.style.display = 'block';
-      searchInput.focus();
+      selectionError.style.display = 'block';
     }
   });
 
   // ── Restore state on validation re-render ─────────────────────────────────
 
-  var savedStage      = {{ (form_data.get('stage') or '') | tojson }};
-  var savedGradeId    = {{ (form_data.get('grade_id') or '') | tojson }};
-  var savedSectionId  = {{ (form_data.get('section_id') or '') | tojson }};
-  var savedStudentId  = {{ (form_data.get('student_id') or '') | tojson }};
-  var savedDisplay    = {{ (form_data.get('student_display') or '') | tojson }};
-  var savedStudentIds = {{ (selected_student_ids or []) | tojson }};
+  var savedStage     = {{ (form_data.get('stage') or '') | tojson }};
+  var savedGradeId   = {{ (form_data.get('grade_id') or '') | tojson }};
+  var savedSectionId = {{ (form_data.get('section_id') or '') | tojson }};
+  // Only students that passed the server's scoped validation, from any section.
+  var savedStudents  = {{ (selected_students or []) | tojson }};
 
-  function restoreSearchStudent() {
-    if (savedStudentId && !savedSectionId && savedDisplay) {
-      studentIdInput.value = savedStudentId;
-      studentDisplayInput.value = savedDisplay;
-      searchInput.value = savedDisplay;
-      searchSelected.textContent = '✓ تم اختيار الطالب';
-    }
-  }
+  addStudents(savedStudents);
 
-  // Cascade restore (section mode or cascade was partially filled). Saved ids
-  // are re-applied only if they are in the reloaded section's student list.
   if (savedStage) {
+    stageEl.value = savedStage;
     populateGrades(savedStage);
-    stageEl.dataset.prev = savedStage;
     if (savedGradeId) {
       gradeEl.value = String(savedGradeId);
       if (gradeEl.value) {
-        gradeEl.dataset.prev = gradeEl.value;
         loadSections(savedGradeId).then(function () {
           if (!savedSectionId) return;
           sectionEl.value = String(savedSectionId);
           if (!sectionEl.value) return;
-          sectionEl.dataset.prev = sectionEl.value;
           showDropdownMode();
-          loadSectionStudents(savedSectionId,
-                              savedStudentIds.length ? savedStudentIds
-                                                     : (savedStudentId ? [savedStudentId] : []));
+          loadSectionStudents(savedSectionId);
         });
       }
     }
   }
-
-  // Direct-search mode: restore the chosen student (after the cascade reset).
-  restoreSearchStudent();
 })();
 </script>
 {% endblock %}

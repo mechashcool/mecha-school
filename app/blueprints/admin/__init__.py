@@ -6,7 +6,7 @@ Handles: Dashboard, User Management, Role/Permission Management,
 from flask import (Blueprint, render_template, redirect, url_for,
                    flash, request, jsonify)
 from flask_login import login_required, current_user
-from sqlalchemy import func, or_, extract
+from sqlalchemy import func, or_, and_, extract
 from sqlalchemy.orm import selectinload
 from datetime import date, timedelta, datetime
 import json
@@ -365,16 +365,44 @@ def _leave_building_scope(query, school_id):
     return apply_building_scope_to_students(query, current_user, school)
 
 
-def _leave_students_for_ids(school_id, student_ids):
-    """Active students of THIS school (building-scoped for the current user)
-    among ``student_ids`` — one query. The caller compares the result size with
-    the request to reject any foreign, inactive or unknown id."""
+def _eligible_leave_students_query(school_id, year_id):
+    """Students the current user may create an admin leave for — the single
+    rule shared by the create POST and both pickers:
+
+      * this school, status 'active';
+      * current year: a student placed in a section must be in a section of
+        THIS school's active year (Student itself is not year-scoped; the
+        section carries the year). A student with no section stays eligible,
+        as direct search always allowed;
+      * the current user's building scope.
+
+    bypass_tenant_scope disables the ORM school AND year criteria, so both are
+    re-applied explicitly here.
+    """
     query = (Student.query
              .execution_options(bypass_tenant_scope=True)
-             .filter(Student.id.in_(student_ids),
-                     Student.school_id == school_id,
-                     Student.status == 'active'))
-    return _leave_building_scope(query, school_id).all()
+             .outerjoin(Section, Section.id == Student.section_id)
+             .filter(Student.school_id == school_id,
+                     Student.status == 'active',
+                     or_(Student.section_id.is_(None),
+                         and_(Section.school_id == school_id,
+                              Section.academic_year_id == year_id))))
+    return _leave_building_scope(query, school_id)
+
+
+def _leave_student_options(students):
+    """Picker JSON shape — also used to restore the selection after a
+    validation error (only students that passed the scoped query)."""
+    return [{'id': s.id, 'name': s.full_name, 'code': s.student_id} for s in students]
+
+
+def _leave_students_for_ids(school_id, year_id, student_ids):
+    """Eligible students among ``student_ids`` — one query. The caller compares
+    the result size with the request to reject any foreign, inactive, other-year,
+    out-of-building or unknown id."""
+    return (_eligible_leave_students_query(school_id, year_id)
+            .filter(Student.id.in_(student_ids))
+            .all())
 
 
 def _queue_leave_parent_notifications(students, school_id):
@@ -2088,30 +2116,26 @@ def leave_request_create_admin():
         elif section_id and not grade:
             errors.append('الشعبة لا تنتمي للصف المحدد.')
 
-        # At least one student is required; every one must be an active student
-        # of this school (one scoped query) and, when a section is chosen,
-        # belong to it. A group (2+ students) is limited to one selected
-        # section. Any bad id rejects the whole submission — nothing is created.
+        # Stage / grade / section are only picker filters: the selection may
+        # span sections and grades, and they never authorise a student. Each
+        # student row is validated on its own (one scoped query, see
+        # _eligible_leave_students_query). Any bad id rejects the whole
+        # submission — nothing is created.
         if ids_invalid:
             errors.append('قائمة الطلاب المحددين غير صالحة.')
         elif not student_ids:
             errors.append('يرجى اختيار الطالب.')
-        elif is_group and not section_id:
-            errors.append('الإجازة لأكثر من طالب تتطلب اختيار الشعبة.')
         elif len(student_ids) > MAX_GROUP_LEAVE_STUDENTS:
             errors.append(f'لا يمكن إضافة الإجازة لأكثر من '
                           f'{MAX_GROUP_LEAVE_STUDENTS} طالب في المرة الواحدة.')
-        else:
-            found = {s.id: s for s in _leave_students_for_ids(school_id, student_ids)}
+        elif active_year:
+            found = {s.id: s for s in
+                     _leave_students_for_ids(school_id, active_year.id, student_ids)}
             students = [found[sid] for sid in student_ids if sid in found]
             if len(students) != len(student_ids):
                 errors.append('بعض الطلاب المحددين غير موجودين أو لا ينتمون لهذه المدرسة.'
                               if is_group else
                               'الطالب غير موجود أو لا ينتمي لهذه المدرسة.')
-            elif section and any(s.section_id != section.id for s in students):
-                errors.append('بعض الطلاب المحددين لا ينتمون للشعبة المحددة.'
-                              if is_group else
-                              'الطالب لا ينتمي للشعبة المحددة.')
 
         if leave_type not in LEAVE_TYPES:
             errors.append('نوع الإجازة غير صالح.')
@@ -2135,7 +2159,7 @@ def leave_request_create_admin():
                                    type_labels=LEAVE_TYPES,
                                    status_labels=LEAVE_STATUS,
                                    form_data=request.form,
-                                   selected_student_ids=student_ids), 422
+                                   selected_students=_leave_student_options(students)), 422
 
         # One normal LeaveRequest row per student, identical leave data, all
         # committed together with their parent notifications (all or nothing).
@@ -2187,7 +2211,7 @@ def leave_request_create_admin():
                            type_labels=LEAVE_TYPES,
                            status_labels=LEAVE_STATUS,
                            form_data={},
-                           selected_student_ids=[])
+                           selected_students=[])
 
 
 @admin_bp.route('/students/<int:student_id>/leave-archive')
@@ -2448,53 +2472,49 @@ def api_leave_sections_for_grade():
 @login_required
 @permission_required('manage_leave_requests')
 def api_leave_students_for_section():
-    """Return the active students of a section (JSON) — scoped by school and
-    the user's buildings: exactly the students the create route accepts, so
+    """Return the eligible students of an active-year section (JSON) — the
+    same rule the create route applies (_eligible_leave_students_query), so
     "select all" never picks a student the submission would reject."""
     school_id = _admin_scope_id()
     section_id = request.args.get('section_id', type=int)
     if not school_id or not section_id:
         return jsonify([])
+    active_year = get_active_year(school_id)
+    if not active_year:
+        return jsonify([])
     section = (Section.query
                .execution_options(include_all_years=True)
-               .filter_by(id=section_id, school_id=school_id)
+               .filter_by(id=section_id, school_id=school_id,
+                          academic_year_id=active_year.id)
                .first())
     if not section:
         return jsonify([])
-    query = (Student.query
-             .execution_options(bypass_tenant_scope=True)
-             .filter_by(section_id=section.id, school_id=school_id, status='active'))
-    students = (_leave_building_scope(query, school_id)
+    students = (_eligible_leave_students_query(school_id, active_year.id)
+                .filter(Student.section_id == section.id)
                 .order_by(Student.full_name).all())
-    return jsonify([
-        {'id': s.id, 'name': s.full_name, 'code': s.student_id}
-        for s in students
-    ])
+    return jsonify(_leave_student_options(students))
 
 
 @admin_bp.route('/api/leave/students-search')
 @login_required
 @permission_required('manage_leave_requests')
 def api_leave_students_search():
-    """Search active students by name or code (JSON) — scoped by school and
-    the user's buildings."""
+    """Search eligible students by name or code (JSON) — the same rule the
+    create route applies (_eligible_leave_students_query)."""
     school_id = _admin_scope_id()
     q = request.args.get('q', '').strip()
     if not school_id or len(q) < 2:
         return jsonify([])
-    query = (Student.query
-             .execution_options(bypass_tenant_scope=True)
-             .filter_by(school_id=school_id, status='active')
-             .filter(or_(
-                 Student.full_name.ilike(f'%{q}%'),
-                 Student.student_id.ilike(f'%{q}%'),
-             )))
-    students = (_leave_building_scope(query, school_id)
+    active_year = get_active_year(school_id)
+    if not active_year:
+        return jsonify([])
+    students = (_eligible_leave_students_query(school_id, active_year.id)
+                .filter(or_(
+                    Student.full_name.ilike(f'%{q}%'),
+                    Student.student_id.ilike(f'%{q}%'),
+                ))
                 .order_by(Student.full_name).limit(20).all())
-    return jsonify([
-        {'id': s.id, 'name': s.full_name, 'code': s.student_id}
-        for s in students
-    ])
+    return jsonify(_leave_student_options(students))
 
 
 @admin_bp.route('/backfill-leave-attendance', methods=['GET', 'POST'])
