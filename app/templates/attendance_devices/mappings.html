@@ -518,6 +518,9 @@
   }
 
   /* ── Device status check ─────────────────────────────────────────────────── */
+  // Presentation only — the server already strips diagnostics for non-Super Admins.
+  const SHOW_DEVICE_DIAGNOSTICS = {{ 'true' if current_user.is_super_admin else 'false' }};
+  const DEVICE_UNREACHABLE_AR = 'تعذر الاتصال بالجهاز حالياً. يرجى التأكد من اتصال الجهاز بالشبكة والمحاولة مرة أخرى.';
   const statusCheckBtn = document.getElementById('statusCheckBtn');
   const statusPanel    = document.getElementById('statusPanel');
   const statusPanelBody = document.getElementById('statusPanelBody');
@@ -555,14 +558,24 @@
           lastSyncDisplay = data.last_sync_at || 'لم تتم بعد';
         }
 
-        let html = '<strong>حالة الجهاز:</strong> ' + (data.status || '—') + connTypeLabel + '<br>'
-                 + '<strong>SN في قاعدة البيانات:</strong> <code>' + (data.device_sn || '—') + '</code><br>'
-                 + '<strong>نوع الجهاز:</strong> ' + (data.device_scope || '—') + '<br>'
-                 + '<strong>آخر نبضة قلب (DB):</strong> ' + lastSyncDisplay + '<br>'
-                 + '<strong>الأجهزة المتصلة مباشرة:</strong> '
-                 + (data.connected_sns && data.connected_sns.length ? data.connected_sns.join(', ') : 'لا يوجد');
+        let html;
+        if (!SHOW_DEVICE_DIAGNOSTICS) {
+          // School users: one generic message on failure; never SNs or device lists.
+          html = data.is_connected
+            ? '<strong>حالة الجهاز:</strong> ' + escHtml(data.status || '—') + connTypeLabel + '<br>'
+              + '<strong>نوع الجهاز:</strong> ' + escHtml(data.device_scope || '—') + '<br>'
+              + '<strong>آخر نبضة قلب (DB):</strong> ' + escHtml(lastSyncDisplay)
+            : DEVICE_UNREACHABLE_AR;
+        } else {
+          html = '<strong>حالة الجهاز:</strong> ' + (data.status || '—') + connTypeLabel + '<br>'
+               + '<strong>SN في قاعدة البيانات:</strong> <code>' + (data.device_sn || '—') + '</code><br>'
+               + '<strong>نوع الجهاز:</strong> ' + (data.device_scope || '—') + '<br>'
+               + '<strong>آخر نبضة قلب (DB):</strong> ' + lastSyncDisplay + '<br>'
+               + '<strong>الأجهزة المتصلة مباشرة:</strong> '
+               + (data.connected_sns && data.connected_sns.length ? data.connected_sns.join(', ') : 'لا يوجد');
+        }
 
-        if (!data.is_connected && data.connected_sns && data.connected_sns.length) {
+        if (SHOW_DEVICE_DIAGNOSTICS && !data.is_connected && data.connected_sns && data.connected_sns.length) {
           html += '<br><span class="text-danger"><i class="bi bi-exclamation-triangle-fill me-1"></i>'
                + 'الرقم التسلسلي في قاعدة البيانات لا يطابق أي جهاز متصل — '
                + 'تأكد من إدخال SN الصحيح في إعدادات الجهاز.</span>';

@@ -1017,7 +1017,7 @@ def ajax_status_check(device_id):
         is_connected, _offline_reason,
     )
 
-    return jsonify({
+    body = {
         'ok':                    True,
         'device_id':             dev.id,
         'device_name':           dev.name,
@@ -1033,10 +1033,50 @@ def ajax_status_check(device_id):
         'bridge_threshold_secs': _BRIDGE_THRESHOLD,
         'status':                status,
         'badge':                 badge,
-    })
+    }
+    if not current_user.is_super_admin:
+        # School users: no SNs, no connected-device list, no failure reason.
+        if is_connected:
+            body = {k: body[k] for k in _SCHOOL_STATUS_KEYS}
+        else:
+            body = {'ok': True, 'device_id': dev.id, 'is_connected': False,
+                    'status': _DEVICE_UNREACHABLE_AR, 'badge': 'danger'}
+    return jsonify(body)
 
 
 _INVALID_NUMBER_AR = 'رقم الجهاز المخزّن غير صالح — يرجى تعديله ثم الإرسال'
+
+# School users get this one message for any device connection failure. The
+# Super Admin keeps the full diagnostics (SNs, connected devices, raw replies);
+# the server logs are unchanged. get_connected_sns() is process-wide, so its
+# list names every school's devices and must never reach a school user.
+_DEVICE_UNREACHABLE_AR = ('تعذر الاتصال بالجهاز حالياً. يرجى التأكد من اتصال '
+                          'الجهاز بالشبكة والمحاولة مرة أخرى.')
+_DEVICE_CONNECTION_ERRORS = ('device_offline', 'setuserinfo_timeout')
+_SCHOOL_SYNC_RESULT_KEYS  = ('ok', 'offline', 'busy', 'error_type', 'error_message_ar',
+                             'message', 'enrollid', 'entity_type', 'name')
+_SCHOOL_STATUS_KEYS       = ('ok', 'device_id', 'device_name', 'device_scope',
+                             'is_connected', 'is_directly_connected', 'via_bridge',
+                             'last_sync_at', 'db_last_sync_secs_ago', 'status', 'badge')
+
+
+def _school_facing_sync_result(result: dict) -> dict:
+    """sync_person_to_device() result as returned to the current user.
+
+    Super Admin: unchanged. Anyone else: no SNs, no connected-device list, no
+    raw device replies, and the generic message for a connection failure.
+    """
+    if current_user.is_super_admin:
+        return result
+    safe = {k: result[k] for k in _SCHOOL_SYNC_RESULT_KEYS if k in result}
+    if 'deleteuser_result' in result:
+        # Key presence alone tells the page that delivery is unknown.
+        safe['deleteuser_result'] = None
+    if result.get('offline') or result.get('error_type') in _DEVICE_CONNECTION_ERRORS:
+        safe['error_message_ar'] = safe['message'] = _DEVICE_UNREACHABLE_AR
+    elif not result.get('ok') and result.get('error_message_ar'):
+        safe['message'] = result['error_message_ar']
+    return safe
 
 
 def _stored_enrollid(number):
@@ -1096,7 +1136,7 @@ def ajax_aiface_sync_student(device_id):
     )
     status = 200 if result['ok'] else (409 if result.get('busy') else
                                       (503 if result.get('offline') else 502))
-    return jsonify(result), status
+    return jsonify(_school_facing_sync_result(result)), status
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1147,7 +1187,7 @@ def ajax_aiface_sync_employee(device_id):
     )
     status = 200 if result['ok'] else (409 if result.get('busy') else
                                       (503 if result.get('offline') else 502))
-    return jsonify(result), status
+    return jsonify(_school_facing_sync_result(result)), status
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1236,6 +1276,7 @@ def ajax_aiface_sync_all(device_id):
                 '[aiface] sync-all unexpected error device_id=%d mapping_id=%d',
                 dev.id, row['mapping_id'])
             res = {'ok': False, 'error_message_ar': 'خطأ داخلي أثناء إرسال البيانات للجهاز'}
+        res = _school_facing_sync_result(res)
 
         if res.get('ok'):
             succeeded.append(row)
@@ -1346,7 +1387,9 @@ def ajax_aiface_delete_from_device(device_id):
     except TimeoutError as exc:
         current_app.logger.warning('[aiface] deleteuser timeout enrollid=%d: %s', enrollid, exc)
         return jsonify({'ok': False, 'error_type': 'timeout',
-                        'message': f'انتهت مهلة الاتصال بالجهاز: {exc}'}), 504
+                        'message': (f'انتهت مهلة الاتصال بالجهاز: {exc}'
+                                    if current_user.is_super_admin
+                                    else _DEVICE_UNREACHABLE_AR)}), 504
     except Exception:
         current_app.logger.exception('[aiface] unexpected error on deleteuser enrollid=%d', enrollid)
         return jsonify({'ok': False, 'error_type': 'internal_error',
@@ -1366,8 +1409,10 @@ def ajax_aiface_delete_from_device(device_id):
 
     current_app.logger.warning(
         '[aiface] deleteuser result=false enrollid=%d response=%s', enrollid, result)
-    return jsonify({
+    body = {
         'ok': False, 'error_type': 'device_result_false',
         'message': f'الجهاز أعاد result=false للرقم {enrollid} — الربط محفوظ',
-        'device_response': result,
-    }), 502
+    }
+    if current_user.is_super_admin:
+        body['device_response'] = result
+    return jsonify(body), 502
