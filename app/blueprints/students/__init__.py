@@ -9,7 +9,7 @@ from flask import (Blueprint, render_template, redirect, url_for,
                    flash, request, abort, jsonify, session, current_app,
                    send_from_directory)
 from flask_login import login_required, current_user
-from sqlalchemy import false
+from sqlalchemy import false, func, or_
 from sqlalchemy.orm import joinedload
 from app.models import (db, Student, Section, Grade, AcademicYear, StudentDocument,
                         parent_students, User, Role, AttendanceDevice, DeviceStudentMapping,
@@ -613,6 +613,30 @@ def validate_rfid_for_student(raw, school_id, exclude_student_id=None):
     return tag
 
 
+# Whitespace removed from the stored name at query time. [[:space:]] plus the
+# no-break spaces (U+00A0 / U+202F) that pasted Arabic text often carries.
+_NAME_SEARCH_WS_PATTERN = '[[:space:]  ]+'
+
+
+def _student_search_clause(raw_q):
+    """Name/code clause for the students list and its live search, or None.
+
+    Name: whitespace is removed from BOTH the stored full_name and the query,
+    so compound names match however they were spaced ("عبدالله" ↔ "عبد الله",
+    "عبدالرحمن" ↔ "عبد الرحمن") while partial searches keep working — a
+    substring of the name is still a substring once spaces are dropped.
+    Stored names are never modified; filtering stays in PostgreSQL.
+    Code: unchanged substring ilike on the trimmed query (no space removal).
+    """
+    q = ' '.join((raw_q or '').split())
+    if not q:
+        return None
+    compact = ''.join(q.split())
+    name_expr = func.regexp_replace(Student.full_name, _NAME_SEARCH_WS_PATTERN, '', 'g')
+    return or_(name_expr.ilike(f'%{compact}%'),
+               Student.student_id.ilike(f'%{q}%'))
+
+
 def _apply_student_status_filter(query, status):
     """Status filter shared by the students list, its live search and export.
 
@@ -661,11 +685,9 @@ def index():
     if _is_teacher():
         query = _teacher_scope_student_query(query, school)
 
-    if search:
-        query = query.filter(
-            Student.full_name.ilike(f'%{search}%') |
-            Student.student_id.ilike(f'%{search}%')
-        )
+    search_clause = _student_search_clause(search)
+    if search_clause is not None:
+        query = query.filter(search_clause)
 
     # RFID card filter — EXACT string match on the stored credential, so a scan
     # resolves to the single student holding that card (never a partial match).
@@ -813,11 +835,9 @@ def search():
     if _is_teacher():
         query = _teacher_scope_student_query(query, school)
 
-    if q:
-        query = query.filter(
-            Student.full_name.ilike(f'%{q}%') |
-            Student.student_id.ilike(f'%{q}%')
-        )
+    search_clause = _student_search_clause(q)
+    if search_clause is not None:
+        query = query.filter(search_clause)
 
     # RFID card filter — identical rule and identical school isolation as
     # students.index (exact match, ANDed with the other filters, school-scoped).
