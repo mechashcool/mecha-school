@@ -1060,12 +1060,22 @@ def _db_touch_device(sn: str) -> None:
         return
     try:
         with _flask_app.app_context():
+            from sqlalchemy.orm import load_only
             from app.models import db, AttendanceDevice
+            # Only the columns this heartbeat reads or writes; the UPDATE is
+            # unchanged (last_sync_at plus the updated_at onupdate).
             device = (AttendanceDevice.query
                       .execution_options(bypass_tenant_scope=True)
+                      .options(load_only(AttendanceDevice.id,
+                                         AttendanceDevice.school_id,
+                                         AttendanceDevice.last_sync_at))
                       .filter_by(device_sn=sn)
                       .first())
             if device:
+                # Captured before the commit: reading them afterwards would
+                # reload the expired row with a second SELECT.
+                _device_id = device.id
+                _school_id = device.school_id
                 _old_sync = device.last_sync_at
                 _new_sync = datetime.utcnow()
                 device.last_sync_at = _new_sync
@@ -1073,7 +1083,7 @@ def _db_touch_device(sn: str) -> None:
                 log.info(
                     '[aiface] heartbeat committed: sn=%s device_id=%d school_id=%d '
                     'last_sync_at: %s → %s (UTC) — commit OK',
-                    sn, device.id, device.school_id, _old_sync, _new_sync,
+                    sn, _device_id, _school_id, _old_sync, _new_sync,
                 )
             else:
                 log.warning(
