@@ -100,6 +100,40 @@ def invalidate_user_badges(user) -> None:
     badge_cache.invalidate(_matches)
 
 
+def _live_chat_module_enabled(school_id) -> bool:
+    """Exactly ``'chat' in get_enabled_modules(school_id)``, in one single-row
+    query instead of loading every school_modules row on each live poll.
+
+    get_enabled_modules semantics, preserved here:
+      * school_id None (super admin)        → True, no query;
+      * the school has NO rows at all       → every MODULES key, chat included;
+      * the school has rows                 → True only when a 'chat' row exists
+        and is enabled (a missing 'chat' row is NOT enabled in this case — this
+        differs from is_module_enabled on purpose).
+    If this request already memoized the flags, they are reused unchanged.
+    """
+    from flask import g
+    from app.utils.modules import MODULES, get_enabled_modules
+
+    if school_id is None or 'chat' not in MODULES:
+        return 'chat' in get_enabled_modules(school_id)
+    if ('module_flags', school_id) in getattr(g, '_request_memo', {}):
+        return 'chat' in get_enabled_modules(school_id)
+
+    from sqlalchemy import and_, func
+    from app.models import SchoolModule
+    # bool_or over the school's rows is NULL when it has none: fall back to
+    # "no rows" (count = 0) → enabled, exactly like get_enabled_modules.
+    chat_on = (db.session.query(func.coalesce(
+                   func.bool_or(and_(SchoolModule.module_key == 'chat',
+                                     SchoolModule.is_enabled)),
+                   func.count() == 0))
+               .execution_options(bypass_tenant_scope=True)
+               .filter(SchoolModule.school_id == school_id)
+               .scalar())
+    return bool(chat_on)
+
+
 def get_badge_counts(*, live: bool = False) -> dict:
     """Return the four badge counts for ``current_user`` in the current scope.
 
@@ -236,10 +270,14 @@ def get_badge_counts(*, live: bool = False) -> dict:
                 counts['pending_leave_requests'] = badge_cache.get_or_set(
                     (prefix + 'leave', sid, 'parent', uid), _load_parent_leaves, ttl=ttl)
 
-        enabled_modules = get_enabled_modules(
-            None if current_user.is_super_admin else getattr(current_user, 'school_id', None))
+        modules_school_id = (None if current_user.is_super_admin
+                             else getattr(current_user, 'school_id', None))
+        if live:
+            chat_enabled = _live_chat_module_enabled(modules_school_id)
+        else:
+            chat_enabled = 'chat' in get_enabled_modules(modules_school_id)
 
-        if 'chat' in enabled_modules:
+        if chat_enabled:
             def _load_unread_chat():
                 # Scope membership through the room's school so a stale or
                 # mismatched cross-school ChatRoomMember can never inflate this
