@@ -3,7 +3,7 @@ Mobile API — Authentication
 ===========================
 POST /api/mobile/v1/auth/login    issue access + refresh tokens
 POST /api/mobile/v1/auth/refresh  issue new access token (send refresh token)
-POST /api/mobile/v1/auth/logout   client-side only; server-side no-op
+POST /api/mobile/v1/auth/logout   stateless; optionally unregisters this device's FCM token
 """
 import datetime
 
@@ -12,7 +12,9 @@ from flask import g, jsonify, request
 from app.models import db, User, Employee, MobileDeviceToken
 from app.utils.login_throttle import check_lockout, record_failed_attempt, reset_attempts, format_wait_ar
 from app.utils.ratelimit import limiter, LOGIN_RATE_LIMIT
-from .utils import encode_token, institution_identity, jwt_required, ok, err, photo_url
+from .utils import (encode_token, institution_identity, jwt_required, ok, err,
+                    photo_url, release_legacy_device_token, submitted_fcm_token,
+                    unregister_device_token)
 from app.utils.student_display_photo import student_display_value
 from app.utils.employee_display_photo import employee_display_value
 
@@ -243,8 +245,10 @@ def register_device():
         )
         db.session.add(existing)
 
-    # Keep legacy single-token field in sync so existing notification service works
+    # Keep legacy single-token field in sync so existing notification service
+    # works, and take it off any previous account on this same installation.
     user.device_token = token
+    release_legacy_device_token(user, token)
 
     db.session.commit()
 
@@ -283,6 +287,14 @@ def refresh():
 def logout():
     """
     Stateless logout. The client must discard both tokens.
-    Server-side: no-op. Add a token blacklist table here in the future if needed.
+
+    Optional body: { "fcm_token": "..." } ('device_token' also accepted) —
+    unregisters exactly that token for the authenticated user, the same as
+    DELETE /me/device-token. Without a token nothing changes server-side.
+    JWTs are not revoked; add a token blacklist table here if ever needed.
     """
+    token = submitted_fcm_token(request.get_json(silent=True))
+    if token:
+        unregister_device_token(g.mobile_user, token)
+        db.session.commit()
     return ok(message='logged_out')

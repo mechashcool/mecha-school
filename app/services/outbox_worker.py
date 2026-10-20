@@ -130,6 +130,16 @@ def deliver_one(row, *, max_attempts: int, now=None) -> str:
             db.session.commit()
             return 'dead'
 
+        # The registration was reassigned to another account after this job
+        # was queued (same installation, new login). The job belongs to its
+        # original recipient only: never deliver it to the new owner.
+        if token_row.user_id != row.user_id:
+            log.warning('[outbox] job %s device token reassigned — not '
+                        'delivering', row.id)
+            outbox.mark_dead(row, error='device-token-reassigned', now=now)
+            db.session.commit()
+            return 'dead'
+
         try:
             data = json.loads(row.data_json) if row.data_json else {}
         except ValueError:

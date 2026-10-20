@@ -2,14 +2,17 @@
 Mobile API — Common endpoints (available to all authenticated roles)
 =====================================================================
 GET  /api/mobile/v1/me               current user profile + school
-POST /api/mobile/v1/me/device-token  save/update the FCM push token
+POST   /api/mobile/v1/me/device-token  save/update the FCM push token
+DELETE /api/mobile/v1/me/device-token  unregister THIS device's FCM token
 """
 import logging
 
 from flask import g, request
 
 from app.models import db, MobileDeviceToken
-from .utils import jwt_required, role_required, ok, err, photo_url
+from .utils import (jwt_required, role_required, ok, err, photo_url,
+                    release_legacy_device_token, submitted_fcm_token,
+                    unregister_device_token)
 from app.utils.student_display_photo import student_display_value
 from . import mobile_api_bp
 
@@ -88,8 +91,10 @@ def update_device_token():
     platform    = (payload.get('platform') or 'android').strip()[:20]
     device_name = (payload.get('device_name') or '').strip()[:200] or None
 
-    # Keep the legacy single-token field in sync.
+    # Keep the legacy single-token field in sync, and take it off any previous
+    # account that registered this same installation.
     user.device_token = token
+    release_legacy_device_token(user, token)
     if payload.get('locale'):
         user.locale = payload['locale'][:10]
 
@@ -122,3 +127,25 @@ def update_device_token():
                 user.id, platform, token)
 
     return ok(message='device_token_saved')
+
+
+@mobile_api_bp.route('/me/device-token', methods=['DELETE'])
+@jwt_required()
+def delete_device_token():
+    """
+    Unregister the FCM token of the device that is logging out.
+
+    Request body (JSON): { "fcm_token": "..." }  ('device_token' also accepted)
+
+    Open to every authenticated mobile role: it can only deactivate the
+    caller's own row for exactly this token. Any supplied token gets the same
+    200 body — whether it existed, was already inactive or belongs to someone
+    else is never revealed. The user's other devices keep their registrations.
+    """
+    user  = g.mobile_user
+    token = submitted_fcm_token(request.get_json(silent=True))
+    if not token:
+        return err('fcm_token is required')
+    unregister_device_token(user, token)
+    db.session.commit()
+    return ok()

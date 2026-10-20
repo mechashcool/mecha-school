@@ -227,6 +227,65 @@ def page_args(default_limit: int = 50, max_limit: int = 100):
     return min(limit, max_limit), max(offset, 0)
 
 
+# ─── FCM device-token ownership ──────────────────────────────────────────────
+
+# Matches MobileDeviceToken.fcm_token / User.device_token (String(512)). A
+# longer value can never match a stored token, so it is not looked up at all.
+_FCM_TOKEN_MAX_LEN = 512
+
+
+def submitted_fcm_token(payload) -> str:
+    """The FCM token from a JSON body: 'fcm_token' or Flutter's 'device_token'.
+    Returns '' when absent, not a string, or longer than any stored token."""
+    if not isinstance(payload, dict):
+        return ''
+    token = payload.get('fcm_token') or payload.get('device_token') or ''
+    if not isinstance(token, str):
+        return ''
+    token = token.strip()
+    return token if len(token) <= _FCM_TOKEN_MAX_LEN else ''
+
+
+def unregister_device_token(user: User, token: str) -> None:
+    """Deactivate ONE registration: the authenticated user's row for exactly
+    this token. Never matches by token alone (another user's registration is
+    untouched) and never touches the user's other devices.
+
+    Clears the legacy User.device_token only when it is this same token.
+    Does not commit — the caller owns the transaction.
+    """
+    from app.models import MobileDeviceToken
+
+    if not token:
+        return
+    row = MobileDeviceToken.query.filter_by(user_id=user.id,
+                                            fcm_token=token).first()
+    if row is not None and row.is_active:
+        row.is_active = False
+    if user.device_token == token:
+        user.device_token = None
+
+
+def release_legacy_device_token(user: User, token: str) -> None:
+    """Clear User.device_token = token on every OTHER account.
+
+    An FCM token identifies one app installation, so once ``user`` registers it
+    no previous account may keep it in the legacy single-token field. A bulk
+    UPDATE on purpose: the previous owner may belong to another school, which
+    the request's ORM read scope would hide and the flush guard would refuse.
+    Matches the exact token only. Does not commit.
+    """
+    if not token:
+        return
+    from sqlalchemy import update
+
+    db.session.execute(
+        update(User)
+        .where(User.device_token == token, User.id != user.id)
+        .values(device_token=None)
+        .execution_options(synchronize_session=False))
+
+
 # ─── Response helpers ─────────────────────────────────────────────────────────
 
 def ok(**kwargs):
