@@ -128,6 +128,7 @@ def _run_employee_auto_absent(school) -> dict:
     """Persist one final employee absent row per eligible missing workday."""
     from sqlalchemy import or_
     from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import load_only
 
     from app.models import Employee, EmployeeAttendance, db
     from app.utils.decorators import get_active_year
@@ -151,8 +152,15 @@ def _run_employee_auto_absent(school) -> dict:
     if not year:
         return {'count': 0, 'reason': 'no_active_year'}
 
+    # Egress: only the four attributes read below and by the before_flush
+    # scope guard (school_id) are transferred, not the wide Employee row, on
+    # every tick. Still ORM instances, so the guard's session.get() keeps
+    # resolving them from the identity map with no per-insert SELECT. Any new
+    # attribute read on these objects must be added here, or it lazy-loads.
     employees = (Employee.query
                  .execution_options(bypass_tenant_scope=True)
+                 .options(load_only(Employee.id, Employee.school_id,
+                                    Employee.hire_date, Employee.shift_id))
                  .filter(
                      Employee.school_id == school.id,
                      Employee.status == 'active',
@@ -187,6 +195,7 @@ def _run_employee_auto_absent(school) -> dict:
         row.employee_id
         for row in (EmployeeAttendance.query
                     .execution_options(bypass_tenant_scope=True)
+                    .with_entities(EmployeeAttendance.employee_id)
                     .filter(
                         EmployeeAttendance.school_id == school.id,
                         EmployeeAttendance.employee_id.in_(employee_ids),
