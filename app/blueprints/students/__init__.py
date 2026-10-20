@@ -993,7 +993,13 @@ def create():
     parent_role = Role.query.filter_by(name='parent').first()
     available_parents = []
     if school and parent_role:
+        from sqlalchemy.orm import load_only
+        # Only what the parent picker renders (id, full_name, username, phone)
+        # plus school_id, which the scope guard reads if a linked parent is
+        # later notified in this request.
         available_parents = (User.query
+                             .options(load_only(User.id, User.username, User.full_name,
+                                                User.school_id, User.phone))
                              .filter_by(school_id=school.id, role_id=parent_role.id,
                                         is_active=True)
                              .order_by(User.full_name)
@@ -1853,9 +1859,14 @@ def edit(student_id):
     parent_role = Role.query.filter_by(name='parent').first()
     available_parents = []
     if school and parent_role:
+        from sqlalchemy.orm import load_only
         linked_ids = {p.id for p in linked_parents}
+        # Same projection as create(): the picker renders id, full_name,
+        # username and phone; school_id is kept for the scope guard.
         available_parents = [
             u for u in (User.query
+                        .options(load_only(User.id, User.username, User.full_name,
+                                           User.school_id, User.phone))
                         .filter_by(school_id=school.id, role_id=parent_role.id,
                                    is_active=True)
                         .order_by(User.full_name)
