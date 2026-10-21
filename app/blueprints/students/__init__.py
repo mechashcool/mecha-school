@@ -44,6 +44,7 @@ from app.utils.buildings import (
     user_can_access_student, validate_building_for_school,
 )
 from app.utils.audit import log_action
+from app.utils.ratelimit import limiter
 from app.utils.device_numbering import (DeviceNumberAllocationError,
                                         DeviceNumberConflictError,
                                         STUDENT_DEVICE_SCOPES,
@@ -618,23 +619,105 @@ def validate_rfid_for_student(raw, school_id, exclude_student_id=None):
 _NAME_SEARCH_WS_PATTERN = '[[:space:]  ]+'
 
 
+# Alef variants folded to bare alef (ا) for name comparison only: أ إ آ → ا.
+# No other Arabic letter is folded (ة/ه, ى/ي … stay distinct).
+_ALEF_VARIANTS = 'أإآ'
+_ALEF_FOLD = str.maketrans(_ALEF_VARIANTS, 'ا' * len(_ALEF_VARIANTS))
+
+
+def _compact_student_name(text):
+    """Python side of the name rules: whitespace removed, alef variants folded."""
+    return ''.join((text or '').split()).translate(_ALEF_FOLD)
+
+
 def _student_search_clause(raw_q):
     """Name/code clause for the students list and its live search, or None.
 
-    Name: whitespace is removed from BOTH the stored full_name and the query,
-    so compound names match however they were spaced ("عبدالله" ↔ "عبد الله",
-    "عبدالرحمن" ↔ "عبد الرحمن") while partial searches keep working — a
-    substring of the name is still a substring once spaces are dropped.
+    Name: whitespace is removed and أ/إ/آ are folded to ا on BOTH the stored
+    full_name and the query, so compound names match however they were spaced
+    ("عبدالله" ↔ "عبد الله", "عبدالرحمن" ↔ "عبد الرحمن") and "أحمد" ↔ "احمد",
+    while partial searches keep working — a substring of the name is still a
+    substring once spaces are dropped.
     Stored names are never modified; filtering stays in PostgreSQL.
     Code: unchanged substring ilike on the trimmed query (no space removal).
     """
     q = ' '.join((raw_q or '').split())
     if not q:
         return None
-    compact = ''.join(q.split())
-    name_expr = func.regexp_replace(Student.full_name, _NAME_SEARCH_WS_PATTERN, '', 'g')
-    return or_(name_expr.ilike(f'%{compact}%'),
+    return or_(_student_name_compact_expr().ilike(f'%{_compact_student_name(q)}%'),
                Student.student_id.ilike(f'%{q}%'))
+
+
+def _student_name_compact_expr():
+    """SQL side of the name rules (_compact_student_name): stored full_name with
+    all whitespace removed and أ/إ/آ folded to ا."""
+    return func.translate(
+        func.regexp_replace(Student.full_name, _NAME_SEARCH_WS_PATTERN, '', 'g'),
+        _ALEF_VARIANTS, 'ا' * len(_ALEF_VARIANTS))
+
+
+# Arabic labels for student statuses (same terms as the list and archive flow).
+STUDENT_STATUS_LABELS_AR = {'archived': 'مؤرشف', 'withdrawn': 'مسحوب',
+                            'transferred': 'منقول', 'graduated': 'متخرج',
+                            'active': 'فعّال'}
+
+DUPLICATE_NAME_LIMIT   = 10     # matches shown in the create-wizard warning
+DUPLICATE_NAME_MIN_KEY = 4      # shorter normalised names are not checked
+DUPLICATE_NAME_MAX_LEN = 200    # Student.full_name length
+
+
+def normalize_student_name_key(name):
+    """Comparison key for duplicate-name detection, or '' when not checkable.
+
+    Same rules as the list search (_compact_student_name): every whitespace
+    character is dropped and أ/إ/آ fold to ا, so "احمد   محمد علي",
+    "أحمد محمد علي" and "عبدالله" / "عبد الله" variants share a key. Latin
+    letters are lower-cased. Nothing else is folded (no ة/ه or ى/ي merging),
+    so genuinely different spellings stay different.
+    """
+    name = name or ''
+    if len(name) > DUPLICATE_NAME_MAX_LEN:
+        return ''
+    key = _compact_student_name(name).lower()
+    return key if len(key) >= DUPLICATE_NAME_MIN_KEY else ''
+
+
+def find_student_name_duplicates(school, name, *, exclude_student_id=None,
+                                 limit=DUPLICATE_NAME_LIMIT):
+    """Existing students of THIS school whose normalised full name equals
+    ``name``'s, newest first; at most ``limit + 1`` rows (the extra row only
+    tells the caller that more exist).
+
+    * school comes from the trusted server context only — never from input;
+    * every stored academic year is searched (students persist across years);
+    * every status except the deleted tombstone, archived included;
+    * the caller's normal student visibility applies (building + teacher
+      scope), so no detail outside what the user may already open is returned.
+    Exact key match only — no fuzzy search — with one indexed school filter.
+    """
+    key = normalize_student_name_key(name)
+    if not school or not key:
+        return []
+    from sqlalchemy.orm import load_only
+    query = Student.query.filter(Student.school_id == school.id,
+                                 student_not_deleted_clause(),
+                                 func.lower(_student_name_compact_expr()) == key)
+    query = apply_building_scope_to_students(query, current_user, school)
+    if _is_teacher():
+        query = _teacher_scope_student_query(query, school)
+    if exclude_student_id:
+        query = query.filter(Student.id != exclude_student_id)
+    return (query
+            .options(load_only(Student.id, Student.school_id, Student.student_id,
+                               Student.full_name, Student.status, Student.section_id,
+                               Student.enrollment_date, Student.created_at),
+                     joinedload(Student.section)
+                     .load_only(Section.id, Section.name, Section.grade_id)
+                     .joinedload(Section.grade).load_only(Grade.id, Grade.name))
+            .execution_options(include_all_years=True)
+            .order_by(Student.created_at.desc(), Student.id.desc())
+            .limit(limit + 1)
+            .all())
 
 
 def _apply_student_status_filter(query, status):
@@ -915,6 +998,49 @@ def search():
         # nothing, based on what the server actually applied.
         'rfid_active':  bool(rfid),
     })
+
+
+def _duplicate_payload(students):
+    """Minimal identifying fields for the duplicate-name warning — no parent,
+    contact, account or document data."""
+    items = []
+    for s in students[:DUPLICATE_NAME_LIMIT]:
+        sec = s.section
+        items.append({
+            'id':           s.id,
+            'full_name':    s.full_name,
+            'student_code': s.student_id,
+            'status':       s.status,
+            'status_label': STUDENT_STATUS_LABELS_AR.get(s.status, s.status or ''),
+            'grade':        sec.grade.name if sec and sec.grade else '',
+            'section':      sec.name if sec else '',
+            'enrollment_date': (s.enrollment_date.strftime('%Y-%m-%d')
+                                if s.enrollment_date else ''),
+            'view_url':     url_for('students.view', student_id=s.id),
+        })
+    return items
+
+
+def _user_rate_key():
+    return f'user:{current_user.get_id()}'
+
+
+@students_bp.route('/check-duplicate-name')
+@login_required
+@permission_required('add_student')
+@permission_required('view_students')
+@limiter.limit('60 per minute', key_func=_user_rate_key)
+def check_duplicate_name():
+    """Create-wizard duplicate-name awareness (warning only, never blocks).
+
+    GET ?name=... → {"matches": [...], "count": n, "more": bool}. The school is
+    the authenticated user's (server-side); a school_id parameter is ignored.
+    """
+    school = get_current_school()
+    found = find_student_name_duplicates(school, request.args.get('name', ''))
+    matches = _duplicate_payload(found)
+    return jsonify({'matches': matches, 'count': len(matches),
+                    'more': len(found) > DUPLICATE_NAME_LIMIT})
 
 
 @students_bp.route('/create', methods=['GET', 'POST'])
@@ -1580,6 +1706,25 @@ def create():
                 _op, student_id=_student_id_for_notify, school_id=school.id)
 
         flash(f'تم إضافة الطالب {student.full_name} برقم {student.student_id}.', 'success')
+        # Server-side duplicate-name re-check — independent of the wizard's
+        # live warning, so disabled/altered JavaScript cannot hide it. Warning
+        # only: the student is already saved. Runs after the commit and never
+        # raises, so a lookup problem can never turn a saved registration into
+        # an error page (which would invite a real duplicate re-submit).
+        try:
+            _dups = find_student_name_duplicates(
+                school, student.full_name, exclude_student_id=_student_id_for_notify)
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception('[students.create] duplicate-name check failed')
+            _dups = []
+        if _dups:
+            _dup_codes = '، '.join(d.student_id for d in _dups[:DUPLICATE_NAME_LIMIT])
+            if len(_dups) > DUPLICATE_NAME_LIMIT:
+                _dup_codes += '، …'
+            flash('تنبيه: يوجد طالب مسجل مسبقاً بالاسم نفسه في المدرسة '
+                  f'(رقم الطالب: {_dup_codes}). يرجى التأكد من أن السجل الجديد '
+                  'ليس تكراراً لطالب موجود.', 'warning')
         if _failed_doc_types:
             flash('تعذّر رفع المستمسكات التالية: ' + '، '.join(_failed_doc_types)
                   + '. تم حفظ الطالب؛ يرجى إضافتها من صفحة تعديل الطالب.', 'warning')
@@ -2734,8 +2879,7 @@ def archive(student_id):
     if new_status not in EDITABLE_STUDENT_STATUSES:
         new_status = 'archived'
 
-    _labels = {'archived': 'مؤرشف', 'withdrawn': 'مسحوب',
-               'transferred': 'منقول', 'graduated': 'متخرج', 'active': 'فعّال'}
+    _labels = STUDENT_STATUS_LABELS_AR
     student.status = new_status
     db.session.commit()
     flash(f'تم تغيير حالة الطالب {student.full_name} إلى {_labels[new_status]}.', 'success')

@@ -18,12 +18,21 @@
 #}
 
 {# full_name + date_of_birth + gender + nationality + phone — column blocks only.
-   The caller supplies the surrounding <div class="row g-3"> wrapper. #}
-{% macro student_identity_fields(form_cfg, sf) %}
+   The caller supplies the surrounding <div class="row g-3"> wrapper.
+   dup_check_url: INTERNAL ONLY (staff create wizard) — enables the live
+   duplicate-name warning under the name field. The public registration form
+   never passes it, so it renders exactly as before. #}
+{% macro student_identity_fields(form_cfg, sf, dup_check_url=none) %}
           <div class="col-md-6">
             <label class="form-label">الاسم الكامل <span class="text-danger">*</span></label>
             <input type="text" name="full_name" class="form-control" required
-                   value="{{ sf.get('full_name') or '' }}">
+                   value="{{ sf.get('full_name') or '' }}"
+                   {%- if dup_check_url %} id="fFullName" data-dup-check-url="{{ dup_check_url }}"
+                   aria-describedby="dupNameWarning"{% endif %}>
+            {% if dup_check_url %}
+            <div id="dupNameWarning" class="alert alert-warning py-2 px-3 mt-2 mb-0"
+                 role="status" aria-live="polite" style="font-size:13px" hidden></div>
+            {% endif %}
           </div>
 
           {% if form_cfg.field_visible('date_of_birth') %}

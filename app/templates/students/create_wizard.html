@@ -115,7 +115,9 @@
       <div class="card-header"><i class="bi bi-person-fill text-accent"></i>البيانات الشخصية</div>
       <div class="card-body">
         <div class="row g-3">
-          {{ sfields.student_identity_fields(form_cfg, sf) }}
+          {{ sfields.student_identity_fields(form_cfg, sf,
+               dup_check_url=(url_for('students.check_duplicate_name')
+                              if current_user.has_permission('view_students') else none)) }}
 
           {% if form_cfg.section_visible('class_section') and not is_institute %}
           <div class="col-md-4">
@@ -510,6 +512,77 @@
 /* ════════════ Stage → Grade → Section cascade (reused from form.html) ════════════ */
 // Shared implementation — defined in shared/_class_cascade_js.html (included above).
 initClassCascade('fStage', 'fGrade', 'fSection');
+
+/* ════════════ Duplicate-name warning (awareness only — never blocks) ════════════
+   Debounced exact-name lookup in THIS school (the server derives the school;
+   nothing school-related is sent). Two different students may share a name,
+   so Next and Save stay enabled; the server re-checks after saving. */
+(function () {
+  const input = document.querySelector('#studentWizardForm input[data-dup-check-url]');
+  const box   = document.getElementById('dupNameWarning');
+  if (!input || !box) return;
+  const CHECK_URL   = input.dataset.dupCheckUrl;
+  const DEBOUNCE_MS = 500;
+  let timer = null, lastKey = null, ctrl = null;
+
+  const nameKey = v => v.replace(/\s+/g, ' ').trim();
+  // Meaningful full name only: at least 2 words and 4 letters.
+  const checkable = k => k.split(' ').length >= 2 && k.replace(/ /g, '').length >= 4;
+  const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+
+  function clear() { box.hidden = true; box.innerHTML = ''; }
+
+  function render(data) {
+    if (!data || !data.count) { clear(); return; }
+    const rows = data.matches.map(m => {
+      const place = [m.grade, m.section].filter(Boolean).join(' / ');
+      const archived = m.status === 'archived'
+        ? '<div class="text-danger" style="font-size:12px">هذا السجل مؤرشف — قد يكون الأنسب إعادة تفعيله بدلاً من إنشاء سجل جديد.</div>'
+        : '';
+      return `<li class="mb-1">
+        <a href="${esc(m.view_url)}" target="_blank" rel="noopener" class="fw-bold">${esc(m.full_name)}</a>
+        <div>رقم الطالب: <code>${esc(m.student_code)}</code>
+          ${place ? ` — الصف / الشعبة: ${esc(place)}` : ''}
+          — الحالة: <strong>${esc(m.status_label)}</strong>
+          ${m.enrollment_date ? ` — تاريخ التسجيل: ${esc(m.enrollment_date)}` : ''}</div>
+        ${archived}</li>`;
+    }).join('');
+    box.innerHTML = `<div class="fw-bold mb-1"><i class="bi bi-exclamation-triangle-fill me-1"></i>
+        تنبيه: يوجد طالب/طلاب مسجلون مسبقاً بهذا الاسم في المدرسة. يرجى التأكد قبل إنشاء سجل جديد.</div>
+      <ul class="mb-1" style="padding-inline-start:18px">${rows}</ul>
+      ${data.more ? '<div style="font-size:12px">توجد سجلات أخرى بالاسم نفسه.</div>' : ''}
+      <div class="text-muted" style="font-size:12px">إذا كان طالباً مختلفاً يحمل الاسم نفسه يمكنك المتابعة.</div>`;
+    box.hidden = false;
+  }
+
+  function check() {
+    clearTimeout(timer);
+    const key = nameKey(input.value);
+    if (!checkable(key)) { lastKey = null; if (ctrl) ctrl.abort(); clear(); return; }
+    if (key === lastKey) return;            // already checked (e.g. blur after debounce)
+    lastKey = key;
+    if (ctrl) ctrl.abort();
+    ctrl = new AbortController();
+    fetch(`${CHECK_URL}?${new URLSearchParams({ name: key })}`,
+          { signal: ctrl.signal, headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (key !== lastKey) return;          // stale answer for an older name
+        if (!data) lastKey = null;            // failed: allow a retry
+        render(data);
+      })
+      .catch(err => { if (err.name !== 'AbortError' && key === lastKey) lastKey = null; });
+  }
+
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(check, DEBOUNCE_MS);
+  });
+  input.addEventListener('blur', check);
+  if (input.value) check();                   // re-render after a validation error
+})();
 
 /* ════════════ Document rows (reused from form.html) ════════════ */
 (function () {

@@ -18,7 +18,9 @@ Pinned here:
     instead of 15 with identical WHERE / ORDER BY / parameters, every other
     statement identical, same statement count and pool checkouts;
   * POST create (link a parent, another school's parent, a new parent, fee +
-    payment → Notification / PushNotification), POST edit (link, new parent,
+    payment → Notification / PushNotification) — apart from the later,
+    intentional duplicate-name re-check (exactly 2 statements after the
+    commit, see _strip_duplicate_name_check), POST edit (link, new parent,
     another school's parent), unlink + edit page, the fee-error rollback →
     _re_render path: identical responses, flashes, normalised database state
     and statement sequence (no extra lazy load / N+1);
@@ -443,6 +445,42 @@ class ParentPickerProjectionTest(unittest.TestCase):
                 self.assertEqual(br, nr, _flat(bs)[:160])
         return lists
 
+    def _strip_duplicate_name_check(self, new, method, url):
+        """Remove the post-save duplicate-name re-check that students.create
+        gained after the 48b7d14 baseline — and nothing else.
+
+        A successful create (302) issues exactly two intentional extra
+        statements, right after its commit: one refresh of the School row (it
+        expired at the commit; the lookup's building scope reads it) and one
+        name lookup on students. Both are matched by exact shape and must occur
+        exactly once, so every other statement is still compared one-to-one
+        with the baseline and any extra query (N+1, repeated lookup) fails.
+        Re-render paths (200) must not run the lookup at all.
+        """
+        stmts = new['stmts']
+        lookups = [i for i, (s, _, _) in enumerate(stmts)
+                   if _flat(s).startswith('SELECT students.')
+                   and 'lower(translate(regexp_replace(students.full_name' in _flat(s)]
+        is_create_ok = (method == 'POST' and url == '/students/create'
+                        and new['status'] == 302)
+        if not is_create_ok:
+            self.assertEqual(lookups, [], 'duplicate-name lookup outside a saved create')
+            return
+        self.assertEqual(len(lookups), 1, 'duplicate-name lookup must run exactly once')
+        i = lookups[0]
+        # The School refresh comes first; the lookup's teacher check may pull
+        # the current user's own expired-row refresh (users.id = …) in between.
+        # The baseline issues that same refresh later, so it stays compared.
+        j = i - 1
+        while j >= 0 and i - j <= 2 and _flat(stmts[j][0]).startswith('SELECT users.') \
+                and ' FROM users ' in _flat(stmts[j][0]) \
+                and 'WHERE users.id = ' in _flat(stmts[j][0]):
+            j -= 1
+        refresh = _flat(stmts[j][0]) if j >= 0 else ''
+        self.assertTrue(refresh.startswith('SELECT schools.')
+                        and ' FROM schools WHERE schools.id = ' in refresh, refresh[:160])
+        new['stmts'] = stmts[:j] + stmts[j + 1:i] + stmts[i + 1:]
+
     def _parity(self, user_key, method, url, data=None, active_school=None):
         self._reset()
         base = self._request('baseline', user_key, method, url, data, active_school)
@@ -450,6 +488,7 @@ class ParentPickerProjectionTest(unittest.TestCase):
         self._reset()
         new = self._request('optimised', user_key, method, url, data, active_school)
         new_state = self._snapshot()
+        self._strip_duplicate_name_check(new, method, url)
         self.assertEqual(base['status'], new['status'])
         self.assertEqual(base['location'], new['location'])
         self.assertEqual(base['flashes'], new['flashes'])
