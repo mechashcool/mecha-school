@@ -61,7 +61,9 @@
     {% endif %}
   </div>
   {% if 'students.export' in enabled_features %}
-  <a href="{{ url_for('students.export_excel', status='active') }}"
+  {# Carries the current list filters (never page) so the file holds exactly the
+     students the list counts; doSearch() keeps it in sync after AJAX filtering. #}
+  <a href="{{ url_for('students.export_excel', **export_args) }}" id="stu-export-link"
      class="btn btn-outline-success">
     <i class="bi bi-file-earmark-excel-fill me-1"></i>تصدير Excel
   </a>
@@ -367,6 +369,8 @@ function onStageChange(el) {
   const paginationWrap = document.getElementById('stu-pagination-wrap');
 
   const SEARCH_URL       = "{{ url_for('students.search') }}";
+  const EXPORT_URL       = "{{ url_for('students.export_excel') }}";
+  const exportLink       = document.getElementById('stu-export-link');
   const BUILDINGS_ON     = {{ 'true' if buildings_enabled else 'false' }};
   const IS_HISTORICAL    = {{ 'true' if is_historical_year else 'false' }};
   const CAN_EDIT         = {{ 'true' if (current_user.has_permission('edit_student') and not is_historical_year and 'students.edit' in enabled_features) else 'false' }};
@@ -521,8 +525,17 @@ function onStageChange(el) {
     paginationEl.innerHTML = html;
   }
 
+  // Export = the same filters as the list, without pagination (whole set).
+  function exportHref() {
+    const params = getFilterParams();
+    if (!params.get('q')) params.delete('q');
+    const qs = params.toString();
+    return qs ? `${EXPORT_URL}?${qs}` : EXPORT_URL;
+  }
+
   function doSearch(page) {
     if (activeXhr) { activeXhr.abort(); activeXhr = null; }
+    if (exportLink) exportLink.href = exportHref();
     const params = getFilterParams();
     params.set('page', page || 1);
 

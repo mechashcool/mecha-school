@@ -652,23 +652,40 @@ def _apply_student_status_filter(query, status):
     return query.filter(false())
 
 
-@students_bp.route('/')
-@login_required
-@permission_required('view_students')
-def index():
-    page        = request.args.get('page', 1, type=int)
-    search      = request.args.get('q', '')
-    status      = request.args.get('status', '')
-    stage       = request.args.get('stage', '')
-    grade_id    = request.args.get('grade_id', type=int)
-    section_id  = request.args.get('section_id', type=int)
-    building_id = request.args.get('building_id', type=int)
-    residential_area_id = request.args.get('residential_area_id', type=int)
+# Students-list filters the page hands to the Excel export. Pagination
+# (page/per_page) is deliberately absent: the export is the whole filtered set.
+STUDENT_LIST_FILTER_ARGS = ('q', 'status', 'stage', 'grade_id', 'section_id',
+                            'building_id', 'residential_area_id', 'rfid')
+
+
+def _student_list_filter_args(args):
+    """The non-empty students-list filters in ``args``, for the export link."""
+    return {k: args.get(k).strip() for k in STUDENT_LIST_FILTER_ARGS
+            if (args.get(k) or '').strip()}
+
+
+def _build_student_list_query(args, school, allowed_building_ids):
+    """The one filtered Student query behind students.index, students.search
+    and students.export_excel, so the page total and the export row count can
+    never drift apart.
+
+    School, building and teacher scope always come from the trusted server-side
+    context — nothing in ``args`` can widen them. ``args`` only narrows the set
+    (search, RFID, status, building, residential area, section/grade/stage).
+    No Student.academic_year_id filter: students persist across years, and
+    callers run the query with include_all_years=True. Callers add ordering,
+    loading and pagination.
+    """
+    search      = args.get('q', '')
+    status      = args.get('status', '')
+    stage       = args.get('stage', '')
+    grade_id    = args.get('grade_id', type=int)
+    section_id  = args.get('section_id', type=int)
+    building_id = args.get('building_id', type=int)
+    residential_area_id = args.get('residential_area_id', type=int)
     # RFID card filter — read as a STRING and only trimmed of the whitespace/CR/LF
     # the USB reader appends, so "0006110011" never degrades to "6110011".
-    rfid        = request.args.get('rfid', '').strip()
-    school      = get_current_school()
-    year        = get_view_year(school.id) if school else None
+    rfid        = args.get('rfid', '').strip()
 
     query = Student.query
 
@@ -679,7 +696,6 @@ def index():
     # Building scoping — second layer, only when the feature is on AND the user
     # is restricted. No effect on schools/users without buildings.
     buildings_on = school_buildings_enabled(school)
-    allowed_building_ids = user_allowed_building_ids(current_user, school)
     query = apply_building_scope_to_students(query, current_user, school)
 
     if _is_teacher():
@@ -722,10 +738,13 @@ def index():
         else:
             query = query.filter(Student.id == -1)
     elif stage:
-        grade_q = Grade.query.filter_by(school_id=school.id, stage=stage)
-        if year:
-            grade_q = grade_q.filter_by(academic_year_id=year.id)
-        stage_grade_ids = [g.id for g in grade_q.all()]
+        stage_grade_ids = []
+        if school:
+            year = get_view_year(school.id)
+            grade_q = Grade.query.filter_by(school_id=school.id, stage=stage)
+            if year:
+                grade_q = grade_q.filter_by(academic_year_id=year.id)
+            stage_grade_ids = [g.id for g in grade_q.all()]
         if stage_grade_ids:
             stage_sec_ids = [s.id for s in Section.query.filter(
                 Section.grade_id.in_(stage_grade_ids)).all()]
@@ -736,9 +755,39 @@ def index():
         else:
             query = query.filter(Student.id == -1)
 
-    students = (query
-                .options(joinedload(Student.section).joinedload(Section.grade))
-                .execution_options(include_all_years=True)
+    return query
+
+
+def _student_list_rows(query):
+    """Shared loading for the students list: section/grade eager-loaded with an
+    OUTER join under all-year visibility, so no student is dropped and an
+    older-year section still renders."""
+    return (query
+            .options(joinedload(Student.section).joinedload(Section.grade))
+            .execution_options(include_all_years=True))
+
+
+@students_bp.route('/')
+@login_required
+@permission_required('view_students')
+def index():
+    page        = request.args.get('page', 1, type=int)
+    search      = request.args.get('q', '')
+    status      = request.args.get('status', '')
+    stage       = request.args.get('stage', '')
+    grade_id    = request.args.get('grade_id', type=int)
+    section_id  = request.args.get('section_id', type=int)
+    building_id = request.args.get('building_id', type=int)
+    residential_area_id = request.args.get('residential_area_id', type=int)
+    rfid        = request.args.get('rfid', '').strip()
+    school      = get_current_school()
+    year        = get_view_year(school.id) if school else None
+
+    buildings_on = school_buildings_enabled(school)
+    allowed_building_ids = user_allowed_building_ids(current_user, school)
+    query = _build_student_list_query(request.args, school, allowed_building_ids)
+
+    students = (_student_list_rows(query)
                 .order_by(Student.created_at.desc())
                 .paginate(page=page, per_page=20, error_out=False))
 
@@ -801,7 +850,8 @@ def index():
                            building_id=building_id,
                            residential_areas_list=residential_areas_list,
                            residential_area_id=residential_area_id,
-                           rfid=rfid)
+                           rfid=rfid,
+                           export_args=_student_list_filter_args(request.args))
 
 
 @students_bp.route('/search')
@@ -815,73 +865,14 @@ def search():
                         'has_next': False, 'has_prev': False,
                         'next_num': None, 'prev_num': None}), 200
 
-    q           = request.args.get('q', '').strip()
     page        = request.args.get('page', 1, type=int)
-    status      = request.args.get('status', '')
-    stage       = request.args.get('stage', '')
-    grade_id    = request.args.get('grade_id', type=int)
-    section_id  = request.args.get('section_id', type=int)
-    building_id = request.args.get('building_id', type=int)
-    residential_area_id = request.args.get('residential_area_id', type=int)
-    # Same string-only handling as students.index — leading zeroes preserved.
     rfid        = request.args.get('rfid', '').strip()
 
     buildings_on         = school_buildings_enabled(school)
     allowed_building_ids = user_allowed_building_ids(current_user, school)
+    query = _build_student_list_query(request.args, school, allowed_building_ids)
 
-    query = Student.query.filter_by(school_id=school.id)
-    query = apply_building_scope_to_students(query, current_user, school)
-
-    if _is_teacher():
-        query = _teacher_scope_student_query(query, school)
-
-    search_clause = _student_search_clause(q)
-    if search_clause is not None:
-        query = query.filter(search_clause)
-
-    # RFID card filter — identical rule and identical school isolation as
-    # students.index (exact match, ANDed with the other filters, school-scoped).
-    if rfid:
-        query = query.filter(Student.rfid_tag_id == rfid)
-
-    query = _apply_student_status_filter(query, status)
-
-    if buildings_on and building_id:
-        if allowed_building_ids is None or building_id in allowed_building_ids:
-            query = query.filter(Student.building_id == building_id)
-
-    # Residential-area filter — same fail-closed reasoning as students.index:
-    # the query is already school-filtered, so a foreign area id matches nothing.
-    if residential_area_id:
-        query = query.filter(Student.residential_area_id == residential_area_id)
-
-    if section_id:
-        query = query.filter_by(section_id=section_id)
-    elif grade_id:
-        _sids = [s.id for s in Section.query.filter_by(grade_id=grade_id).all()]
-        if _sids:
-            query = query.filter(Student.section_id.in_(_sids))
-        else:
-            query = query.filter(Student.id == -1)
-    elif stage:
-        year = get_view_year(school.id)
-        _gq = Grade.query.filter_by(school_id=school.id, stage=stage)
-        if year:
-            _gq = _gq.filter_by(academic_year_id=year.id)
-        _gids = [g.id for g in _gq.all()]
-        if _gids:
-            _ssids = [s.id for s in Section.query.filter(
-                Section.grade_id.in_(_gids)).all()]
-            if _ssids:
-                query = query.filter(Student.section_id.in_(_ssids))
-            else:
-                query = query.filter(Student.id == -1)
-        else:
-            query = query.filter(Student.id == -1)
-
-    paginated = (query
-                 .options(joinedload(Student.section).joinedload(Section.grade))
-                 .execution_options(include_all_years=True)
+    paginated = (_student_list_rows(query)
                  .order_by(Student.created_at.desc())
                  .paginate(page=page, per_page=20, error_out=False))
 
@@ -2861,36 +2852,30 @@ def export_excel():
     from flask import Response
     from app.utils.excel_export import export_students
     school = get_current_school()
-    year   = get_view_year(school.id) if school else None
-    status = request.args.get('status', 'active')
+    # One school per file: a super admin with no school selected gets no
+    # cross-school spreadsheet.
+    if not school:
+        flash('يرجى اختيار مدرسة أولاً.', 'warning')
+        return redirect(url_for('students.index'))
 
-    # Exactly one known status. Anything else — including 'deleted' — exports
-    # nothing, so a removed student can never be exported through a crafted
-    # status parameter.
-    if status in EDITABLE_STUDENT_STATUSES:
-        query = Student.query.filter(Student.status == status)
-    else:
-        query = Student.query.filter(false())
-    if request.args.get('all_years', '0') == '1':
-        query = query.execution_options(include_all_years=True)
-    if school:
-        query = query.filter_by(school_id=school.id)
-    if year and request.args.get('all_years', '0') != '1':
-        query = query.filter_by(academic_year_id=year.id)
-    # Building scope — restricted users only export their own buildings' students.
-    query = apply_building_scope_to_students(query, current_user, school)
-    if _is_teacher():
-        query = _teacher_scope_student_query(query, school)
+    # Exactly the population of the Students page for the same filters (shared
+    # query: school/building/teacher scope, default status = all except
+    # archived/deleted, no academic-year filter) — the whole set, no pagination.
+    allowed_building_ids = user_allowed_building_ids(current_user, school)
+    query = _build_student_list_query(request.args, school, allowed_building_ids)
+    students = _student_list_rows(query).order_by(Student.full_name, Student.id).all()
 
-    students = query.order_by(Student.full_name).all()
     data = export_students(students)
     if not data:
         flash('مكتبة Excel غير متاحة.', 'warning')
         return redirect(url_for('students.index'))
+    status = request.args.get('status', '')
+    filename = (f'students_{status}.xlsx' if status in EDITABLE_STUDENT_STATUSES
+                else 'students.xlsx')
     return Response(
         data,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        headers={'Content-Disposition': f'attachment; filename=students_{status}.xlsx'}
+        headers={'Content-Disposition': f'attachment; filename={filename}'}
     )
 
 

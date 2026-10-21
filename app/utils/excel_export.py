@@ -48,14 +48,16 @@ def _autowidth(ws, min_w=12, max_w=50):
 # ─── STUDENTS ────────────────────────────────────────────────────────────────
 
 def export_students(students) -> bytes | None:
-    """Export active students list to Excel. Returns bytes or None."""
+    """Export a students list to Excel. Returns bytes or None."""
     wb = _wb()
     if not wb:
         return None
     from openpyxl.styles import Font, PatternFill, Alignment
 
+    # Same terms as the Students page status filter.
     STUDENT_STATUS_AR = {
         'active': 'فعال', 'inactive': 'غير فعال', 'archived': 'مؤرشف',
+        'transferred': 'منقول', 'withdrawn': 'مسحوب', 'graduated': 'متخرج',
     }
 
     ws = wb.active
