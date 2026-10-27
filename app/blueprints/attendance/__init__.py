@@ -847,6 +847,13 @@ def take(section_id):
                     # Absent record with no physical check-in — treat as finalized.
                     already_marked_count += 1
                     continue
+                # An omitted status field is not a choice. manual.html posts
+                # nothing for locked cards (every existing row), so the
+                # 'absent' default above would silently turn an approved leave
+                # into an absence and notify the parents. Keep the row as is.
+                if f'status_{student.id}' not in request.form:
+                    already_marked_count += 1
+                    continue
                 # on_leave record (no check_in) — can be updated via manual selection.
                 # The admin may override approved leave with present, late, absent, or
                 # keep it as on_leave by selecting the مجاز option.

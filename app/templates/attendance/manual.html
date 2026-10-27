@@ -403,6 +403,12 @@ function buildCard(s) {
                             <i class="bi bi-lock-fill me-1"></i>
                             <span style="color:#e03e3e">غائب</span> ${src}
                           </div>`;
+        } else if (rec && rec.status === 'on_leave') {
+            // Leave row — locked; nothing is posted, the server keeps it as is.
+            bottomHtml = `<div class="text-muted text-center py-1" style="font-size:11px">
+                            <i class="bi bi-lock-fill me-1"></i>
+                            <span style="color:#2e7d32">مجاز</span>
+                          </div>`;
         } else if (s.needs_checkout) {
             // Departure mode: checked in, awaiting checkout — will be checked out on submit
             const cin = rec && rec.check_in ? `<b style="color:#1aab6d">${rec.check_in}</b>` : '';

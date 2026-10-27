@@ -189,7 +189,8 @@
              on_leave records are unlocked — admin can override approved leave. #}
           {% set locked = current is not none and (current.check_in is not none or current.status == 'absent') %}
           {% set is_suspended = student.id in suspended_ids %}
-          <tr {% if locked or is_suspended %}style="opacity:.55;background:#f8f9fa"{% endif %}>
+          <tr {% if locked or is_suspended %}style="opacity:.55;background:#f8f9fa"{% endif %}
+              {% if current is not none and current.status == 'on_leave' %}data-on-leave="1"{% endif %}>
             <td class="text-muted">{{ loop.index }}</td>
             <td><code>{{ student.student_id }}</code></td>
             <td class="fw-600">
@@ -330,9 +331,12 @@ updateCheckedCount();
 // ── Normal check-in mode ──────────────────────────────────────────────────
 function markAll(status) {
   document.querySelectorAll(`input[type=radio][value=${status}]:not(:disabled)`).forEach(r => {
-    if (!r.closest('tr').style.opacity) {
-      r.checked = true;
-    }
+    const row = r.closest('tr');
+    if (row.style.opacity) return;
+    // "الكل غائب" never touches a student on leave (مجاز); marking one of
+    // them absent stays an explicit per-student choice.
+    if (status === 'absent' && row.dataset.onLeave) return;
+    r.checked = true;
   });
   updateCounts();
 }
