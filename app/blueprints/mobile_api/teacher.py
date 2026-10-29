@@ -643,10 +643,13 @@ def teacher_schedule():
         user_id / school_id / academic_year_id is ever read from the client.
       • Schedule.teacher_id is optional (NULL when admin does not assign a teacher
         to a period). The query uses three OR branches: (1) teacher_id == emp.id —
-        explicit assignments always included; (2) section_id in teacher's sections
-        AND teacher_id IS NULL; (3) grade_id in teacher's grades AND section_id IS
-        NULL AND teacher_id IS NULL. Entries explicitly assigned to a DIFFERENT
-        employee are never included (branches 2 and 3 require teacher_id IS NULL).
+        explicit assignments always included; (2) teacher_id IS NULL AND the exact
+        (section_id, subject_id) pair is in the teacher's teacher_subjects;
+        (3) teacher_id IS NULL AND section_id IS NULL AND (grade_id, subject_id)
+        matches an assigned pair in a section of that grade. Homeroom alone, or
+        another subject in the same section/grade, never exposes an unassigned
+        lesson. Entries explicitly assigned to a DIFFERENT employee are never
+        included (branches 2 and 3 require teacher_id IS NULL).
       • The query is explicitly scoped to school_id and academic_year_id so that
         no other school's or year's data can be returned. The ORM global tenant
         scope is now active for authenticated mobile requests (set_mobile_request_scope
@@ -674,58 +677,61 @@ def teacher_schedule():
     # teacher to a period). Filtering by teacher_id == emp.id alone returns an
     # empty result set whenever teacher_id was left NULL in the web.
     #
-    # The authoritative teacher-scope is the set of sections/grades this teacher
-    # is responsible for, derived entirely server-side from their homeroom and
-    # subject assignments — consistent with how all other teacher endpoints work.
+    # An unassigned period belongs to a teacher only through an EXACT subject
+    # assignment (teacher_subjects section+subject pair, written solely by
+    # Employee Management). Homeroom alone, or teaching another subject in the
+    # same section/grade, must not make an unassigned lesson look like theirs.
     #
     # Isolation:
     #   school_id        → explicit column filter; prevent cross-school leakage
     #   academic_year_id → explicit column filter; current year only
-    #   section/grade    → server-side from _teacher_section_ids(); no client input
-    section_ids = list(_teacher_section_ids(emp))
+    #   pairs            → server-side from teacher_subjects; no client input
+    #
+    # One query: the teacher's pairs, joined to their section for the grade.
+    # Explicit school_id + year guard — defence-in-depth on top of the ORM
+    # tenant scope (set_mobile_request_scope); it must not be removed.
+    pair_rows = db.session.execute(
+        select(teacher_subjects.c.section_id,
+               teacher_subjects.c.subject_id,
+               Section.grade_id)
+        .join(Section, Section.id == teacher_subjects.c.section_id)
+        .where(teacher_subjects.c.employee_id == emp.id,
+               Section.school_id == emp.school_id,
+               Section.academic_year_id == year.id)
+    ).fetchall()
+    section_pairs = {(r.section_id, r.subject_id) for r in pair_rows}
+    grade_pairs = {(r.grade_id, r.subject_id) for r in pair_rows if r.grade_id}
 
     # Three ownership branches (OR):
     #   1. teacher_id == emp.id — entry explicitly assigned to this teacher;
-    #      always included regardless of section/grade membership.
-    #   2. section_id IN teacher's sections AND teacher_id IS NULL — unassigned
-    #      section-based entry; section membership is the scope.
-    #   3. grade_id IN teacher's grades AND section_id IS NULL AND teacher_id IS NULL —
-    #      unassigned whole-grade entry; grade membership (derived from teacher's
-    #      sections) is the scope.
+    #      always included regardless of teacher_subjects.
+    #   2. teacher_id IS NULL AND (section_id, subject_id) is an assigned pair —
+    #      unassigned section-based entry.
+    #   3. teacher_id IS NULL AND section_id IS NULL AND (grade_id, subject_id)
+    #      matches an assigned pair in a section of that grade — unassigned
+    #      whole-grade entry.
     # Entries with teacher_id pointing to a DIFFERENT employee are excluded because
     # branches 2 and 3 require teacher_id IS NULL.
     or_clauses = [Schedule.teacher_id == emp.id]
 
-    if section_ids:
+    if section_pairs:
         or_clauses.append(
             db.and_(
-                Schedule.section_id.in_(section_ids),
                 Schedule.teacher_id.is_(None),
+                db.tuple_(Schedule.section_id, Schedule.subject_id)
+                  .in_(sorted(section_pairs)),
             )
         )
 
-        # Derive grade_ids so that unassigned whole-grade rows are included.
-        # Explicit school_id guard — defence-in-depth. The ORM tenant scope is
-        # active for authenticated mobile requests (set_mobile_request_scope);
-        # this explicit filter must not be removed.
-        grade_sections = (
-            Section.query
-            .filter(
-                Section.id.in_(section_ids),
-                Section.school_id == emp.school_id,
+    if grade_pairs:
+        or_clauses.append(
+            db.and_(
+                Schedule.teacher_id.is_(None),
+                Schedule.section_id.is_(None),
+                db.tuple_(Schedule.grade_id, Schedule.subject_id)
+                  .in_(sorted(grade_pairs)),
             )
-            .all()
         )
-        grade_ids = list({s.grade_id for s in grade_sections if s.grade_id})
-
-        if grade_ids:
-            or_clauses.append(
-                db.and_(
-                    Schedule.grade_id.in_(grade_ids),
-                    Schedule.section_id.is_(None),
-                    Schedule.teacher_id.is_(None),
-                )
-            )
 
     schedules = (Schedule.query
                  .filter(
