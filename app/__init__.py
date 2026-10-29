@@ -216,15 +216,14 @@ def create_app(config_name=None):
                                  upload_url=protected_upload_url)
 
     # ── Jinja2 filters ────────────────────────────────────────────────────────
-    from datetime import timezone as _tz, timedelta as _td
-    _baghdad = _tz(_td(hours=3))  # Iraq is UTC+3, no DST
+    # Stored timestamps are naive UTC; these convert for display only
+    # (Asia/Baghdad via zoneinfo — see app/utils/time_display.py).
+    from app.utils.time_display import (format_baghdad, format_datetime_ar12,
+                                        format_time_ar12)
 
-    def _to_baghdad(dt, fmt='%Y-%m-%d %H:%M'):
-        if not dt:
-            return ''
-        return dt.replace(tzinfo=_tz.utc).astimezone(_baghdad).strftime(fmt)
-
-    app.jinja_env.filters['to_baghdad'] = _to_baghdad
+    app.jinja_env.filters['to_baghdad'] = format_baghdad
+    app.jinja_env.filters['ar_time12'] = format_time_ar12
+    app.jinja_env.filters['ar_datetime12'] = format_datetime_ar12
 
     # ── Root redirect ─────────────────────────────────────────────────────────
     from flask import redirect, url_for

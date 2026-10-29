@@ -49,6 +49,7 @@ from app.utils.decorators import (admin_required, permission_required,
                                    get_current_school, get_active_year)
 from app.utils.modules import is_module_enabled
 from app.utils.chat_send_lock import lock_room_for_message_insert
+from app.utils.time_display import format_datetime_ar12
 
 _log = logging.getLogger('mecha.chat')
 
@@ -75,7 +76,9 @@ def _format_message_json(msg: ChatMessage) -> dict:
         'id': msg.id,
         'body': msg.body or '[مرفق]',
         'sender_name': msg.sender.full_name if msg.sender else 'محذوف',
-        'created_at': msg.created_at.strftime('%Y-%m-%d %H:%M'),
+        # Display string in Baghdad time — identical to the server-rendered
+        # bubble (|ar_datetime12). Stored UTC value is untouched.
+        'created_at': format_datetime_ar12(msg.created_at),
         'is_self': msg.sender_user_id == current_user.id,
     }
 
@@ -118,7 +121,7 @@ def _sse_generator(room_id: int, user_id: int, after_id: int):
                         'id':          msg.id,
                         'body':        msg.body or '[مرفق]',
                         'sender_name': msg.sender.full_name if msg.sender else 'محذوف',
-                        'created_at':  msg.created_at.strftime('%Y-%m-%d %H:%M'),
+                        'created_at':  format_datetime_ar12(msg.created_at),
                         'is_self':     msg.sender_user_id == user_id,
                     }, ensure_ascii=False)))
 
@@ -183,7 +186,7 @@ def _poll_messages_json(room_id: int, user_id: int, after_id: int):
             'id':          m.id,
             'body':        m.body or '[مرفق]',
             'sender_name': m.sender.full_name if m.sender else 'محذوف',
-            'created_at':  m.created_at.strftime('%Y-%m-%d %H:%M'),
+            'created_at':  format_datetime_ar12(m.created_at),
             'is_self':     m.sender_user_id == user_id,
         } for m in msgs]
     })
@@ -2451,7 +2454,7 @@ def room_older_messages(room_id: int):
                 'id':          m.id,
                 'body':        m.body or '[مرفق]',
                 'sender_name': m.sender.full_name if m.sender else 'محذوف',
-                'created_at':  m.created_at.strftime('%Y-%m-%d %H:%M'),
+                'created_at':  format_datetime_ar12(m.created_at),
                 'is_self':     m.sender_user_id == current_user.id,
                 'is_deleted':  bool(m.is_deleted),
             }

@@ -90,8 +90,8 @@
                 <span class="fw-semibold" style="font-size:13px">
                   {{ msg.sender.full_name if msg.sender else 'محذوف' }}
                 </span>
-                <span class="text-muted" style="font-size:11px">
-                  {{ msg.created_at | to_baghdad }}
+                <span class="text-muted" style="font-size:11px" dir="rtl">
+                  {{ msg.created_at | ar_datetime12 }}
                 </span>
               </div>
               {% if msg.is_deleted %}
@@ -308,7 +308,7 @@ function appendMessageToDom(msgData) {
       <div style="max-width:70%">
         <div class="d-flex gap-2 align-items-center mb-1 ${rev}">
           <span class="fw-semibold" style="font-size:13px">${escapeHtml(msgData.sender_name)}</span>
-          <span class="text-muted" style="font-size:11px">${escapeHtml(msgData.created_at)}</span>
+          <span class="text-muted" style="font-size:11px" dir="rtl">${escapeHtml(msgData.created_at)}</span>
         </div>
         <div class="bg-white border rounded p-2 shadow-sm" style="font-size:14px">${escapeHtml(msgData.body)}</div>
       </div>
@@ -478,7 +478,7 @@ function buildOlderMsgHtml(msgData) {
     <div style="max-width:70%">
       <div class="d-flex gap-2 align-items-center mb-1 ${rev}">
         <span class="fw-semibold" style="font-size:13px">${senderHtml}</span>
-        <span class="text-muted" style="font-size:11px">${timeHtml}</span>
+        <span class="text-muted" style="font-size:11px" dir="rtl">${timeHtml}</span>
       </div>
       ${bubbleHtml}
     </div>

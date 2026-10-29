@@ -120,7 +120,7 @@
           <span class="msg-convo-name">{{ room.name }}</span>
           <div class="d-flex align-items-center gap-2 flex-shrink-0">
             {% if item.last_message %}
-            <span class="msg-convo-time">{{ item.last_message.created_at | to_baghdad('%H:%M') }}</span>
+            <span class="msg-convo-time" dir="rtl">{{ item.last_message.created_at | ar_time12 }}</span>
             {% endif %}
             {% if item.unread_count > 0 %}
             <span class="msg-unread-badge">{{ item.unread_count }}</span>
@@ -220,7 +220,7 @@
           </div>
           <div class="d-flex align-items-center gap-2 flex-shrink-0">
             {% if item.last_message %}
-            <span class="msg-convo-time">{{ item.last_message.created_at | to_baghdad('%H:%M') }}</span>
+            <span class="msg-convo-time" dir="rtl">{{ item.last_message.created_at | ar_time12 }}</span>
             {% endif %}
             {% if item.unread_count > 0 %}
             <span class="msg-unread-badge">{{ item.unread_count }}</span>

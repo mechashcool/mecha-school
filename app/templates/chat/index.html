@@ -148,8 +148,8 @@
                 {% if other %}{{ other.full_name }}{% else %}{{ room.name }}{% endif %}
               </span>
               {% if stat.last_message %}
-              <span class="ms-convo-time">
-                {{ stat.last_message.created_at | to_baghdad('%H:%M') }}
+              <span class="ms-convo-time" dir="rtl">
+                {{ stat.last_message.created_at | ar_time12 }}
               </span>
               {% endif %}
             </div>
@@ -357,7 +357,7 @@
                   {% endif %}
                   {{ stat.last_message.body or '[مرفق]' }}
                 </div>
-                <div class="ms-group-preview-time">{{ stat.last_message.created_at | to_baghdad }}</div>
+                <div class="ms-group-preview-time" dir="rtl">{{ stat.last_message.created_at | ar_datetime12 }}</div>
                 {% else %}
                 <div class="ms-group-preview-empty">لا توجد رسائل بعد</div>
                 {% endif %}
