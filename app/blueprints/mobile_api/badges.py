@@ -29,7 +29,9 @@ notifications   Notification rows visible to this user with no NotificationRead
 messages        ChatMessage rows not read by this user across all their rooms
 school_board    SchoolVideo + SchoolAnnouncement rows not yet in SchoolContentRead
 grades          ExamResult rows created after last_viewed_at  (current year, parent only)
-homework        Homework rows created after last_viewed_at    (current year, parent only)
+homework        Homework rows that became parent-visible after last_viewed_at
+                  (created after it, or published after its local date;
+                  never before publish_date — current year, parent only)
 exams           Exam rows created after last_viewed_at        (current year, parent only)
 attendance      StudentAttendance rows created after last_viewed_at (current year, parent only)
 fees            FeeInstallment rows updated after last_viewed_at   (current year, parent only)
@@ -68,6 +70,8 @@ from app.models import (
     StudentAttendance,
 )
 from app.utils import badge_cache
+from app.utils.homework_visibility import (newly_visible_clause, school_clock,
+                                           school_local_today)
 from app.utils.notification_visibility import notification_visible_to
 
 from . import mobile_api_bp
@@ -315,9 +319,13 @@ def _compute_badge_payload(user, role_name, school_id, year_id) -> dict:
                     .scalar() or 0
                 )
 
-            # homework: new Homework rows since last view
+            # homework: rows that became parent-visible since last view — the
+            # same school-local publish_date rule as the homework list, so an
+            # unpublished homework is never counted and is counted once it
+            # publishes.
             last_hw = views.get('homework')
             if last_hw is not None and section_ids:
+                clock = school_clock(school_id)
                 homework_count = (
                     db.session.query(func.count(Homework.id))
                     .execution_options(bypass_tenant_scope=True)
@@ -326,7 +334,8 @@ def _compute_badge_payload(user, role_name, school_id, year_id) -> dict:
                         Homework.school_id == school_id,
                         Homework.academic_year_id == year_id,
                         Homework.is_active == True,
-                        Homework.created_at > last_hw,
+                        newly_visible_clause(last_hw, school_local_today(clock),
+                                             clock),
                     )
                     .scalar() or 0
                 )

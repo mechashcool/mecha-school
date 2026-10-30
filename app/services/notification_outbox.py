@@ -126,6 +126,18 @@ def study_request_enabled() -> bool:
     return _flag('STUDY_REQUEST_OUTBOX_ENABLED')
 
 
+def homework_defer_enabled() -> bool:
+    """Delayed homework notifications, request side. Sixth flag, default
+    FALSE. Off: homework keeps its original immediate notification path."""
+    return _flag('HOMEWORK_PUBLISH_DEFER_ENABLED')
+
+
+def homework_sweep_enabled() -> bool:
+    """Delayed homework notifications, worker side (the publish sweep).
+    Seventh flag, default FALSE. Independent of every other flag."""
+    return _flag('HOMEWORK_PUBLISH_SWEEP_ENABLED')
+
+
 def any_enabled() -> bool:
     """True when ANY producer is switched on — the worker's gate.
 
@@ -134,7 +146,8 @@ def any_enabled() -> bool:
     completely inert when no flag is set.
     """
     return (enabled() or aiface_enabled() or manual_enabled()
-            or auto_absence_enabled() or study_request_enabled())
+            or auto_absence_enabled() or study_request_enabled()
+            or homework_defer_enabled() or homework_sweep_enabled())
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -746,6 +759,79 @@ def stage_study_request_viewed_delivery(*, school_id: int, request_id: int,
         )
         for token_id in token_ids])
     return len(token_ids)
+
+
+def _homework_dedup_key(homework_id: int, user_id: int, token_id: int) -> str:
+    """Stable per (homework, parent, device). A homework is fanned out at most
+    once (homework.parents_notified_at is claimed in the same transaction), so
+    a second staging can only be a bug — it collides on the UNIQUE index."""
+    key = (f'{NotificationOutbox.EVENT_HOMEWORK_PUBLISHED}:'
+           f'{homework_id}:{user_id}:{token_id}')
+    return key[:_MAX_DEDUP_KEY]
+
+
+def stage_homework_deliveries(*, school_id: int, homework_id: int, title: str,
+                              body: str, payload: dict, recipients,
+                              created_by=None, now=None) -> tuple[int, int]:
+    """Stage ONE homework's parent notifications. Does NOT commit.
+
+    Adds to the CURRENT session so the caller commits it together with the
+    homework's notified marker: the marker, the in-app rows and the push jobs
+    exist together or not at all. No network I/O.
+
+    `recipients` is [(parent User, student_id)], already resolved by the
+    caller to this school's active linked parents — one entry per parent.
+    For each: ONE in-app Notification, and one push job per ACTIVE token of
+    that parent registered in THIS school (one query for all parents).
+    `payload` is the push data without student_id; each job adds its
+    parent's own student_id.
+
+    Returns (in_app_rows, push_jobs).
+    """
+    recipients = list(recipients)
+    if not recipients:
+        return 0, 0
+    for parent, _sid in recipients:
+        # Fail closed: never stage a delivery to an account of another school.
+        if parent.school_id != school_id:
+            raise ValueError(
+                f'outbox: parent {parent.id} does not belong to school '
+                f'{school_id} — refusing to stage a cross-school delivery')
+
+    now = now or datetime.utcnow()
+    db.session.add_all([
+        Notification(school_id=school_id, title=title, body=body,
+                     ntype='homework', target_user=parent, created_by=created_by)
+        for parent, _sid in recipients])
+
+    student_of = {parent.id: sid for parent, sid in recipients}
+    tokens = (db.session.query(MobileDeviceToken.id, MobileDeviceToken.user_id)
+              .execution_options(**OPTS)
+              .filter(MobileDeviceToken.user_id.in_(list(student_of)),
+                      MobileDeviceToken.school_id == school_id,
+                      MobileDeviceToken.is_active.is_(True))
+              .order_by(MobileDeviceToken.user_id.asc(),
+                        MobileDeviceToken.id.asc())
+              .all())
+    db.session.add_all([
+        NotificationOutbox(
+            school_id=school_id,
+            event_type=NotificationOutbox.EVENT_HOMEWORK_PUBLISHED,
+            user_id=user_id,
+            device_token_id=token_id,
+            title=title, body=body,
+            data_json=json.dumps({**payload,
+                                  'student_id': str(student_of[user_id])},
+                                 ensure_ascii=False),
+            ntype='homework',
+            dedup_key=_homework_dedup_key(homework_id, user_id, token_id),
+            status=NotificationOutbox.STATUS_PENDING,
+            attempts=0,
+            next_attempt_at=now,
+            created_at=now,
+        )
+        for token_id, user_id in tokens])
+    return len(recipients), len(tokens)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

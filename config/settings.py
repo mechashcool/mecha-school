@@ -243,6 +243,28 @@ class Config:
         .strip().lower() == 'true'
     )
 
+    # ── Delayed homework notifications — both OFF by default ─────────────────
+    # DEFER (web/mobile request side): a homework published in the future is
+    # saved PENDING (homework.parents_notified_at IS NULL) and nobody is
+    # notified until it publishes; one published today is staged at once as
+    # in-app rows + outbox push jobs. Off: the original immediate notification
+    # path runs unchanged and nothing is ever left pending.
+    HOMEWORK_PUBLISH_DEFER_ENABLED = (
+        os.environ.get('HOMEWORK_PUBLISH_DEFER_ENABLED', 'false')
+        .strip().lower() == 'true'
+    )
+    # SWEEP (outbox worker side): the worker notifies pending homework once it
+    # publishes, from HOMEWORK_PUBLISH_SEND_HOUR school-local time, catching up
+    # after a missed run. Enable it BEFORE DEFER; disable it only after the
+    # pending count is 0. Independent of FEE_REMINDER_SCHEDULER_DISABLED.
+    HOMEWORK_PUBLISH_SWEEP_ENABLED = (
+        os.environ.get('HOMEWORK_PUBLISH_SWEEP_ENABLED', 'false')
+        .strip().lower() == 'true'
+    )
+    # Invalid values fall back to the defaults in app/services/homework_publish.py.
+    HOMEWORK_PUBLISH_SEND_HOUR = os.environ.get('HOMEWORK_PUBLISH_SEND_HOUR', '7')
+    HOMEWORK_PUBLISH_SWEEP_SECONDS = os.environ.get('HOMEWORK_PUBLISH_SWEEP_SECONDS', '60')
+
     # ── Redis coordination (P3) — OPTIONAL ────────────────────────────────────
     # When REDIS_URL is unset (the default) every Redis-backed feature silently
     # degrades to the existing in-process behaviour: pushes use the P0 thread

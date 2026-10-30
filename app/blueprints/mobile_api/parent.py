@@ -71,6 +71,7 @@ from app.models import (
 )
 from app.services import institute_attendance as inst_att
 from app.utils.helpers import save_uploaded_file, delete_uploaded_file
+from app.utils.homework_visibility import published_clause, school_local_today
 from app.utils.institute_groups import (student_current_enrollments,
                                         student_enrollment_history)
 from app.utils.notification_visibility import notification_visible_to
@@ -860,14 +861,14 @@ def parent_child_homework(student_id):
             .filter_by(school_id=user.school_id, is_current=True)
             .first())
 
-    today = date.today()
     q = (Homework.query
          .execution_options(bypass_tenant_scope=True)
          .filter_by(section_id=s.section_id, is_active=True, school_id=user.school_id))
     if year:
         q = q.filter_by(academic_year_id=year.id)
-    # Only show homework that has been published (publish_date <= today)
-    q = q.filter(Homework.publish_date <= today)
+    # Only show homework that has been published: publish_date <= the SCHOOL's
+    # local today (not the UTC server date).
+    q = q.filter(published_clause(school_local_today(user.school_id)))
     q = q.order_by(Homework.publish_date.desc(), Homework.id.desc())
     if page_meta:
         page_meta['total'] = q.count()
@@ -975,7 +976,7 @@ def _institute_parent_homework(s: Student, school: School, page_meta: dict):
                  Homework.academic_year_id == year_id,
                  Homework.is_active.is_(True),
                  Homework.institute_group_id.in_(group_ids),
-                 Homework.publish_date <= date.today())
+                 published_clause(school_local_today(school)))
          .order_by(Homework.publish_date.desc(), Homework.id.desc()))
     if page_meta:
         page_meta['total'] = q.count()

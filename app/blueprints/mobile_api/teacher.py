@@ -90,6 +90,7 @@ from . import mobile_api_bp
 from .utils import jwt_required, role_required, ok, ok_etag, err, photo_url, page_args
 from app.utils.student_display_photo import student_display_value
 from app.utils.employee_display_photo import employee_display_value
+from app.services import homework_publish
 from app.services import institute_attendance as inst_att
 from app.utils.institute_groups import (active_enrollment_count_map, active_roster,
                                         active_roster_students,
@@ -1590,8 +1591,8 @@ def teacher_grades():
 # _notify_grade_results_mobile(): a fixed number of set-based recipient queries,
 # ONE Notification commit per job, and ONE send_push_batch task for the FCM
 # fan-out — never a commit or a Firebase round-trip per parent inside this job.
-# The web routes keep their own inline helpers (grades._notify_new_exam,
-# homework._notify_homework_parents); this path no longer calls either.
+# The web exam route keeps its own inline helper (grades._notify_new_exam);
+# web homework (homework._notify_homework_parents) now delegates here too.
 
 # NOTE (P3): _notify_new_exam_bg and _notify_homework_bg are deliberately NOT
 # registered as durable-queue tasks. They create in-app Notification rows, and
@@ -1601,6 +1602,56 @@ def teacher_grades():
 # only loss window is a queued task at worker recycle. Pure-push tasks
 # (fcm.send_push_batch, chat.send_room_pushes) ARE durable: re-delivering a
 # tray notification is harmless, losing it is not.
+
+def _linked_parent_recipients(school_id: int, student_ids, *,
+                              active_parents_only: bool, log_tag: str):
+    """The parents to notify about `student_ids` — ONE recipient rule shared by
+    _notify_parents_batched and the delayed homework fan-out.
+
+    Returns ({parent_user_id: User}, {parent_user_id: lowest linked student_id
+    in this audience}). Only parents whose OWN account belongs to `school_id`
+    (and is active when `active_parents_only`) are returned; a corrupt link to
+    another school's account is skipped, never notified. Two queries.
+    """
+    import logging as _mlog
+    from sqlalchemy.orm import load_only
+
+    _log = _mlog.getLogger('mecha.mobile')
+    student_ids = sorted({int(s) for s in (student_ids or [])})
+    if not student_ids:
+        return {}, {}
+
+    # 1. Links → parent_user_id : lowest linked student_id in this audience.
+    parent_to_student: dict[int, int] = {}
+    for uid, sid in db.session.execute(
+        select(parent_students.c.user_id, parent_students.c.student_id).where(
+            parent_students.c.student_id.in_(student_ids)
+        )
+    ).fetchall():
+        if uid not in parent_to_student or sid < parent_to_student[uid]:
+            parent_to_student[uid] = sid
+    if not parent_to_student:
+        _log.info('%s no linked parents school_id=%s', log_tag, school_id)
+        return {}, {}
+
+    # 2. Only parents whose OWN account belongs to this school. load_only keeps
+    # the row narrow; the loaded objects are handed to Notification.target_user
+    # so the flush guard validates them from the identity map, not per row.
+    users_q = (User.query
+               .execution_options(bypass_tenant_scope=True)
+               .options(load_only(User.id, User.school_id, User.is_active))
+               .filter(User.id.in_(list(parent_to_student)),
+                       User.school_id == school_id))
+    if active_parents_only:
+        users_q = users_q.filter(User.is_active.is_(True))
+    users = {u.id: u for u in users_q.all()}
+    skipped = len(parent_to_student) - len(users)
+    if skipped:
+        _log.warning('%s school_id=%s: %d linked parent(s) skipped '
+                     '(outside this school%s)', log_tag, school_id, skipped,
+                     ' or inactive' if active_parents_only else '')
+    return users, parent_to_student
+
 
 def _notify_parents_batched(*, school_id: int, student_ids, title: str, body: str,
                             ntype: str, fcm_data: dict | None,
@@ -1630,44 +1681,13 @@ def _notify_parents_batched(*, school_id: int, student_ids, title: str, body: st
     is logged and never touches the already-committed homework/exam.
     """
     import logging as _mlog
-    from sqlalchemy.orm import load_only
     from app.services import async_dispatch
     from app.services.fcm_service import is_enabled as _fcm_enabled, send_push_batch
 
     _log = _mlog.getLogger('mecha.mobile')
-    student_ids = sorted({int(s) for s in (student_ids or [])})
-    if not student_ids:
-        return
-
-    # 1. Links → parent_user_id : lowest linked student_id in this audience.
-    parent_to_student: dict[int, int] = {}
-    for uid, sid in db.session.execute(
-        select(parent_students.c.user_id, parent_students.c.student_id).where(
-            parent_students.c.student_id.in_(student_ids)
-        )
-    ).fetchall():
-        if uid not in parent_to_student or sid < parent_to_student[uid]:
-            parent_to_student[uid] = sid
-    if not parent_to_student:
-        _log.info('%s no linked parents school_id=%s', log_tag, school_id)
-        return
-
-    # 2. Only parents whose OWN account belongs to this school. load_only keeps
-    # the row narrow; the loaded objects are handed to Notification.target_user
-    # so the flush guard validates them from the identity map, not per row.
-    users_q = (User.query
-               .execution_options(bypass_tenant_scope=True)
-               .options(load_only(User.id, User.school_id, User.is_active))
-               .filter(User.id.in_(list(parent_to_student)),
-                       User.school_id == school_id))
-    if active_parents_only:
-        users_q = users_q.filter(User.is_active.is_(True))
-    users = {u.id: u for u in users_q.all()}
-    skipped = len(parent_to_student) - len(users)
-    if skipped:
-        _log.warning('%s school_id=%s: %d linked parent(s) skipped '
-                     '(outside this school%s)', log_tag, school_id, skipped,
-                     ' or inactive' if active_parents_only else '')
+    users, parent_to_student = _linked_parent_recipients(
+        school_id, student_ids, active_parents_only=active_parents_only,
+        log_tag=log_tag)
     if not users:
         return
 
@@ -1816,7 +1836,7 @@ def _notify_homework_bg(homework_id: int, school_id: int,
     """New-homework notification for the mobile teacher API. Never raises.
 
     Audience, text and payload match homework._notify_homework_parents(): the
-    linked parents (in this school) of the active students of hw.section_id;
+    active linked parents (in this school) of the active students of hw.section_id;
     an institute row targets its group's active enrollments with the institute
     payload (no section_id). `created_by` is the authoring user's id, passed as
     a primitive — current_user does not exist in this thread.
@@ -1849,9 +1869,10 @@ def _notify_homework_bg(homework_id: int, school_id: int,
                 'section_id':  str(hw.section_id),
                 'screen':      'homework',
             },
-            # School rows keep their historical audience; an institute row uses
-            # the institute rule (active parents only), as on the web.
-            active_parents_only=is_institute_hw,
+            # Active parents only, for school and institute rows alike — the
+            # same recipient rule as web creation (a disabled account cannot
+            # open the homework list either: the mobile API rejects it).
+            active_parents_only=True,
             created_by=created_by,
             dedup_since=hw.created_at,
             log_tag=f'[mobile-hw] hw_id={homework_id}',
@@ -2714,6 +2735,9 @@ def teacher_homework_create():
             return _hw_attachment_err(exc, uses_legacy_field(request.files))
         mode = prepared.mode
 
+    # Pending (NULL) only in deferred mode; otherwise the column default
+    # stamps the row handled and the original notification path runs.
+    marker = homework_publish.pending_marker_kwargs()
     hw = Homework(
         school_id=emp.school_id,
         academic_year_id=year.id,
@@ -2727,6 +2751,7 @@ def teacher_homework_create():
         is_active=True,
         attachment_path=stored[0] if stored else None,
         attachment_type=mode if stored else None,
+        **marker,
     )
     try:
         db.session.add(hw)
@@ -2741,19 +2766,13 @@ def teacher_homework_create():
         discard_unreferenced_uploads(stored)
         return err('server_error', 500)
 
-    # FCM + in-app Notification rows to parents of students in this section.
-    # P0: queued to the background dispatcher — the per-parent fan-out no longer
-    # blocks this request. The Homework row is re-loaded inside the task with an
-    # explicit school_id equality; only primitives cross the thread boundary
-    # (the author's user id included — current_user does not exist there).
-    # Best-effort: a notification failure must never fail the API response.
-    try:
-        from app.services import async_dispatch
-        async_dispatch.submit(_notify_homework_bg, hw.id, emp.school_id, user.id)
-    except Exception:
-        import logging as _log
-        _log.getLogger('mecha.mobile').exception(
-            '[mobile-hw] notification dispatch failed hw_id=%s', hw.id)
+    if marker:
+        # Deferred mode: durable in-app rows + outbox push jobs now if already
+        # published (school-local date); otherwise pending for the outbox
+        # worker's sweep. Never raises; a failure stays pending.
+        homework_publish.notify_after_commit([hw.id], created_by=user.id)
+    else:
+        _queue_homework_notification(hw.id, emp.school_id, user.id)
 
     att_url  = _hw_attachment_url(hw)
     att_name = hw.attachment_path.rstrip('/').rsplit('/', 1)[-1] if hw.attachment_path else None
@@ -2778,6 +2797,23 @@ def teacher_homework_create():
                                               photo_url, primary_url=att_url),
         },
     ), 201
+
+
+def _queue_homework_notification(homework_id: int, school_id: int, user_id: int) -> None:
+    """The original (non-deferred) mobile homework notification, unchanged."""
+    # FCM + in-app Notification rows to parents of students in this section.
+    # P0: queued to the background dispatcher — the per-parent fan-out no longer
+    # blocks this request. The Homework row is re-loaded inside the task with an
+    # explicit school_id equality; only primitives cross the thread boundary
+    # (the author's user id included — current_user does not exist there).
+    # Best-effort: a notification failure must never fail the API response.
+    try:
+        from app.services import async_dispatch
+        async_dispatch.submit(_notify_homework_bg, homework_id, school_id, user_id)
+    except Exception:
+        import logging as _log
+        _log.getLogger('mecha.mobile').exception(
+            '[mobile-hw] notification dispatch failed hw_id=%s', homework_id)
 
 
 @mobile_api_bp.route('/teacher/homework/<int:homework_id>', methods=['PUT', 'PATCH', 'DELETE'])
@@ -3953,14 +3989,15 @@ def _parse_date_field(raw, field):
         return None, err(f'invalid {field} — use YYYY-MM-DD')
 
 
-def _notify_institute_homework(hw, school_id):
+def _notify_institute_homework(hw, school_id, marker):
     """The web institute homework notification — the SAME single flow the web
-    uses (in-app rows for the parents of the group's actively enrolled
-    students + one queued FCM batch, no Firebase call in this request).
+    uses: with `marker` (deferred mode) the durable fan-out, otherwise in-app
+    rows for the parents of the group's actively enrolled students + one
+    queued FCM batch, no Firebase call in this request.
     Runs after the homework commit; never fails the request."""
     try:
-        from app.blueprints.homework import _notify_homework_parents
-        _notify_homework_parents(hw, school_id, created_by=g.mobile_user.id)
+        from app.blueprints.homework import _notify_new_homework
+        _notify_new_homework([hw], school_id, marker, created_by=g.mobile_user.id)
     except Exception:
         db.session.rollback()
         _inst_log.exception('[mobile-inst-hw] notify failed hw_id=%s', hw.id)
@@ -4034,16 +4071,18 @@ def teacher_institute_create_homework():
         if bad:
             return bad
 
+    marker = homework_publish.pending_marker_kwargs()
     hw = Homework(
         school_id=school.id, academic_year_id=year.id, teacher_id=emp.id,
         subject_id=group.subject_id,     # derived, never posted
         section_id=None,                 # never both targets
         institute_group_id=group.id,
         title=title, description=description, publish_date=pub_dt, due_date=due_dt,
-        attachment_path=att_path, attachment_type=att_type, is_active=True)
+        attachment_path=att_path, attachment_type=att_type, is_active=True,
+        **marker)
     db.session.add(hw)
     db.session.commit()
-    _notify_institute_homework(hw, school.id)
+    _notify_institute_homework(hw, school.id, marker)
 
     return ok(message='تم إضافة الواجب بنجاح.',
               homework=_institute_homework_dict(
@@ -4138,6 +4177,10 @@ def teacher_institute_update_homework(homework_id):
     hw.attachment_path    = new_path
     hw.attachment_type    = new_type
     db.session.commit()
+    # Same rule as the web edit: a still-pending homework now published is
+    # announced; one already notified is never announced again.
+    if hw.parents_notified_at is None:
+        homework_publish.notify_after_commit([hw.id], created_by=g.mobile_user.id)
 
     return ok(homework=_institute_homework_dict(
         hw, group.name, _subject_map(school.id, [hw.subject_id])))

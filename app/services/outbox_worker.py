@@ -11,6 +11,13 @@ Run it:
     python -m app.services.outbox_worker run
     python -m app.services.outbox_worker status
     python -m app.services.outbox_worker cleanup --days 30
+    python -m app.services.outbox_worker homework-status
+    python -m app.services.outbox_worker homework-flush --yes   (rollback aid)
+
+With HOMEWORK_PUBLISH_SWEEP_ENABLED the loop also runs the delayed-homework
+publish sweep (app/services/homework_publish.py) once per
+HOMEWORK_PUBLISH_SWEEP_SECONDS: it stages in-app rows and outbox jobs for
+homework whose publish date has arrived, which this loop then delivers.
 
 A systemd template is tracked at deploy/mecha-school-outbox-worker.service.
 
@@ -260,6 +267,37 @@ def run_once(worker_id: str, *, batch_size: int, lease_seconds: int,
     return stats
 
 
+def _maybe_homework_sweep(last_sweep):
+    """The delayed-homework publish sweep, at most once per
+    HOMEWORK_PUBLISH_SWEEP_SECONDS (min 60) and only while
+    HOMEWORK_PUBLISH_SWEEP_ENABLED. It STAGES work (in-app rows + outbox jobs)
+    that this same loop then delivers; it never calls Firebase itself.
+
+    Isolated: a sweep failure is logged and rolled back and can never stop or
+    delay outbox delivery. The interval restarts before the sweep runs, so a
+    failing sweep is retried once per interval, not in a tight loop.
+    Returns the new last-sweep monotonic time.
+    """
+    from app.services import homework_publish
+    try:
+        if not homework_publish.sweep_enabled():
+            return None
+        if (last_sweep is not None and
+                time.monotonic() - last_sweep < homework_publish.sweep_seconds()):
+            return last_sweep
+        last_sweep = time.monotonic()
+        homework_publish.sweep_due()
+    except Exception as exc:
+        log.error('[outbox] homework sweep failed (%s) — retried next interval',
+                  type(exc).__name__)
+        try:
+            from app.models import db
+            db.session.rollback()
+        except Exception:
+            pass
+    return last_sweep
+
+
 def run(app=None, *, batch_size=None, poll_seconds=None, lease_seconds=None,
         max_attempts=None, max_loops=None) -> dict:
     """Run the worker loop until SIGTERM/SIGINT (or `max_loops` in tests)."""
@@ -271,6 +309,7 @@ def run(app=None, *, batch_size=None, poll_seconds=None, lease_seconds=None,
     max_attempts = max_attempts or DEFAULTS['max_attempts']
     reclaim_seconds = DEFAULTS['reclaim_seconds']
     last_reclaim = None     # None → the first enabled sweep reclaims at once
+    last_homework_sweep = None   # None → the first enabled tick sweeps at once
 
     app = app or _build_app()
     worker_id = worker_identity()
@@ -292,6 +331,7 @@ def run(app=None, *, batch_size=None, poll_seconds=None, lease_seconds=None,
 
         while not _stop.is_set():
             totals['loops'] += 1
+            last_homework_sweep = _maybe_homework_sweep(last_homework_sweep)
             try:
                 do_reclaim = (last_reclaim is None
                               or reclaim_seconds <= 0
@@ -396,6 +436,32 @@ def _cmd_cleanup(days: int, limit: int, app=None) -> int:
     return removed
 
 
+def _cmd_homework_status(app=None) -> dict:
+    """Read-only pending-homework report. Touches nothing."""
+    from app.services import homework_publish
+    app = app or _build_app()
+    with app.app_context():
+        summary = homework_publish.status_summary()
+    print('homework (delayed parent notifications)')
+    for key, value in summary.items():
+        print(f'  {key:<40} {value if value is not None else "-"}')
+    return summary
+
+
+def _cmd_homework_flush(confirmed: bool, app=None) -> dict:
+    """ROLLBACK AID: notify every pending homework now (pre-fix behaviour)."""
+    if not confirmed:
+        print('refusing: homework-flush notifies EVERY pending homework now, '
+              'published or not. Re-run with --yes.')
+        return {}
+    from app.services import homework_publish
+    app = app or _build_app()
+    with app.app_context():
+        totals = homework_publish.flush_pending()
+    print(f'homework-flush {totals}')
+    return totals
+
+
 def main(argv=None) -> int:
     # Declared at the very top of the entry point, before any command parsing
     # or application construction, so every subcommand (run/status/cleanup)
@@ -424,6 +490,12 @@ def main(argv=None) -> int:
     clean_p.add_argument('--days', type=int, default=30)
     clean_p.add_argument('--limit', type=int, default=1000)
 
+    sub.add_parser('homework-status',
+                   help='read-only count of homework awaiting parent notification')
+    flush_p = sub.add_parser('homework-flush',
+                             help='rollback aid: notify every pending homework now')
+    flush_p.add_argument('--yes', action='store_true')
+
     args = parser.parse_args(argv)
 
     if args.command == 'run':
@@ -434,6 +506,10 @@ def main(argv=None) -> int:
         _cmd_status()
     elif args.command == 'cleanup':
         _cmd_cleanup(args.days, args.limit)
+    elif args.command == 'homework-status':
+        _cmd_homework_status()
+    elif args.command == 'homework-flush':
+        _cmd_homework_flush(args.yes)
     return 0
 
 

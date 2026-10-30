@@ -3248,6 +3248,9 @@ class NotificationOutbox(db.Model):
     # "أرسل درسي": the administration FIRST marks a parent's study request
     # viewed (pending → viewed, one-way). Delivered to the submitting parent.
     EVENT_INSTITUTE_STUDY_REQUEST_VIEWED = 'institute_study_request_viewed'
+    # A homework's parents notified once it publishes (school section or
+    # institute group). Staged by app/services/homework_publish.py.
+    EVENT_HOMEWORK_PUBLISHED = 'homework_published'
 
     id = db.Column(db.BigInteger, primary_key=True)
 
@@ -4155,6 +4158,16 @@ class Homework(db.Model):
     is_active        = db.Column(db.Boolean, nullable=False, default=True)
     created_at       = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at       = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Delayed parent notification marker (naive UTC). NULL = parents not yet
+    # notified: the outbox worker's homework sweep notifies them once the
+    # homework publishes (app/services/homework_publish.py). Any value =
+    # handled. The server default stamps every row the application does not
+    # explicitly mark pending — existing rows, old code, the immediate path —
+    # so nothing is ever resent. ONLY homework_publish.pending_marker_kwargs()
+    # writes NULL (an explicit SQL NULL: the ORM would drop a plain None and
+    # let the default apply).
+    parents_notified_at = db.Column(db.DateTime, nullable=True,
+                                    server_default=db.text("timezone('utc', now())"))
 
     school        = db.relationship('School', foreign_keys=[school_id],
                                     backref=db.backref('homework_list',

@@ -28,7 +28,8 @@ from flask_login import login_required, current_user
 from sqlalchemy import select
 
 from app.models import (db, Employee, Grade, Homework, Section, Subject,
-                        AcademicYear, Notification, teacher_subjects)
+                        AcademicYear, teacher_subjects)
+from app.services import homework_publish
 from app.utils.decorators import get_current_school, get_active_year
 from app.utils.helpers import save_uploaded_file, resolve_photo_url
 from app.utils.homework_attachments import (
@@ -297,26 +298,51 @@ def _notify_institute_homework_parents(hw: Homework, school_id: int, title: str,
             '[homework-notify] institute notify failed homework_id=%s', hw.id)
 
 
+def _notify_new_homework(hws, school_id: int, marker: dict, created_by=None) -> None:
+    """Notify parents about newly COMMITTED homework rows. Never raises.
+
+    `marker` is the homework_publish.pending_marker_kwargs() the rows were
+    inserted with, so the insert and the notification path always agree:
+      * deferred (marker set): durable fan-out (in-app rows + outbox push
+        jobs, one transaction) of every row already published on the
+        school-local date; a future row stays pending for the outbox worker's
+        sweep; a failure stays pending and the sweep recovers it;
+      * otherwise: the original immediate path, unchanged.
+    """
+    if marker:
+        homework_publish.notify_after_commit(
+            [hw.id for hw in hws],
+            created_by=(created_by if created_by is not None
+                        else current_user.id if current_user.is_authenticated
+                        else None))
+        return
+    for hw in hws:
+        try:
+            _notify_homework_parents(hw, school_id, created_by)
+        except Exception as exc:
+            current_app.logger.warning(
+                '[homework] notify failed hw_id=%s: %s', hw.id, exc)
+
+
 def _notify_homework_parents(hw: Homework, school_id: int, created_by=None) -> None:
     """Create in-app Notification rows + FCM push for the parents of the
     students this homework ACTUALLY targets.
 
-    School homework  → the active students of hw.section_id. Unchanged.
+    School homework  → the active students of hw.section_id.
     Institute homework → _notify_institute_homework_parents() (batched, push
-    queued off the request). `created_by` is only used by the institute branch
-    (the mobile teacher API passes its JWT user; the web falls back to
-    current_user).
+    queued off the request).
 
-    School path: commits Notification rows first; FCM fires after so in-app rows
-    are saved even if FCM fails.  One push per parent even if the parent has
-    multiple children in the same section (deduplication via parent_to_student
-    dict).
+    Both delegate to the mobile teacher infrastructure's _notify_parents_batched,
+    so web and mobile creation share ONE recipient rule: linked parents whose own
+    account is in this school and active (a cross-school or disabled account is
+    skipped), one row + one push per parent (siblings collapse, carrying the
+    lowest linked student_id), dedup scoped to THIS homework (created_at) so an
+    older homework with the same text never suppresses this one. Rows commit
+    first; the push is queued after the commit. `created_by` falls back to
+    current_user (the mobile teacher API passes its JWT user). Never raises.
     """
     import logging
     _hw_log = logging.getLogger('mecha.homework')
-
-    from app.models import Student, parent_students
-    from sqlalchemy import select as _sel
 
     subject_name = hw.subject.name if hw.subject else 'غير محدد'
     title = 'واجب جديد'
@@ -325,97 +351,45 @@ def _notify_homework_parents(hw: Homework, school_id: int, created_by=None) -> N
     _hw_log.info('[homework-notify] homework_id=%s section_id=%s group_id=%s title=%r',
                  hw.id, hw.section_id, hw.institute_group_id, hw.title)
 
+    if created_by is None and current_user.is_authenticated:
+        created_by = current_user.id
+
     if hw.institute_group_id:
-        if created_by is None and current_user.is_authenticated:
-            created_by = current_user.id
         _notify_institute_homework_parents(hw, school_id, title, body, created_by)
         return
 
-    if hw.section_id:
-        student_ids = [
-            s.id for s in
-            Student.query.filter_by(section_id=hw.section_id, status='active').all()
-        ]
-        if not student_ids:
-            _hw_log.info('[homework-notify] no active students in section_id=%s', hw.section_id)
-            return
-    else:
+    if not hw.section_id:
         # No target at all (a legacy row whose section was deleted). Notify
         # nobody rather than guessing an audience.
         return
 
-    # Build parent_user_id → first student_id mapping (deduplicate parents with
-    # multiple children in the same section; one notification + one FCM per parent)
-    parent_to_student: dict[int, int] = {}
-    for row in db.session.execute(
-        _sel(parent_students.c.user_id, parent_students.c.student_id).where(
-            parent_students.c.student_id.in_(student_ids)
-        )
-    ).fetchall():
-        uid, sid = row.user_id, row.student_id
-        if uid not in parent_to_student:
-            parent_to_student[uid] = sid
-
-    _hw_log.info('[homework-notify] parent_targets=%d homework_id=%s',
-                 len(parent_to_student), hw.id)
-
-    if not parent_to_student:
-        return
-
-    # Create in-app Notification rows; skip if one already exists (idempotent re-runs)
-    fcm_targets: list[tuple[int, int]] = []  # (parent_user_id, student_id)
-    for uid, sid in parent_to_student.items():
-        existing = Notification.query.filter_by(
+    try:
+        from app.blueprints.mobile_api.teacher import (
+            _active_audience_student_ids, _notify_parents_batched)
+        _notify_parents_batched(
             school_id=school_id,
-            target_user_id=uid,
-            ntype='homework',
+            student_ids=_active_audience_student_ids(school_id, hw.section_id, None),
             title=title,
             body=body,
-        ).first()
-        if not existing:
-            db.session.add(Notification(
-                school_id=school_id,
-                title=title,
-                body=body,
-                ntype='homework',
-                target_user_id=uid,
-                created_by=current_user.id if current_user.is_authenticated else None,
-            ))
-            fcm_targets.append((uid, sid))
-            _hw_log.info('[homework-notify] notification created parent_user_id=%s', uid)
-
-    if not fcm_targets:
-        _hw_log.info('[homework-notify] all notifications already exist, skipping — homework_id=%s',
-                     hw.id)
-        return
-
-    try:
-        db.session.commit()
-    except Exception:
-        _hw_log.exception('[homework-notify] commit failed homework_id=%s', hw.id)
-        db.session.rollback()
-        return
-
-    # FCM push — after commit so in-app rows are saved regardless of push outcome.
-    try:
-        from app.services.fcm_service import is_enabled, send_push_to_user
-        if not is_enabled():
-            _hw_log.info('[homework-notify] FCM disabled, skipping push homework_id=%s', hw.id)
-            return
-        for uid, sid in fcm_targets:
-            data = {
+            ntype='homework',
+            # The unchanged school payload; the helper adds each parent's
+            # own student_id.
+            fcm_data={
                 'type':        'homework',
                 'ntype':       'homework',
                 'route':       '/parent/homework',
                 'homework_id': str(hw.id),
                 'section_id':  str(hw.section_id),
-                'student_id':  str(sid),
                 'screen':      'homework',
-            }
-            _hw_log.info('[homework-notify] dispatching FCM parent_user_id=%s', uid)
-            send_push_to_user(uid, title, body, data)
+            },
+            active_parents_only=True,
+            created_by=created_by,
+            dedup_since=hw.created_at,
+            log_tag=f'[homework-notify] hw_id={hw.id}',
+        )
     except Exception:
-        _hw_log.exception('[homework-notify] FCM dispatch failed homework_id=%s', hw.id)
+        db.session.rollback()
+        _hw_log.exception('[homework-notify] notify failed homework_id=%s', hw.id)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -831,6 +805,9 @@ def create():
                     add_new_attachments(row, prepared.mode, stored_paths)
 
         teacher_id = emp.id if emp else None
+        # Pending (NULL) only in deferred mode; otherwise the column default
+        # stamps the rows handled and the immediate path notifies.
+        marker = homework_publish.pending_marker_kwargs()
 
         # ── Persist ─────────────────────────────────────────────────────────
         try:
@@ -854,6 +831,7 @@ def create():
                         attachment_path=attach_path,
                         attachment_type=attach_type,
                         is_active=True,
+                        **marker,
                     )
                     db.session.add(hw)
                     created_hws.append(hw)
@@ -877,12 +855,7 @@ def create():
                 else:
                     flash('تم إنشاء الواجب لجميع شعب الصف بنجاح.', 'success')
 
-                for hw in created_hws:
-                    try:
-                        _notify_homework_parents(hw, school.id)
-                    except Exception as exc:
-                        current_app.logger.warning(
-                            '[homework] notify failed hw_id=%s: %s', hw.id, exc)
+                _notify_new_homework(created_hws, school.id, marker)
 
             else:
                 target_group_id = group.id if group else None
@@ -910,16 +883,13 @@ def create():
                     attachment_path=attach_path,
                     attachment_type=attach_type,
                     is_active=True,
+                    **marker,
                 )
                 db.session.add(hw)
                 _record_extra_images([hw])
                 db.session.commit()
 
-                try:
-                    _notify_homework_parents(hw, school.id)
-                except Exception as exc:
-                    current_app.logger.warning(
-                        '[homework] notify failed hw_id=%s: %s', hw.id, exc)
+                _notify_new_homework([hw], school.id, marker)
 
                 flash('تم إضافة الواجب بنجاح.', 'success')
 
@@ -1157,6 +1127,11 @@ def edit(hw_id):
             discard_unreferenced_uploads(stored_paths)
             flash('حدث خطأ أثناء حفظ الواجب. يرجى المحاولة مجدداً.', 'danger')
             return redirect(url_for('homework.edit', hw_id=hw_id))
+        # A still-PENDING homework (deferred mode) whose publish date is now
+        # today or earlier is announced now; a future one stays pending. A
+        # homework already notified is never announced again by an edit.
+        if hw.parents_notified_at is None:
+            homework_publish.notify_after_commit([hw.id], created_by=current_user.id)
         flash('تم تحديث الواجب بنجاح.', 'success')
         return redirect(url_for('homework.index'))
 
