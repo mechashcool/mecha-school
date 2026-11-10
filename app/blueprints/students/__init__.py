@@ -661,6 +661,18 @@ STUDENT_STATUS_LABELS_AR = {'archived': 'مؤرشف', 'withdrawn': 'مسحوب',
                             'transferred': 'منقول', 'graduated': 'متخرج',
                             'active': 'فعّال'}
 
+STUDENT_ARCHIVING_DISABLED_MESSAGE = (
+    'تم إيقاف صلاحية أرشفة الطلاب لهذه المدرسة من قبل إدارة النظام.'
+)
+
+
+def _student_archive_transition_blocked(school, old_status, new_status):
+    """True only for a newly-created archive while this school forbids it."""
+    return (old_status != 'archived'
+            and new_status == 'archived'
+            and school is not None
+            and school.archiving_enabled is False)
+
 DUPLICATE_NAME_LIMIT   = 10     # matches shown in the create-wizard warning
 DUPLICATE_NAME_MIN_KEY = 4      # shorter normalised names are not checked
 DUPLICATE_NAME_MAX_LEN = 200    # Student.full_name length
@@ -2014,6 +2026,14 @@ def edit(student_id):
         from datetime import datetime as dt
         from sqlalchemy.exc import IntegrityError as _EditIntegrityError
 
+        # Reject before mutating fields, storing uploads, or changing related
+        # records, so a prohibited archive cannot partially save the form.
+        _requested_status = request.form.get('status', student.status)
+        if _student_archive_transition_blocked(
+                school, student.status, _requested_status):
+            flash(STUDENT_ARCHIVING_DISABLED_MESSAGE, 'danger')
+            return redirect(url_for('students.edit', student_id=student.id))
+
         def _sticky_group_ids():
             """Submitted group ids, so a validation failure re-renders the form
             with the operator's own selection instead of silently reverting to
@@ -2878,6 +2898,10 @@ def archive(student_id):
     new_status = request.form.get('status', 'archived')
     if new_status not in EDITABLE_STUDENT_STATUSES:
         new_status = 'archived'
+
+    if _student_archive_transition_blocked(school, student.status, new_status):
+        flash(STUDENT_ARCHIVING_DISABLED_MESSAGE, 'danger')
+        return redirect(request.form.get('next') or url_for('students.index'))
 
     _labels = STUDENT_STATUS_LABELS_AR
     student.status = new_status

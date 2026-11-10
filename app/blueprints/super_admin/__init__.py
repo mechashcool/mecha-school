@@ -340,6 +340,41 @@ def disable_registration(school_id):
     return redirect(url_for('super_admin.school_detail', school_id=school_id))
 
 
+@super_admin_bp.route('/schools/<int:school_id>/student-archiving', methods=['POST'])
+@login_required
+@super_admin_required
+def update_student_archiving(school_id):
+    """Enable or disable creation of new student archives for one school."""
+    school = School.query.get_or_404(school_id)
+    action = request.form.get('action', '').strip().lower()
+    if action not in {'enable', 'disable'}:
+        flash('إجراء صلاحية أرشفة الطلاب غير صالح.', 'danger')
+        return redirect(url_for('super_admin.school_detail', school_id=school_id)
+                        + '#tab-settings')
+
+    previous = bool(school.archiving_enabled)
+    requested = action == 'enable'
+    school.archiving_enabled = requested
+    db.session.commit()
+
+    if previous != requested:
+        log_action(
+            'edit', 'school', school.id,
+            details=(f'student_archiving school_id={school.id} '
+                     f'previous={previous} new={requested} '
+                     f'super_admin_user_id={current_user.id}'),
+        )
+
+    flash(
+        'تم تفعيل صلاحية أرشفة الطلاب لهذه المدرسة.'
+        if requested else
+        'تم تعطيل صلاحية أرشفة الطلاب لهذه المدرسة.',
+        'success' if requested else 'warning',
+    )
+    return redirect(url_for('super_admin.school_detail', school_id=school_id)
+                    + '#tab-settings')
+
+
 @super_admin_bp.route('/schools/<int:school_id>/registration/regenerate', methods=['POST'])
 @login_required
 @super_admin_required

@@ -17,7 +17,7 @@
     {% endif %}
 
     {% if current_user.has_permission('delete_student') and 'students.delete' in enabled_features %}
-      {% if student.status != 'archived' %}
+      {% if student.status != 'archived' and school.archiving_enabled %}
       <form method="POST" action="{{ url_for('students.archive', student_id=student.id) }}" class="d-inline">
         <input type="hidden" name="status" value="archived">
         <input type="hidden" name="next" value="{{ url_for('students.view', student_id=student.id) }}">
@@ -26,7 +26,7 @@
           <i class="bi bi-archive me-1"></i>أرشفة
         </button>
       </form>
-      {% else %}
+      {% elif student.status == 'archived' %}
       <form method="POST" action="{{ url_for('students.archive', student_id=student.id) }}" class="d-inline">
         <input type="hidden" name="status" value="active">
         <input type="hidden" name="next" value="{{ url_for('students.view', student_id=student.id) }}">

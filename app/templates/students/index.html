@@ -276,7 +276,7 @@
               </a>
               {% endif %}
               {% if current_user.has_permission('delete_student') and not is_historical_year and 'students.delete' in enabled_features %}
-                {% if s.status != 'archived' %}
+                {% if s.status != 'archived' and school.archiving_enabled %}
                 {# Archive: safe deactivation for school managers #}
                 <form method="POST" action="{{ url_for('students.archive', student_id=s.id) }}" class="d-inline">
                   <input type="hidden" name="status" value="archived">
@@ -285,7 +285,7 @@
                     <i class="bi bi-archive"></i>
                   </button>
                 </form>
-                {% else %}
+                {% elif s.status == 'archived' %}
                 {# Restore archived student back to active #}
                 <form method="POST" action="{{ url_for('students.archive', student_id=s.id) }}" class="d-inline">
                   <input type="hidden" name="status" value="active">
@@ -375,6 +375,7 @@ function onStageChange(el) {
   const IS_HISTORICAL    = {{ 'true' if is_historical_year else 'false' }};
   const CAN_EDIT         = {{ 'true' if (current_user.has_permission('edit_student') and not is_historical_year and 'students.edit' in enabled_features) else 'false' }};
   const CAN_DELETE       = {{ 'true' if (current_user.has_permission('delete_student') and not is_historical_year and 'students.delete' in enabled_features) else 'false' }};
+  const ARCHIVING_ENABLED = {{ 'true' if school.archiving_enabled else 'false' }};
   const IS_SUPER_ADMIN   = {{ 'true' if current_user.is_super_admin else 'false' }};
   const COL_COUNT        = BUILDINGS_ON ? 9 : 8;
 
@@ -422,13 +423,13 @@ function onStageChange(el) {
       html += `<a href="${s.edit_url}" class="btn btn-sm btn-outline-secondary" title="تعديل"><i class="bi bi-pencil"></i></a>`;
     }
     if (CAN_DELETE) {
-      if (s.status !== 'archived') {
+      if (s.status !== 'archived' && ARCHIVING_ENABLED) {
         html += `<form method="POST" action="${s.archive_url}" class="d-inline">
           <input type="hidden" name="status" value="archived">
           <button class="btn btn-sm btn-outline-secondary" title="أرشفة الطالب"
                   data-confirm="أرشفة الطالب ${escHtml(s.full_name)}؟ ستختفي من القوائم النشطة لكن بياناته ستبقى محفوظة.">
             <i class="bi bi-archive"></i></button></form>`;
-      } else {
+      } else if (s.status === 'archived') {
         html += `<form method="POST" action="${s.archive_url}" class="d-inline">
           <input type="hidden" name="status" value="active">
           <button class="btn btn-sm btn-outline-success" title="إعادة تفعيل"

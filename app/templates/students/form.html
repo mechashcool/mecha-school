@@ -240,7 +240,9 @@
                 <option value="transferred" {{ 'selected' if student.status == 'transferred' }}>منقول</option>
                 <option value="withdrawn"   {{ 'selected' if student.status == 'withdrawn' }}>مسحوب</option>
                 <option value="graduated"   {{ 'selected' if student.status == 'graduated' }}>متخرج</option>
+                {% if school.archiving_enabled or student.status == 'archived' %}
                 <option value="archived"    {{ 'selected' if student.status == 'archived' }}>مؤرشف</option>
+                {% endif %}
               </select>
             </div>
             {% endif %}

@@ -203,6 +203,9 @@ class School(db.Model):
     # Admin enables/disables/regenerates the link.
     external_registration_enabled = db.Column(db.Boolean, default=False, nullable=False,
                                               server_default=db.false())
+    # Super Admin-controlled permission for creating new student archives.
+    archiving_enabled = db.Column(db.Boolean, default=True, nullable=False,
+                                  server_default=db.true())
     # sha256(raw token) — used for lookup + verification at the public entry point.
     registration_token_hash       = db.Column(db.String(64), unique=True, nullable=True)
     # Fernet-encrypted raw token — authorized Super-Admin recovery (copy link later).
