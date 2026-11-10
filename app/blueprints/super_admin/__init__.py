@@ -33,7 +33,9 @@ from app.models import (db, School, SchoolBilling, AcademicYear,
                          FeeInstallment, Revenue, Expense,
                          Grade, Section, Subject, FeeType,
                          Role, MobileDeviceToken, INVESTOR_ROLE,
-                         InvestorSchoolAccess)
+                         InvestorSchoolAccess, AnnualSchoolAgreement,
+                         PlatformSchoolInvoice, PlatformSchoolPayment,
+                         PlatformInvoiceStudentCoverage)
 from app.utils.decorators import (super_admin_required,
                                   historical_guard)
 from app.utils.audit import log_action
@@ -1161,6 +1163,7 @@ def billing_overview():
     gov_filter    = request.args.get('governorate', '').strip()
     school_filter = request.args.get('school_id',   type=int)
     status_filter = request.args.get('status', '').strip()
+    year_filter   = request.args.get('year_id', type=int)
 
     q = SchoolBilling.query.join(School, SchoolBilling.school_id == School.id)
 
@@ -1190,6 +1193,37 @@ def billing_overview():
     all_schools = School.query.execution_options(bypass_tenant_scope=True)\
         .order_by(School.school_name).all()
 
+    # New platform account totals are deliberately calculated independently
+    # from the legacy SchoolBilling rows above.
+    from app.services.platform_finance import school_totals
+    finance_rows = []
+    for school in all_schools:
+        if school_filter and school.id != school_filter:
+            continue
+        year = (AcademicYear.query.execution_options(bypass_tenant_scope=True).filter_by(
+            school_id=school.id, id=year_filter).first() if year_filter else
+            AcademicYear.query.execution_options(bypass_tenant_scope=True).filter_by(
+                school_id=school.id, is_current=True).first())
+        agreement = (AnnualSchoolAgreement.query.filter_by(school_id=school.id,
+            academic_year_id=year.id, status='active').first() if year else None)
+        active_ids = {r[0] for r in db.session.query(Student.id).execution_options(
+            bypass_tenant_scope=True, include_all_years=True).filter_by(
+                school_id=school.id, status='active').all()}
+        covered_ids = ({r[0] for r in db.session.query(
+            PlatformInvoiceStudentCoverage.student_id).filter_by(school_id=school.id,
+                academic_year_id=year.id, status='active').all()} if year else set())
+        totals = school_totals(school.id, year.id if year else None)
+        price = int(agreement.annual_price_per_student) if agreement else 0
+        finance_rows.append({'school': school, 'year': year, 'students': len(active_ids),
+            'price': price, 'expected': len(active_ids) * price,
+            'additional': len(active_ids - covered_ids), **totals})
+    finance_summary = {
+        'expected': sum(r['expected'] for r in finance_rows),
+        'invoiced': sum(r['invoiced'] for r in finance_rows),
+        'received': sum(r['received'] for r in finance_rows),
+        'outstanding': sum(r['outstanding'] for r in finance_rows),
+    }
+
     return render_template(
         'super_admin/billing_overview.html',
         records       = records,
@@ -1202,6 +1236,11 @@ def billing_overview():
         school_filter = school_filter,
         status_filter = status_filter,
         status_types  = SchoolBilling.STATUS_TYPES,
+        finance_rows  = finance_rows,
+        finance_summary = finance_summary,
+        year_filter = year_filter,
+        all_years = AcademicYear.query.execution_options(bypass_tenant_scope=True).order_by(
+            AcademicYear.start_date.desc()).all(),
     )
 
 
@@ -1397,4 +1436,9 @@ def restore_student_document(doc_id):
     flash(f'تم استرجاع المستمسك «{doc_label}» للطالب {student.full_name} '
           f'بنفس ملفه الأصلي.', 'success')
     return redirect(url_for('super_admin.recycle_bin'))
+
+
+# Register the isolated annual platform-finance routes on this blueprint.
+from .finance_routes import register_finance_routes
+register_finance_routes(super_admin_bp)
 

@@ -380,6 +380,11 @@
 
   {# ═══ Tab: Billing ═════════════════════════════════════════════════════ #}
   <div class="tab-pane fade" id="tab-billing" role="tabpanel">
+    <div class="alert alert-primary d-flex justify-content-between align-items-center">
+      <span><strong>الحساب المالي السنوي الجديد</strong><br><small>الفواتير والدفعات والتغطية حسب الطالب والسنة.</small></span>
+      <a class="btn btn-primary" href="{{ url_for('super_admin.finance_school', school_id=school.id) }}">فتح الإدارة المالية</a>
+    </div>
+    <div class="alert alert-warning small">السجلات أدناه قديمة وتاريخية، وهي منفصلة ولا تدخل في إجماليات الحساب المالي الجديد.</div>
     <div class="card border-0 shadow-sm">
       <div class="card-header bg-white d-flex justify-content-between align-items-center">
         <strong><i class="bi bi-receipt me-2"></i>سجلات الفواتير والاشتراكات</strong>

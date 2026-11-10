@@ -309,6 +309,152 @@ class SchoolBilling(db.Model):
         return f'<SchoolBilling school={self.school_id} due={self.amount_due} status={self.status}>'
 
 
+# New platform financial account.  These tables intentionally do not read or
+# write SchoolBilling: that model remains the labelled legacy account.
+class AnnualSchoolAgreement(db.Model):
+    __tablename__ = 'annual_school_agreements'
+
+    id = db.Column(db.Integer, primary_key=True)
+    school_id = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'), nullable=False)
+    revision_number = db.Column(db.Integer, nullable=False)
+    annual_price_per_student = db.Column(db.BigInteger, nullable=False)
+    effective_date = db.Column(db.Date, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='active')
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
+    approved_by = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
+    approved_at = db.Column(db.DateTime)
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    school = db.relationship('School', foreign_keys=[school_id])
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('school_id', 'academic_year_id', 'revision_number',
+                            name='uq_annual_agreement_revision'),
+        db.Index('uq_annual_agreement_active', 'school_id', 'academic_year_id',
+                 unique=True, postgresql_where=db.text("status = 'active'")),
+        db.CheckConstraint('annual_price_per_student > 0', name='ck_annual_agreement_price_positive'),
+    )
+
+
+class PlatformSchoolInvoice(db.Model):
+    __tablename__ = 'platform_school_invoices'
+
+    id = db.Column(db.Integer, primary_key=True)
+    school_id = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'), nullable=False)
+    agreement_id = db.Column(db.Integer, db.ForeignKey('annual_school_agreements.id'), nullable=False)
+    invoice_number = db.Column(db.String(50), nullable=False, unique=True)
+    submission_key = db.Column(db.String(64), nullable=False, unique=True)
+    invoice_type = db.Column(db.String(30), nullable=False)
+    issue_date = db.Column(db.Date, nullable=False)
+    due_date = db.Column(db.Date)
+    approved_student_count = db.Column(db.Integer, nullable=False)
+    unit_price_snapshot = db.Column(db.BigInteger, nullable=False)
+    total_amount = db.Column(db.BigInteger, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='unpaid')
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
+    approved_by = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
+    approved_at = db.Column(db.DateTime)
+    notes = db.Column(db.Text)
+    voided_at = db.Column(db.DateTime)
+    voided_by = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
+    void_reason = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    school = db.relationship('School', foreign_keys=[school_id])
+    academic_year = db.relationship('AcademicYear', foreign_keys=[academic_year_id])
+    agreement = db.relationship('AnnualSchoolAgreement', foreign_keys=[agreement_id])
+    coverages = db.relationship('PlatformInvoiceStudentCoverage', back_populates='invoice', lazy='dynamic')
+    allocations = db.relationship('PlatformPaymentAllocation', back_populates='invoice', lazy='dynamic')
+
+    __table_args__ = (
+        db.CheckConstraint("invoice_type IN ('annual_base', 'additional_students')",
+                           name='ck_platform_invoice_type'),
+        db.CheckConstraint('approved_student_count > 0', name='ck_platform_invoice_students_positive'),
+        db.CheckConstraint('unit_price_snapshot > 0 AND total_amount > 0',
+                           name='ck_platform_invoice_amount_positive'),
+        db.Index('ix_platform_invoice_school_year', 'school_id', 'academic_year_id'),
+    )
+
+
+class PlatformInvoiceStudentCoverage(db.Model):
+    __tablename__ = 'platform_invoice_student_coverage'
+
+    id = db.Column(db.Integer, primary_key=True)
+    invoice_id = db.Column(db.Integer, db.ForeignKey('platform_school_invoices.id'), nullable=False)
+    school_id = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False)
+    academic_year_id = db.Column(db.Integer, db.ForeignKey('academic_years.id'), nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id'), nullable=False)
+    student_code_snapshot = db.Column(db.String(40), nullable=False)
+    student_name_snapshot = db.Column(db.String(200), nullable=False)
+    unit_price_snapshot = db.Column(db.BigInteger, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='active')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    invoice = db.relationship('PlatformSchoolInvoice', back_populates='coverages')
+    student = db.relationship('Student', foreign_keys=[student_id])
+
+    __table_args__ = (
+        db.Index('uq_platform_effective_student_coverage', 'school_id', 'academic_year_id',
+                 'student_id', unique=True, postgresql_where=db.text("status = 'active'")),
+        db.Index('ix_platform_coverage_invoice', 'invoice_id'),
+    )
+
+
+class PlatformSchoolPayment(db.Model):
+    __tablename__ = 'platform_school_payments'
+
+    id = db.Column(db.Integer, primary_key=True)
+    school_id = db.Column(db.Integer, db.ForeignKey('schools.id'), nullable=False)
+    amount = db.Column(db.BigInteger, nullable=False)
+    payment_date = db.Column(db.Date, nullable=False)
+    payment_method = db.Column(db.String(30), nullable=False)
+    receipt_number = db.Column(db.String(50), nullable=False, unique=True)
+    submission_key = db.Column(db.String(64), nullable=False, unique=True)
+    transaction_reference = db.Column(db.String(120))
+    received_by = db.Column(db.String(200))
+    recorded_by = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
+    covered_student_count = db.Column(db.Integer)
+    notes = db.Column(db.Text)
+    status = db.Column(db.String(20), nullable=False, default='active')
+    reversed_at = db.Column(db.DateTime)
+    reversed_by = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
+    reversal_reason = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    school = db.relationship('School', foreign_keys=[school_id])
+    allocations = db.relationship('PlatformPaymentAllocation', back_populates='payment', lazy='dynamic')
+
+    __table_args__ = (
+        db.CheckConstraint('amount > 0', name='ck_platform_payment_amount_positive'),
+        db.CheckConstraint('covered_student_count IS NULL OR covered_student_count >= 0',
+                           name='ck_platform_payment_student_count'),
+        db.Index('ix_platform_payment_school_date', 'school_id', 'payment_date'),
+    )
+
+
+class PlatformPaymentAllocation(db.Model):
+    __tablename__ = 'platform_payment_allocations'
+
+    id = db.Column(db.Integer, primary_key=True)
+    payment_id = db.Column(db.Integer, db.ForeignKey('platform_school_payments.id'), nullable=False)
+    invoice_id = db.Column(db.Integer, db.ForeignKey('platform_school_invoices.id'), nullable=False)
+    allocated_amount = db.Column(db.BigInteger, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    payment = db.relationship('PlatformSchoolPayment', back_populates='allocations')
+    invoice = db.relationship('PlatformSchoolInvoice', back_populates='allocations')
+
+    __table_args__ = (
+        db.UniqueConstraint('payment_id', 'invoice_id', name='uq_platform_payment_invoice'),
+        db.CheckConstraint('allocated_amount > 0', name='ck_platform_allocation_positive'),
+        db.Index('ix_platform_allocation_invoice', 'invoice_id'),
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  SCHOOL BUILDINGS  (optional per-school branch/building data partitioning)
 # ─────────────────────────────────────────────────────────────────────────────

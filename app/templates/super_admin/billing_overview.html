@@ -26,6 +26,15 @@
   {% endfor %}
 {% endwith %}
 
+<div class="alert alert-info">هذا القسم هو الحساب المالي السنوي الجديد. السجلات القديمة معروضة بعده للمراجعة فقط ولا تدخل في هذه الإجماليات.</div>
+<div class="stats-grid mb-4" style="grid-template-columns:repeat(4,1fr)">
+  {% for label,value in [('الإيراد السنوي المتوقع',finance_summary.expected),('الفواتير المعتمدة',finance_summary.invoiced),('الدفعات المستلمة',finance_summary.received),('الرصيد المفتوح',finance_summary.outstanding)] %}
+  <div class="stat-card"><div><div class="stat-value">{{ '{:,.0f}'.format(value) }}</div><div class="stat-label">{{ label }} (د.ع)</div></div></div>{% endfor %}
+</div>
+<div class="card border-0 shadow-sm mb-4"><div class="card-header bg-white"><strong>حسابات المدارس الجديدة</strong></div><div class="table-responsive"><table class="table table-hover mb-0"><thead><tr><th>المدرسة</th><th>السنة</th><th>الطلاب</th><th>السعر السنوي</th><th>المتوقع</th><th>المفوتر</th><th>المقبوض</th><th>المفتوح</th><th>طلاب غير مفوترين</th></tr></thead><tbody>{% for r in finance_rows %}<tr><td><a href="{{ url_for('super_admin.finance_school', school_id=r.school.id) }}">{{ r.school.school_name_ar or r.school.school_name }}</a></td><td>{{ r.year.name if r.year else '—' }}</td><td>{{ r.students }}</td><td>{{ '{:,.0f}'.format(r.price) }}</td><td>{{ '{:,.0f}'.format(r.expected) }}</td><td>{{ '{:,.0f}'.format(r.invoiced) }}</td><td>{{ '{:,.0f}'.format(r.received) }}</td><td>{{ '{:,.0f}'.format(r.outstanding) }}</td><td><span class="badge {{ 'bg-warning text-dark' if r.additional else 'bg-success' }}">{{ r.additional }}</span></td></tr>{% else %}<tr><td colspan="9" class="text-center">لا توجد مدارس.</td></tr>{% endfor %}</tbody></table></div></div>
+
+<h5 class="mb-3">السجلات القديمة (تاريخية ومنفصلة)</h5>
+
 {# ── Summary cards ─────────────────────────────────────────────────────── #}
 <div class="stats-grid mb-4" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));">
   <div class="stat-card">
@@ -89,6 +98,10 @@
         </option>
         {% endfor %}
       </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label small">السنة الدراسية</label>
+      <select name="year_id" class="form-select form-select-sm"><option value="">الحالية لكل مدرسة</option>{% for y in all_years %}<option value="{{ y.id }}" {{ 'selected' if year_filter == y.id }}>{{ y.name }} — {{ y.school.school_name }}</option>{% endfor %}</select>
     </div>
     <div class="col-md-2">
       <label class="form-label small">الحالة</label>
