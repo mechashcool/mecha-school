@@ -1,196 +1,21 @@
 {% extends "shared/base.html" %}
-
-{% block title %}الفواتير الشاملة{% endblock %}
-
+{% block title %}الملخص المالي للمدارس{% endblock %}
+{% macro money(value) %}{{ '{:,.0f}'.format(value or 0) }} د.ع{% endmacro %}
 {% block content %}
-<div class="page-header">
-  <div>
-    <nav aria-label="breadcrumb">
-      <ol class="breadcrumb mb-1">
-        <li class="breadcrumb-item">
-          <a href="{{ url_for('super_admin.dashboard') }}">بوابة المشرف العام</a>
-        </li>
-        <li class="breadcrumb-item active">الفواتير الشاملة</li>
-      </ol>
-    </nav>
-    <h1 class="page-title"><i class="bi bi-receipt me-2"></i>الفواتير الشاملة</h1>
-    <p class="text-muted mb-0">جميع فواتير المدارس مع تصفية بالمحافظة والحالة</p>
-  </div>
+<div class="page-header"><div><nav><ol class="breadcrumb mb-1"><li class="breadcrumb-item"><a href="{{ url_for('super_admin.dashboard') }}">بوابة المشرف العام</a></li><li class="breadcrumb-item active">الملخص المالي</li></ol></nav><h1 class="page-title"><i class="bi bi-cash-stack me-2"></i>الملخص المالي للمدارس</h1><p class="text-muted mb-0">عدد الطلاب ← السعر السنوي ← المتوقع ← المقبوض ← المتبقي</p></div></div>
+
+<form method="get" class="card border-0 shadow-sm mb-4 p-3"><div class="row g-2 align-items-end"><div class="col-md-3"><label class="form-label small">المحافظة</label><select name="governorate" class="form-select"><option value="">الكل</option><option value="غير محدد" {{ 'selected' if gov_filter == 'غير محدد' }}>غير محدد</option>{% for gov in governorates %}<option value="{{ gov }}" {{ 'selected' if gov_filter == gov }}>{{ gov }}</option>{% endfor %}</select></div><div class="col-md-3"><label class="form-label small">المدرسة</label><select name="school_id" class="form-select"><option value="">الكل</option>{% for s in all_schools %}<option value="{{ s.id }}" {{ 'selected' if school_filter == s.id }}>{{ s.school_name_ar or s.school_name }}</option>{% endfor %}</select></div><div class="col-md-3"><label class="form-label small">السنة الدراسية</label><select name="year_id" class="form-select"><option value="">الحالية لكل مدرسة</option>{% for id,name,school_name in year_options %}<option value="{{ id }}" {{ 'selected' if year_filter == id }}>{{ name }} — {{ school_name }}</option>{% endfor %}</select></div><div class="col-md-3 d-flex gap-2"><button class="btn btn-primary flex-fill">عرض</button><a class="btn btn-outline-secondary" href="{{ url_for('super_admin.billing_overview') }}">إعادة</a></div></div></form>
+
+{% if finance_summary.historical_limited %}<div class="alert alert-warning">السنة المختارة تاريخية ولا توجد لقطة موثوقة لأعداد الطلاب؛ لذلك لا تُعرض قيم متوقعة تاريخية مصطنعة.</div>{% endif %}
+<div class="row g-3 mb-4">
+  <div class="col-sm-6 col-xl-3"><div class="stat-card h-100"><div><div class="stat-value">{{ money(finance_summary.expected) if not finance_summary.historical_limited else 'غير متاح تاريخياً' }}</div><div class="stat-label">إجمالي المبالغ المتوقعة</div></div></div></div>
+  <div class="col-sm-6 col-xl-3"><div class="stat-card h-100"><div><div class="stat-value text-success">{{ money(finance_summary.received) }}</div><div class="stat-label">إجمالي المبالغ المقبوضة</div></div></div></div>
+  <div class="col-sm-6 col-xl-3"><div class="stat-card h-100"><div><div class="stat-value text-danger">{{ money(finance_summary.remaining_expected) if not finance_summary.historical_limited else 'غير متاح تاريخياً' }}</div><div class="stat-label">إجمالي المبالغ المتبقية المتوقعة</div></div></div></div>
+  <div class="col-sm-6 col-xl-3"><div class="stat-card h-100"><div><div class="stat-value text-warning">{{ finance_summary.schools_with_uncovered }}</div><div class="stat-label">مدارس لديها طلاب غير مشمولين بالفواتير</div></div></div></div>
 </div>
+<div class="alert alert-light border small">المقبوض هو مجموع الدفعات الفعلية النشطة وغير المعكوسة لكل مدرسة، سواء خُصصت لفواتير أم لم تُخصص، دون احتساب التخصيصات مرة أخرى. لا تحمل الدفعات الحالية مرجع سنة دراسية، لذلك فهذا الإجمالي لكل الفترات ولا يشمل سجلات <code>SchoolBilling</code> القديمة.</div>
 
-{% with messages = get_flashed_messages(with_categories=true) %}
-  {% for cat, msg in messages %}
-  <div class="alert alert-{{ cat }} alert-dismissible fade show">{{ msg }}
-    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-  </div>
-  {% endfor %}
-{% endwith %}
+<div class="card border-0 shadow-sm mb-4"><div class="card-header bg-white"><strong>ملخص المدارس</strong></div><div class="table-responsive"><table class="table table-hover align-middle mb-0"><thead class="table-light"><tr><th>المدرسة</th><th>عدد الطلاب</th><th>سعر الطالب</th><th>المتوقع</th><th>المقبوض</th><th>المتبقي</th><th>طلاب غير مشمولين</th></tr></thead><tbody>{% for r in finance_rows %}<tr><td><a class="fw-semibold text-decoration-none" href="{{ url_for('super_admin.finance_school', school_id=r.school.id, year_id=r.year.id if r.year else none) }}">{{ r.school.school_name_ar or r.school.school_name }}</a><div class="small text-muted">{{ r.year.name if r.year else 'لا توجد سنة محددة' }}</div></td>{% if r.is_current_year %}<td>{{ r.students }}</td><td>{{ money(r.price) if r.agreement else 'غير محدد' }}</td><td>{{ money(r.expected) }}</td><td class="text-success fw-semibold">{{ money(r.received) }}</td><td>{% if r.remaining_expected < 0 %}<span class="text-success">رصيد زائد {{ money(-r.remaining_expected) }}</span>{% else %}<span class="text-danger fw-semibold">{{ money(r.remaining_expected) }}</span>{% endif %}</td><td><span class="badge {{ 'bg-warning text-dark' if r.uncovered else 'bg-success' }}">{{ r.uncovered }}</span></td>{% else %}<td colspan="3" class="text-muted">لا تتوفر لقطة تاريخية موثوقة للطلاب أو المتوقع</td><td class="text-success fw-semibold">{{ money(r.received) }}<div class="small text-muted">كل الفترات</div></td><td class="text-muted">غير متاح تاريخياً</td><td class="text-muted">غير متاح تاريخياً</td>{% endif %}</tr>{% else %}<tr><td colspan="7" class="text-center text-muted py-4">لا توجد مدارس مطابقة.</td></tr>{% endfor %}</tbody></table></div></div>
 
-<div class="alert alert-info">هذا القسم هو الحساب المالي السنوي الجديد. السجلات القديمة معروضة بعده للمراجعة فقط ولا تدخل في هذه الإجماليات.</div>
-<div class="stats-grid mb-4" style="grid-template-columns:repeat(4,1fr)">
-  {% for label,value in [('الإيراد السنوي المتوقع',finance_summary.expected),('الفواتير المعتمدة',finance_summary.invoiced),('الدفعات المستلمة',finance_summary.received),('الرصيد المفتوح',finance_summary.outstanding)] %}
-  <div class="stat-card"><div><div class="stat-value">{{ '{:,.0f}'.format(value) }}</div><div class="stat-label">{{ label }} (د.ع)</div></div></div>{% endfor %}
-</div>
-<div class="card border-0 shadow-sm mb-4"><div class="card-header bg-white"><strong>حسابات المدارس الجديدة</strong></div><div class="table-responsive"><table class="table table-hover mb-0"><thead><tr><th>المدرسة</th><th>السنة</th><th>الطلاب</th><th>السعر السنوي</th><th>المتوقع</th><th>المفوتر</th><th>المقبوض</th><th>المفتوح</th><th>طلاب غير مفوترين</th></tr></thead><tbody>{% for r in finance_rows %}<tr><td><a href="{{ url_for('super_admin.finance_school', school_id=r.school.id) }}">{{ r.school.school_name_ar or r.school.school_name }}</a></td><td>{{ r.year.name if r.year else '—' }}</td><td>{{ r.students }}</td><td>{{ '{:,.0f}'.format(r.price) }}</td><td>{{ '{:,.0f}'.format(r.expected) }}</td><td>{{ '{:,.0f}'.format(r.invoiced) }}</td><td>{{ '{:,.0f}'.format(r.received) }}</td><td>{{ '{:,.0f}'.format(r.outstanding) }}</td><td><span class="badge {{ 'bg-warning text-dark' if r.additional else 'bg-success' }}">{{ r.additional }}</span></td></tr>{% else %}<tr><td colspan="9" class="text-center">لا توجد مدارس.</td></tr>{% endfor %}</tbody></table></div></div>
-
-<h5 class="mb-3">السجلات القديمة (تاريخية ومنفصلة)</h5>
-
-{# ── Summary cards ─────────────────────────────────────────────────────── #}
-<div class="stats-grid mb-4" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));">
-  <div class="stat-card">
-    <div class="stat-icon" style="background:rgba(13,110,253,.12);color:#0d6efd">
-      <i class="bi bi-file-earmark-text"></i>
-    </div>
-    <div>
-      <div class="stat-value">{{ records|length }}</div>
-      <div class="stat-label">سجلات</div>
-    </div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-icon" style="background:rgba(224,62,62,.12);color:#e03e3e">
-      <i class="bi bi-cash"></i>
-    </div>
-    <div>
-      <div class="stat-value">{{ "{:,.0f}".format(total_due) }}</div>
-      <div class="stat-label">إجمالي المستحق</div>
-    </div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-icon" style="background:rgba(26,171,109,.12);color:#1aab6d">
-      <i class="bi bi-cash-stack"></i>
-    </div>
-    <div>
-      <div class="stat-value">{{ "{:,.0f}".format(total_paid) }}</div>
-      <div class="stat-label">إجمالي المحصّل</div>
-    </div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-icon" style="background:rgba(232,160,32,.12);color:#e8a020">
-      <i class="bi bi-exclamation-circle"></i>
-    </div>
-    <div>
-      <div class="stat-value">{{ "{:,.0f}".format(total_remaining) }}</div>
-      <div class="stat-label">إجمالي المتبقي</div>
-    </div>
-  </div>
-</div>
-
-{# ── Filters ───────────────────────────────────────────────────────────── #}
-<form method="GET" class="card border-0 shadow-sm mb-4 p-3">
-  <div class="row g-2 align-items-end">
-    <div class="col-md-3">
-      <label class="form-label small">المحافظة</label>
-      <select name="governorate" class="form-select form-select-sm">
-        <option value="">الكل</option>
-        <option value="غير محدد" {{ 'selected' if gov_filter == 'غير محدد' }}>غير محدد</option>
-        {% for gov in governorates %}
-        <option value="{{ gov }}" {{ 'selected' if gov_filter == gov }}>{{ gov }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class="col-md-3">
-      <label class="form-label small">المدرسة</label>
-      <select name="school_id" class="form-select form-select-sm">
-        <option value="">الكل</option>
-        {% for s in all_schools %}
-        <option value="{{ s.id }}" {{ 'selected' if school_filter == s.id }}>
-          {{ s.school_name_ar or s.school_name }}
-        </option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class="col-md-2">
-      <label class="form-label small">السنة الدراسية</label>
-      <select name="year_id" class="form-select form-select-sm"><option value="">الحالية لكل مدرسة</option>{% for y in all_years %}<option value="{{ y.id }}" {{ 'selected' if year_filter == y.id }}>{{ y.name }} — {{ y.school.school_name }}</option>{% endfor %}</select>
-    </div>
-    <div class="col-md-2">
-      <label class="form-label small">الحالة</label>
-      <select name="status" class="form-select form-select-sm">
-        <option value="">الكل</option>
-        <option value="unpaid"  {{ 'selected' if status_filter == 'unpaid' }}>غير مدفوع</option>
-        <option value="partial" {{ 'selected' if status_filter == 'partial' }}>جزئي</option>
-        <option value="paid"    {{ 'selected' if status_filter == 'paid' }}>مدفوع</option>
-      </select>
-    </div>
-    <div class="col-md-2">
-      <button type="submit" class="btn btn-primary btn-sm w-100">
-        <i class="bi bi-funnel me-1"></i>تصفية
-      </button>
-    </div>
-    <div class="col-md-2">
-      <a href="{{ url_for('super_admin.billing_overview') }}"
-         class="btn btn-outline-secondary btn-sm w-100">إعادة تعيين</a>
-    </div>
-  </div>
-</form>
-
-{# ── Records table ─────────────────────────────────────────────────────── #}
-<div class="card border-0 shadow-sm">
-  <div class="card-body p-0">
-    <div class="table-responsive">
-      <table class="table table-hover align-middle mb-0">
-        <thead class="table-light">
-          <tr>
-            <th>#</th>
-            <th>المدرسة</th>
-            <th>المحافظة</th>
-            <th>النوع</th>
-            <th>الوصف</th>
-            <th>المستحق</th>
-            <th>المدفوع</th>
-            <th>المتبقي</th>
-            <th>الحالة</th>
-            <th>الاستحقاق</th>
-            <th>آخر دفع</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% set type_labels = {
-            'subscription': 'اشتراك',
-            'setup': 'إعداد',
-            'extra_students': 'طلاب إضافيون',
-            'service': 'خدمة',
-            'other': 'أخرى'
-          } %}
-          {% for rec in records %}
-          <tr>
-            <td class="text-muted small">{{ rec.id }}</td>
-            <td>
-              <a href="{{ url_for('super_admin.school_detail', school_id=rec.school_id) }}"
-                 class="fw-semibold text-decoration-none">
-                {{ rec.school.school_name_ar or rec.school.school_name }}
-              </a>
-            </td>
-            <td><small>{{ rec.school.governorate or 'غير محدد' }}</small></td>
-            <td>
-              <span class="badge bg-info-subtle text-info">
-                {{ type_labels.get(rec.billing_type, rec.billing_type) }}
-              </span>
-            </td>
-            <td><small>{{ rec.description or '—' }}</small></td>
-            <td class="fw-semibold">{{ "{:,.0f}".format(rec.amount_due or 0) }}</td>
-            <td class="text-success fw-semibold">{{ "{:,.0f}".format(rec.amount_paid or 0) }}</td>
-            <td class="text-danger fw-semibold">{{ "{:,.0f}".format(rec.remaining) }}</td>
-            <td>
-              {% if rec.status == 'paid' %}
-                <span class="badge bg-success">مدفوع</span>
-              {% elif rec.status == 'partial' %}
-                <span class="badge bg-warning text-dark">جزئي</span>
-              {% else %}
-                <span class="badge bg-danger">غير مدفوع</span>
-              {% endif %}
-            </td>
-            <td><small class="text-muted">{{ rec.due_date.strftime('%Y-%m-%d') if rec.due_date else '—' }}</small></td>
-            <td><small class="text-muted">{{ rec.payment_date.strftime('%Y-%m-%d') if rec.payment_date else '—' }}</small></td>
-          </tr>
-          {% else %}
-          <tr>
-            <td colspan="11" class="text-center text-muted py-4">لا توجد سجلات فواتير.</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</div>
+<div class="accordion" id="legacyRecords"><div class="accordion-item border-warning"><h2 class="accordion-header"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#legacyBody">السجلات المالية القديمة — تاريخية وغير مصالَحة ({{ records|length }})</button></h2><div id="legacyBody" class="accordion-collapse collapse"><div class="accordion-body"><div class="alert alert-warning small">هذه السجلات منفصلة ولا تدخل في الملخص الجديد.</div><div class="table-responsive"><table class="table table-sm"><thead><tr><th>#</th><th>المدرسة</th><th>الوصف</th><th>المستحق</th><th>المدفوع</th><th>المتبقي</th><th>الحالة</th></tr></thead><tbody>{% for rec in records %}<tr><td>{{ rec.id }}</td><td>{{ rec.school.school_name_ar or rec.school.school_name }}</td><td>{{ rec.description or '—' }}</td><td>{{ money(rec.amount_due) }}</td><td>{{ money(rec.amount_paid) }}</td><td>{{ money(rec.remaining) }}</td><td>{{ rec.status }}</td></tr>{% else %}<tr><td colspan="7" class="text-center text-muted">لا توجد سجلات قديمة.</td></tr>{% endfor %}</tbody></table></div></div></div></div></div>
 {% endblock %}

@@ -33,9 +33,7 @@ from app.models import (db, School, SchoolBilling, AcademicYear,
                          FeeInstallment, Revenue, Expense,
                          Grade, Section, Subject, FeeType,
                          Role, MobileDeviceToken, INVESTOR_ROLE,
-                         InvestorSchoolAccess, AnnualSchoolAgreement,
-                         PlatformSchoolInvoice, PlatformSchoolPayment,
-                         PlatformInvoiceStudentCoverage)
+                         InvestorSchoolAccess)
 from app.utils.decorators import (super_admin_required,
                                   historical_guard)
 from app.utils.audit import log_action
@@ -1193,35 +1191,42 @@ def billing_overview():
     all_schools = School.query.execution_options(bypass_tenant_scope=True)\
         .order_by(School.school_name).all()
 
-    # New platform account totals are deliberately calculated independently
-    # from the legacy SchoolBilling rows above.
-    from app.services.platform_finance import school_totals
+    # The primary overview uses aggregate queries only.  Detailed student
+    # identities remain on the individual school page.
+    from app.services.platform_finance import simple_school_summaries
+    visible_schools = [school for school in all_schools
+                       if (not school_filter or school.id == school_filter)
+                       and (not gov_filter or
+                            (gov_filter == 'غير محدد' and school.governorate is None) or
+                            school.governorate == gov_filter)]
+    years_by_school = {}
+    if year_filter:
+        selected_year = AcademicYear.query.execution_options(
+            bypass_tenant_scope=True).filter_by(id=year_filter).first()
+        visible_schools = [school for school in visible_schools
+                           if selected_year and school.id == selected_year.school_id]
+        if selected_year:
+            years_by_school[selected_year.school_id] = selected_year
+    else:
+        visible_ids = [school.id for school in visible_schools]
+        current_years = (AcademicYear.query.execution_options(bypass_tenant_scope=True)
+                         .filter(AcademicYear.school_id.in_(visible_ids),
+                                 AcademicYear.is_current.is_(True)).all()
+                         if visible_ids else [])
+        years_by_school = {year.school_id: year for year in current_years}
+
+    summary_by_school = simple_school_summaries(visible_schools, years_by_school)
     finance_rows = []
-    for school in all_schools:
-        if school_filter and school.id != school_filter:
-            continue
-        year = (AcademicYear.query.execution_options(bypass_tenant_scope=True).filter_by(
-            school_id=school.id, id=year_filter).first() if year_filter else
-            AcademicYear.query.execution_options(bypass_tenant_scope=True).filter_by(
-                school_id=school.id, is_current=True).first())
-        agreement = (AnnualSchoolAgreement.query.filter_by(school_id=school.id,
-            academic_year_id=year.id, status='active').first() if year else None)
-        active_ids = {r[0] for r in db.session.query(Student.id).execution_options(
-            bypass_tenant_scope=True, include_all_years=True).filter_by(
-                school_id=school.id, status='active').all()}
-        covered_ids = ({r[0] for r in db.session.query(
-            PlatformInvoiceStudentCoverage.student_id).filter_by(school_id=school.id,
-                academic_year_id=year.id, status='active').all()} if year else set())
-        totals = school_totals(school.id, year.id if year else None)
-        price = int(agreement.annual_price_per_student) if agreement else 0
-        finance_rows.append({'school': school, 'year': year, 'students': len(active_ids),
-            'price': price, 'expected': len(active_ids) * price,
-            'additional': len(active_ids - covered_ids), **totals})
+    for school in visible_schools:
+        row = summary_by_school[school.id]
+        finance_rows.append({'school': school,
+                             'year': years_by_school.get(school.id), **row})
     finance_summary = {
-        'expected': sum(r['expected'] for r in finance_rows),
-        'invoiced': sum(r['invoiced'] for r in finance_rows),
+        'expected': sum(r['expected'] or 0 for r in finance_rows),
         'received': sum(r['received'] for r in finance_rows),
-        'outstanding': sum(r['outstanding'] for r in finance_rows),
+        'remaining_expected': sum(r['remaining_expected'] or 0 for r in finance_rows),
+        'schools_with_uncovered': sum(1 for r in finance_rows if r['uncovered']),
+        'historical_limited': any(not r['is_current_year'] for r in finance_rows),
     }
 
     return render_template(
@@ -1239,8 +1244,10 @@ def billing_overview():
         finance_rows  = finance_rows,
         finance_summary = finance_summary,
         year_filter = year_filter,
-        all_years = AcademicYear.query.execution_options(bypass_tenant_scope=True).order_by(
-            AcademicYear.start_date.desc()).all(),
+        year_options = (db.session.query(AcademicYear.id, AcademicYear.name,
+                                         School.school_name)
+                        .join(School, School.id == AcademicYear.school_id)
+                        .order_by(AcademicYear.start_date.desc()).all()),
     )
 
 

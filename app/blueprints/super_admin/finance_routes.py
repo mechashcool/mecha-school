@@ -8,8 +8,9 @@ from sqlalchemy.exc import IntegrityError
 from app.models import (db, School, SchoolBilling, AcademicYear,
     AnnualSchoolAgreement, PlatformSchoolInvoice, PlatformInvoiceStudentCoverage,
     PlatformSchoolPayment, PlatformPaymentAllocation)
-from app.services.platform_finance import (eligible_students, uncovered_students, school_totals,
-    invoice_allocated, payment_allocated, refresh_invoice_status)
+from app.services.platform_finance import (uncovered_students, school_totals,
+    simple_school_summaries, invoice_allocated, payment_allocated,
+    refresh_invoice_status)
 from app.utils.decorators import super_admin_required
 from app.utils.audit import log_action
 from app.utils.helpers import generate_receipt_no
@@ -51,12 +52,14 @@ def register_finance_routes(bp):
         agreement = next((a for a in agreements if a.status == 'active'), None)
         payments = PlatformSchoolPayment.query.filter_by(school_id=school_id).order_by(
             PlatformSchoolPayment.payment_date.desc(), PlatformSchoolPayment.id.desc()).all()
+        summary = simple_school_summaries(
+            [school], {school.id: year}).get(school.id, {})
         return render_template('super_admin/finance_school.html', school=school,
             years=years, year=year, agreement=agreement, agreements=agreements,
             invoices=invoices, payments=payments,
             open_invoices=[i for i in invoices if i.status not in ('paid', 'void')],
             uncovered=uncovered, totals=school_totals(school_id, year.id if year else None),
-            eligible_count=len(eligible_students(school_id)),
+            summary=summary,
             legacy=SchoolBilling.query.filter_by(school_id=school_id).order_by(
                 SchoolBilling.created_at.desc()).all(), today=date.today(),
             submission_key=uuid4().hex, invoice_allocated=invoice_allocated,
@@ -237,8 +240,19 @@ def register_finance_routes(bp):
     @super_admin_required
     def finance_statement(school_id):
         school = School.query.get_or_404(school_id)
+        years = (AcademicYear.query.execution_options(bypass_tenant_scope=True)
+                 .filter_by(school_id=school_id)
+                 .order_by(AcademicYear.start_date.desc()).all())
+        requested = request.args.get('year_id', type=int)
+        year = _year(school_id, requested) if requested else next(
+            (item for item in years if item.is_current), years[0] if years else None)
+        summary = simple_school_summaries(
+            [school], {school.id: year}).get(school.id, {})
+        invoice_query = PlatformSchoolInvoice.query.filter_by(school_id=school_id)
+        if year:
+            invoice_query = invoice_query.filter_by(academic_year_id=year.id)
         return render_template('super_admin/finance_print.html', kind='statement', school=school,
-            invoices=PlatformSchoolInvoice.query.filter_by(school_id=school_id).order_by(
-                PlatformSchoolInvoice.issue_date).all(),
+            year=year, summary=summary,
+            invoices=invoice_query.order_by(PlatformSchoolInvoice.issue_date).all(),
             payments=PlatformSchoolPayment.query.filter_by(school_id=school_id).order_by(
                 PlatformSchoolPayment.payment_date).all(), totals=school_totals(school_id))
