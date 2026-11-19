@@ -221,6 +221,8 @@ def resolve_upload_owner(value: str | None) -> dict | None:
                   .first())
         except Exception:
             hw = None
+        if hw is None:
+            return None
         return owner(row, section_id=getattr(hw, 'section_id', None), kind='homework')
 
     # External-registration intake files (documents + submitted student photo).
@@ -311,9 +313,58 @@ def _study_request_image_access(user, role: str, owner: dict) -> bool:
     return student is not None and student.building_id in allowed
 
 
+def _can_access_homework_attachment(user, value: str, school_id: int,
+                                    *, teacher: bool = False) -> bool:
+    """Check an active homework reference, including files shared across rows.
+
+    «جميع الشعب» stores one file for several homework rows. A teacher who owns
+    one of them must not depend on which row the owner resolver found first.
+    """
+    from app.models import (db, Employee, Homework, HomeworkImage,
+                            InstituteStudyGroup, School)
+    from sqlalchemy import and_, or_
+
+    op = object_path_of(value)
+    candidates = [path for path in {value, op} if path]
+    if not school_id or not candidates:
+        return False
+
+    extra_ids = db.select(HomeworkImage.homework_id).where(
+        HomeworkImage.school_id == school_id,
+        HomeworkImage.file_path.in_(candidates))
+    query = (db.session.query(Homework.id)
+             .execution_options(bypass_tenant_scope=True, include_all_years=True)
+             .filter(Homework.school_id == school_id,
+                     Homework.is_active.is_(True),
+                     or_(Homework.attachment_path.in_(candidates),
+                         Homework.id.in_(extra_ids))))
+
+    if teacher:
+        # Institute teachers also need an active assignment to the group in
+        # the homework's own year, as the existing web edit scope requires.
+        assigned_group = (db.session.query(InstituteStudyGroup.id)
+                          .filter(InstituteStudyGroup.id == Homework.institute_group_id,
+                                  InstituteStudyGroup.school_id == school_id,
+                                  InstituteStudyGroup.academic_year_id == Homework.academic_year_id,
+                                  InstituteStudyGroup.instructor_id == Employee.id,
+                                  InstituteStudyGroup.is_active.is_(True))
+                          .exists())
+        is_institute = (db.func.lower(db.func.trim(
+            db.func.coalesce(School.institution_type, '')))
+            == School.INSTITUTION_INSTITUTE)
+        query = (query.join(Employee, Employee.id == Homework.teacher_id)
+                 .join(School, School.id == Homework.school_id)
+                 .filter(Employee.user_id == user.id,
+                         Employee.school_id == school_id,
+                         or_(and_(~is_institute,
+                                  Homework.institute_group_id.is_(None)),
+                             and_(is_institute,
+                                  assigned_group))))
+    return query.first() is not None
+
+
 def _teacher_can_access(user, owner: dict) -> bool:
-    """Teacher scope: own employee-tied files, homework in-school, or a student in
-    one of the teacher's assigned sections."""
+    """Teacher scope: own employee-tied files or an assigned-section student."""
     from app.models import Employee, Student
     from app.utils.decorators import get_teacher_section_ids
 
@@ -322,10 +373,6 @@ def _teacher_can_access(user, owner: dict) -> bool:
         emp = (Employee.query.execution_options(bypass_tenant_scope=True)
                .filter_by(id=emp_id).first())
         return bool(emp and emp.user_id == user.id)
-
-    if owner.get('kind') == 'homework':
-        # Same-school already verified by the caller; teachers may view homework.
-        return True
 
     stu_id = owner.get('student_id')
     if stu_id is None:
@@ -341,8 +388,9 @@ def can_access_upload(user, value: str | None) -> bool:
     """Authorise ``user`` to read the file identified by the stored ``value``.
 
     Enforces, in order: authenticated → same school (super-admin excepted) →
-    role rules (investor never; parent only own children; teacher only assigned
-    scope) → building scope for student-tied files → same-school staff allowed.
+    homework-specific scope → other role rules (investor never; parent only own
+    children; teacher only assigned scope) → building scope for student-tied
+    files → same-school staff allowed for non-homework files.
     Default-deny when ownership is unknown.
     """
     if not user or not getattr(user, 'is_authenticated', False):
@@ -368,6 +416,21 @@ def can_access_upload(user, value: str | None) -> bool:
     # same-school-staff access, teachers always denied).
     if owner.get('kind') == STUDY_REQUEST_IMAGE_KIND:
         return _study_request_image_access(user, role, owner)
+
+    # The homework page admits managers, manage_homework roles, and teachers
+    # scoped to their own assignments. Parent/mobile clients receive signed
+    # links after the homework API's child/assignment checks; they do not rely
+    # on a parent web session passing this direct-file rule.
+    if owner.get('kind') == 'homework':
+        if role == 'teacher':
+            return _can_access_homework_attachment(user, value, school_id,
+                                                   teacher=True)
+        if role in ('parent', 'investor_viewer'):
+            return False
+        if not (getattr(user, 'is_school_admin', False)
+                or user.has_permission('manage_homework')):
+            return False
+        return _can_access_homework_attachment(user, value, school_id)
 
     # Read-only investor accounts never access documents.
     if role == 'investor_viewer':
